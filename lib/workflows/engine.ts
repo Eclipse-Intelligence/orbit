@@ -1179,6 +1179,7 @@ async function findEmailStep(ctx: Ctx, step: Step): Promise<StepResult> {
     await saveRun(ctx.actor, ctx.run.id, { state: { ...ctx.state, at: step.id, vars: ctx.vars } });
   };
   let contact = await getContact(ctx.actor, contactId);
+  let note: string | null = null;
   if (!contact.email) {
     const before = earlier ? await findEarlier(ctx, contact.id, earlier.at) : null;
     if (before === "not_found") throw new ItemSkipped(`No email found for ${contact.name}.`, { status: "not_found", address: null });
@@ -1192,9 +1193,10 @@ async function findEmailStep(ctx: Ctx, step: Step): Promise<StepResult> {
         await keep();
       },
     });
-    if (found.status === "failed" && found.duplicate) throw new ItemSkipped(found.message, { status: "not_found", address: null });
+    if (found.status === "failed" && found.duplicate) throw new ItemSkipped(found.clash ?? found.message, { status: "not_found", address: null });
     if (found.status === "failed") throw new CrmError("upstream_error", found.message, 502);
     if (found.status !== "found") throw new ItemSkipped(found.message, { status: "not_found", address: null });
+    note = found.clash ?? null;
     contact = await getContact(ctx.actor, contact.id);
   }
   ctx.vars.contact = contactVars(contact);
@@ -1213,7 +1215,7 @@ async function findEmailStep(ctx: Ctx, step: Step): Promise<StepResult> {
       await keep();
     },
   });
-  const output = { status: check.verdict, address: check.email };
+  const output = { status: check.verdict, address: check.email, ...(note ? { note } : {}) };
   if (check.verdict === "invalid") throw new ItemSkipped(`${check.email} is invalid.`, output);
   if (check.verdict !== "valid") throw new ItemSkipped(`Couldn't confirm ${check.email}.`, output);
   return { kind: "next", output };

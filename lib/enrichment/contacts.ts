@@ -5,7 +5,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, errorText, tooMany } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalLinkedin } from "@/lib/crm/normalize";
-import type { Contact, ContactWrite, UserActor } from "@/lib/crm/types";
+import type { Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import {
   PROVIDER_BY_ID,
   ProviderFailure,
@@ -42,7 +42,39 @@ export type ContactEnrichment = {
   provider: ProviderId | null;
   attempts: Attempt[];
   duplicate?: boolean;
+  clash?: string;
 };
+
+type SavedKey = "email" | "linkedinUrl" | "phone";
+
+const WRITE_KEYS: Record<ContactField, SavedKey> = { email: "email", linkedin: "linkedinUrl", phone: "phone" };
+const SAVED_NAMES: Record<SavedKey, string> = { email: "email", linkedinUrl: "LinkedIn profile", phone: "phone number" };
+const CLASH_NAMES: Record<SavedKey, string> = { email: "that email", linkedinUrl: "that LinkedIn profile", phone: "that phone number" };
+
+function isDuplicate(error: unknown) {
+  return error instanceof CrmError && error.code === "duplicate_contact";
+}
+
+async function saveFound(actor: UserActor, contactId: string, write: ContactWrite, provenance: Provenance): Promise<SavedKey[]> {
+  const keys = Object.keys(write) as SavedKey[];
+  try {
+    await updateContact(actor, contactId, write, { provenance });
+    return [];
+  } catch (error) {
+    if (!isDuplicate(error)) throw error;
+    if (keys.length === 1) return keys;
+  }
+  const clashed: SavedKey[] = [];
+  for (const key of keys) {
+    try {
+      await updateContact(actor, contactId, { [key]: write[key] }, { provenance });
+    } catch (error) {
+      if (!isDuplicate(error)) throw error;
+      clashed.push(key);
+    }
+  }
+  return clashed;
+}
 
 const NOUNS: Record<ContactField, string> = { email: "email", linkedin: "LinkedIn profile", phone: "phone number" };
 
@@ -229,31 +261,54 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   if (linkedin) write.linkedinUrl = linkedin.value;
   if (phone) write.phone = phone.value;
   const allFailed = attempts.length > 0 && attempts.every((attempt) => attempt.outcome === "failed");
+  const targetKey = WRITE_KEYS[field];
+  let clash: string | null = null;
 
   if (Object.keys(write).length > 0) {
+    let clashed: SavedKey[];
     try {
-      await updateContact(actor, contactId, write, {
-        provenance: {
-          operation: "enrich_contact",
-          source: (field === "email" ? email : field === "linkedin" ? linkedin : phone)?.provider ?? email?.provider ?? linkedin?.provider ?? "enrichment",
-        },
+      clashed = await saveFound(actor, contactId, write, {
+        operation: "enrich_contact",
+        source: (field === "email" ? email : field === "linkedin" ? linkedin : phone)?.provider ?? email?.provider ?? linkedin?.provider ?? "enrichment",
       });
     } catch (error) {
-      const duplicate = error instanceof CrmError && error.code === "duplicate_contact";
-      const message =
-        duplicate
-          ? write.email && write.linkedinUrl
-            ? "Another contact already has this email or LinkedIn profile."
-            : write.email
-              ? `Another contact already has ${write.email}.`
-              : write.linkedinUrl
-                ? "Another contact already has that LinkedIn profile."
-                : "Another contact already has that profile."
-          : error instanceof CrmError
-            ? error.message
-            : "Couldn't save what was found.";
+      const message = error instanceof CrmError ? error.message : "Couldn't save what was found.";
       await recordLookup(actor, contactId, field, "failed", null, null, attempts);
-      return { contactId, field, status: "failed", message, email: null, linkedinUrl: null, phone: null, provider: null, attempts, ...(duplicate ? { duplicate } : {}) };
+      return { contactId, field, status: "failed", message, email: null, linkedinUrl: null, phone: null, provider: null, attempts };
+    }
+    if (clashed.length > 0) {
+      clash =
+        clashed.includes("email") && clashed.includes("linkedinUrl")
+          ? "Another contact already has this email or LinkedIn profile."
+          : `Another contact already has ${clashed.map((key) => (key === "email" ? write.email : CLASH_NAMES[key])).join(" or ")}.`;
+      const kept = (Object.keys(write) as SavedKey[]).filter((key) => !clashed.includes(key));
+      const savedNote = kept.length ? `Saved the ${kept.map((key) => SAVED_NAMES[key]).join(" and ")}. ` : "";
+      if (clashed.includes("email")) email = null;
+      if (clashed.includes("linkedinUrl")) linkedin = null;
+      if (clashed.includes("phone")) phone = null;
+      if (clashed.includes(targetKey)) {
+        if (email) {
+          await recordLookup(actor, contactId, "email", "found", email.provider, email.value, [
+            { provider: email.provider, outcome: "found", verifiedBy: email.verifiedBy },
+          ]);
+        }
+        if (linkedin) await recordLookup(actor, contactId, "linkedin", "found", linkedin.provider, linkedin.value, []);
+        await recordLookup(actor, contactId, field, "failed", null, null, attempts);
+        return {
+          contactId,
+          field,
+          status: "failed",
+          message: `${savedNote}${clash}`,
+          email: email?.value ?? null,
+          linkedinUrl: linkedin?.value ?? null,
+          phone: phone?.value ?? null,
+          provider: null,
+          attempts,
+          duplicate: true,
+          clash,
+        };
+      }
+      clash = `${savedNote}${clash}`;
     }
   }
 
@@ -268,7 +323,9 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   await recordLookup(actor, contactId, field, status, target?.provider ?? null, target?.value ?? null, attempts);
 
   const noun = NOUNS[field];
-  const message = target
+  const message = clash
+    ? clash
+    : target
     ? `Found ${contact.name}'s ${noun} with ${PROVIDER_BY_ID.get(target.provider)!.name}.`
     : allFailed
       ? `Couldn't search for ${contact.name}'s ${noun}: ${attempts.map((attempt) => attempt.detail).filter(Boolean).join(" ")}`
@@ -283,6 +340,7 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
     phone: phone?.value ?? null,
     provider: target?.provider ?? null,
     attempts,
+    ...(clash ? { clash } : {}),
   };
 }
 

@@ -3,7 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { createCompany, getCompany, updateCompany } from "@/lib/crm/companies";
 import { createContact, getContact } from "@/lib/crm/contacts";
 import type { UserActor } from "@/lib/crm/types";
-import { getPool } from "@/lib/db/pool";
+import { getAdminPool, getPool } from "@/lib/db/pool";
 import { brandToCompany, enrichCompany, sizeFromEmployees } from "@/lib/enrichment/companies";
 import { contactLookups, enrichContact, enrichContacts } from "@/lib/enrichment/contacts";
 import { latestEmailCheck } from "@/lib/enrichment/email-check";
@@ -340,6 +340,53 @@ describe("contact email and LinkedIn waterfall", () => {
       company: false,
       logoClientId: "brandLL_1",
     });
+  });
+
+  it("saves the value that doesn't clash with another contact and says which one did", async () => {
+    const hunterOnly = { HUNTER_API_KEY: "hun" };
+    const lookups = async (id: string) =>
+      (
+        await getAdminPool().query<{ field: string; status: string; value: string | null }>(
+          "select field, status, value from crm.enrichment_lookups where record_id = $1 order by created_at, field",
+          [id],
+        )
+      ).rows.map((row) => [row.field, row.status, row.value]);
+
+    const profile = "https://www.linkedin.com/in/clash-owner";
+    await person("Owen", "Owner", { linkedinUrl: profile, email: "owen@globex.test" });
+
+    const keeps = await person("Ema", "Saved");
+    const emailSaved = fake([hunterFinds("ema@globex.test", { linkedin_url: profile })]);
+    const first = await enrichContact(owner, keeps.id, "email", { ...FAST, env: hunterOnly, fetchImpl: emailSaved.fetchImpl });
+    assert.equal(first.status, "found");
+    assert.equal(first.message, "Saved the email. Another contact already has that LinkedIn profile.");
+    const afterFirst = await getContact(owner, keeps.id);
+    assert.equal(afterFirst.email, "ema@globex.test");
+    assert.equal(afterFirst.linkedinUrl, null);
+    assert.deepEqual(await lookups(keeps.id), [["email", "found", "ema@globex.test"]]);
+
+    const linked = await person("Lyn", "Linked");
+    const linkedinSaved = fake([hunterFinds("owen@globex.test", { linkedin_url: "https://www.linkedin.com/in/lyn-linked" })]);
+    const second = await enrichContact(owner, linked.id, "linkedin", { ...FAST, env: hunterOnly, fetchImpl: linkedinSaved.fetchImpl });
+    assert.equal(second.status, "found");
+    assert.equal(second.message, "Saved the LinkedIn profile. Another contact already has owen@globex.test.");
+    const afterSecond = await getContact(owner, linked.id);
+    assert.equal(afterSecond.email, null);
+    assert.match(afterSecond.linkedinUrl ?? "", /lyn-linked/);
+    assert.deepEqual((await lookups(linked.id)).map(([field, status]) => [field, status]), [["linkedin", "found"]]);
+
+    const both = await person("Bo", "Both");
+    const bothClash = fake([hunterFinds("owen@globex.test", { linkedin_url: profile })]);
+    const third = await enrichContact(owner, both.id, "email", { ...FAST, env: hunterOnly, fetchImpl: bothClash.fetchImpl });
+    assert.equal(third.status, "failed");
+    assert.equal(third.message, "Another contact already has this email or LinkedIn profile.");
+    const afterThird = await getContact(owner, both.id);
+    assert.equal(afterThird.email, null);
+    assert.equal(afterThird.linkedinUrl, null);
+    assert.deepEqual(await lookups(both.id), [["email", "failed", null]]);
+
+    const [routed] = await enrichContacts(owner, [keeps.id], "linkedin", { ...FAST, env: hunterOnly, fetchImpl: emailSaved.fetchImpl });
+    assert.equal(routed.message, "Another contact already has that LinkedIn profile.", "the app's route shows the clash");
   });
 
   it("spots LinkedIn profile URLs anywhere in a response", () => {

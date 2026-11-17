@@ -640,7 +640,7 @@ describe("workflow tags and Find and check email", () => {
       assert.equal(run.skip_reason, "Check email: Another contact already has dee.taken@acme-steps.test.");
     });
 
-    it("names both when a found email comes with a LinkedIn profile another contact has", async () => {
+    it("saves a found email and carries on when only its LinkedIn profile belongs to another contact", async () => {
       const profile = "https://www.linkedin.com/in/shared-steps-person";
       await createContact(owner, { firstName: "Lin", lastName: "Owner", linkedinUrl: profile, companyId: acme });
       const clash = await person("Lin", "Clash");
@@ -655,8 +655,26 @@ describe("workflow tags and Find and check email", () => {
       await drain(fake1.fetchImpl);
       const run = await runRow(started.runId);
       assert.equal(run.status, "succeeded");
-      assert.equal(run.skip_reason, "Check email: Another contact already has this email or LinkedIn profile.");
-      assert.equal((await getContact(owner, clash.id)).email, null);
+      assert.equal(run.skip_reason, null);
+      assert.equal((await getContact(owner, clash.id)).email, "lin.clash@acme-steps.test");
+      const { steps } = await getRunSteps(owner, started.runId);
+      assert.deepEqual(steps.find((step) => step.stepId === "find_email_1")?.output, {
+        status: "valid",
+        address: "lin.clash@acme-steps.test",
+        note: "Saved the email. Another contact already has that LinkedIn profile.",
+      });
+
+      const both = await person("Lin", "Both");
+      const bothFake = fake([
+        (call) =>
+          call.url.includes("api.hunter.io/v2/email-finder")
+            ? { body: { data: { email: "lin.clash@acme-steps.test", score: 96, verification: { status: "valid" }, linkedin_url: profile } } }
+            : null,
+      ]);
+      const skipped = await start(findEmail(), { type: "contact", id: both.id }, bothFake.fetchImpl);
+      await drain(bothFake.fetchImpl);
+      assert.equal((await runRow(skipped.runId)).skip_reason, "Check email: Another contact already has this email or LinkedIn profile.");
+      assert.equal((await getContact(owner, both.id)).email, null);
     });
 
     it("fails the step inside a loop when no email finder is set up", async () => {
