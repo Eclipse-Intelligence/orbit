@@ -442,6 +442,20 @@ What happens to a lead:
 
 The hourly check runs from `/api/cron/sync`, inside the same 50 seconds. A quick query decides whether there is Meta work (a Page due or a lead waiting); only then do the other sync steps get 40 seconds instead of 50 and the check up to 10. It retries waiting leads first (all of its time when no Page is due, otherwise 40%), in three queues so they can't crowd each other out: leads with a workspace, notifications that didn't go out, and a few held leads still to be fetched (held leads that are only waiting for a link aren't retried). It then checks each linked Page whose last check is over an hour old, or that wasn't finished, oldest first so Pages take turns. For each of the Page's lead forms, least recently read first, it reads the leads created since that form's last successful read less two hours (the first read starts at the link, or a day before it when the person who linked the Page sees held leads: an owner of every workspace, or, when nobody owns every workspace, an owner of the oldest workspace), one Graph page at a time, saving the Graph paging cursor after each page so a large form carries on where it stopped on the next run. A saved cursor that Meta rejects, or that is over an hour old, is dropped and the form is read again from its last successful read (leads already saved are skipped). A form that fails is noted and the others still run. Pushes are cut short at the deadline, and alerts left when time runs out are sent on the next run. A lead that couldn't be fetched or filed is retried with backoff (5 minutes, doubling up to once a day, never given up); a held lead is retried hourly without counting, a few per Page at a time, and the rest of that Page's held leads wait an hour too, so they don't keep the check running. Filing a lead starts its alert retries afresh. The card shows each Page's last check and error.
 
+## Campaigns
+
+Cold outreach runs in Smartlead (email) and HeyReach (LinkedIn); Orbit reads both. Each workspace connects its own Smartlead client API key in Settings › Tools › Smartlead (owners and admins). Orbit checks the key, reads the client's name ("Connected to client Eclipse. 3 campaigns.") and stores the key encrypted with `APP_SECRET`. One key can be connected to one workspace only ("This key is already connected."). Members see the card's status but never the key. Hold to disconnect stops the sync and keeps every campaign, prospect and event.
+
+HeyReach works the same way with a HeyReach workspace's API key in Settings › Tools › HeyReach ("Connected. 2 LinkedIn accounts, 3 campaigns."). The card lists the workspace's LinkedIn accounts (senders), each linked to the member it belongs to: on connect, and when a new account appears, an account whose email equals exactly one member's sign-in email is linked to them; otherwise it stays Not linked. Only owners and admins change a link; each change is audited (`campaign.sender_linked`) and the member linked and the one unlinked get a notification. Removing a member clears their links (audited, not notified).
+
+Campaigns (in the sidebar) lists the workspace's campaigns with Live, Paused and Archived tabs and a channel icon on each: prospects, and the share who replied, replied positively and bounced. A Channel filter appears when both tools are connected. A campaign's page shows its totals and the last 30 days, each step and variant with sent, opened and replied (best one marked), the custom variables its steps use, its mailboxes (read live: how many a day they send, and any that can't send, can't read replies or have a low warm-up reputation), and its prospects with All, Replied and Skipped and a search. Every member sees every campaign; campaigns are shared like companies. A LinkedIn campaign's page shows prospects, invites, the share accepted and replied, invites and acceptances by day, its steps (invite and messages, with their `{variables}`), how many invites its senders send a day, and its prospects with their stage (Invited, Accepted) and Sender.
+
+Prospects are matched to contacts by email, and LinkedIn prospects by LinkedIn profile. Nobody is added to Orbit by the sync: Import on a campaign's page links each prospect to the contact with the same email or profile, leaving that contact as it is, and adds the rest as contacts (linked to an existing company with the same domain or name). Imported contacts start no workflows; their `contact.created` webhooks still go. Import needs `contacts:write` and `campaigns:write`.
+
+The first sync after connecting reads every campaign, its steps, all its prospects and their history (sent, opened, clicked, replied, bounced, unsubscribed; for LinkedIn, invites sent, invites accepted and messages sent). This history fires no workflows and notifies nobody. After that, every live campaign's totals and new events are read every five minutes, and its steps and prospects once an hour; other campaigns once a day. A big first sync carries on over several runs. Smartlead and HeyReach calls share the workflow limits (`WORKFLOW_LIMIT_SMARTLEAD_*`, `WORKFLOW_LIMIT_SMARTLEAD_STATS_*` and `WORKFLOW_LIMIT_HEYREACH_*`), and a call that would go over, or that the tool answers with 429, waits for the next run. LinkedIn replies and conversations come in a later release.
+
+Merging two people keeps one prospect per campaign: the kept person's row takes the other row's events. Move to workspace is refused while a person (or a person going along with a company) is active in a campaign: "<name> is in <campaign>. Remove them from campaigns first." Copying is allowed, and rows left behind after a move keep their email but no longer point at the moved person or company.
+
 ## ClickUp
 
 Orbit keeps its tasks and ClickUp tasks in step, both ways.
@@ -492,14 +506,33 @@ select cron.schedule(
 
 Check runs with `select * from cron.job_run_details order by start_time desc limit 10;` and responses with `select * from net._http_response order by created desc limit 10;`. Stop it with `select cron.unschedule('orbit-sync');`. Running `cron.schedule` again with the same name replaces the job, which is how to rotate the secret.
 
-Mail and workflows need three more jobs, made the same way with their own name, schedule and path (production has all three):
+Mail, workflows and campaigns need more jobs, made the same way with their own name, schedule and path (production has `orbit-mail`, `orbit-workflows`, `orbit-mail-due` and `orbit-learn`; add `orbit-campaigns` with the SQL below):
 
 | Job | Schedule | Path | What it does |
 | --- | --- | --- | --- |
 | `orbit-mail` | `*/5 * * * *` (every five minutes) | `/api/cron/mail` | Syncs every connected mailbox into the Mail mirror (backfill included, up to four minutes a run), then for each user sends due mail and prepares replies and reminders (`prepareMail`). |
 | `orbit-workflows` | `*/2 * * * *` (every two minutes) | `/api/cron/workflows` | Runs workflows for up to about four and a half minutes, including Ask AI steps that search the web (`maxDuration` 300). |
 | `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Sends scheduled emails, brings snoozed conversations back, raises No reply reminders, sends meeting and task reminders and picks up agent mailbox jobs left behind (`maxDuration` 300). |
+| `orbit-campaigns` | `*/5 * * * *` (every five minutes) | `/api/cron/campaigns` | Syncs every connected campaign tool: campaigns, totals, steps, prospects and events, carrying a first sync over several runs (`maxDuration` 300, stops starting work after about four and a half minutes). |
 | `orbit-learn` | `*/10 1-5 * * *` (every ten minutes, 1am to 6am UTC) | `/api/cron/learn` | Nightly learning (see Learning). Each part runs once a day, so the extra runs only pick up what an earlier run didn't finish. |
+
+```sql
+select cron.schedule(
+  'orbit-campaigns',
+  '*/5 * * * *',
+  $$
+  select net.http_post(
+    url := '<SITE_URL>/api/cron/campaigns',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer <CRON_SECRET>',
+      'Content-Type', 'application/json'
+    ),
+    body := '{}'::jsonb,
+    timeout_milliseconds := 300000
+  );
+  $$
+);
+```
 
 ## Contact enrichment
 
@@ -1007,7 +1040,7 @@ Every variable Orbit reads. `.env.example` lists them with comments (aliases suc
 | `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) | Invites, email attachments, live Docs | Server only. Creates confirmed logins for invitees, signs uploads to and reads from the private `email-attachments` Storage bucket, and broadcasts assistant and agent edits to open notes through Realtime. |
 | `DOCS_LIVE_RELAY` | Live Docs in local development | `1` runs an in-process relay for live editing when Supabase isn't configured. Only for a single local server; leave it unset in production. |
 | `SITE_URL` (or `NEXT_PUBLIC_SITE_URL`) | Links in emails, ClickUp, Linear and invites; webhooks and Teams subscriptions | The https origin, with or without `https://`. |
-| `WORKFLOW_LIMIT_<SERVICE>_PER_MINUTE`, `_PER_HOUR`, `_AT_ONCE` | Workflow runs | Optional. Shared limits for workflow calls to `LLM` (600 a minute, 100 at once), `WEB_SEARCH` (120, 30), `PARALLEL` (120, 30), `MINDCASE` (30, 5), `CONTEXT_DEV` (60, 10), `HUNTER` (60, 10), `ENROW` (60, 10) and `ICYPEAS` (60, 10). |
+| `WORKFLOW_LIMIT_<SERVICE>_PER_MINUTE`, `_PER_HOUR`, `_AT_ONCE` | Workflow runs | Optional. Shared limits for workflow calls to `LLM` (600 a minute, 100 at once), `WEB_SEARCH` (120, 30), `PARALLEL` (120, 30), `MINDCASE` (30, 5), `CONTEXT_DEV` (60, 10), `HUNTER` (60, 10), `ENROW` (60, 10), `ICYPEAS` (60, 10), `SMARTLEAD` (60 a minute and 1,000 an hour per workspace key) and `SMARTLEAD_STATS` (10 a minute across the Smartlead account, for lead statistics) and `HEYREACH` (300 a minute per workspace key). |
 | `CRON_SECRET` | `/api/cron/sync`, `/api/cron/workflows`, `/api/workflows/worker`, `/api/cron/mail`, `/api/cron/mail-due`, `/api/assistant/probe` | Bearer secret. Workflow workers also need `SITE_URL` to call themselves. |
 | `MAIL_STORAGE_LIMIT_MB` | Mail mirror | Optional. The database size at which the mail backfill pauses (default 400). Raise it on a Pro Supabase project. |
 | `MAIL_HARD_STOP_MB` | Mail mirror | Optional. The database size at which all mail sync stops, new mail included (default 18% above `MAIL_STORAGE_LIMIT_MB`, so 472 on the defaults). |

@@ -28,6 +28,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | CSV export | `crm:read` |
 | CSV import | `companies:write` or `contacts:write` |
 | Webhook list and deliveries | `crm:read` |
+| Campaigns: importing prospects as contacts (the agent API has no campaign endpoints yet) | `campaigns:write` and `contacts:write` |
 | Webhook create and archive | `admin` |
 | Docs list, search, read, folders | `docs:read` |
 | Docs create, change, archive | `docs:write` |

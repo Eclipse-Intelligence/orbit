@@ -11,6 +11,7 @@ export const SCOPES = [
   "market:write",
   "docs:read",
   "docs:write",
+  "campaigns:write",
   "admin",
 ] as const;
 

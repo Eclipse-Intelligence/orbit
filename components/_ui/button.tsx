@@ -47,6 +47,8 @@ export const buttonVariants = cva(
 type ButtonProps = VariantProps<typeof buttonVariants> &
   ComponentProps<"button"> & {
     href?: ComponentProps<typeof Link>["href"];
+    target?: string;
+    rel?: string;
     shortcut?: string[];
   };
 
@@ -67,12 +69,15 @@ export default function Button({
   size,
   className,
   href,
+  target,
+  rel,
   children: label,
   shortcut,
   type = "button",
   ...props
 }: ButtonProps) {
   const classes = cn(buttonVariants({ variant, size }), className);
+  const linkRel = rel ?? (target === "_blank" ? "noopener noreferrer" : undefined);
   const children = shortcut?.length ? (
     <>
       {label}
@@ -84,7 +89,7 @@ export default function Button({
 
   if (typeof href === "string" && (href.startsWith("/api/") || href.startsWith("#"))) {
     return (
-      <a href={href} className={classes} {...(props as ComponentProps<"a">)}>
+      <a href={href} target={target} rel={linkRel} className={classes} {...(props as ComponentProps<"a">)}>
         {children}
       </a>
     );
@@ -94,6 +99,8 @@ export default function Button({
     return (
       <Link
         href={href}
+        target={target}
+        rel={linkRel}
         className={classes}
         {...(props as Omit<ComponentProps<typeof Link>, "href" | "className">)}
       >
