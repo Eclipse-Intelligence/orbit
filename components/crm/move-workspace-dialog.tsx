@@ -171,7 +171,8 @@ function MoveBody({
   const hasDeals = Boolean(preview && (copy ? preview.dealsAvailable > 0 : preview.deals > 0));
   const showDeals = hasDeals && (!copy || copyDeals) && pipelines.length > 0;
   const lines = preview ? summaryLines(preview, copy, copyDeals) : [];
-  const proposalBlocked = Boolean(preview?.proposalConflict && !copy && preview?.canMove !== false);
+  const moveConflict = preview?.proposalConflict ?? preview?.campaignConflict ?? null;
+  const proposalBlocked = Boolean(moveConflict && !copy && preview?.canMove !== false);
   const blocked = Boolean(showDeals && preview?.boardConflict && pipeline?.kind === "board") || proposalBlocked;
   const previewError = loading ? null : (loaded?.error ?? null);
   const mustCopy = preview?.canMove === false;
@@ -312,7 +313,7 @@ function MoveBody({
         </div>
         {proposalBlocked && (
           <p role="alert" className="caption-style text-danger">
-            {preview?.proposalConflict}
+            {moveConflict}
           </p>
         )}
         {blocked && !proposalBlocked && (

@@ -168,6 +168,7 @@ const HASH_TARGETS: Record<string, string> = {
   enrichment: SETTINGS_PATHS.tools,
   "agent-mailbox": SETTINGS_PATHS.tools,
   "meta-leads": SETTINGS_PATHS.tools,
+  smartlead: SETTINGS_PATHS.tools,
   agents: SETTINGS_PATHS.tools,
   webhooks: SETTINGS_PATHS.tools,
   "email-and-calendar": SETTINGS_PATHS.tools,

@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import AgentMailboxSettings from "@/components/crm/agent-mailbox-settings";
+import CampaignConnectionCard from "@/components/campaigns/campaign-connection-card";
 import ApiSettings from "@/components/crm/api-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
 import { LinearSettings } from "@/components/crm/connection-cards";
@@ -10,6 +11,7 @@ import { SettingsPage } from "@/components/crm/settings-ui";
 import WebhooksSettings from "@/components/crm/webhooks-settings";
 import { agentMailboxView } from "@/lib/agent-mail/mailbox";
 import { getUserActor } from "@/lib/auth/user";
+import { campaignConnectionViews } from "@/lib/campaigns/connections";
 import { getClickUpSettings } from "@/lib/crm/clickup";
 import { getMetaLeadSettings } from "@/lib/crm/meta-leads";
 import { SCOPES } from "@/lib/crm/scopes";
@@ -30,7 +32,7 @@ export default async function ToolsSettingsPage() {
   const headerStore = await headers();
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
   const origin = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
-  const [clickup, enrichment, unenriched, agentMailbox, linear, endpoints, deliveries, metaLeads] = await Promise.all([
+  const [clickup, enrichment, unenriched, agentMailbox, linear, endpoints, deliveries, metaLeads, campaignTools] = await Promise.all([
     getClickUpSettings(user),
     getEnrichmentSettings(user),
     unenrichedCompanyCount(user),
@@ -39,6 +41,7 @@ export default async function ToolsSettingsPage() {
     listWebhooks(user),
     listWebhookDeliveries(user, 20),
     getMetaLeadSettings(user, siteOrigin() ?? origin),
+    campaignConnectionViews(user),
   ]);
   const canAdmin = user.role === "owner" || user.role === "admin";
   return (
@@ -54,6 +57,9 @@ export default async function ToolsSettingsPage() {
       />
       <AgentMailboxSettings view={agentMailbox} isOwner={user.role === "owner"} />
       <MetaLeadsSettings view={metaLeads} canAdmin={canAdmin} />
+      {campaignTools.map((view) => (
+        <CampaignConnectionCard key={view.provider} view={view} />
+      ))}
       <LinearSettings linear={linear} connection={linearHere} workspaceName={user.workspaceName} canAdmin={canAdmin} isOwner={user.role === "owner"} />
       <ApiSettings origin={origin} scopes={[...SCOPES]} />
       <WebhooksSettings endpoints={endpoints} deliveries={deliveries} canAdmin={canAdmin} />

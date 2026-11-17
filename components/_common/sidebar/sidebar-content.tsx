@@ -30,6 +30,7 @@ import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import CalendarIcon from "@/public/assets/images/companies/sidebar/calendar.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
+import SendIcon from "@/public/assets/images/campaigns/send.svg";
 import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
 
 type SidebarContentProps = {
@@ -166,6 +167,12 @@ export default function SidebarContent({
               icon={ZapIcon}
               label="Workflows"
               active={current("/workflows")}
+            />
+            <SidebarNavItem
+              href="/campaigns"
+              icon={SendIcon}
+              label="Campaigns"
+              active={current("/campaigns")}
             />
           </SidebarSection>
           <SidebarDocs />
