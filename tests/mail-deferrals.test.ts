@@ -7,11 +7,11 @@ import { createWorkspace } from "@/lib/crm/workspaces";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { dayKey, dayKeyAt } from "@/lib/crm/task-due";
 import { clockLabel, dayStartIso } from "@/lib/crm/task-time";
-import { getTask, updateTask } from "@/lib/crm/tasks";
+import { archiveTask, getTask, updateTask } from "@/lib/crm/tasks";
 import { setTaskRepeat } from "@/lib/crm/task-series";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { deferralHint, deferralOptions, normalizeDeferral, resolveDeferral } from "@/lib/mail/deferral-dates";
+import { deferralOptions, normalizeDeferral, resolveDeferral } from "@/lib/mail/deferral-dates";
 import { applyDeferral, cancelDeferral, moveDeferral, settleDeferrals } from "@/lib/mail/deferrals";
 import { finishReminder, waitingMail } from "@/lib/mail/waiting";
 import { addFollowUp, cancelFollowUp, prepareMail, prepareNudge, setMailHelp } from "@/lib/mail/prepare";
@@ -124,23 +124,6 @@ describe("resolving when someone asked to pick things up", () => {
     assert.equal(resolveDeferral({ precision: "day", date: "2027-02-30" }, now, "Europe/London"), null);
   });
 
-  it("only asks the model about emails that name a later time", () => {
-    assert.ok(deferralHint("Can we pick this up in January?"));
-    assert.ok(deferralHint("Let's circle back after Q1."));
-    assert.ok(deferralHint("Try me next year, budgets are frozen."));
-    assert.ok(!deferralHint("Could you send over the renewal terms this week?"));
-  });
-
-  it("only treats May and March as a time next to a preposition or a year", () => {
-    assert.ok(!deferralHint("You may want to review the attached."));
-    assert.ok(!deferralHint("We will march on with the plan."));
-    assert.ok(!deferralHint("The fall in prices helps."));
-    assert.ok(deferralHint("can we pick this up in May?"));
-    assert.ok(deferralHint("Let's talk in May."));
-    assert.ok(deferralHint("Budgets reopen early March."));
-    assert.ok(deferralHint("Speak again May 2027."));
-  });
-
   it("starts a named period that has already begun from the next working day", () => {
     const tuesday = Date.parse("2026-11-17T10:00:00Z");
     assert.equal(resolveDeferral({ precision: "month", date: "2026-11-01" }, tuesday, "Europe/London")?.toISOString(), "2026-11-18T09:00:00.000Z", "later this month");
@@ -150,6 +133,8 @@ describe("resolving when someone asked to pick things up", () => {
     assert.equal(resolveDeferral({ precision: "week", date: "2026-11-23" }, sundayEvening, "Europe/London")?.toISOString(), "2026-11-23T09:00:00.000Z", "next week, sent on a Sunday evening");
     const january = Date.parse("2027-01-20T10:00:00Z");
     assert.equal(resolveDeferral({ precision: "quarter", date: "2027-01-01" }, january, "Europe/London")?.toISOString(), "2027-01-21T09:00:00.000Z", "in Q1, said in January");
+    const newYear = Date.parse("2026-01-03T10:00:00Z");
+    assert.equal(resolveDeferral({ precision: "year", date: "2027-01-01" }, newYear, "Europe/London")?.toISOString(), "2027-01-11T09:00:00.000Z", "next year, said early in January");
   });
 
   it("reads loose model answers and refuses ones it can't place", () => {
@@ -158,29 +143,6 @@ describe("resolving when someone asked to pick things up", () => {
     assert.deepEqual(normalizeDeferral({ precision: "day", date: "2026-11-25T09:00:00Z" }), { precision: "day", date: "2026-11-25" });
     assert.equal(normalizeDeferral({ precision: "soon", date: "2027-01-01" }), null);
     assert.equal(normalizeDeferral({ precision: "day", date: "next week" }), null);
-  });
-
-  it("asks the model about the ways people really put things off", () => {
-    for (const phrase of [
-      "We will pick this up Wednesday next week",
-      "Can we speak next Wednesday?",
-      "Can you chase me next Friday?",
-      "Let's catch up on Monday 30th",
-      "Tuesday week works",
-      "Come back to me in a month",
-      "Give me a shout in a week",
-      "Let's speak in two weeks",
-      "Try again after the 20th",
-      "I'm away until the 3rd",
-      "Shall we pick up w/c 7th?",
-      "Let's speak after half term",
-      "Once the new financial year starts",
-      "Shall we say March?",
-      "Speak tomorrow",
-      "Let's regroup after the weekend",
-    ]) {
-      assert.ok(deferralHint(phrase), phrase);
-    }
   });
 
   it("offers later dates to change to", () => {
@@ -439,9 +401,11 @@ describe("deferral bookkeeping", () => {
       message("m-new", "Thanks, that all works.", { conversationId: "conv-pair", receivedDateTime: ago(2), sentDateTime: ago(2) }),
     );
     await sync();
-    const { fetchImpl, prompts } = model([]);
+    const { fetchImpl, prompts } = model([{ deferrals: [] }]);
     await prepareMail(owner, { deadline: soon(), fetchImpl });
-    assert.equal(prompts.length, 0);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0].user, /that all works/, "every email from someone in the CRM goes to the model, whatever its wording");
+    assert.doesNotMatch(prompts[0].user, /pick this up in January/, "an email they followed up an hour later isn't asked about");
     const checked = await admin().query("select 1 from crm.mail_deferral_checks d join crm.mail_messages m on m.id = d.message_id where m.provider_message_id = 'm-old'");
     assert.equal(checked.rowCount, 0);
   });
@@ -551,6 +515,10 @@ describe("deferrals after review", () => {
 
     await updateTask(owner, deferral.task_id!, { completed: true });
     assert.equal((await threadDeferrals("conv-redefer"))[0].state, "done", "completing the task ends the check-in");
+    await admin().query("update crm.mail_reminders set state = 'waiting' where id = $1", [deferral.id]);
+    await admin().query("update crm.tasks set completed_at = null where id = $1", [deferral.task_id]);
+    await archiveTask(owner, deferral.task_id!);
+    assert.equal((await threadDeferrals("conv-redefer"))[0].state, "cancelled", "deleting the task cancels the check-in, so the email can come back");
 
     const [own] = await threadDeferrals("conv-own");
     await admin().query("update crm.mail_reminders set state = 'due', surfaced_at = now() where id = $1", [own.id]);
@@ -576,6 +544,20 @@ describe("deferrals after review", () => {
     assert.equal(await settleDeferrals(owner), 1);
     assert.equal((await threadDeferrals(thread))[0].state, "done");
     assert.ok((await getTask(owner, own.task_id!)).completedAt);
+
+    await admin().query("update crm.mail_reminders set state = 'due', surfaced_at = now() where id = $1", [own.id]);
+    await admin().query("update crm.tasks set completed_at = null where id = $1", [own.task_id]);
+    inbox.push(
+      message("r-wrote-first", "Morning Mark, ready when you are.", {
+        from: { emailAddress: { name: "Ross Burke", address: "ross@hvac.test" } },
+        conversationId: thread,
+        receivedDateTime: new Date(Date.now() + 60_000).toISOString(),
+        sentDateTime: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    );
+    await sync();
+    assert.equal(await settleDeferrals(owner), 1, "their email after the check-in surfaced ends it too");
+    assert.ok((await getTask(owner, own.task_id!)).completedAt);
   });
 
   it("retries an answer it can't place instead of forgetting the email", async () => {
@@ -586,7 +568,8 @@ describe("deferrals after review", () => {
       }),
     );
     await sync();
-    const { fetchImpl } = model([{ deferrals: [{ n: 1, note: "Asked to pick this up after half term.", precision: "soonish", date: "after half term" }] }]);
+    const odd = { note: "Asked to pick this up after half term.", precision: "soonish", date: "after half term" };
+    const { fetchImpl } = model([{ deferrals: [1, 2, 3, 4].map((n) => ({ n, ...odd })) }]);
     await prepareMail(owner, { deadline: soon(), fetchImpl });
     const check = (await admin().query<{ state: string }>("select state from crm.mail_deferral_checks where message_id = $1", [await messageId("r-odd")])).rows[0];
     assert.equal(check.state, "failed");
@@ -638,6 +621,8 @@ describe("deferrals after review", () => {
     const result = await applyDeferral(owner, { ...candidate(copy, "conv-copy"), sourceId: other }, { note: "Asked to pick this up later.", precision: "month", date: when });
     assert.equal(result, null);
     assert.equal((await threadDeferrals("conv-copy")).length, 0);
+    const held = await admin().query("select 1 from crm.capture_dismissals where user_id = $1 and source_id = $2 and thread_key = 'conv-copy'", [owner.userId, other]);
+    assert.equal(held.rowCount, 1, "the second copy is held back from Replies too");
   });
 
   it("puts the check-in in the other workspace when only that one knows the sender", async () => {

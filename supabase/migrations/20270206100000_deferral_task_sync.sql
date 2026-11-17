@@ -23,7 +23,7 @@ begin
     where r.task_id = new.id and r.deferral and r.state = 'due'
       and p.user_id = r.user_id and p.source_id = r.source_id and p.thread_key = r.thread_key
       and p.kind = 'nudge' and p.state = 'ready';
-    update crm.mail_reminders set state = 'done'
+    update crm.mail_reminders set state = case when new.completed_at is not null then 'done' else 'cancelled' end
     where task_id = new.id and deferral and state in ('waiting', 'due');
     return null;
   end if;

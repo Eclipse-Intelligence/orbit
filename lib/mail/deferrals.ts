@@ -11,16 +11,16 @@ import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
 import { completeJson } from "@/lib/llm";
 import { clean } from "@/lib/mail/ai";
-import { DEFERRAL_GRACE_MINUTES, deferralHint, deferralOptions, normalizeDeferral, resolveDeferral } from "@/lib/mail/deferral-dates";
+import { DEFERRAL_GRACE_MINUTES, deferralOptions, normalizeDeferral, resolveDeferral } from "@/lib/mail/deferral-dates";
 import { stripQuoted } from "@/lib/mail/format";
 import type { DeferredFollowUp } from "@/lib/mail/view";
 import { threadKey } from "@/lib/mail/threads";
 import { filedWorkspaces } from "@/lib/mail/timeline";
 
 const LOOKBACK_HOURS = 48;
-const CANDIDATES_PER_RUN = 24;
-const ASKED_PER_RUN = 8;
-const BODY_CHARS = 20_000;
+const CANDIDATES_PER_RUN = 40;
+const PER_CALL = 8;
+const MODEL_WINDOW_CHARS = 150_000;
 const MAX_FAILURES = 3;
 const RETRY_HOURS = 6;
 const STEP_MS = 20_000;
@@ -79,7 +79,7 @@ function knownSender(alias: string, workspaceParam: string, freeParam: string) {
 }
 
 export function deferralText(body: string | null, snippet: string | null) {
-  return stripQuoted(body ?? snippet ?? "").slice(0, BODY_CHARS);
+  return stripQuoted(body ?? snippet ?? "").slice(0, MODEL_WINDOW_CHARS);
 }
 
 async function workspaceIdsOf(actor: UserActor) {
@@ -296,6 +296,12 @@ async function recordDeferral(caller: UserActor, input: DeferralInput) {
         [actor.userId, message.internet_message_id, input.sourceId],
       );
       if (copied.rowCount) {
+        await db.query(
+          `insert into crm.capture_dismissals (workspace_id, user_id, kind, source_id, thread_key, message_at)
+           values ($1, $2, 'reply', $3, $4, $5)
+           on conflict (user_id, kind, source_id, thread_key) do update set message_at = greatest(crm.capture_dismissals.message_at, excluded.message_at)`,
+          [actor.workspaceId, actor.userId, input.sourceId, input.threadKey, message.at],
+        );
         await noteChecked(db, actor, [input.messageId], "found");
         return null;
       }
@@ -402,11 +408,10 @@ export async function settleDeferrals(actor: UserActor) {
            select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
            where m.user_id = $1 and m.source_id = r.source_id and m.thread_key = r.thread_key and not m.is_draft
              and f.role not in ('drafts', 'outbox', 'junk', 'trash')
-             and lower(coalesce(m.from_email, '')) in ${ownAddresses("$1", "$2")}
              and coalesce(m.sent_at, m.received_at, m.created_at) > coalesce(r.surfaced_at, r.due_at)
          )
        returning r.id`,
-      [actor.userId, actor.email],
+      [actor.userId],
     );
     return result.rows.map((row) => row.id);
   });
@@ -424,19 +429,27 @@ function emailDate(value: Date | string) {
   return dayKeyAt(new Date(value));
 }
 
-export async function checkDeferrals(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
-  const workspaceIds = await workspaceIdsOf(actor);
-  const list = await withActor(actor, (db) => candidates(db, actor, workspaceIds));
-  if (list.length === 0) return 0;
-  const withHint = new Set(list.filter((item) => deferralHint(`${item.subject ?? ""}\n${deferralText(item.body_text, item.snippet)}`)).map((item) => item.id));
-  await markDeferralChecked(
-    actor,
-    list.filter((item) => !withHint.has(item.id)).map((item) => item.id),
-  );
-  const hinted = list.filter((item) => withHint.has(item.id)).slice(0, ASKED_PER_RUN);
-  if (hinted.length === 0 || options.deadline - Date.now() < STEP_MS) return 0;
+function deferralBatches(list: Candidate[]) {
+  const batches: Candidate[][] = [];
+  let current: Candidate[] = [];
+  let size = 0;
+  for (const item of list) {
+    const length = deferralText(item.body_text, item.snippet).length + (item.subject?.length ?? 0) + 200;
+    if (current.length > 0 && (current.length >= PER_CALL || size + length > MODEL_WINDOW_CHARS)) {
+      batches.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(item);
+    size += length;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+async function askBatch(actor: UserActor, batch: Candidate[], options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
   const name = actor.fullName || actor.email;
-  const listed = hinted
+  const listed = batch
     .map(
       (item, index) =>
         `[${index + 1}] From: ${item.from_name ? `${item.from_name} <${item.from_email}>` : item.from_email}\nDate: ${emailDate(item.at)}\nSubject: ${item.subject ?? "(no subject)"}\n${deferralText(item.body_text, item.snippet)}`,
@@ -450,23 +463,23 @@ export async function checkDeferrals(actor: UserActor, options: { deadline: numb
         `${DEFERRAL_RULES} When unsure, leave it out. ${UNTRUSTED}`,
       user: listed,
       schema: BATCH_SCHEMA,
-      maxTokens: 600,
-      timeoutMs: 15_000,
+      maxTokens: 800,
+      timeoutMs: 20_000,
       deadline: options.deadline,
       fetchImpl: options.fetchImpl,
     });
   } catch (error) {
     console.error("Deferral check failed", error instanceof Error ? error.message : error);
-    await noteFailures(actor, hinted.map((item) => item.id));
+    await noteFailures(actor, batch.map((item) => item.id));
     return 0;
   }
   const found = new Map<number, FoundDeferral>();
   for (const entry of result.data.deferrals) {
-    if (entry && Number.isInteger(entry.n) && entry.n >= 1 && entry.n <= hinted.length && !found.has(entry.n)) found.set(entry.n, entry);
+    if (entry && Number.isInteger(entry.n) && entry.n >= 1 && entry.n <= batch.length && !found.has(entry.n)) found.set(entry.n, entry);
   }
   const malformed = result.data.deferrals.some((entry) => entry === null);
   let recorded = 0;
-  for (const [index, item] of hinted.entries()) {
+  for (const [index, item] of batch.entries()) {
     try {
       const entry = found.get(index + 1);
       if (!entry && malformed) {
@@ -484,6 +497,17 @@ export async function checkDeferrals(actor: UserActor, options: { deadline: numb
       console.error("Recording a deferral failed", error instanceof Error ? error.message : error);
       await noteFailures(actor, [item.id]);
     }
+  }
+  return recorded;
+}
+
+export async function checkDeferrals(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
+  const workspaceIds = await workspaceIdsOf(actor);
+  const list = await withActor(actor, (db) => candidates(db, actor, workspaceIds));
+  let recorded = 0;
+  for (const batch of deferralBatches(list)) {
+    if (options.deadline - Date.now() < STEP_MS) break;
+    recorded += await askBatch(actor, batch, options);
   }
   return recorded;
 }
