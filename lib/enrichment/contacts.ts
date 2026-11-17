@@ -242,7 +242,13 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
       const duplicate = error instanceof CrmError && error.code === "duplicate_contact";
       const message =
         duplicate
-          ? `Another contact already has ${write.email ?? "that profile"}.`
+          ? write.email && write.linkedinUrl
+            ? "Another contact already has this email or LinkedIn profile."
+            : write.email
+              ? `Another contact already has ${write.email}.`
+              : write.linkedinUrl
+                ? "Another contact already has that LinkedIn profile."
+                : "Another contact already has that profile."
           : error instanceof CrmError
             ? error.message
             : "Couldn't save what was found.";

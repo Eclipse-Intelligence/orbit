@@ -640,6 +640,25 @@ describe("workflow tags and Find and check email", () => {
       assert.equal(run.skip_reason, "Check email: Another contact already has dee.taken@acme-steps.test.");
     });
 
+    it("names both when a found email comes with a LinkedIn profile another contact has", async () => {
+      const profile = "https://www.linkedin.com/in/shared-steps-person";
+      await createContact(owner, { firstName: "Lin", lastName: "Owner", linkedinUrl: profile, companyId: acme });
+      const clash = await person("Lin", "Clash");
+      const fake1 = fake([
+        (call) =>
+          call.url.includes("api.hunter.io/v2/email-finder")
+            ? { body: { data: { email: "lin.clash@acme-steps.test", score: 96, verification: { status: "valid" }, linkedin_url: profile } } }
+            : null,
+        hunterChecks({}),
+      ]);
+      const started = await start(findEmail(), { type: "contact", id: clash.id }, fake1.fetchImpl);
+      await drain(fake1.fetchImpl);
+      const run = await runRow(started.runId);
+      assert.equal(run.status, "succeeded");
+      assert.equal(run.skip_reason, "Check email: Another contact already has this email or LinkedIn profile.");
+      assert.equal((await getContact(owner, clash.id)).email, null);
+    });
+
     it("fails the step inside a loop when no email finder is set up", async () => {
       delete process.env.HUNTER_API_KEY;
       const tag = "setup batch";
