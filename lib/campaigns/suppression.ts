@@ -152,6 +152,12 @@ async function blockBatch(workspaceId: string, provider: CampaignProvider, conte
   await query("select private.suppression_blocked($1, $2::uuid[])", [workspaceId, rows.map((row) => row.id)]);
 }
 
+function rejected(provider: CampaignProvider, error: unknown) {
+  if (error instanceof ServiceBusy) return false;
+  const status = provider.failure(error)?.status ?? null;
+  return status !== null && status >= 400 && status < 500 && status !== 429;
+}
+
 export async function pushBlockList(workspaceId: string, provider: CampaignProvider, context: ProviderContext) {
   if (!provider.blockAddresses) return 0;
   let pending: { id: string; value: string }[];
@@ -166,11 +172,8 @@ export async function pushBlockList(workspaceId: string, provider: CampaignProvi
     await blockBatch(workspaceId, provider, context, pending);
     return pending.length;
   } catch (error) {
-    console.error(`Couldn't add addresses to the ${provider.name} block list`, redactedError(error));
-    if (error instanceof ServiceBusy || pending.length === 1) {
-      await blockFailed(workspaceId, provider, pending.map((row) => row.id));
-      return 0;
-    }
+    if (!(error instanceof ServiceBusy)) console.error(`Couldn't add addresses to the ${provider.name} block list`, redactedError(error));
+    if (!rejected(provider, error)) return 0;
   }
   let blocked = 0;
   for (const row of pending) {
@@ -178,8 +181,8 @@ export async function pushBlockList(workspaceId: string, provider: CampaignProvi
       await blockBatch(workspaceId, provider, context, [row]);
       blocked += 1;
     } catch (error) {
+      if (!rejected(provider, error)) break;
       await blockFailed(workspaceId, provider, [row.id]);
-      if (error instanceof ServiceBusy) break;
     }
   }
   return blocked;

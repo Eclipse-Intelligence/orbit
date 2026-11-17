@@ -675,7 +675,7 @@ describe("suppression and Do not contact", () => {
       assert.equal(audit?.changes.workflowStep, "step_1");
     });
 
-    it("tries a rejected batch's addresses one at a time, and counts busy and server failures too", async () => {
+    it("tries a rejected batch's addresses one at a time, counting only the address that was rejected", async () => {
       const ok = (await createContact(owner, { firstName: "Olu", lastName: "Fine", email: "olu@fine.test" }, { provenance: { operation: "test" } })).body.contact.id;
       const bad = (await createContact(owner, { firstName: "Bea", lastName: "Bad", email: "bea@bad.test" }, { provenance: { operation: "test" } })).body.contact.id;
       alpha.fail = (url: URL) => (url.pathname.endsWith("/leads/add-domain-block-list") ? new Response("{}", { status: 500 }) : null);
@@ -686,7 +686,7 @@ describe("suppression and Do not contact", () => {
         alpha.fail = undefined;
       }
       const counted = await sql<{ value: string; block_attempts: number }>("select value, block_attempts from crm.suppressions where value in ('olu@fine.test', 'bea@bad.test') order by value");
-      assert.ok(counted.every((row) => row.block_attempts >= 1), "a 5xx counts");
+      assert.deepEqual(counted.map((row) => row.block_attempts), [0, 0], "a 5xx never counts");
       const smartleadWrites = alpha.writes ?? [];
       const before = smartleadWrites.length;
       const rejectBad: typeof fetch = async (input, init) => {
@@ -701,6 +701,25 @@ describe("suppression and Do not contact", () => {
         { value: "olu@fine.test", blocked: true },
       ]);
       assert.ok(smartleadWrites.slice(before).some((write) => write.path === "/leads/add-domain-block-list"));
+    });
+
+    it("never gives up on an address because of server errors or a busy provider", async () => {
+      const hal = (await createContact(owner, { firstName: "Hal", lastName: "Patient", email: "hal@patient.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      const statuses = [500, 503, 429, 502, 429, 500];
+      let next = 0;
+      alpha.fail = (url: URL) => (url.pathname.endsWith("/leads/add-domain-block-list") ? new Response("{}", { status: statuses[next++ % statuses.length], headers: { "retry-after": "1" } }) : null);
+      try {
+        await setDoNotContact(owner, { contactId: hal }, { fetchImpl });
+        for (let run = 0; run < 4; run += 1) {
+          await sql("delete from private.rate_limit_buckets where bucket_key like 'workflow-service:%'");
+          await sync(owner.workspaceId);
+        }
+      } finally {
+        alpha.fail = undefined;
+      }
+      const row = await sql<{ blocked_at: Date | null; block_attempts: number }>("select blocked_at, block_attempts from crm.suppressions where value = 'hal@patient.test'");
+      assert.deepEqual(row, [{ blocked_at: null, block_attempts: 0 }]);
+      assert.ok((await sql<{ value: string }>("select value from private.suppression_block_pending($1, 100)", [owner.workspaceId])).some((item) => item.value === "hal@patient.test"));
     });
 
     it("never drops a bounce on lift, including one that arrived while the person was on the list", async () => {
