@@ -2,6 +2,7 @@ const OPEN_SECTIONS = new Set([
   "activities",
   "boards",
   "calendar",
+  "campaigns",
   "capture",
   "companies",
   "contacts",

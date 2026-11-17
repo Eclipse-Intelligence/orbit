@@ -34,7 +34,7 @@ export async function enqueueWorkflowEvent(
   kickWorkflows();
 }
 
-function kickWorkflows() {
+export function kickWorkflows() {
   try {
     after(async () => {
       try {

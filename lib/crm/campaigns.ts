@@ -85,8 +85,8 @@ export async function listCampaigns(actor: Actor): Promise<CampaignSummary[]> {
 
 async function readCampaign(db: Db, actor: Actor, id: string) {
   if (!isUuid(id)) throw notFound("campaign");
-  const result = await db.query<CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[]; sync_error: string | null }>(
-    SUMMARY_SQL.replace("select k.id,", "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.sync_error, k.id,") + " where k.id = $1 and k.workspace_id = $2",
+  const result = await db.query<CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[]; sync_error: string | null; stray: number | null }>(
+    SUMMARY_SQL.replace("select k.id,", "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.sync_error, (k.sync_state->>'strayConversations')::int as stray, k.id,") + " where k.id = $1 and k.workspace_id = $2",
     [id, actor.workspaceId],
   );
   const row = result.rows[0];
@@ -196,6 +196,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
       url: provider?.campaignUrl(row.external_id) ?? null,
       capacity,
       syncError: row.sync_error,
+      strayConversations: row.stray ?? 0,
     };
   });
 }

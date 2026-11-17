@@ -178,6 +178,10 @@ export function activityDirection(
     if (direction === "inbound" || activity.metadata.source === "microsoft")
       return "Received";
   }
+  if (activity.type === "linkedin") {
+    if (direction === "outbound") return "Sent";
+    if (direction === "inbound") return "Received";
+  }
   return null;
 }
 
@@ -244,7 +248,7 @@ export function activityByline(
     text(activity.actorName) ??
     (viewerId && activity.actorUserId === viewerId ? "You" : null);
   if (
-    activity.type === "email" &&
+    (activity.type === "email" || activity.type === "linkedin") &&
     activityDirection({ ...activity, body: null }) === "Received"
   ) {
     const from = text(activity.contactName) ?? text(activity.metadata.from);

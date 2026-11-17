@@ -56,6 +56,7 @@ export default async function CampaignPage({
       filter={filter}
       search={search}
       canImport={user.scopes.includes("contacts:write") && user.scopes.includes("campaigns:write")}
+      canAct={user.scopes.includes("campaigns:write")}
       mailboxes={
         campaign.channel === "email" ? (
           <Suspense fallback={<p className="ui-style text-subtle">Checking…</p>}>

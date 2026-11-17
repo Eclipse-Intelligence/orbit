@@ -8,6 +8,7 @@ import { recordAudit } from "@/lib/crm/mutate";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 import { decryptSecret, encryptSecret } from "@/lib/crypto/secret";
 import { query } from "@/lib/db/pool";
+import { campaignWebhookUrlFor } from "@/lib/campaigns/webhook-urls";
 import { ServiceBusy } from "@/lib/workflows/limits";
 
 export const KEY_TAKEN = "This key is already connected.";
@@ -96,7 +97,7 @@ export async function saveCampaignConnection(
 export async function removeCampaignConnection(actor: Actor, providerId: string, options: { provenance?: Provenance } = {}) {
   const provider = providerOrFail(providerId);
   assertAdmin(actor, provider);
-  return withActor(actor, async (db) => {
+  const removed = await withActor(actor, async (db) => {
     const removed = await db.query<{ id: string }>(
       "delete from crm.campaign_connections where workspace_id = $1 and provider = $2 returning id",
       [actor.workspaceId, provider.id],
@@ -109,6 +110,8 @@ export async function removeCampaignConnection(actor: Actor, providerId: string,
     });
     return true;
   });
+  if (removed) await query("select private.campaign_forget_webhooks($1, $2)", [actor.workspaceId, provider.id]);
+  return removed;
 }
 
 async function keyHint(workspaceId: string, provider: CampaignProviderId) {
@@ -124,9 +127,10 @@ async function keyHint(workspaceId: string, provider: CampaignProviderId) {
 
 export async function campaignConnectionViews(actor: Actor): Promise<ConnectionView[]> {
   const rows = await withActor(actor, async (db) => {
-    const result = await db.query<{ provider: CampaignProviderId; details: Record<string, unknown>; last_synced_at: Date | null; last_error: string | null; campaigns: number }>(
+    const result = await db.query<{ provider: CampaignProviderId; details: Record<string, unknown>; last_synced_at: Date | null; last_error: string | null; campaigns: number; webhook_failed: boolean }>(
       `select c.provider, c.details, c.last_synced_at, c.last_error,
-              (select count(*)::int from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider) as campaigns
+              (select count(*)::int from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider) as campaigns,
+              exists (select 1 from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider and k.sync_state ? 'webhookFailedAt') as webhook_failed
        from crm.campaign_connections c
        where c.workspace_id = $1`,
       [actor.workspaceId],
@@ -145,10 +149,10 @@ export async function campaignConnectionViews(actor: Actor): Promise<ConnectionV
 async function connectionView(
   actor: Actor,
   provider: CampaignProvider,
-  row: { details: Record<string, unknown>; last_synced_at: Date | null; last_error: string | null; campaigns: number } | undefined,
+  row: { details: Record<string, unknown>; last_synced_at: Date | null; last_error: string | null; campaigns: number; webhook_failed: boolean } | undefined,
   canAdmin: boolean,
 ): Promise<ConnectionView> {
-  if (!row) return { provider: provider.id, connected: false, line: null, lastSyncedAt: null, lastError: null, keyHint: null, canAdmin };
+  if (!row) return { provider: provider.id, connected: false, line: null, lastSyncedAt: null, lastError: null, keyHint: null, canAdmin, webhookUrl: null };
   const campaigns = row.campaigns || (typeof row.details.campaigns === "number" ? row.details.campaigns : 0);
   return {
     provider: provider.id,
@@ -158,6 +162,7 @@ async function connectionView(
     lastError: row.last_error,
     keyHint: canAdmin ? await keyHint(actor.workspaceId, provider.id) : null,
     canAdmin,
+    webhookUrl: canAdmin && row.webhook_failed ? await campaignWebhookUrlFor(actor, provider.id) : null,
     ...(provider.listSenders ? { senders: await listCampaignSenders(actor, provider.id) } : {}),
   };
 }

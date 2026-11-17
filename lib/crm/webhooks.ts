@@ -70,6 +70,15 @@ export const WEBHOOK_EVENTS = [
   "page_folder.shared",
   "page_folder.archived",
   "page_folder.restored",
+  "campaign.connection_changed",
+  "campaign.sender_linked",
+  "campaign.paused",
+  "campaign.resumed",
+  "campaign.prospect_paused",
+  "campaign.prospect_resumed",
+  "campaign.prospect_removed",
+  "campaign.category_changed",
+  "campaign.reply_sent",
 ] as const;
 
 const BACKOFF_SECONDS = [60, 300, 1800, 7200];

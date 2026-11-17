@@ -64,3 +64,8 @@ export async function upstreamFailure(provider: string, response: Response, opti
   logUpstream(provider, response.status, body);
   return upstreamMessage(provider, response.status, options);
 }
+
+export function urlSecrets(url: string) {
+  const secret = new URL(url).searchParams.get("secret");
+  return secret ? [url, secret] : [url];
+}

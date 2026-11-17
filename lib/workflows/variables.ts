@@ -171,6 +171,16 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
       { path: "proposal.clientUrl", label: "Client's link", group: "Proposal" },
     );
   }
+  if (type === "campaign_event") {
+    options.push(
+      { path: "campaign.name", label: "Campaign", group: "Campaign" },
+      { path: "campaign.channel", label: "Channel", group: "Campaign" },
+      { path: "campaign.category", label: "Category", group: "Campaign" },
+      { path: "campaign.step", label: "Step", group: "Campaign" },
+      { path: "campaign.url", label: "Link to the campaign", group: "Campaign" },
+      { path: "campaign.threadUrl", label: "Link to the conversation", group: "Campaign" },
+    );
+  }
   if (type === "email_received") {
     options.push(
       { path: "email.subject", label: "Subject", group: "Email" },

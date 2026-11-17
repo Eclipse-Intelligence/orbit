@@ -3,6 +3,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
+import CopyButton from "@/components/_ui/copy-button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
 import { SettingsCard } from "@/components/crm/settings-ui";
@@ -78,6 +79,15 @@ export default function CampaignConnectionCard({ view, children }: { view: Conne
             <p role="alert" className="caption-style text-danger">
               {error}
             </p>
+          )}
+          {view.webhookUrl && (
+            <div className="flex flex-col gap-1.5">
+              <p className="caption-style text-subtle">Add the reply webhook to each campaign in {name}.</p>
+              <div className="flex min-w-0 items-center gap-2">
+                <code className="ui-style text-soft min-w-0 flex-1 truncate">{view.webhookUrl}</code>
+                <CopyButton text={view.webhookUrl} ariaLabel="Copy the webhook URL" />
+              </div>
+            </div>
           )}
           {children}
         </>

@@ -24,6 +24,7 @@ import { getTask } from "@/lib/crm/tasks";
 import { listProducts } from "@/lib/proposals/catalogue";
 import { createDocument, getDocument } from "@/lib/proposals/documents";
 import { formatMoney, type Currency } from "@/lib/proposals/model";
+import { campaignThreadPath, positiveCategory } from "@/lib/campaigns/format";
 import type { Company, CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { createLinearIssue, LINEAR_PRIORITIES, LinearError } from "@/lib/linear";
@@ -356,6 +357,27 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
     };
     companyId = document.companyId;
     contactId = document.contactId;
+  } else if (trigger.type === "campaign_event") {
+    const kind = typeof data.kind === "string" ? data.kind : null;
+    const category = typeof data.category === "string" ? data.category : null;
+    const wanted =
+      trigger.event === "positive" ? kind === "category" && positiveCategory(category) : kind === trigger.event;
+    if (event.type !== "campaign.event" || !wanted) return { vars, matches: false };
+    if (trigger.channel && data.channel !== trigger.channel) return { vars, matches: false };
+    const campaignId = typeof data.campaignId === "string" ? data.campaignId : null;
+    const prospectId = typeof data.prospectId === "string" ? data.prospectId : null;
+    vars.campaign = {
+      id: campaignId,
+      name: typeof data.campaignName === "string" ? data.campaignName : null,
+      channel: typeof data.channel === "string" ? data.channel : null,
+      event: trigger.event,
+      category,
+      step: typeof data.step === "number" ? data.step : null,
+      prospectId,
+      url: campaignId ? link(`/campaigns/${campaignId}`) : null,
+      threadUrl: prospectId ? link(campaignThreadPath(prospectId)) : null,
+    };
+    if (event.entityType === "contact") contactId = event.entityId ?? null;
   } else if (trigger.type === "task_completed") {
     const task = event.entityId ? await maybe(() => getTask(actor, event.entityId!, { direct: true })) : null;
     if (!task) return { vars, matches: false };

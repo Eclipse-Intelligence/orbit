@@ -33,7 +33,10 @@ export type FakeCampaign = {
   sequences: unknown[];
   analytics: Record<string, unknown>;
   mailboxes?: unknown[];
+  threads?: Record<string, unknown[]>;
 };
+
+export type FakeWrite = { method: string; path: string; body: Record<string, unknown> | null };
 
 export type FakeAccount = {
   key: string;
@@ -41,6 +44,8 @@ export type FakeAccount = {
   campaigns: FakeCampaign[];
   calls: URL[];
   fail?: (url: URL) => Response | null;
+  writes?: FakeWrite[];
+  categories?: { id: number; name: string }[];
 };
 
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -55,7 +60,7 @@ function latest(stat: FakeStat) {
 }
 
 export function fakeSmartlead(accounts: FakeAccount[]): typeof fetch {
-  return async (input) => {
+  return async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (url.origin !== "https://server.smartlead.ai") throw new Error(`Unexpected request to ${url.origin}`);
     const account = accounts.find((item) => item.key === url.searchParams.get("api_key"));
@@ -64,6 +69,24 @@ export function fakeSmartlead(accounts: FakeAccount[]): typeof fetch {
     const failure = account.fail?.(url);
     if (failure) return failure;
     const path = url.pathname.replace(/^\/api\/v1/, "");
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method !== "GET") {
+      const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+      (account.writes ??= []).push({ method, path, body });
+      const status = path.match(/^\/campaigns\/(\d+)\/status$/);
+      if (status) {
+        const campaign = account.campaigns.find((item) => String(item.id) === status[1]);
+        if (campaign && body) campaign.status = String(body.status) === "START" ? "ACTIVE" : String(body.status);
+      }
+      if (path.match(/^\/campaigns\/\d+\/webhooks$/)) return json({ id: 77 });
+      return json({ ok: true });
+    }
+    if (path === "/leads/fetch-categories") return json(account.categories ?? [{ id: 1, name: "Interested" }, { id: 2, name: "Not Interested" }, { id: 3, name: "Out Of Office" }, { id: 4, name: "Meeting Booked" }]);
+    const history = path.match(/^\/campaigns\/(\d+)\/leads\/([^/]+)\/message-history$/);
+    if (history) {
+      const campaign = account.campaigns.find((item) => String(item.id) === history[1]);
+      return json({ history: campaign?.threads?.[decodeURIComponent(history[2])] ?? [] });
+    }
     if (path === "/campaigns") {
       return json(account.campaigns.map((campaign) => ({ id: campaign.id, name: campaign.name, status: campaign.status, client_id: account.client.id })));
     }
@@ -134,6 +157,17 @@ export type FakeHeyReachLead = {
   created?: string;
 };
 
+export type FakeHeyReachMessage = { createdAt: string; body: string; sender: "ME" | "CORRESPONDENT" };
+
+export type FakeConversation = {
+  id: string;
+  accountId: number;
+  profileUrl: string;
+  leadId?: string;
+  messages: FakeHeyReachMessage[];
+  tags?: string[];
+};
+
 export type FakeHeyReachCampaign = {
   id: number;
   name: string;
@@ -143,6 +177,7 @@ export type FakeHeyReachCampaign = {
   leads: FakeHeyReachLead[];
   overall: Record<string, number>;
   byDay: Record<string, Record<string, number>>;
+  conversations?: FakeConversation[];
 };
 
 export type FakeHeyReachAccount = {
@@ -173,6 +208,32 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
     const failure = account.fail?.(path);
     if (failure) return failure;
     if (path === "/auth/CheckApiKey") return new Response(null, { status: 200 });
+    if (path === "/inbox/GetConversationsV2") {
+      const filters = (body?.filters ?? {}) as { campaignIds?: unknown[]; leadProfileUrl?: string };
+      const ids = (filters.campaignIds ?? []).map(String);
+      const wanted = filters.leadProfileUrl ? filters.leadProfileUrl.toLowerCase().replace(/\/$/, "") : null;
+      const conversations = account.campaigns
+        .filter((campaign) => ids.length === 0 || ids.includes(String(campaign.id)))
+        .flatMap((campaign) => campaign.conversations ?? [])
+        .filter((conversation) => !wanted || conversation.profileUrl.toLowerCase().replace(/\/$/, "").replace("://linkedin", "://www.linkedin") === wanted)
+        .map((conversation) => ({
+          id: conversation.id,
+          linkedInAccountId: conversation.accountId,
+          lastMessageAt: conversation.messages[conversation.messages.length - 1]?.createdAt ?? null,
+          correspondentProfile: { profileUrl: conversation.profileUrl, id: conversation.leadId ?? null },
+          leadTags: conversation.tags ?? [],
+          messages: conversation.messages,
+        }));
+      return json(page(conversations, body));
+    }
+    if (path === "/inbox/SendMessage" || path === "/campaign/Pause" || path === "/campaign/Resume" || path === "/campaign/StopLeadInCampaign") {
+      if (path === "/campaign/Pause" || path === "/campaign/Resume") {
+        const campaign = account.campaigns.find((item) => String(item.id) === url.searchParams.get("campaignId"));
+        if (campaign) campaign.status = path === "/campaign/Pause" ? "PAUSED" : "IN_PROGRESS";
+      }
+      return new Response(null, { status: 200 });
+    }
+    if (path === "/webhooks/CreateWebhook") return json({ id: 55 });
     if (path === "/campaign/GetAll") {
       return json(page(account.campaigns.map((campaign) => ({ id: campaign.id, name: campaign.name, status: campaign.status, campaignAccountIds: campaign.accountIds })), body));
     }

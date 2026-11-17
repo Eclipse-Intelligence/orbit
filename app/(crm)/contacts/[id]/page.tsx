@@ -8,6 +8,7 @@ import { manualWorkflows } from "@/lib/workflows/store";
 import { listDocuments } from "@/lib/proposals/documents";
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { listActivitiesByContact } from "@/lib/crm/activities";
+import { contactCampaignLines, contactCampaignTimeline } from "@/lib/campaigns/threads";
 import { getMeetings } from "@/lib/crm/calendar";
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
@@ -68,6 +69,8 @@ export default async function ContactPage({
     proposals,
     relationships,
     moveTargets,
+    campaignLines,
+    campaignRows,
   ] = await Promise.all([
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
@@ -81,6 +84,14 @@ export default async function ContactPage({
     listDocuments(user, { contactId: contact.id, limit: 20 }),
     relationshipsFor(user, "contact", [contact.id]),
     getMoveTargets(user),
+    contactCampaignLines(user, contact.id).catch((error: unknown) => {
+      console.error("Couldn't read the contact's campaigns", error);
+      return [];
+    }),
+    contactCampaignTimeline(user, contact.id).catch((error: unknown) => {
+      console.error("Couldn't read the contact's campaign timeline", error);
+      return [];
+    }),
   ]);
   const available = enrichmentAvailability();
   const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, [contact.id]) : {};
@@ -123,6 +134,8 @@ export default async function ContactPage({
       activities={activities}
       insights={insights}
       reads={reads}
+      campaignLines={campaignLines}
+      campaignRows={campaignRows}
       meetings={meetings}
       tags={tags}
       invite={invite}

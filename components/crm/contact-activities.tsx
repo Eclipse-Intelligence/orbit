@@ -12,6 +12,10 @@ import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
 import ReadStatus from "@/components/mail/read-status";
+import ChannelIcon from "@/components/campaigns/channel-icon";
+import { campaignThreadPath } from "@/lib/campaigns/format";
+import { campaignRowMeta, timelineEntries } from "@/lib/campaigns/thread-view";
+import type { CampaignTimelineRow } from "@/lib/campaigns/threads";
 import PaperclipIcon from "@/public/assets/images/_common/paperclip.svg";
 import {
   activityByline,
@@ -193,6 +197,7 @@ export function ActivityComposer({
 
 export function ActivityTimeline({
   activities: given,
+  campaignRows = [],
   insights,
   reads,
   showContact,
@@ -202,6 +207,7 @@ export function ActivityTimeline({
   empty,
 }: {
   activities: Activity[];
+  campaignRows?: CampaignTimelineRow[];
   insights?: Record<string, CallInsight>;
   reads?: Record<string, EmailRead>;
   showContact?: boolean;
@@ -222,11 +228,11 @@ export function ActivityTimeline({
     active === "all"
       ? activities
       : activities.filter((activity) => timelineKind(activity) === active);
-  const groups = groupByDay(shown, now);
+  const groups = groupByDay(timelineEntries(shown, active === "all" ? campaignRows : []), now);
 
   return (
     <div className="flex flex-col gap-3">
-      {activities.length > 0 && (
+      {(activities.length > 0 || campaignRows.length > 0) && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <QuietTabs
             label="Filter activity by type"
@@ -259,27 +265,31 @@ export function ActivityTimeline({
                   {group.label}
                 </h3>
                 <ul className="flex flex-col">
-                  {group.items.map((activity) => (
-                    <ActivityRow
-                      key={activity.id}
-                      panelId={`${baseId}-panel-${activity.id}`}
-                      activity={activity}
-                      insight={insights?.[activity.id] ?? null}
-                      read={reads?.[activity.id] ?? null}
-                      showContact={showContact}
-                      viewerId={viewerId}
-                      editable={mayEditActivity({ userId: viewerId, role: viewerRole }, activity)}
-                      onDeleted={() => setRemoved((current) => [...current, activity.id])}
-                      now={now}
-                      open={open[activity.id] ?? false}
-                      onToggle={() =>
-                        setOpen((current) => ({
-                          ...current,
-                          [activity.id]: !current[activity.id],
-                        }))
-                      }
-                    />
-                  ))}
+                  {group.items.map((entry) => {
+                    if (entry.type === "campaign") return <CampaignRow key={entry.id} row={entry.row} now={now} />;
+                    const activity = entry.activity;
+                    return (
+                      <ActivityRow
+                        key={activity.id}
+                        panelId={`${baseId}-panel-${activity.id}`}
+                        activity={activity}
+                        insight={insights?.[activity.id] ?? null}
+                        read={reads?.[activity.id] ?? null}
+                        showContact={showContact}
+                        viewerId={viewerId}
+                        editable={mayEditActivity({ userId: viewerId, role: viewerRole }, activity)}
+                        onDeleted={() => setRemoved((current) => [...current, activity.id])}
+                        now={now}
+                        open={open[activity.id] ?? false}
+                        onToggle={() =>
+                          setOpen((current) => ({
+                            ...current,
+                            [activity.id]: !current[activity.id],
+                          }))
+                        }
+                      />
+                    );
+                  })}
                 </ul>
               </section>
             );
@@ -298,6 +308,7 @@ export default function ContactActivities({
   viewerId,
   viewerRole,
   activities,
+  campaignRows,
   insights,
   reads,
   className,
@@ -309,6 +320,7 @@ export default function ContactActivities({
   viewerId?: string | null;
   viewerRole?: string | null;
   activities: Activity[];
+  campaignRows?: CampaignTimelineRow[];
   insights?: Record<string, CallInsight>;
   reads?: Record<string, EmailRead>;
   className?: string;
@@ -331,6 +343,7 @@ export default function ContactActivities({
       />
       <ActivityTimeline
         activities={draft.withAdded(activities)}
+        campaignRows={campaignRows}
         insights={insights}
         reads={reads}
         viewerId={viewerId}
@@ -338,6 +351,27 @@ export default function ContactActivities({
         empty="No activity"
       />
     </DetailSection>
+  );
+}
+
+function CampaignRow({ row, now }: { row: CampaignTimelineRow; now: number }) {
+  return (
+    <li className="flex flex-col">
+      <Button variant="item" size="none" href={campaignThreadPath(row.prospectId)} className="group gap-3 px-2 py-2">
+        <span className={cn("mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full", OTHER_MARK.tone)}>
+          <ChannelIcon channel={row.channel} className="size-3.5" />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="min-w-0 flex-1 truncate text-[14px] leading-5">{row.title}</span>
+            <time dateTime={row.at} title={activityWhen(row.at, now)} className="caption-style text-subtle shrink-0 tabular-nums" suppressHydrationWarning>
+              {activityTime(row.at)}
+            </time>
+          </span>
+          <span className="caption-style text-subtle truncate leading-4">{campaignRowMeta(row)}</span>
+        </span>
+      </Button>
+    </li>
   );
 }
 
@@ -476,7 +510,7 @@ function ActivityRow({
             mark.tone,
           )}
         >
-          <Icon aria-hidden className="size-3.5" />
+          {activity.type === "linkedin" ? <ChannelIcon channel="linkedin" className="size-3.5" /> : <Icon aria-hidden className="size-3.5" />}
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-baseline gap-2">
