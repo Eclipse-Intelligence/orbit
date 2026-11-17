@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import type { ContactEnrichment, LookupState } from "@/lib/enrichment/contacts";
 import type { ContactField } from "@/lib/enrichment/providers";
@@ -16,6 +16,39 @@ const PLURALS: Record<ContactField, [string, string]> = {
   linkedin: ["LinkedIn profile", "LinkedIn profiles"],
   phone: ["phone number", "phone numbers"],
 };
+
+const clashNotes = new Map<string, string>();
+const listeners = new Set<() => void>();
+
+function noteKey(contactId: string, field: ContactField) {
+  return `${contactId}:${field}`;
+}
+
+function setClashNote(contactId: string, field: ContactField, note: string | null) {
+  if (note) clashNotes.set(noteKey(contactId, field), note);
+  else clashNotes.delete(noteKey(contactId, field));
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function FindNote({ contactId, field }: { contactId: string; field: ContactField }) {
+  const note = useSyncExternalStore(
+    subscribe,
+    () => clashNotes.get(noteKey(contactId, field)) ?? null,
+    () => null,
+  );
+  return note ? (
+    <p role="status" className="caption-style text-subtle mt-1">
+      {note}
+    </p>
+  ) : null;
+}
 
 async function findDetails(ids: string[], field: ContactField): Promise<ContactEnrichment[]> {
   const response = await fetch("/api/enrichment/contacts", {
@@ -40,9 +73,11 @@ export async function findDetailsInBatches(ids: string[], field: ContactField, p
 export function bulkFindSummary(results: ContactEnrichment[], field: ContactField) {
   const found = results.filter((result) => result.status === "found").length;
   const skipped = results.filter((result) => result.status === "skipped").length;
-  const failed = results.filter((result) => result.status === "failed");
+  const failed = results.filter((result) => result.status === "failed" && !result.duplicate);
+  const clashes = results.filter((result) => result.clash).length;
   const searched = results.length - skipped;
   const parts = [`Found ${found} of ${searched} ${PLURALS[field][searched === 1 ? 0 : 1]}`];
+  if (clashes > 0) parts.push(`${clashes} already on another contact`);
   if (skipped > 0) parts.push(`${skipped} skipped (already filled in or missing a name or company)`);
   if (failed.length > 0) parts.push(`${failed.length} couldn't be searched: ${failed[0].message}`);
   return { message: parts.join(". "), tone: failed.length > 0 && found === 0 ? ("error" as const) : ("status" as const) };
@@ -84,6 +119,7 @@ export default function FindDetailButton({
     try {
       const [result] = await findDetails([contactId], field);
       setOutcome({ status: result.status, title: attemptsTitle(result) });
+      setClashNote(contactId, field, result.status === "found" ? (result.clash ?? null) : null);
       if (result.email || result.linkedinUrl || result.phone) router.refresh();
     } catch (error) {
       setOutcome({ status: "failed", title: error instanceof Error ? error.message : "That lookup failed. Try again." });

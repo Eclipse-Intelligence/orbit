@@ -15,6 +15,7 @@ export default function InlineField({
   placeholder,
   emptyLabel = "Add",
   accessory,
+  note,
   onSave,
 }: {
   label: string;
@@ -25,6 +26,7 @@ export default function InlineField({
   placeholder?: string;
   emptyLabel?: string;
   accessory?: ReactNode;
+  note?: ReactNode;
   onSave: (value: string) => Promise<string | null>;
 }) {
   const id = useId();
@@ -132,6 +134,7 @@ export default function InlineField({
           {accessory}
           </span>
         )}
+        {note}
         {error && (
           <p role="alert" className="caption-style text-danger mt-1">
             {error}

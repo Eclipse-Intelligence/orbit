@@ -48,14 +48,14 @@ export function editTags(
     : editCompanyTags(actor, id, edit, provenance);
 }
 
-export async function addTags(actor: Actor, kind: TagKind, ids: unknown, tags: unknown) {
+export async function addTags(actor: Actor, kind: TagKind, ids: unknown, tags: unknown, provenance: Provenance = web("add_tags")) {
   const wanted = requestedTags(tags);
   return runBulk(actor, scopeFor(kind), ids, (id) =>
-    editTags(actor, kind, id, (current) => [...current, ...wanted], web("add_tags")),
+    editTags(actor, kind, id, (current) => [...current, ...wanted], provenance),
   );
 }
 
-export async function removeTags(actor: Actor, kind: TagKind, ids: unknown, tags: unknown) {
+export async function removeTags(actor: Actor, kind: TagKind, ids: unknown, tags: unknown, provenance: Provenance = web("remove_tags")) {
   const unwanted = new Set(requestedTags(tags));
   return runBulk(actor, scopeFor(kind), ids, (id) =>
     editTags(
@@ -63,7 +63,7 @@ export async function removeTags(actor: Actor, kind: TagKind, ids: unknown, tags
       kind,
       id,
       (current) => current.filter((tag) => !unwanted.has(tag)),
-      web("remove_tags"),
+      provenance,
     ),
   );
 }

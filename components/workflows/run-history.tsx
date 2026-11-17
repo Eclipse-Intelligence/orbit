@@ -31,6 +31,7 @@ function runTag(run: RunSummary): { tone: "green" | "red" | "amber" | "blue" | "
   if (run.waitingFor === "approval") return { tone: "amber", label: "Needs approval" };
   if (run.children && run.waitingFor === "children") return { tone: "blue", label: "Running" };
   if (run.children && run.status === "succeeded") return { tone: "green", label: "Succeeded" };
+  if (run.skipReason && run.status === "succeeded") return { tone: "neutral", label: "Skipped" };
   return { tone: TONES[run.status] ?? "neutral", label: RUN_LABELS[run.status] ?? run.status };
 }
 
@@ -59,9 +60,9 @@ function StepLog({ step }: { step: RunStepLog }) {
           )}
         />
         <span className="min-w-0 flex-1 truncate text-[13.5px] leading-5">{step.label || STEP_LABELS[step.stepType as StepType] || step.stepId}</span>
-        <span className="caption-style text-subtle">{step.status === "waiting" ? "Waiting" : step.status === "failed" ? "Failed" : "Done"}</span>
+        <span className="caption-style text-subtle">{step.status === "waiting" ? "Waiting" : step.status === "failed" ? "Failed" : step.status === "skipped" ? "Skipped" : "Done"}</span>
       </button>
-      {step.error && <p className="caption-style text-danger pl-3.5">{step.error}</p>}
+      {step.error && step.status !== "skipped" && <p className="caption-style text-danger pl-3.5">{step.error}</p>}
       {open && (
         <div className="flex flex-col gap-2 pl-3.5">
           {output && (
@@ -274,7 +275,7 @@ export default function RunHistory({
             </div>
             {active && (
               <div className="border-border flex flex-col gap-2 border-t px-3 py-2">
-                {run.error && <p className="caption-style text-danger">{run.error}</p>}
+                {run.error && <p className={cn("caption-style", run.skipReason ? "text-subtle" : "text-danger")}>{run.error}</p>}
                 {run.waitingFor === "approval" && (
                   <Link href={`/workflows?approve=${run.id}#approval-${run.id}`} className="caption-style text-foreground underline underline-offset-2">
                     Review

@@ -5,16 +5,19 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, errorText, tooMany } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalLinkedin } from "@/lib/crm/normalize";
-import type { Contact, ContactWrite, UserActor } from "@/lib/crm/types";
+import type { Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import {
   PROVIDER_BY_ID,
   ProviderFailure,
   providerKey,
+  throughGate,
   verifyWith,
   type ContactField,
   type Finding,
   type PersonQuery,
+  type ProviderGate,
   type ProviderId,
+  type VerifyAttempt,
 } from "@/lib/enrichment/providers";
 import { PHONE_ORDER, getEnrichmentSettings } from "@/lib/enrichment/settings";
 import { normalizePhone } from "@/lib/phone";
@@ -38,7 +41,40 @@ export type ContactEnrichment = {
   phone: string | null;
   provider: ProviderId | null;
   attempts: Attempt[];
+  duplicate?: boolean;
+  clash?: string;
 };
+
+type SavedKey = "email" | "linkedinUrl" | "phone";
+
+const WRITE_KEYS: Record<ContactField, SavedKey> = { email: "email", linkedin: "linkedinUrl", phone: "phone" };
+const SAVED_NAMES: Record<SavedKey, string> = { email: "email", linkedinUrl: "LinkedIn profile", phone: "phone number" };
+const CLASH_NAMES: Record<SavedKey, string> = { email: "that email", linkedinUrl: "that LinkedIn profile", phone: "that phone number" };
+
+function isDuplicate(error: unknown) {
+  return error instanceof CrmError && error.code === "duplicate_contact";
+}
+
+async function saveFound(actor: UserActor, contactId: string, write: ContactWrite, provenance: Provenance): Promise<SavedKey[]> {
+  const keys = Object.keys(write) as SavedKey[];
+  try {
+    await updateContact(actor, contactId, write, { provenance });
+    return [];
+  } catch (error) {
+    if (!isDuplicate(error)) throw error;
+    if (keys.length === 1) return keys;
+  }
+  const clashed: SavedKey[] = [];
+  for (const key of keys) {
+    try {
+      await updateContact(actor, contactId, { [key]: write[key] }, { provenance });
+    } catch (error) {
+      if (!isDuplicate(error)) throw error;
+      clashed.push(key);
+    }
+  }
+  return clashed;
+}
 
 const NOUNS: Record<ContactField, string> = { email: "email", linkedin: "LinkedIn profile", phone: "phone number" };
 
@@ -46,7 +82,21 @@ export type LookupState = { status: "found" | "not_found" | "failed"; at: string
 
 export type ContactLookups = Record<string, Partial<Record<ContactField, LookupState>>>;
 
-type Options = { fetchImpl?: typeof fetch; env?: Record<string, string | undefined>; pollMs?: number };
+export type FindProgress = {
+  attempts: Attempt[];
+  email: { value: string; provider: ProviderId; verifiedBy: ProviderId } | null;
+  linkedin: { value: string; provider: ProviderId } | null;
+  pending: { provider: ProviderId; finding: Finding; checks: VerifyAttempt[] } | null;
+};
+
+type Options = {
+  fetchImpl?: typeof fetch;
+  env?: Record<string, string | undefined>;
+  pollMs?: number;
+  workflowLimits?: ProviderGate;
+  resume?: FindProgress | null;
+  onProgress?: (progress: FindProgress) => void | Promise<void>;
+};
 
 function emailDomain(email: string) {
   return email.split("@")[1]?.toLowerCase() ?? "";
@@ -120,23 +170,40 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   });
   if (order.length === 0) return skipped(contactId, field, `No ${NOUNS[field]} finder is set up.`);
 
-  const attempts: Attempt[] = [];
-  let email: { value: string; provider: ProviderId; verifiedBy: ProviderId } | null = null;
-  let linkedin: { value: string; provider: ProviderId } | null = null;
+  const attempts: Attempt[] = [...(options.resume?.attempts ?? [])];
+  const tried = new Set(attempts.map((attempt) => attempt.provider));
+  let pending = options.resume?.pending ?? null;
+  let email: { value: string; provider: ProviderId; verifiedBy: ProviderId } | null = field === "email" ? (options.resume?.email ?? null) : null;
+  let linkedin: { value: string; provider: ProviderId } | null = contact.linkedinUrl ? null : (options.resume?.linkedin ?? null);
   let phone: { value: string; provider: ProviderId } | null = null;
+  const report = async () => {
+    await options.onProgress?.({ attempts: [...attempts], email, linkedin, pending });
+  };
 
-  for (const id of order) {
+  for (const id of email ? [] : order) {
+    if (tried.has(id)) continue;
     if (Date.now() > deadline - 5_000) break;
     const provider = PROVIDER_BY_ID.get(id)!;
+    const resumed = pending?.provider === id ? pending : null;
     let finding: Finding | null;
-    try {
-      finding = await provider.find(query, field, { key: providerKey(id, env)!, fetchImpl, deadline, pollMs: options.pollMs });
-    } catch (error) {
-      attempts.push({ provider: id, outcome: "failed", detail: error instanceof ProviderFailure ? error.message : "Lookup failed." });
-      continue;
+    if (resumed) {
+      finding = resumed.finding;
+      pending = null;
+    } else {
+      try {
+        finding = await throughGate(options.workflowLimits, id, () =>
+          provider.find(query, field, { key: providerKey(id, env)!, fetchImpl, deadline, pollMs: options.pollMs }),
+        );
+      } catch (error) {
+        if (!(error instanceof ProviderFailure) && options.workflowLimits) throw error;
+        attempts.push({ provider: id, outcome: "failed", detail: error instanceof ProviderFailure ? error.message : "Lookup failed." });
+        await report();
+        continue;
+      }
     }
     if (!finding) {
       attempts.push({ provider: id, outcome: "not_found" });
+      await report();
       continue;
     }
 
@@ -151,7 +218,21 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
         if (!confident) emailNote = "Match score too low.";
         else if (!sameCompanyDomain(candidate, [domain, finding.companyDomain])) emailNote = "Email isn't on the company's domain.";
         else {
-          const check = await verifyWith(candidate, { env, fetchImpl, deadline, pollMs: options.pollMs });
+          pending = { provider: id, finding, checks: resumed?.checks ?? [] };
+          await report();
+          const check = await verifyWith(candidate, {
+            env,
+            fetchImpl,
+            deadline,
+            pollMs: options.pollMs,
+            gate: options.workflowLimits,
+            resume: pending.checks,
+            onAttempt: async (checks) => {
+              pending = { provider: id, finding: finding!, checks };
+              await report();
+            },
+          });
+          pending = null;
           if (check.verdict === "valid" && check.by) email = { value: candidate, provider: id, verifiedBy: check.by };
           else emailNote = unconfirmed(check);
         }
@@ -168,9 +249,11 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
     const target = field === "email" ? email : field === "linkedin" ? linkedin : phone;
     if (target?.provider === id) {
       attempts.push({ provider: id, outcome: "found", ...(field === "email" && email ? { verifiedBy: email.verifiedBy } : {}) });
+      await report();
       break;
     }
     attempts.push({ provider: id, outcome: emailNote && field === "email" ? "rejected" : "not_found", ...(emailNote && field === "email" ? { detail: emailNote } : {}) });
+    await report();
   }
 
   const write: ContactWrite = {};
@@ -178,24 +261,54 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   if (linkedin) write.linkedinUrl = linkedin.value;
   if (phone) write.phone = phone.value;
   const allFailed = attempts.length > 0 && attempts.every((attempt) => attempt.outcome === "failed");
+  const targetKey = WRITE_KEYS[field];
+  let clash: string | null = null;
 
   if (Object.keys(write).length > 0) {
+    let clashed: SavedKey[];
     try {
-      await updateContact(actor, contactId, write, {
-        provenance: {
-          operation: "enrich_contact",
-          source: (field === "email" ? email : field === "linkedin" ? linkedin : phone)?.provider ?? email?.provider ?? linkedin?.provider ?? "enrichment",
-        },
+      clashed = await saveFound(actor, contactId, write, {
+        operation: "enrich_contact",
+        source: (field === "email" ? email : field === "linkedin" ? linkedin : phone)?.provider ?? email?.provider ?? linkedin?.provider ?? "enrichment",
       });
     } catch (error) {
-      const message =
-        error instanceof CrmError && error.code === "duplicate_contact"
-          ? `Another contact already has ${write.email ?? "that profile"}.`
-          : error instanceof CrmError
-            ? error.message
-            : "Couldn't save what was found.";
+      const message = error instanceof CrmError ? error.message : "Couldn't save what was found.";
       await recordLookup(actor, contactId, field, "failed", null, null, attempts);
       return { contactId, field, status: "failed", message, email: null, linkedinUrl: null, phone: null, provider: null, attempts };
+    }
+    if (clashed.length > 0) {
+      clash =
+        clashed.includes("email") && clashed.includes("linkedinUrl")
+          ? "Another contact already has this email or LinkedIn profile."
+          : `Another contact already has ${clashed.map((key) => (key === "email" ? write.email : CLASH_NAMES[key])).join(" or ")}.`;
+      const kept = (Object.keys(write) as SavedKey[]).filter((key) => !clashed.includes(key));
+      const savedNote = kept.length ? `Saved the ${kept.map((key) => SAVED_NAMES[key]).join(" and ")}. ` : "";
+      if (clashed.includes("email")) email = null;
+      if (clashed.includes("linkedinUrl")) linkedin = null;
+      if (clashed.includes("phone")) phone = null;
+      if (clashed.includes(targetKey)) {
+        if (email) {
+          await recordLookup(actor, contactId, "email", "found", email.provider, email.value, [
+            { provider: email.provider, outcome: "found", verifiedBy: email.verifiedBy },
+          ]);
+        }
+        if (linkedin) await recordLookup(actor, contactId, "linkedin", "found", linkedin.provider, linkedin.value, []);
+        await recordLookup(actor, contactId, field, "failed", null, null, attempts);
+        return {
+          contactId,
+          field,
+          status: "failed",
+          message: `${savedNote}${clash}`,
+          email: email?.value ?? null,
+          linkedinUrl: linkedin?.value ?? null,
+          phone: phone?.value ?? null,
+          provider: null,
+          attempts,
+          duplicate: true,
+          clash,
+        };
+      }
+      clash = `${savedNote}${clash}`;
     }
   }
 
@@ -210,7 +323,9 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
   await recordLookup(actor, contactId, field, status, target?.provider ?? null, target?.value ?? null, attempts);
 
   const noun = NOUNS[field];
-  const message = target
+  const message = clash
+    ? clash
+    : target
     ? `Found ${contact.name}'s ${noun} with ${PROVIDER_BY_ID.get(target.provider)!.name}.`
     : allFailed
       ? `Couldn't search for ${contact.name}'s ${noun}: ${attempts.map((attempt) => attempt.detail).filter(Boolean).join(" ")}`
@@ -225,6 +340,7 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
     phone: phone?.value ?? null,
     provider: target?.provider ?? null,
     attempts,
+    ...(clash ? { clash } : {}),
   };
 }
 

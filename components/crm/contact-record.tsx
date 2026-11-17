@@ -8,7 +8,7 @@ import { ConnectionMark, EntityChip, Monogram } from "@/components/beautifui/rec
 import DetailSection from "@/components/companies/detail/detail-section";
 import ContactActivities from "@/components/crm/contact-activities";
 import ContactEditor from "@/components/crm/contact-editor";
-import FindDetailButton from "@/components/crm/find-detail";
+import FindDetailButton, { FindNote } from "@/components/crm/find-detail";
 import CheckEmailButton from "@/components/crm/check-email";
 import { contactRecipient } from "@/lib/crm/personalise";
 import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
@@ -287,6 +287,7 @@ export default function ContactRecord({
                         <FindDetailButton contactId={shown.id} field="phone" lookup={enrichment.lookups?.phone} variant="text" />
                       ) : null
                     }
+                    note={<FindNote contactId={shown.id} field="phone" />}
                     onSave={(value) => patch({ phone: value || null })}
                   />
                   <InlineField
@@ -301,6 +302,7 @@ export default function ContactRecord({
                         <FindDetailButton contactId={shown.id} field="email" lookup={enrichment.lookups?.email} variant="text" />
                       ) : null
                     }
+                    note={<FindNote contactId={shown.id} field="email" />}
                     onSave={(value) => patch({ email: value || null })}
                   />
                   <InlineField
@@ -323,6 +325,7 @@ export default function ContactRecord({
                         <FindDetailButton contactId={shown.id} field="linkedin" lookup={enrichment.lookups?.linkedin} variant="text" />
                       ) : null
                     }
+                    note={<FindNote contactId={shown.id} field="linkedin" />}
                     onSave={(value) => patch({ linkedinUrl: value || null })}
                   />
                   <InlineField label="Location" value={shown.location ?? ""} onSave={(value) => patch({ location: value || null })} />

@@ -21,6 +21,7 @@ import LinearIcon from "@/public/assets/images/workflows/linear.svg";
 import RepeatIcon from "@/public/assets/images/workflows/repeat.svg";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import ProposalIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
+import AtSignIcon from "@/public/assets/images/workflows/at-sign.svg";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -51,6 +52,7 @@ export const STEP_META: Record<StepType, { icon: Icon; group: NodeGroup }> = {
   linear_issue: { icon: LinearIcon, group: "action" },
   find_records: { icon: SearchIcon, group: "logic" },
   upsert_record: { icon: BuildingIcon, group: "action" },
+  find_email: { icon: AtSignIcon, group: "action" },
   webhook: { icon: BracesIcon, group: "action" },
   create_proposal: { icon: ProposalIcon, group: "action" },
 };
@@ -60,7 +62,7 @@ export const TRIGGER_ICON = ZapIcon;
 export const PALETTE: { label: string; types: StepType[] }[] = [
   { label: "AI", types: ["ai", "decide"] },
   { label: "Logic", types: ["if", "filter", "loop", "delay", "approval"] },
-  { label: "Records", types: ["find_records", "upsert_record", "update_record"] },
+  { label: "Records", types: ["find_records", "upsert_record", "update_record", "find_email"] },
   { label: "Actions", types: ["create_task", "add_note", "board", "notify", "post_to_chat", "send_email", "create_proposal", "linear_issue", "webhook"] },
 ];
 
@@ -122,9 +124,13 @@ export function nodeSummary(node: WorkflowNode) {
       return `Up to ${Number(c.limit) || 25} ${what}${quiet}`;
     }
     case "upsert_record": {
+      const tags = plain(text(c.tags));
+      if (tags) return short(`Tag ${tags}`);
       const target = c.object === "contact" ? plain(text(c.email)) : plain(text(c.domain) || text(c.name));
       return target ? short(`${c.create === false ? "Find" : "Find or create"} ${target}`) : "Say what to find";
     }
+    case "find_email":
+      return "Skip if not valid";
     case "webhook": {
       const url = text(c.url);
       try {
@@ -155,6 +161,7 @@ export function nodeSummary(node: WorkflowNode) {
     case "add_note":
       return short(plain(text(c.title) || text(c.body))) || "Write the note";
     case "update_record":
+      if (text(c.field) === "tags") return short(`${c.tagAction === "remove" ? "Untag" : "Tag"} ${plain(text(c.value))}`.trim());
       return text(c.field) ? `Set ${text(c.field)}` : "Choose a field";
     case "board":
       return text(c.boardId) ? "Add or move the card" : "Choose a board";

@@ -5,7 +5,15 @@ import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import { enrichmentAllowed } from "@/lib/enrichment/limits";
-import { PROVIDER_BY_ID, configuredVerifiers, verifyWith, type ProviderId, type Verdict } from "@/lib/enrichment/providers";
+import {
+  PROVIDER_BY_ID,
+  configuredVerifiers,
+  verifyWith,
+  type ProviderGate,
+  type ProviderId,
+  type Verdict,
+  type VerifyAttempt,
+} from "@/lib/enrichment/providers";
 
 const CHECK_BUDGET_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -33,6 +41,9 @@ export type EmailCheckOptions = {
   pollMs?: number;
   deadline?: number;
   now?: number;
+  workflowLimits?: ProviderGate;
+  resume?: VerifyAttempt[];
+  onAttempt?: (attempts: VerifyAttempt[]) => void | Promise<void>;
 };
 
 type CheckRow = {
@@ -134,11 +145,19 @@ export async function verifyEmail(actor: UserActor, email: unknown, options: Ema
     }
   }
   if (configuredVerifiers(env).length === 0) throw new CrmError("not_configured", NO_EMAIL_CHECKER, 400);
-  if (!(await enrichmentAllowed(actor.userId, 1))) {
+  if (!options.workflowLimits && !(await enrichmentAllowed(actor.userId, 1))) {
     throw new CrmError("rate_limited", "Hourly lookup limit reached. Try again later.", 429);
   }
   const deadline = Math.min(options.deadline ?? Infinity, Date.now() + CHECK_BUDGET_MS);
-  const result = await verifyWith(address, { env, fetchImpl: options.fetchImpl ?? fetch, deadline, pollMs: options.pollMs });
+  const result = await verifyWith(address, {
+    env,
+    fetchImpl: options.fetchImpl ?? fetch,
+    deadline,
+    pollMs: options.pollMs,
+    gate: options.workflowLimits,
+    resume: options.resume,
+    onAttempt: options.onAttempt,
+  });
   if (result.attempts.every((attempt) => attempt.outcome === "failed")) {
     const details = [...new Set(result.attempts.map((attempt) => attempt.detail).filter(Boolean))].join(" ");
     throw new CrmError("upstream_error", `Couldn't check ${address}. ${details}`.trim(), 502);

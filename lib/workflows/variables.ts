@@ -264,6 +264,9 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
         { path: `steps.${step.id}.url`, label: "Link in Orbit", group },
       );
     }
+    if (step.type === "find_email") {
+      options.push({ path: `steps.${step.id}.status`, label: "Check result", group }, { path: `steps.${step.id}.address`, label: "Email address", group });
+    }
     if (step.type === "webhook") {
       options.push({ path: `steps.${step.id}.status`, label: "Status", group }, { path: `steps.${step.id}.response`, label: "Response", group });
     }
