@@ -41,6 +41,7 @@ export type ContactEnrichment = {
   phone: string | null;
   provider: ProviderId | null;
   attempts: Attempt[];
+  duplicate?: boolean;
 };
 
 const NOUNS: Record<ContactField, string> = { email: "email", linkedin: "LinkedIn profile", phone: "phone number" };
@@ -238,14 +239,15 @@ export async function enrichContact(actor: UserActor, contactId: string, field: 
         },
       });
     } catch (error) {
+      const duplicate = error instanceof CrmError && error.code === "duplicate_contact";
       const message =
-        error instanceof CrmError && error.code === "duplicate_contact"
+        duplicate
           ? `Another contact already has ${write.email ?? "that profile"}.`
           : error instanceof CrmError
             ? error.message
             : "Couldn't save what was found.";
       await recordLookup(actor, contactId, field, "failed", null, null, attempts);
-      return { contactId, field, status: "failed", message, email: null, linkedinUrl: null, phone: null, provider: null, attempts };
+      return { contactId, field, status: "failed", message, email: null, linkedinUrl: null, phone: null, provider: null, attempts, ...(duplicate ? { duplicate } : {}) };
     }
   }
 

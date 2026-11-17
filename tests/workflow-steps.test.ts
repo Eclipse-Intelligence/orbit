@@ -590,6 +590,56 @@ describe("workflow tags and Find and check email", () => {
       ]);
     });
 
+    it("doesn't count waits for Orbit's own limiter as a busy provider", async () => {
+      process.env.WORKFLOW_LIMIT_HUNTER_AT_ONCE = "1";
+      const tag = "local batch";
+      for (const last of ["One", "Two", "Three"]) await person("Lo", last, null, [tag]);
+      const fake1 = fake([hunterFinds({ One: "lo1@acme-steps.test", Two: "lo2@acme-steps.test", Three: "lo3@acme-steps.test" }), hunterChecks({})]);
+      const definition = chain(
+        { type: "manual", object: "company" },
+        [
+          node("find_records_1", "find_records", { object: "contact", tag, limit: 10 }),
+          node("loop_1", "loop", { items: "{{steps.find_records_1.records}}", parallel: true, atOnce: 5 }),
+          node("find_email_1", "find_email", {}),
+        ],
+        [["loop_1", "each", "find_email_1"]],
+      );
+      const held = await takeService("hunter");
+      const started = await start(definition, { type: "company", id: acme }, fake1.fetchImpl);
+      try {
+        for (let wait = 0; wait < 4; wait += 1) {
+          await drain(fake1.fetchImpl);
+          await wakeUp(started.runId);
+        }
+        assert.equal(fake1.calls.length, 0);
+      } finally {
+        await held.release();
+      }
+      for (let round = 0; round < 20 && (await runRow(started.runId)).status !== "succeeded"; round += 1) {
+        await drain(fake1.fetchImpl);
+        await wakeUp(started.runId);
+      }
+      assert.equal((await runRow(started.runId)).status, "succeeded");
+      assert.deepEqual((await children(started.runId)).map((item) => item.skip_reason), [null, null, null]);
+      const lookups = await getAdminPool().query<{ attempts: { provider: string; outcome: string; detail?: string }[] }>(
+        "select l.attempts from crm.enrichment_lookups l join crm.contacts c on c.id = l.record_id where $1 = any(c.tags) and l.field = 'email'",
+        [tag],
+      );
+      assert.equal(lookups.rowCount, 3);
+      for (const row of lookups.rows) assert.deepEqual(row.attempts.map((attempt) => [attempt.provider, attempt.outcome]), [["hunter", "found"]]);
+    });
+
+    it("skips the item when the email found belongs to another contact", async () => {
+      await person("Dee", "Taken", "dee.taken@acme-steps.test");
+      const dup = await person("Dee", "Copy");
+      const fake1 = fake([hunterFinds({ Copy: "dee.taken@acme-steps.test" }), hunterChecks({})]);
+      const started = await start(findEmail(), { type: "contact", id: dup.id }, fake1.fetchImpl);
+      await drain(fake1.fetchImpl);
+      const run = await runRow(started.runId);
+      assert.equal(run.status, "succeeded");
+      assert.equal(run.skip_reason, "Check email: Another contact already has dee.taken@acme-steps.test.");
+    });
+
     it("fails the step inside a loop when no email finder is set up", async () => {
       delete process.env.HUNTER_API_KEY;
       const tag = "setup batch";
@@ -658,6 +708,47 @@ describe("workflow tags and Find and check email", () => {
       assert.equal(counts.get("/v1/people/enrich"), 1);
       assert.equal((await getContact(owner, rae.id)).email, "rae@acme-steps.test");
       assert.equal((await notes(owner, "Reclaimed"))[0]?.body, "rae@acme-steps.test");
+    });
+  });
+
+  describe("a checker that answered before the worker died", () => {
+    it("isn't called again on resume", async () => {
+      delete process.env.HUNTER_API_KEY;
+      process.env.ICYPEAS_API_KEY = "icy";
+      process.env.HUNTER_API_KEY = "hun";
+      const cy = await person("Cy", "Checked", "cy@acme-steps.test");
+      const answered: string[] = [];
+      let reached: () => void = () => undefined;
+      const atHunter = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      let died = false;
+      const fetchImpl = (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("email-verifier") && !died) {
+          died = true;
+          reached();
+          return new Promise<Response>(() => undefined);
+        }
+        answered.push(url);
+        if (url.endsWith("/api/email-verification")) return Response.json({ success: true, item: { _id: "icy_v", status: "NONE" } });
+        if (url.endsWith("/api/bulk-single-searchs/read")) {
+          return Response.json({ items: [{ _id: "icy_v", status: "DEBITED", results: { emails: [{ email: "cy@acme-steps.test", certainty: "risky" }] } }] });
+        }
+        if (url.includes("email-verifier")) return Response.json({ data: { status: "valid" } });
+        return Response.json({ message: "unexpected" }, { status: 404 });
+      }) as typeof fetch;
+      const definition = chain({ type: "manual", object: "contact" }, [node("find_email_1", "find_email", {})]);
+      const started = await start(definition, { type: "contact", id: cy.id }, fetchImpl);
+      await getAdminPool().query("update crm.workflow_runs set status = 'running', claimed_at = now() where id = $1", [started.runId]);
+      void executeRun(started.runId, owner.userId, owner.workspaceId, { deadline: Date.now() + LONG_TICK_MS, fetchImpl }).catch(() => undefined);
+      await atHunter;
+      const rows = await getAdminPool().query("select 1 from crm.enrichment_lookups where record_id = $1", [cy.id]);
+      assert.equal(rows.rowCount, 0, "the worker died before the check was written");
+      const outcome = await executeRun(started.runId, owner.userId, owner.workspaceId, { deadline: Date.now() + LONG_TICK_MS, fetchImpl });
+      assert.equal(outcome, "succeeded");
+      assert.equal(answered.filter((url) => url.endsWith("/api/email-verification")).length, 1, "Icypeas isn't asked again");
+      assert.equal(answered.filter((url) => url.includes("email-verifier")).length, 1);
     });
   });
 

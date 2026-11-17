@@ -1132,12 +1132,18 @@ const BUSY_WAITS_PER_PROVIDER = 3;
 
 function providerLimits(lookup: Lookup): ProviderGate {
   return async (provider, run) => {
+    let called = false;
     try {
-      return await withService(PROVIDER_SERVICES[provider], run, {
-        statusOf: (error) => (error instanceof ProviderFailure ? { status: error.status, retryAfter: error.retryAfter } : null),
-      });
+      return await withService(
+        PROVIDER_SERVICES[provider],
+        () => {
+          called = true;
+          return run();
+        },
+        { statusOf: (error) => (error instanceof ProviderFailure ? { status: error.status, retryAfter: error.retryAfter } : null) },
+      );
     } catch (error) {
-      if (!(error instanceof ServiceBusy)) throw error;
+      if (!(error instanceof ServiceBusy) || !called) throw error;
       const waits = (lookup.busy?.[provider] ?? 0) + 1;
       if (waits > BUSY_WAITS_PER_PROVIDER) throw new ProviderFailure("Busy.");
       lookup.busy = { ...lookup.busy, [provider]: waits };
@@ -1186,6 +1192,7 @@ async function findEmailStep(ctx: Ctx, step: Step): Promise<StepResult> {
         await keep();
       },
     });
+    if (found.status === "failed" && found.duplicate) throw new ItemSkipped(found.message, { status: "not_found", address: null });
     if (found.status === "failed") throw new CrmError("upstream_error", found.message, 502);
     if (found.status !== "found") throw new ItemSkipped(found.message, { status: "not_found", address: null });
     contact = await getContact(ctx.actor, contact.id);
@@ -1959,7 +1966,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
       if (skipped && !endsItem) {
         (vars.steps as Record<string, unknown>)[step.id] = skipped.output;
         const reason = `${stepName(step)}: ${message}`.slice(0, 2000);
-        const note = [reason, itemsNote(state.skipped ?? [], state.failedItems ?? [])].filter(Boolean).join(". ").slice(0, 2000);
+        const note = [reason, itemsNote(state.skipped ?? [], state.failedItems ?? [])].filter(Boolean).join(" ").slice(0, 2000);
         await endRun(actor, run, "skipped", { state: { ...state, at: null, vars }, error: note, skip_reason: reason });
         return "succeeded";
       }
