@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Monogram } from "@/components/beautifui/record-marks";
@@ -16,7 +16,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
+import { Radio } from "@/components/_ui/radio";
 import Tag from "@/components/_ui/tag";
+import { Textarea } from "@/components/_ui/textarea";
 import ChannelIcon from "@/components/campaigns/channel-icon";
 import DetailSection from "@/components/companies/detail/detail-section";
 import SectionHeader from "@/components/crm/section-header";
@@ -33,6 +35,7 @@ import {
 import { CAMPAIGN_CATEGORIES, categoryTone } from "@/lib/campaigns/format";
 import {
   campaignStateLine,
+  draftAfterRestore,
   messageStatus,
   newClientKey,
   noteLabel,
@@ -40,7 +43,9 @@ import {
   retryable,
   SEND_FAILED,
   sourceLink,
+  withoutReply,
   withPending,
+  type DraftRestore,
   type PendingReply,
 } from "@/lib/campaigns/thread-view";
 import type { ProspectThread, ReplyOption, ThreadCampaign, ThreadMessage } from "@/lib/campaigns/threads";
@@ -121,36 +126,20 @@ function SendLine({ status, onRetry }: { status: { text: string; failed: boolean
 }
 
 function ChannelSwitch({ options, value, onChange }: { options: ReplyOption[]; value: CampaignChannel; onChange: (channel: CampaignChannel) => void }) {
-  const refs = useRef<Record<string, HTMLButtonElement | null>>({});
-  function onKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const index = options.findIndex((option) => option.channel === value);
-    const next = options[(index + (event.key === "ArrowRight" ? 1 : options.length - 1)) % options.length].channel;
-    onChange(next);
-    refs.current[next]?.focus();
-  }
   return (
-    <span role="radiogroup" aria-label="Reply on" onKeyDown={onKeyDown} className="flex items-center gap-1 rounded-full bg-white/[0.04] p-0.5">
+    <span role="radiogroup" aria-label="Reply on" className="flex items-center gap-1 rounded-full bg-white/[0.04] p-0.5">
       {options.map((option) => (
-        <button
+        <label
           key={option.channel}
-          ref={(node) => {
-            refs.current[option.channel] = node;
-          }}
-          type="button"
-          role="radio"
-          aria-checked={value === option.channel}
-          tabIndex={value === option.channel ? 0 : -1}
-          onClick={() => onChange(option.channel)}
           className={cn(
-            "caption-style hit ease-power3-out focus-visible:ring-ring/60 flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 whitespace-nowrap transition-colors duration-150 outline-none focus-visible:ring-2",
+            "caption-style hit ease-power3-out has-[:focus-visible]:ring-ring/60 flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 whitespace-nowrap transition-colors duration-150 has-[:focus-visible]:ring-2",
             value === option.channel ? "bg-muted text-foreground shadow-[inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]" : "text-subtle hover:text-foreground",
           )}
         >
+          <Radio name="reply-channel" value={option.channel} checked={value === option.channel} onChange={() => onChange(option.channel)} className="sr-only" />
           <ChannelIcon channel={option.channel} className="size-3" />
-          <span aria-hidden>{CHANNEL_LABELS[option.channel]}</span>
-        </button>
+          <span>{CHANNEL_LABELS[option.channel]}</span>
+        </label>
       ))}
     </span>
   );
@@ -159,15 +148,23 @@ function ChannelSwitch({ options, value, onChange }: { options: ReplyOption[]; v
 function Composer({
   options,
   preferred,
+  restore,
   onSend,
 }: {
   options: ReplyOption[];
   preferred: CampaignChannel;
+  restore: DraftRestore | null;
   onSend: (option: ReplyOption, text: string) => void;
 }) {
   const { mac } = useShortcuts();
   const [chosen, setChosen] = useState<CampaignChannel | null>(null);
   const [text, setText] = useState("");
+  const [restored, setRestored] = useState<number | null>(null);
+  if (restore && restore.at !== restored) {
+    setRestored(restore.at);
+    setText((current) => draftAfterRestore(current, restore));
+    setChosen(restore.channel);
+  }
   const field = useRef<HTMLTextAreaElement>(null);
   const channel = replyChannel(options, preferred, chosen);
   const option = options.find((item) => item.channel === channel) ?? null;
@@ -201,7 +198,7 @@ function Composer({
       className="bg-surface-field flex flex-col gap-3 rounded-2xl px-4 pt-3 pb-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]"
     >
       {option.canReply ? (
-        <textarea
+        <Textarea
           ref={field}
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -214,7 +211,7 @@ function Composer({
           aria-label={placeholder}
           placeholder={placeholder}
           rows={2}
-          className="text-foreground placeholder:text-subtle min-h-11 w-full resize-none bg-transparent text-[14px] leading-[1.45] outline-none"
+          className="text-foreground placeholder:text-subtle min-h-11 w-full resize-none rounded-none border-0 bg-transparent p-0 text-[14px] leading-[1.45] shadow-none outline-none focus-visible:ring-0"
         />
       ) : (
         <p role="status" className="caption-style text-subtle">
@@ -246,10 +243,11 @@ function CategoryPicker({ category, disabled, onChange }: { category: string | n
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="none"
           aria-label={category ? `Category: ${category}` : "Set a category"}
-          className="hit focus-visible:ring-ring/60 shrink-0 cursor-pointer rounded-full outline-none focus-visible:ring-2"
+          className="hit focus-visible:ring-ring/60 shrink-0 rounded-full p-0 hover:bg-transparent"
         >
           {category ? (
             <Tag tone={categoryTone(category)} size="sm" className="caption-style">
@@ -260,7 +258,7 @@ function CategoryPicker({ category, disabled, onChange }: { category: string | n
               Category
             </Tag>
           )}
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup value={category ?? ""} onValueChange={(value) => onChange(value || null)}>
@@ -371,6 +369,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [removing, setRemoving] = useState<ThreadCampaign | null>(null);
+  const [restore, setRestore] = useState<DraftRestore | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const opened = thread.campaigns.find((campaign) => campaign.prospectId === thread.prospectId) ?? null;
   const shownCategory = category ? category.value : thread.category;
@@ -397,11 +396,17 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
     };
   }, [thread.prospectId, router]);
 
-  async function deliver(clientKey: string, prospectId: string, text: string) {
+  async function deliver(clientKey: string, prospectId: string, text: string, channel?: CampaignChannel) {
     setSends((current) => ({ ...current, [clientKey]: { state: "sending", error: null } }));
     const outcome = await replyToProspectAction(prospectId, text, clientKey).catch(() => ({ error: SEND_FAILED, result: undefined }));
     if (outcome.error || !outcome.result) {
       setSends((current) => ({ ...current, [clientKey]: { state: "failed", error: outcome.error ?? SEND_FAILED } }));
+      if (channel) {
+        setPending((current) => withoutReply(current, clientKey));
+        setRestore((current) => ({ text, channel, at: (current?.at ?? 0) + 1 }));
+        setProblem(outcome.error ?? SEND_FAILED);
+        router.refresh();
+      }
       return;
     }
     const messageId = outcome.result.messageId;
@@ -423,7 +428,8 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
     };
     setPending((current) => [...current, reply]);
     window.requestAnimationFrame(() => end.current?.scrollIntoView({ block: "nearest" }));
-    void deliver(reply.clientKey, reply.prospectId, reply.text);
+    setProblem(null);
+    void deliver(reply.clientKey, reply.prospectId, reply.text, reply.channel);
   }
 
   async function chooseCategory(value: string | null) {
@@ -456,12 +462,13 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
     router.refresh();
   }
 
-  function statusOf(clientKey: string | null, fallback: ReturnType<typeof messageStatus>) {
+  function statusOf(clientKey: string | null, fallback: ReturnType<typeof messageStatus>, sendError: string | null = null) {
     const local = clientKey ? sends[clientKey] : undefined;
     if (local?.state === "sending") return { text: "Sending…", failed: false };
     if (local?.state === "failed") return { text: local.error ?? SEND_FAILED, failed: true };
     if (local?.state === "sent" && fallback === "Sending…") return null;
-    return fallback ? { text: fallback, failed: fallback === "Couldn't send." } : null;
+    const failed = fallback === "Couldn't send.";
+    return fallback ? { text: failed && sendError ? sendError : fallback, failed } : null;
   }
 
   return (
@@ -491,7 +498,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_300px]">
           <div className="border-border flex min-w-0 flex-col gap-3 border-b px-3 py-4 sm:px-5 lg:border-r lg:border-b-0">
-            <div className="mx-auto flex w-full max-w-[47.5em] flex-col gap-3">
+            <div className="mx-auto flex w-full max-w-[47.5em] flex-col gap-3 pb-20">
               {problem && (
                 <p role="alert" className="caption-style text-danger">
                   {problem}
@@ -517,7 +524,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
                   );
                 }
                 const inbound = item.direction === "inbound";
-                const status = statusOf(item.clientKey, messageStatus(item));
+                const status = statusOf(item.clientKey, messageStatus(item), item.sendError);
                 const canRetry = retryable(item) && sends[item.clientKey!]?.state !== "sending";
                 return (
                   <Bubble
@@ -533,7 +540,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
                   </Bubble>
                 );
               })}
-              <Composer options={thread.replyOptions} preferred={thread.defaultChannel} onSend={send} />
+              <Composer options={thread.replyOptions} preferred={thread.defaultChannel} restore={restore} onSend={send} />
               <div ref={end} />
             </div>
           </div>

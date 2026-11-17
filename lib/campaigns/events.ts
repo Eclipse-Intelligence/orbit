@@ -73,8 +73,8 @@ async function refreshForReply(provider: CampaignProvider, context: ProviderCont
     await saveThread(event.prospect_id, messages, { replyEvents: provider.repliesFromThreads, handled: false });
     await threadFetched(event.prospect_id);
   } catch (error) {
-    if (error instanceof ServiceBusy) throw error;
-    console.error(`Couldn't read a ${provider.name} thread after a reply`, redactedError(error));
+    if (!(error instanceof ServiceBusy)) console.error(`Couldn't read a ${provider.name} thread after a reply`, redactedError(error));
+    throw error;
   }
 }
 
@@ -136,10 +136,11 @@ async function handleReply(actor: UserActor, provider: CampaignProvider, context
   if (!provider.repliesFromThreads && context) await refreshForReply(provider, context, event);
   const messages = await replyMessages(actor, event);
   const reply = messages[0] ?? null;
-  if (automaticReply(event.category) || reply?.automatic) {
-    await query("select private.campaign_reply_uncount($1)", [event.id]);
-    return;
+  if (reply ? reply.automatic : automaticReply(event.category)) {
+    const uncounted = await query<{ done: boolean }>("select private.campaign_reply_uncount($1) as done", [event.id]);
+    if (uncounted.rows[0]?.done) return;
   }
+  await query("select private.campaign_reply_counted($1)", [event.id]);
   await query("select * from private.campaign_stop_person($1, $2)", [actor.workspaceId, event.prospect_id]);
   const filable = messages.filter((message) => !message.automatic);
   if (filable.length > 0) {

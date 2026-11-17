@@ -510,7 +510,7 @@ function ActivityRow({
             mark.tone,
           )}
         >
-          <Icon aria-hidden className="size-3.5" />
+          {activity.type === "linkedin" ? <ChannelIcon channel="linkedin" className="size-3.5" /> : <Icon aria-hidden className="size-3.5" />}
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-baseline gap-2">

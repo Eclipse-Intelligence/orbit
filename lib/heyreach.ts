@@ -1,5 +1,5 @@
 import type { CampaignStats, CampaignStatus, LeadStatus, SequenceStep } from "@/lib/campaigns/types";
-import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
+import { logUpstream, unreachable, upstreamMessage, urlSecrets } from "@/lib/upstream";
 import { withService } from "@/lib/workflows/limits";
 
 export const HEYREACH_API = "https://api.heyreach.io/api/public";
@@ -68,7 +68,7 @@ function itemsOf(body: unknown) {
   return (Array.isArray(body) ? body : list(record(body).items)).map(record);
 }
 
-async function call(key: string, path: string, options: HeyReachOptions & { method?: "GET" | "POST"; body?: Json; query?: Record<string, string> }): Promise<unknown> {
+async function call(key: string, path: string, options: HeyReachOptions & { method?: "GET" | "POST"; body?: Json; query?: Record<string, string>; secrets?: string[] }): Promise<unknown> {
   const run = async () => {
     const url = new URL(`${HEYREACH_API}${path}`);
     for (const [name, value] of Object.entries(options.query ?? {})) url.searchParams.set(name, value);
@@ -84,12 +84,12 @@ async function call(key: string, path: string, options: HeyReachOptions & { meth
         signal,
       });
     } catch (error) {
-      logUpstream("HeyReach", null, error, [key]);
+      logUpstream("HeyReach", null, error, [key, ...(options.secrets ?? [])]);
       throw new HeyReachError(unreachable("HeyReach"), null);
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      logUpstream("HeyReach", response.status, body, [key]);
+      logUpstream("HeyReach", response.status, body, [key, ...(options.secrets ?? [])]);
       throw new HeyReachError(upstreamMessage("HeyReach", response.status), response.status, response.headers.get("retry-after"));
     }
     const raw = await response.text().catch(() => "");
@@ -97,7 +97,7 @@ async function call(key: string, path: string, options: HeyReachOptions & { meth
     try {
       return JSON.parse(raw);
     } catch (error) {
-      logUpstream("HeyReach", response.status, error, [key]);
+      logUpstream("HeyReach", response.status, error, [key, ...(options.secrets ?? [])]);
       throw new HeyReachError("HeyReach sent a reply Orbit couldn't read.", response.status);
     }
   };
@@ -458,6 +458,7 @@ export async function createHeyReachWebhook(key: string, campaignId: string, url
   const body = record(
     await call(key, "/webhooks/CreateWebhook", {
       ...options,
+      secrets: urlSecrets(url),
       body: { webhookName: "Orbit replies", webhookUrl: url, eventType: HEYREACH_REPLY_EVENT, campaignIds: [campaignNumber(campaignId)] },
     }),
   );

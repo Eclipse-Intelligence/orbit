@@ -11,6 +11,7 @@ import type { Actor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 
 const REFRESH_EVERY_MS = 60_000;
+export const SENDING_STALE_MS = 5 * 60_000;
 const THREAD_MESSAGES = 500;
 const TIMELINE_ROWS = 100;
 
@@ -184,6 +185,7 @@ type MessageRow = {
   send_state: ThreadMessage["sendState"];
   send_error: string | null;
   client_key: string | null;
+  created_at: Date;
   automatic: boolean;
   conversation_id: string | null;
   sender_id: string | null;
@@ -217,7 +219,7 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
     const byId = new Map(rows.map((row) => [row.id, row]));
     const messages = await db.query<MessageRow>(
       `select m.id, m.prospect_id, m.campaign_id, m.channel, m.direction, m.subject, m.body, m.sent_at, m.from_address, m.sent_by_user_id,
-              coalesce(nullif(btrim(pr.full_name), ''), pr.email) as sent_by, s.name as sender_name, m.send_state, m.send_error, m.client_key, m.automatic,
+              coalesce(nullif(btrim(pr.full_name), ''), pr.email) as sent_by, s.name as sender_name, m.send_state, m.send_error, m.client_key, m.automatic, m.created_at,
               m.conversation_id, m.sender_id, m.stats_id, m.provider_message_id
        from crm.campaign_messages m
        left join crm.profiles pr on pr.id = m.sent_by_user_id
@@ -236,6 +238,10 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
     const items: ThreadItem[] = [];
     for (const message of messages.rows) {
       const prospect = byId.get(message.prospect_id)!;
+      if (message.send_state === "sending" && Date.now() - message.created_at.getTime() > SENDING_STALE_MS) {
+        message.send_state = "unknown";
+        message.send_error = "May not have gone.";
+      }
       const author =
         message.direction === "inbound" ? prospect.name : (message.sent_by ?? (message.channel === "linkedin" ? (prospect.sender_name ?? message.sender_name) : null) ?? message.from_address ?? "Campaign");
       items.push({
@@ -342,6 +348,8 @@ export async function refreshProspectThread(actor: Actor, prospectId: string, op
     return refs;
   });
   let saved = 0;
+  let read = 0;
+  let failure: Error | null = null;
   for (const prospect of rows) {
     const { provider, context } = await connectedContext(actor.workspaceId, prospect.provider, options).catch(() => ({ provider: null, context: null }));
     if (!provider || !context) continue;
@@ -349,11 +357,13 @@ export async function refreshProspectThread(actor: Actor, prospectId: string, op
       const messages = await provider.readThread(context, { externalId: prospect.campaign_external_id }, leadRef(prospect));
       saved += (await saveThread(prospect.id, messages, { replyEvents: provider.repliesFromThreads, handled: false })).length;
       await threadFetched(prospect.id);
+      read += 1;
     } catch (error) {
-      throw providerError(provider, error, "Couldn't read the conversation. Try again.");
+      failure ??= providerError(provider, error, "Couldn't read the conversation. Try again.");
     }
   }
-  return { saved };
+  if (failure && read === 0) throw failure;
+  return { saved, failed: failure ? true : false };
 }
 
 export type CampaignLine = {

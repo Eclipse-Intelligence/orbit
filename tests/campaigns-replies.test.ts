@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { saveCampaignConnection } from "@/lib/campaigns/connections";
+import { campaignConnectionViews, removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused } from "@/lib/campaigns/manage";
 import { replyToProspect } from "@/lib/campaigns/replies";
 import { syncCampaigns } from "@/lib/campaigns/sync";
 import { contactCampaignLines, contactCampaignTimeline, getProspectThread, refreshProspectThread } from "@/lib/campaigns/threads";
-import { ensureWebhookSecret } from "@/lib/campaigns/webhook-urls";
+import { campaignWebhookUrl, ensureWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { handleCampaignWebhook } from "@/lib/campaigns/webhooks";
+import { getCampaign } from "@/lib/crm/campaigns";
 import { createContact } from "@/lib/crm/contacts";
+import { mergeContacts } from "@/lib/crm/merge";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
 import { removeMember } from "@/lib/crm/team";
@@ -97,11 +99,13 @@ function agencyOutreach() {
       { id: "lead-priya", email: "priya@halcyon.test", first: "Priya", last: "Shah", company: "Halcyon Digital" },
       { id: "lead-ben", email: "ben@lumen.test", first: "Ben", last: "Hart", company: "Lumen & Co" },
       { id: "lead-tom", email: "tom@brightlane.test", first: "Tom", last: "Avery", company: "Brightlane" },
+      { id: "lead-ivy", email: "ivy@kiln.test", first: "Ivy", last: "Bell", company: "Kiln" },
     ],
     stats: [
       { lead_id: "lead-priya", lead_email: "priya@halcyon.test", lead_name: "Priya Shah", sequence_number: 1, sent_time: T0 },
       { lead_id: "lead-ben", lead_email: "ben@lumen.test", lead_name: "Ben Hart", sequence_number: 1, sent_time: T0 },
       { lead_id: "lead-tom", lead_email: "tom@brightlane.test", lead_name: "Tom Avery", sequence_number: 1, sent_time: T0 },
+      { lead_id: "lead-ivy", lead_email: "ivy@kiln.test", lead_name: "Ivy Bell", sequence_number: 1, sent_time: T0 },
     ],
     sequences: sequenceOf([{ subject: "Quick question", body: "Hi {{first_name}}" }]),
     analytics: {},
@@ -110,6 +114,7 @@ function agencyOutreach() {
         { type: "SENT", stats_id: "stats-priya", message_id: "<sent-priya@getridgeon.test>", time: T0, subject: "Quick question", email_body: "<p>Hi Priya, saw the Shopify Plus news.</p>", email_seq_number: 1, from: "mark@getridgeon.test" },
       ],
       "lead-ben": [{ type: "SENT", stats_id: "stats-ben", message_id: "<sent-ben@getridgeon.test>", time: T0, subject: "Quick question", email_body: "<p>Hi Ben</p>", email_seq_number: 1, from: "mark@getridgeon.test" }],
+      "lead-ivy": [{ type: "SENT", stats_id: "stats-ivy", message_id: "<sent-ivy@getridgeon.test>", time: T0, subject: "Quick question", email_body: "<p>Hi Ivy</p>", email_seq_number: 1, from: "mark@getridgeon.test" }],
     } as Record<string, unknown[]>,
   };
 }
@@ -124,6 +129,7 @@ function agencyFounders(): FakeHeyReachCampaign {
     leads: [
       { id: "lead-hr-priya", profileUrl: "https://www.linkedin.com/in/priyashah/", first: "Priya", last: "Shah", accountId: 1, connection: "ConnectionAccepted", lastActionTime: "2026-11-11T16:40:00.000Z", created: "2026-11-01T09:00:00.000Z" },
       { id: "lead-hr-dan", profileUrl: "https://www.linkedin.com/in/danellis/", first: "Dan", last: "Ellis", accountId: 2, connection: "ConnectionAccepted", lastActionTime: "2026-11-11T16:40:00.000Z", created: "2026-11-01T09:00:00.000Z" },
+      { id: "lead-hr-kim", profileUrl: "https://www.linkedin.com/in/kimosei/", first: "Kim", last: "Osei", accountId: 1, connection: "ConnectionAccepted", lastActionTime: "2026-11-11T16:40:00.000Z", created: "2026-11-01T09:00:00.000Z" },
     ],
     overall: {},
     byDay: {},
@@ -131,6 +137,8 @@ function agencyFounders(): FakeHeyReachCampaign {
       { id: "c-priya", accountId: 1, profileUrl: "https://www.linkedin.com/in/priyashah/", leadId: "lead-hr-priya", messages: [{ createdAt: "2026-11-12T10:00:00.000Z", body: "Hi Priya, I work with agencies on onboarding.", sender: "ME" }] },
       { id: "c-priya-private", accountId: 9, profileUrl: "https://www.linkedin.com/in/priyashah/", messages: [{ createdAt: "2026-11-13T10:00:00.000Z", body: "Dinner on Friday?", sender: "CORRESPONDENT" }] },
       { id: "c-dan", accountId: 2, profileUrl: "https://www.linkedin.com/in/danellis/", leadId: "lead-hr-dan", messages: [{ createdAt: "2026-11-12T10:00:00.000Z", body: "Thanks for connecting, Dan.", sender: "ME" }] },
+      { id: "c-kim", accountId: 1, profileUrl: "https://www.linkedin.com/in/kimosei/", leadId: "lead-hr-kim", messages: [{ createdAt: "2026-11-13T10:00:00.000Z", body: "Interested, tell me more.", sender: "CORRESPONDENT" }] },
+      { id: "c-stranger", accountId: 1, profileUrl: "https://www.linkedin.com/in/someone-else/", messages: [{ createdAt: "2026-11-13T11:00:00.000Z", body: "Who is this?", sender: "CORRESPONDENT" }] },
     ],
   };
 }
@@ -222,10 +230,37 @@ describe("campaign events and replies", () => {
     assert.equal((await sql("select 1 from crm.workflow_events where 'campaign_event' = any(trigger_types)")).length, 0);
     assert.equal((await notifications(owner.workspaceId)).length, 0);
     const messages = await sql<{ conversation_id: string; body: string }>("select conversation_id, body from crm.campaign_messages where channel = 'linkedin' order by conversation_id");
-    assert.deepEqual(messages.map((row) => row.conversation_id), ["c-dan", "c-priya"]);
-    assert.ok(!messages.some((row) => row.body.includes("Dinner")));
+    assert.deepEqual(messages.map((row) => row.conversation_id), ["c-dan", "c-kim", "c-priya"]);
+    assert.ok(!messages.some((row) => row.body.includes("Dinner") || row.body.includes("Who is this")));
     const priya = await sql<{ contact_id: string | null }>("select contact_id from crm.campaign_prospects where external_lead_id in ('lead-priya', 'lead-hr-priya')");
     assert.deepEqual(priya.map((row) => row.contact_id), [priyaContact, priyaContact]);
+  });
+
+  it("never fires a reply from before or during the backfill, even from an opened thread", async () => {
+    const kim = await prospect("lead-hr-kim");
+    assert.ok(kim.replied_at);
+    const before = await sql<{ handled: boolean; counted: boolean }>("select handled_at is not null as handled, counted_at is not null as counted from crm.campaign_events where prospect_id = $1 and kind = 'replied'", [kim.id]);
+    assert.deepEqual(before, [{ handled: true, counted: false }]);
+    await sql("update crm.campaigns set backfilled_at = null where external_id = '901'");
+    try {
+      heyreach.campaigns[0].conversations!.find((item) => item.id === "c-kim")!.messages.push({ createdAt: new Date().toISOString(), body: "Still keen.", sender: "CORRESPONDENT" });
+      await refreshProspectThread(owner, kim.id, { fetchImpl, force: true });
+    } finally {
+      await sql("update crm.campaigns set backfilled_at = now() where external_id = '901'");
+    }
+    const after = await sql<{ handled: boolean }>("select handled_at is not null as handled from crm.campaign_events where prospect_id = $1 and kind = 'replied'", [kim.id]);
+    assert.deepEqual(after.map((row) => row.handled), [true, true]);
+    await sync(owner.workspaceId);
+    assert.equal((await notifications(owner.workspaceId)).length, 0);
+    assert.equal((await sql("select 1 from crm.campaign_events where prospect_id = $1 and fired_at is not null", [kim.id])).length, 0);
+    assert.equal((await sql("select 1 from crm.campaign_prospects where stop_requested_at is not null")).length, 0);
+  });
+
+  it("keeps counting conversations that aren't from the campaign's prospects", async () => {
+    const founders = (await sql<{ id: string }>("select id from crm.campaigns where external_id = '901'"))[0].id;
+    assert.equal((await getCampaign(owner, founders)).strayConversations, 1);
+    await sync(owner.workspaceId);
+    assert.equal((await getCampaign(owner, founders)).strayConversations, 1);
   });
 
   describe("webhooks", () => {
@@ -348,6 +383,52 @@ describe("campaign events and replies", () => {
       assert.equal((await sql("select 1 from crm.campaign_messages where prospect_id = $1 and direction = 'inbound'", [ben.id])).length, 1);
       assert.ok(!(await notifications(owner.workspaceId)).some((row) => row.title.startsWith("Ben")));
       assert.equal((await sql("select 1 from crm.campaign_events where kind = 'replied' and fired_at is not null")).length, 1);
+      assert.equal((await sql("select 1 from crm.campaign_event_tombstones")).length, 1);
+    });
+
+    it("counts a real reply even when the stored category still says Out of office, and never re-reads the old one", async () => {
+      const replyAt = new Date(Date.now() - 10_000).toISOString();
+      const campaign = alpha.campaigns[0];
+      campaign.stats.push({ lead_id: "lead-ben", lead_email: "ben@lumen.test", lead_name: "Ben Hart", sequence_number: 1, sent_time: T0, reply_time: replyAt, lead_category: "Out Of Office" });
+      campaign.threads!["lead-ben"].push({ type: "REPLY", stats_id: "stats-ben", message_id: "<real-ben@lumen.test>", time: replyAt, subject: "Re: Quick question", email_body: "Back now. Yes, let's talk.", from: "ben@lumen.test" });
+      await sync(owner.workspaceId);
+      await sync(owner.workspaceId);
+      const ben = await prospect("lead-ben");
+      assert.ok(ben.replied_at);
+      assert.equal((await sql("select 1 from crm.campaign_events where prospect_id = $1 and kind = 'replied'", [ben.id])).length, 1);
+      assert.ok((await notifications(owner.workspaceId)).some((row) => row.title === "Ben Hart replied"));
+    });
+
+    it("doesn't count or act on a reply while its thread can't be read, then judges it once it can", async () => {
+      const replyAt = new Date(Date.now() - 5_000).toISOString();
+      const campaign = alpha.campaigns[0];
+      campaign.stats.push({ lead_id: "lead-ivy", lead_email: "ivy@kiln.test", lead_name: "Ivy Bell", sequence_number: 1, sent_time: T0, reply_time: replyAt });
+      campaign.threads!["lead-ivy"].push({ type: "REPLY", stats_id: "stats-ivy", message_id: "<ooo-ivy@kiln.test>", time: replyAt, subject: "Re: Quick question", email_body: "On leave.", is_auto_reply: true, from: "ivy@kiln.test" });
+      alpha.fail = (url) => (url.pathname.endsWith("/leads/lead-ivy/message-history") ? new Response("{}", { status: 500 }) : null);
+      try {
+        await sync(owner.workspaceId);
+      } finally {
+        alpha.fail = undefined;
+      }
+      const ivy = await prospect("lead-ivy");
+      const waiting = await sql<{ counted: boolean; fired: boolean; handled: boolean }>(
+        "select counted_at is not null as counted, fired_at is not null as fired, handled_at is not null as handled from crm.campaign_events where prospect_id = $1 and kind = 'replied'",
+        [ivy.id],
+      );
+      assert.deepEqual(waiting, [{ counted: false, fired: false, handled: false }]);
+      assert.ok(!(await notifications(owner.workspaceId)).some((row) => row.title.startsWith("Ivy")));
+      await sync(owner.workspaceId);
+      assert.equal((await prospect("lead-ivy")).replied_at, null);
+      assert.equal((await sql("select 1 from crm.campaign_events where prospect_id = $1 and kind = 'replied'", [ivy.id])).length, 0);
+      assert.ok(!(await notifications(owner.workspaceId)).some((row) => row.title.startsWith("Ivy")));
+    });
+
+    it("keeps a counted reply counted", async () => {
+      const priya = await prospect("lead-priya");
+      const event = (await sql<{ id: string }>("select id from crm.campaign_events where prospect_id = $1 and kind = 'replied'", [priya.id]))[0];
+      const result = await sql<{ done: boolean }>("select private.campaign_reply_uncount($1) as done", [event.id]);
+      assert.equal(result[0].done, false);
+      assert.ok((await prospect("lead-priya")).replied_at);
     });
 
     it("tells the LinkedIn sender's member about a LinkedIn reply", async () => {
@@ -419,6 +500,34 @@ describe("campaign events and replies", () => {
       assert.ok(outbound[1].confirmed_at);
     });
 
+    it("shows a send that died mid-flight as May not have gone, and never sends it again", async () => {
+      const priya = await prospectId("lead-priya");
+      await sql(
+        `insert into crm.campaign_messages (workspace_id, campaign_id, prospect_id, channel, direction, body, sent_at, send_state, client_key, sent_by_user_id, created_at)
+         select p.workspace_id, p.campaign_id, p.id, 'email', 'outbound', 'A reply that never came back.', now() - interval '10 minutes', 'sending', 'stale-1', $2, now() - interval '10 minutes'
+         from crm.campaign_prospects p where p.id = $1`,
+        [priya, owner.userId],
+      );
+      const shown = (await getProspectThread(owner, priya)).items.find((item) => item.type === "message" && item.clientKey === "stale-1");
+      assert.ok(shown && shown.type === "message");
+      assert.deepEqual([shown.sendState, shown.sendError], ["unknown", "May not have gone."]);
+      const writes = (alpha.writes ?? []).length;
+      const again = await replyToProspect(owner, priya, { text: "A reply that never came back.", clientKey: "stale-1" }, { fetchImpl });
+      assert.deepEqual([again.repeated, again.sendState], [true, "unknown"]);
+      assert.equal((alpha.writes ?? []).length, writes);
+      assert.equal((await sql<{ send_state: string }>("select send_state from crm.campaign_messages where client_key = 'stale-1'"))[0].send_state, "unknown");
+    });
+
+    it("treats a HeyReach success it can't read as maybe sent", async () => {
+      heyreach.fail = (path) => (path === "/inbox/SendMessage" ? new Response("<html>ok", { status: 200 }) : null);
+      try {
+        const result = await replyToProspect(jess, await prospectId("lead-hr-dan"), { text: "Also free Thursday.", clientKey: "linkedin-2" }, { fetchImpl });
+        assert.equal(result.sendState, "unknown");
+      } finally {
+        heyreach.fail = undefined;
+      }
+    });
+
     it("sends again after a clear refusal, stores it as outbound and files it on the timeline", async () => {
       const priya = await prospectId("lead-priya");
       alpha.fail = (url) => (url.pathname.endsWith("/reply-email-thread") ? new Response("{}", { status: 400 }) : null);
@@ -444,7 +553,7 @@ describe("campaign events and replies", () => {
       const filed = await sql<{ type: string; title: string }>("select type, title from crm.activities where metadata->>'campaignMessageId' = $1", [sent.messageId]);
       assert.deepEqual(filed.map((row) => [row.type, row.title]), [["email", "Reply sent in Agency outreach"]]);
       const replies = await audits(owner.workspaceId, "campaign.reply_sent");
-      assert.deepEqual(replies.map((row) => row.changes.sendState), ["sent", "unknown", "sent"]);
+      assert.deepEqual(replies.map((row) => row.changes.sendState), ["sent", "unknown", "unknown", "sent"]);
     });
   });
 
@@ -546,9 +655,86 @@ describe("campaign events and replies", () => {
     });
 
     it("refuses a LinkedIn reply from someone removed from the workspace", async () => {
+      const sends = heyreach.calls.filter((call) => call.path === "/inbox/SendMessage").length;
       await removeMember(owner, jess.userId);
       await assert.rejects(replyToProspect(jess, await prospectId("lead-hr-dan"), { text: "Still there?" }, { fetchImpl }), refused(["not_found", "forbidden"]));
-      assert.equal(heyreach.calls.filter((call) => call.path === "/inbox/SendMessage").length, 1);
+      assert.equal(heyreach.calls.filter((call) => call.path === "/inbox/SendMessage").length, sends);
+    });
+
+    it("never puts a campaign reply in anyone's personal Mail", async () => {
+      const mail = await sql<{ count: number }>(
+        "select count(*)::int as count from crm.mail_messages where lower(coalesce(from_email, '')) in ('priya@halcyon.test', 'ben@lumen.test') or body_text ilike '%Happy to talk next week%' or body_text ilike '%Tuesday works%'",
+      );
+      assert.equal(mail[0].count, 0);
+      const mine = await queryAsUser<{ count: number }>(owner.userId, "select count(*)::int as count from crm.mail_messages");
+      assert.equal(mine[0].count, 0);
+    });
+  });
+
+  describe("webhook registration, merging and disconnecting", () => {
+    it("keeps the webhook secret out of the logs and shows the manual URL to admins only", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "smartlead"))!;
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = ORIGIN;
+      const hook = campaignWebhookUrl(owner.workspaceId, "smartlead", secret)!;
+      alpha.fail = (url) => (url.pathname.endsWith("/campaigns/801/webhooks") ? new Response(`Refused webhook_url ${hook}`, { status: 400 }) : null);
+      const logged: string[] = [];
+      const original = console.error;
+      console.error = (...parts: unknown[]) => {
+        logged.push(parts.map((part) => (part instanceof Error ? `${part.message} ${part.stack}` : typeof part === "string" ? part : JSON.stringify(part))).join(" "));
+      };
+      try {
+        await sync(owner.workspaceId);
+      } finally {
+        console.error = original;
+        alpha.fail = undefined;
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+      assert.ok(logged.some((line) => line.includes("Smartlead request failed")));
+      assert.ok(!logged.some((line) => line.includes(secret)));
+      const state = await sql<{ external_id: string; failed: boolean; hooked: boolean }>(
+        "select external_id, sync_state ? 'webhookFailedAt' as failed, sync_state ? 'webhookId' as hooked from crm.campaigns where workspace_id = $1 order by external_id",
+        [owner.workspaceId],
+      );
+      assert.deepEqual(state.map((row) => [row.external_id, row.failed, row.hooked]), [["801", true, false], ["901", false, true]]);
+      process.env.SITE_URL = ORIGIN;
+      try {
+        const views = await campaignConnectionViews(owner);
+        assert.match(views.find((view) => view.provider === "smartlead")!.webhookUrl ?? "", /\/api\/webhooks\/smartlead\?w=.+&secret=/);
+        assert.equal(views.find((view) => view.provider === "heyreach")!.webhookUrl, null);
+        assert.equal((await campaignConnectionViews(ann)).find((view) => view.provider === "smartlead")!.webhookUrl, null);
+      } finally {
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+    });
+
+    it("keeps an unconfirmed stop and the messages when two prospects merge", async () => {
+      const keep = (await createContact(owner, { firstName: "Sam", lastName: "One", email: "sam1@merge-replies.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      const merge = (await createContact(owner, { firstName: "Sam", lastName: "Two", email: "sam2@merge-replies.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      const founders = (await sql<{ id: string }>("select id from crm.campaigns where external_id = '901'"))[0].id;
+      const rows = await sql<{ id: string }>(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, external_lead_id, state, pushed_at, stop_requested_at, stop_reason)
+         values ($1, $2, $3, 'lead-sam-1', 'pushed', now(), null, null), ($1, $2, $4, 'lead-sam-2', 'pushed', now(), now(), 'replied')
+         returning id`,
+        [owner.workspaceId, founders, keep, merge],
+      );
+      await sql(
+        "insert into crm.campaign_messages (workspace_id, campaign_id, prospect_id, channel, direction, body, sent_at, external_id) values ($1, $2, $3, 'linkedin', 'inbound', 'Hello', now(), 'sam-message')",
+        [owner.workspaceId, founders, rows[1].id],
+      );
+      await mergeContacts(owner, keep, merge, { operation: "test" });
+      const kept = await sql<{ stop: boolean; reason: string | null }>("select stop_requested_at is not null as stop, stop_reason as reason from crm.campaign_prospects where id = $1", [rows[0].id]);
+      assert.deepEqual(kept, [{ stop: true, reason: "replied" }]);
+      assert.deepEqual((await sql<{ prospect_id: string }>("select prospect_id from crm.campaign_messages where external_id = 'sam-message'")).map((row) => row.prospect_id), [rows[0].id]);
+    });
+
+    it("forgets a provider's webhooks when it is disconnected, so reconnecting adds them again", async () => {
+      await removeCampaignConnection(owner, "heyreach");
+      const state = await sql<{ hooked: boolean }>("select sync_state ? 'webhookId' as hooked from crm.campaigns where external_id = '901'");
+      assert.deepEqual(state, [{ hooked: false }]);
+      await saveCampaignConnection(owner, "heyreach", HR_A, { fetchImpl });
     });
   });
 });

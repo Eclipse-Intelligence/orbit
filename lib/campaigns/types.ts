@@ -107,6 +107,7 @@ export type CampaignDetail = CampaignSummary & {
   url: string | null;
   capacity: SenderCapacity | null;
   syncError: string | null;
+  strayConversations: number;
 };
 
 export type SenderCapacity = { senders: number; invites: number | null };
@@ -161,5 +162,6 @@ export type ConnectionView = {
   lastError: string | null;
   keyHint: string | null;
   canAdmin: boolean;
+  webhookUrl: string | null;
   senders?: SendersView;
 };

@@ -29,5 +29,5 @@ export function mightHaveSent(provider: CampaignProvider, error: unknown) {
   if (error instanceof ServiceBusy || error instanceof CrmError || (error instanceof Error && error.name === "LeadNotReady")) return false;
   const failure = provider.failure(error);
   if (!failure) return true;
-  return failure.status === null || failure.status >= 500;
+  return failure.status === null || failure.status < 400 || failure.status >= 500;
 }

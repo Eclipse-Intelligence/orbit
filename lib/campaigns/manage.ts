@@ -151,6 +151,7 @@ export async function removeProspect(actor: Actor, prospectId: string, options: 
   if (prospect.stopped_at || prospect.state === "skipped" || prospect.state === "failed") throw new CrmError("conflict", "This person is already out of the campaign.", 409);
   const before = await query<{ state: string | null }>("select private.campaign_prospect_remove($1, $2) as state", [actor.workspaceId, prospect.id]);
   if (!before.rows[0]?.state) throw notFound("prospect");
+  if (before.rows[0].state === "unchanged") throw new CrmError("conflict", "This person is already out of the campaign.", 409);
   await withActor(actor, (db) =>
     recordAudit(db, actor, CAMPAIGN_AUDIT_EVENTS.prospectRemoved, "campaign_prospect", prospect.id, web("remove_prospect", options), {
       campaignId: prospect.campaign_id,

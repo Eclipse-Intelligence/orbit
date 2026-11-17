@@ -57,9 +57,6 @@ export async function handleCampaignWebhook(request: Request, providerId: Campai
   }
   const hint = provider.webhookHint(payload, request.headers);
   if (!hint) return json({ ignored: true });
-  const key = createHash("sha256").update(hint.receiptKey).digest("hex");
-  const receipt = await query<{ fresh: boolean }>("select private.campaign_webhook_receipt($1, $2, $3) as fresh", [workspaceId, provider.id, key]);
-  if (!receipt.rows[0]?.fresh) return json({ duplicate: true });
   const flagged = await query<{ count: number }>("select private.campaign_request_sync($1, $2, $3, $4, $5, $6) as count", [
     workspaceId,
     provider.id,
@@ -69,6 +66,9 @@ export async function handleCampaignWebhook(request: Request, providerId: Campai
     hint.linkedin,
   ]);
   const queued = flagged.rows[0]?.count ?? 0;
+  const key = createHash("sha256").update(hint.receiptKey).digest("hex");
+  const receipt = await query<{ fresh: boolean }>("select private.campaign_webhook_receipt($1, $2, $3) as fresh", [workspaceId, provider.id, key]);
+  if (!receipt.rows[0]?.fresh) return json({ duplicate: true });
   if (queued > 0) syncSoon(workspaceId, provider.id, options);
   return json({ queued });
 }

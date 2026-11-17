@@ -13,6 +13,19 @@ alter table crm.campaign_prospects
 
 alter table crm.campaign_events add column if not exists claimed_at timestamptz;
 alter table crm.campaign_events add column if not exists fired_at timestamptz;
+alter table crm.campaign_events add column if not exists counted_at timestamptz;
+
+create table if not exists crm.campaign_event_tombstones (
+  campaign_id uuid not null references crm.campaigns (id) on delete cascade,
+  dedupe_key text not null,
+  created_at timestamptz not null default now(),
+  constraint campaign_event_tombstones_pkey primary key (campaign_id, dedupe_key),
+  constraint campaign_event_tombstones_key_length check (char_length(dedupe_key) between 1 and 500)
+);
+
+alter table crm.campaign_event_tombstones enable row level security;
+alter table crm.campaign_event_tombstones force row level security;
+revoke all on crm.campaign_event_tombstones from anon, authenticated, crm_agent;
 
 create table if not exists crm.campaign_messages (
   id uuid primary key default gen_random_uuid(),
@@ -361,7 +374,7 @@ begin
           regexp_replace(lower(v_message.body), '\s+', ' ', 'g'),
           btrim(regexp_replace(lower(m.body), '\s+', ' ', 'g'))
         ) > 0
-        and m.created_at between v_message.sent_at - interval '1 day' and v_message.sent_at + interval '1 day'
+        and m.created_at between v_message.sent_at - interval '1 day' and v_message.sent_at + interval '2 minutes'
       order by abs(extract(epoch from (m.created_at - v_message.sent_at))), m.created_at
       limit 1
       for update;
@@ -403,7 +416,7 @@ begin
       values (
         v_prospect.workspace_id, v_campaign.id, p_prospect, 'replied', v_message.step, v_message.sent_at, v_message.reply_key,
         jsonb_strip_nulls(jsonb_build_object('messageId', v_id, 'conversationId', v_message.conversation_id, 'senderId', v_message.sender_id)),
-        case when p_handled then now() end
+        case when p_handled or v_campaign.backfilled_at is null or v_message.sent_at < v_campaign.backfilled_at then now() end
       )
       on conflict on constraint campaign_events_dedupe do nothing
       returning e.id into v_event;
@@ -464,6 +477,9 @@ begin
     where x.occurred_at is not null and coalesce(x.dedupe_key, '') <> ''
     order by x.occurred_at
   loop
+    if exists (select 1 from crm.campaign_event_tombstones t where t.campaign_id = p_campaign and t.dedupe_key = v_event.dedupe_key) then
+      continue;
+    end if;
     v_prospect := null;
     v_category := null;
     if v_event.external_lead_id is not null then
@@ -697,9 +713,17 @@ begin
   if current_user not in ('crm_app', 'postgres') then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-  delete from crm.campaign_events e
-  where e.id = p_event and e.kind = 'replied' and e.fired_at is null
-  returning e.prospect_id into v_prospect;
+  with gone as (
+    delete from crm.campaign_events e
+    where e.id = p_event and e.kind = 'replied' and e.counted_at is null
+    returning e.prospect_id, e.campaign_id, e.dedupe_key
+  ),
+  kept as (
+    insert into crm.campaign_event_tombstones (campaign_id, dedupe_key)
+    select gone.campaign_id, gone.dedupe_key from gone
+    on conflict on constraint campaign_event_tombstones_pkey do nothing
+  )
+  select gone.prospect_id into v_prospect from gone;
   if v_prospect is null then
     return false;
   end if;
@@ -707,6 +731,38 @@ begin
   set replied_at = (select min(e.occurred_at) from crm.campaign_events e where e.prospect_id = p.id and e.kind = 'replied')
   where p.id = v_prospect;
   return true;
+end;
+$$;
+
+create or replace function private.campaign_reply_counted(p_event uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_events e set counted_at = now()
+  where e.id = p_event and e.kind = 'replied' and e.counted_at is null;
+end;
+$$;
+
+create or replace function private.campaign_forget_webhooks(p_workspace uuid, p_provider text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaigns k
+  set sync_state = k.sync_state - 'webhookId' - 'webhookFailedAt'
+  where k.workspace_id = p_workspace and k.provider = p_provider
+    and (k.sync_state ? 'webhookId' or k.sync_state ? 'webhookFailedAt');
 end;
 $$;
 
@@ -823,15 +879,20 @@ set search_path = ''
 as $$
 declare
   v_state text;
+  v_stopped timestamptz;
+  v_reason text;
 begin
   if current_user not in ('crm_app', 'postgres') then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-  select p.state into v_state from crm.campaign_prospects p
+  select p.state, p.stopped_at, p.stop_reason into v_state, v_stopped, v_reason from crm.campaign_prospects p
   where p.id = p_prospect and p.workspace_id = p_workspace
   for update;
   if not found then
     return null;
+  end if;
+  if v_state in ('skipped', 'failed') or v_stopped is not null or v_reason = 'removed' then
+    return 'unchanged';
   end if;
   update crm.campaign_prospects p
   set state = case when p.state in ('queued', 'filling') then 'skipped' else p.state end,
@@ -955,6 +1016,12 @@ begin
   if found then
     if v_existing.prospect_id <> p_prospect or v_existing.sent_by_user_id is distinct from p_user then
       raise exception 'That reply belongs to another thread.' using errcode = '22023';
+    end if;
+    if v_existing.send_state = 'sending' and v_existing.created_at < now() - interval '5 minutes' then
+      update crm.campaign_messages m
+      set send_state = 'unknown', send_error = 'May not have gone.'
+      where m.id = v_existing.id;
+      v_existing.send_state := 'unknown';
     end if;
     if v_existing.send_state = 'failed' then
       update crm.campaign_messages m
@@ -1120,7 +1187,8 @@ begin
   get diagnostics routes = row_count;
 
   for prospect in
-    select dup.id as merge_id, kept.id as keep_id, dup.replied_at, dup.last_event_at, dup.external_lead_id, dup.email, dup.linkedin
+    select dup.id as merge_id, kept.id as keep_id, dup.replied_at, dup.last_event_at, dup.external_lead_id, dup.email, dup.linkedin,
+      dup.stop_requested_at, dup.stopped_at, dup.stop_reason
     from crm.campaign_prospects dup
     join crm.campaign_prospects kept
       on kept.campaign_id = dup.campaign_id and kept.contact_id = p_keep and kept.workspace_id = p_workspace
@@ -1136,7 +1204,17 @@ begin
           when prospect.replied_at is null then k.replied_at
           else least(k.replied_at, prospect.replied_at)
         end,
-        last_event_at = greatest(k.last_event_at, prospect.last_event_at)
+        last_event_at = greatest(k.last_event_at, prospect.last_event_at),
+        stop_requested_at = case
+          when prospect.stop_requested_at is not null and prospect.stopped_at is null and k.stopped_at is null
+            then coalesce(k.stop_requested_at, prospect.stop_requested_at)
+          else k.stop_requested_at
+        end,
+        stop_reason = case
+          when prospect.stop_requested_at is not null and prospect.stopped_at is null and k.stopped_at is null
+            then coalesce(k.stop_reason, prospect.stop_reason)
+          else k.stop_reason
+        end
     where k.id = prospect.keep_id;
     delete from crm.campaign_prospects d where d.id = prospect.merge_id;
     update crm.campaign_prospects k
@@ -1191,6 +1269,8 @@ revoke all on function private.campaign_claim_events(uuid, integer) from public;
 revoke all on function private.campaign_events_release(uuid, uuid[]) from public;
 revoke all on function private.campaign_fire_events(uuid[]) from public;
 revoke all on function private.campaign_reply_uncount(uuid) from public;
+revoke all on function private.campaign_reply_counted(uuid) from public;
+revoke all on function private.campaign_forget_webhooks(uuid, text) from public;
 revoke all on function private.campaign_stop_person(uuid, uuid) from public;
 revoke all on function private.campaign_pending_stops(uuid, text, integer) from public;
 revoke all on function private.campaign_stop_confirmed(uuid, uuid, text) from public;
@@ -1216,6 +1296,8 @@ grant execute on function private.campaign_claim_events(uuid, integer) to crm_ap
 grant execute on function private.campaign_events_release(uuid, uuid[]) to crm_app;
 grant execute on function private.campaign_fire_events(uuid[]) to crm_app;
 grant execute on function private.campaign_reply_uncount(uuid) to crm_app;
+grant execute on function private.campaign_reply_counted(uuid) to crm_app;
+grant execute on function private.campaign_forget_webhooks(uuid, text) to crm_app;
 grant execute on function private.campaign_stop_person(uuid, uuid) to crm_app;
 grant execute on function private.campaign_pending_stops(uuid, text, integer) to crm_app;
 grant execute on function private.campaign_stop_confirmed(uuid, uuid, text) to crm_app;

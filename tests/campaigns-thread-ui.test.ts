@@ -4,6 +4,7 @@ import {
   campaignRowMeta,
   campaignStateLine,
   contactLineText,
+  draftAfterRestore,
   messageStatus,
   newClientKey,
   noteLabel,
@@ -12,6 +13,7 @@ import {
   sourceLink,
   timelineEntries,
   unsettled,
+  withoutReply,
   withPending,
   type PendingReply,
 } from "@/lib/campaigns/thread-view";
@@ -60,6 +62,15 @@ describe("optimistic replies", () => {
     assert.equal(withPending([...items, message({ id: "m2", clientKey: "web-1" })], [pending()]).length, 2);
     assert.equal(withPending([...items, message({ id: "m2" })], [pending({ messageId: "m2" })]).length, 2);
     assert.deepEqual(unsettled([...items, message({ id: "m2", clientKey: "web-1" })], [pending(), pending({ clientKey: "web-2" })]).map((reply) => reply.clientKey), ["web-2"]);
+  });
+
+  it("puts a reply that failed back in the composer, without overwriting new typing", () => {
+    const failed = pending({ clientKey: "web-9", text: "Does Tuesday work?" });
+    assert.deepEqual(withoutReply([pending(), failed], "web-9").map((reply) => reply.clientKey), ["web-1"]);
+    const restore = { text: failed.text, channel: failed.channel, at: 1 };
+    assert.equal(draftAfterRestore("", restore), "Does Tuesday work?");
+    assert.equal(draftAfterRestore("  ", restore), "Does Tuesday work?");
+    assert.equal(draftAfterRestore("Something new", restore), "Something new");
   });
 
   it("keeps the same items when nothing is waiting", () => {

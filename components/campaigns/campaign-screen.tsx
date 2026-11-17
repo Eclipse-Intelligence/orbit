@@ -259,6 +259,10 @@ function lowerFirst(text: string) {
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
+function strayLine(count: number) {
+  return count === 1 ? "1 conversation not from this campaign's prospects" : `${count.toLocaleString("en-GB")} conversations not from this campaign's prospects`;
+}
+
 function capacityLine(capacity: SenderCapacity) {
   const senders = capacity.senders === 1 ? "1 sender" : `${capacity.senders.toLocaleString("en-GB")} senders`;
   if (capacity.invites === null) return `${senders}.`;
@@ -462,6 +466,7 @@ export default function CampaignScreen({
               {extras.length > 0 && <span>{extras.join(" · ")}</span>}
             </div>
             <p className="caption-style text-subtle">{syncLine}</p>
+            {campaign.strayConversations > 0 && <p className="caption-style text-subtle">{strayLine(campaign.strayConversations)}</p>}
           </Section>
 
           <Section title="Steps" className={linkedin ? "max-sm:hidden" : undefined}>

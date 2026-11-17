@@ -23,6 +23,7 @@ const HAND_OVER_BATCH = 500;
 const REPLY_PAGES = 20;
 const REQUESTED_BATCH = 25;
 const WEBHOOK_RETRY_MS = 24 * 60 * 60_000;
+const STRAY_KEPT = 1_000;
 
 export type SyncState = {
   sequenceAt?: string;
@@ -37,6 +38,7 @@ export type SyncState = {
   repliesSince?: string | null;
   repliesAt?: string;
   strayConversations?: number;
+  strayIds?: string[];
   webhookId?: string | null;
   webhookFailedAt?: string | null;
 };
@@ -180,14 +182,14 @@ async function handOverEvents(pass: Pass, campaign: SyncedCampaign) {
 
 async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
   const { provider, context, options } = pass;
-  if (!provider.readReplies) return;
+  if (!provider.readReplies) return true;
   const state = row.sync_state ?? {};
   const since = state.repliesSince ? Date.parse(state.repliesSince) : null;
   const startedAt = new Date().toISOString();
-  let stray = 0;
+  const stray = new Set(state.strayIds ?? []);
   let offset: number | null = 0;
   for (let pages = 0; offset !== null && pages < REPLY_PAGES; pages += 1) {
-    if (!timeLeft(options.deadline, STEP_RESERVE_MS)) return;
+    if (!timeLeft(options.deadline, STEP_RESERVE_MS)) return false;
     const page = await provider.readReplies(context, row.external_id, offset);
     let fresh = 0;
     for (const thread of page.items) {
@@ -197,7 +199,7 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
       const found = await query<{ id: string | null }>("select private.campaign_find_prospect($1, $2, $3) as id", [row.id, thread.leadId, thread.linkedin]);
       const prospectId = found.rows[0]?.id;
       if (!prospectId) {
-        stray += 1;
+        if (stray.size < STRAY_KEPT) stray.add(thread.conversationId);
         continue;
       }
       const saved = await saveThread(prospectId, thread.messages, { replyEvents: true, handled });
@@ -207,8 +209,14 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
     offset = page.next;
   }
   await saveCampaign(row.id, {
-    syncState: { repliesSince: new Date(Date.parse(startedAt) - EVENT_OVERLAP_MS).toISOString(), repliesAt: startedAt, strayConversations: stray },
+    syncState: {
+      repliesSince: new Date(Date.parse(startedAt) - EVENT_OVERLAP_MS).toISOString(),
+      repliesAt: startedAt,
+      strayConversations: stray.size,
+      strayIds: [...stray],
+    },
   });
+  return true;
 }
 
 async function registerWebhook(pass: Pass, row: CampaignRow) {
@@ -221,7 +229,7 @@ async function registerWebhook(pass: Pass, row: CampaignRow) {
     const id = await pass.provider.registerWebhook(pass.context, row.external_id, url);
     await saveCampaign(row.id, { syncState: { webhookId: id, webhookFailedAt: null } });
   } catch (error) {
-    if (error instanceof ServiceBusy) return;
+    if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return;
     const failure = pass.provider.failure(error);
     if (failure?.rejectedKey) throw error;
     if (!failure) console.error(`Couldn't add the ${pass.provider.name} reply webhook`, redactedError(error));
@@ -368,18 +376,20 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     if (!backfilling && (engaged.rows[0]?.count ?? 0) > 0) await handOverEvents(pass, campaign);
   }
 
+  let repliesComplete = !provider.readReplies || (!backfilling && Boolean(state.repliesAt));
   if (provider.readReplies && (backfilling || live || due(state.repliesAt, IDLE_EVERY_MS, now)) && room()) {
     try {
-      await syncReplies(pass, row, backfilling || !options.onEvents);
+      repliesComplete = await syncReplies(pass, row, backfilling || !options.onEvents);
     } catch (error) {
       const failure = provider.failure(error);
       if (error instanceof ServiceBusy || !failure || failure.rejectedKey || pass.context.signal?.aborted) throw error;
       report.errors.push(`Couldn't read replies from ${provider.name}. ${failure.message}`);
+      repliesComplete = true;
     }
     if (!backfilling) await handOverEvents(pass, campaign);
   }
 
-  if (backfilling && leadsComplete && eventsComplete) {
+  if (backfilling && leadsComplete && eventsComplete && repliesComplete) {
     await saveCampaign(row.id, { backfilled: true });
     report.backfilled += 1;
   }
@@ -442,11 +452,6 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
       JSON.stringify(listed.map((item) => ({ external_id: item.externalId, name: item.name, status: item.status }))),
     ]);
     const pass: Pass = { provider, context, workspaceId: target.workspace_id, actor, options, report, listed: new Map(listed.map((item) => [item.externalId, item])) };
-    for (const row of rows.rows) {
-      if (!timeLeft(options.deadline, STEP_RESERVE_MS) || outOfTime.aborted) break;
-      if (!pass.listed.has(row.external_id)) continue;
-      await syncCampaignSafely(pass, row);
-    }
     const byId = new Map(rows.rows.map((row) => [row.id, row]));
     const touched = await syncRequested(pass, byId);
     for (const id of touched) {
@@ -454,6 +459,12 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
       if (row?.backfilled_at && timeLeft(options.deadline, STEP_RESERVE_MS)) {
         await handOverEvents(pass, { id: row.id, workspaceId: target.workspace_id, provider: provider.id, externalId: row.external_id, name: row.name });
       }
+    }
+    if (timeLeft(options.deadline, STEP_RESERVE_MS)) report.stopped += await processStops(target.workspace_id, provider, context, options.deadline);
+    for (const row of rows.rows) {
+      if (!timeLeft(options.deadline, STEP_RESERVE_MS) || outOfTime.aborted) break;
+      if (!pass.listed.has(row.external_id)) continue;
+      await syncCampaignSafely(pass, row);
     }
     if (timeLeft(options.deadline, STEP_RESERVE_MS)) report.stopped += await processStops(target.workspace_id, provider, context, options.deadline);
     await finish(target, null, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });

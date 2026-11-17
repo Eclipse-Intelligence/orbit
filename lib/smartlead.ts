@@ -1,6 +1,6 @@
 import type { CampaignStats, CampaignStatus, LeadStatus, Mailbox, SequenceStep } from "@/lib/campaigns/types";
 import { htmlToText } from "@/lib/mail/text";
-import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
+import { logUpstream, unreachable, upstreamMessage, urlSecrets } from "@/lib/upstream";
 import { withService, type Service } from "@/lib/workflows/limits";
 
 export const SMARTLEAD_API = "https://server.smartlead.ai/api/v1";
@@ -66,7 +66,7 @@ function yes(value: unknown) {
 async function call(
   key: string,
   path: string,
-  options: SmartleadOptions & { query?: Record<string, string | number | null | undefined>; services?: Service[]; method?: "GET" | "POST" | "DELETE"; body?: Json },
+  options: SmartleadOptions & { query?: Record<string, string | number | null | undefined>; services?: Service[]; method?: "GET" | "POST" | "DELETE"; body?: Json; secrets?: string[] },
 ): Promise<unknown> {
   const services = options.services ?? ["smartlead"];
   const run = async () => {
@@ -87,12 +87,12 @@ async function call(
         signal,
       });
     } catch (error) {
-      logUpstream("Smartlead", null, error, [key]);
+      logUpstream("Smartlead", null, error, [key, ...(options.secrets ?? [])]);
       throw new SmartleadError(unreachable("Smartlead"), null);
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      logUpstream("Smartlead", response.status, body, [key]);
+      logUpstream("Smartlead", response.status, body, [key, ...(options.secrets ?? [])]);
       throw new SmartleadError(upstreamMessage("Smartlead", response.status), response.status, response.headers.get("retry-after"));
     }
     const raw = await response.text().catch(() => "");
@@ -101,7 +101,7 @@ async function call(
       return JSON.parse(raw);
     } catch (error) {
       if ((options.method ?? (options.body ? "POST" : "GET")) !== "GET") return raw;
-      logUpstream("Smartlead", response.status, error, [key]);
+      logUpstream("Smartlead", response.status, error, [key, ...(options.secrets ?? [])]);
       throw new SmartleadError("Smartlead sent a reply Orbit couldn't read.", response.status);
     }
   };
@@ -446,6 +446,7 @@ export const SMARTLEAD_WEBHOOK_EVENTS = ["EMAIL_REPLY", "LEAD_CATEGORY_UPDATED"]
 export async function createSmartleadWebhook(key: string, campaignId: string, url: string, options: SmartleadOptions = {}) {
   const body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}/webhooks`, {
     ...options,
+    secrets: urlSecrets(url),
     body: { id: null, name: "Orbit replies", webhook_url: url, event_types: [...SMARTLEAD_WEBHOOK_EVENTS], categories: [] },
   });
   const row = record(body);

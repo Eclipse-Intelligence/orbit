@@ -132,6 +132,7 @@ export type ProviderMessage = {
 };
 
 export type ProviderThread = {
+  conversationId: string;
   leadId: string | null;
   linkedin: string | null;
   lastMessageAt: string | null;
@@ -399,6 +400,7 @@ async function conversationThread(context: ProviderContext, campaignId: string, 
   const full = conversation.messages === null && conversation.accountId ? await readHeyReachChatroom(context.key, conversation.accountId, conversation.id, context) : null;
   const read = full ? { ...conversation, messages: full.messages ?? [] } : conversation;
   return {
+    conversationId: conversation.id,
     leadId: conversation.leadId,
     linkedin: prospectLinkedin(conversation.profileUrl),
     lastMessageAt: conversation.lastMessageAt,
