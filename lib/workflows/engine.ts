@@ -1917,7 +1917,13 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
         return "waiting";
       }
       const endsItem = ENDS_ITEM.has(step.type) && ((state.frames?.length ?? 0) > 0 || Boolean(run.parent_run_id));
-      await logStep(ctx, step, skipped && endsItem ? "skipped" : "failed", input, skipped?.output ?? null, message, started);
+      await logStep(ctx, step, skipped ? "skipped" : "failed", input, skipped?.output ?? null, message, started);
+      if (skipped && !endsItem) {
+        (vars.steps as Record<string, unknown>)[step.id] = skipped.output;
+        const reason = `${step.label || step.id}: ${message}`.slice(0, 2000);
+        await endRun(actor, run, "skipped", { state: { ...state, at: null, vars }, error: reason, skip_reason: reason });
+        return "succeeded";
+      }
       if (endsItem && (state.frames?.length ?? 0) > 0) {
         state.retried = null;
         state.busy = null;

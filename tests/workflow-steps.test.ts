@@ -286,16 +286,21 @@ describe("workflow tags and Find and check email", () => {
       assert.equal(fake1.hits("email-verifier"), 0, "a found email carries its check, so it isn't paid for twice");
     });
 
-    it("ends a top-level run like Ask AI does when the email is invalid", async () => {
+    it("ends a top-level run as succeeded with its skip reason and no failure notification when the email is invalid", async () => {
       const ivan = await person("Ivan", "Invalid", "ivan@acme-steps.test");
       const fake1 = fake([hunterChecks({ "ivan@acme-steps.test": "invalid" })]);
       const started = await start(findEmail(), { type: "contact", id: ivan.id }, fake1.fetchImpl);
       await drain(fake1.fetchImpl);
       const run = await runRow(started.runId);
-      assert.equal(run.status, "failed");
+      assert.equal(run.status, "succeeded");
+      assert.equal(run.skip_reason, "Check email: ivan@acme-steps.test is invalid.");
       assert.equal(run.error, "Check email: ivan@acme-steps.test is invalid.");
       const { steps } = await getRunSteps(owner, started.runId);
-      assert.deepEqual(steps.find((step) => step.stepId === "find_email_1")?.output, { status: "invalid", address: "ivan@acme-steps.test" });
+      const logged = steps.find((step) => step.stepId === "find_email_1");
+      assert.equal(logged?.status, "skipped");
+      assert.deepEqual(logged?.output, { status: "invalid", address: "ivan@acme-steps.test" });
+      const alerts = await getAdminPool().query("select 1 from crm.notifications where user_id = $1 and href like '%' || $2 || '%'", [owner.userId, started.runId]);
+      assert.equal(alerts.rowCount, 0, "no failure notification");
       assert.equal((await notes(owner, "Checked")).filter((row) => row.contact_id === ivan.id).length, 0);
     });
 
@@ -371,8 +376,8 @@ describe("workflow tags and Find and check email", () => {
       const started = await start(definition, { type: "company", id: acme });
       await drain(fake([]).fetchImpl);
       const run = await runRow(started.runId);
-      assert.equal(run.status, "failed");
-      assert.equal(run.error, "find_email_1: This run has no contact to find an email for.");
+      assert.equal(run.status, "succeeded");
+      assert.equal(run.skip_reason, "find_email_1: This run has no contact to find an email for.");
     });
 
     it("only describes the step in a test run", async () => {
