@@ -12,7 +12,6 @@ const SCAN = 200;
 const TIMEOUT_MS = 20_000;
 const MIN_LEFT_MS = 8_000;
 const MIN_CALL_MS = 7_000;
-const SPARE_MS = 3_000;
 export const REPLY_CHECK_MISSES = 3;
 
 const CHECK_SCHEMA = z.object({ emails: z.array(z.object({ index: z.number().int(), needsReply: z.boolean() })) });
@@ -87,6 +86,11 @@ async function recordStates(actor: UserActor, items: { item: { id: string; sourc
   );
 }
 
+function blamesEmail(status: number | null) {
+  if (status === null || status === 429 || status >= 500) return false;
+  return true;
+}
+
 export async function checkCrmReplies(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
   if (!process.env.LLM_API_KEY?.trim() || options.deadline - Date.now() < MIN_LEFT_MS) return 0;
   const workspaceIds = (await workspaceActors(actor).catch(() => [actor])).map((item) => item.workspaceId);
@@ -122,7 +126,14 @@ export async function checkCrmReplies(actor: UserActor, options: { deadline: num
   const share = windowShare(flagged.length);
   let emails: { index: number; needsReply: boolean }[] = [];
   let answered = false;
-  let failedEarly = false;
+  let failedOnEmail = false;
+  let status: number | null = null;
+  const send = options.fetchImpl ?? fetch;
+  const watched: typeof fetch = async (input, init) => {
+    const response = await send(input, init);
+    status = response.status;
+    return response;
+  };
   try {
     const result = await completeJson({
       system:
@@ -142,12 +153,12 @@ export async function checkCrmReplies(actor: UserActor, options: { deadline: num
       timeoutMs: TIMEOUT_MS,
       attempts: 1,
       deadline: options.deadline,
-      fetchImpl: options.fetchImpl,
+      fetchImpl: watched,
     });
     emails = result.data.emails;
     answered = true;
   } catch (error) {
-    failedEarly = options.deadline - Date.now() > SPARE_MS;
+    failedOnEmail = flagged.length === 1 && blamesEmail(status);
     console.error("Checking CRM mail for replies failed", error instanceof Error ? error.message : error);
   }
   const verdicts = new Map<number, boolean>();
@@ -156,7 +167,7 @@ export async function checkCrmReplies(actor: UserActor, options: { deadline: num
     actor,
     [...verdicts].map(([index, needsReply]) => ({ item: flagged[index], state: needsReply ? ("ready" as const) : ("skipped" as const) })),
   );
-  if (answered || failedEarly) {
+  if (answered || failedOnEmail) {
     await recordMisses(
       actor,
       flagged.filter((_, index) => !verdicts.has(index)),

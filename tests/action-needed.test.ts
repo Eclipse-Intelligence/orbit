@@ -641,7 +641,7 @@ describe("Capture after review", () => {
     const asked: string[] = [];
     const down: typeof fetch = async (_input, init) => {
       asked.push((JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content);
-      return Response.json({ error: "down" }, { status: 503 });
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails: [] }) }, finish_reason: "stop" }] });
     };
     const partial: typeof fetch = async (_input, init) => {
       const user = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content;
@@ -699,6 +699,13 @@ describe("Capture after review", () => {
       await checkCrmReplies(mark, { deadline: Date.now() + 9_500, fetchImpl: hangs });
       assert.equal(calls, 1);
       assert.equal(await misses(), 0, "a call cut off at the deadline adds no miss");
+      const outage: typeof fetch = async () => {
+        calls += 1;
+        return Response.json({ error: "down" }, { status: 503 });
+      };
+      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: outage });
+      assert.equal(calls, 2, "one attempt per run");
+      assert.equal(await misses(), 0, "a 503 adds no miss");
       await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: leavesOut });
       assert.equal(await misses(), 1, "an entry the model left out adds one");
     } finally {
