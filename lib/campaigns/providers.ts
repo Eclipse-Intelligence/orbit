@@ -99,7 +99,7 @@ export type CampaignProvider = {
   channel: CampaignChannel;
   name: string;
   standardVariables: readonly string[];
-  failure(error: unknown): { message: string; rejectedKey: boolean } | null;
+  failure(error: unknown): { message: string; rejectedKey: boolean; missing: boolean } | null;
   checkKey(context: ProviderContext): Promise<ConnectionCheck>;
   connectedLine(details: Record<string, unknown>, campaigns: number): string;
   listCampaigns(context: ProviderContext): Promise<ProviderCampaign[]>;
@@ -169,7 +169,7 @@ export const smartleadProvider: CampaignProvider = {
     "sl_time_of_day",
     "sl_day_of_week",
   ],
-  failure: (error) => (error instanceof SmartleadError ? { message: error.message, rejectedKey: error.rejectedKey } : null),
+  failure: (error) => (error instanceof SmartleadError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404 } : null),
   async checkKey(context) {
     const campaigns = await listSmartleadCampaigns(context.key, context);
     const clientIds = [...new Set(campaigns.map((item) => item.clientId).filter((id): id is string => Boolean(id)))];
@@ -250,7 +250,7 @@ export const heyReachProvider: CampaignProvider = {
   channel: "linkedin",
   name: "HeyReach",
   standardVariables: ["first_name", "last_name", "company_name", "position", "location"],
-  failure: (error) => (error instanceof HeyReachError ? { message: error.message, rejectedKey: error.rejectedKey } : null),
+  failure: (error) => (error instanceof HeyReachError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404 } : null),
   async checkKey(context) {
     await checkHeyReachKey(context.key, context);
     const [campaigns, senders] = await Promise.all([listHeyReachCampaigns(context.key, context), heyReachProvider.listSenders!(context)]);

@@ -151,6 +151,7 @@ begin
         when p_patch ? 'syncState' then jsonb_strip_nulls(k.sync_state || (p_patch -> 'syncState'))
         else k.sync_state
       end,
+      sync_error = case when p_patch ? 'syncError' then left(p_patch ->> 'syncError', 500) else k.sync_error end,
       backfilled_at = case when coalesce((p_patch ->> 'backfilled')::boolean, false) then coalesce(k.backfilled_at, now()) else k.backfilled_at end,
       synced_at = now()
   where k.id = p_campaign;
@@ -209,10 +210,10 @@ begin
     end if;
     if v_id is null then
       insert into crm.campaign_prospects (
-        workspace_id, campaign_id, email, linkedin, lead, state, external_lead_id, lead_status, category, pushed_at, sender_id
+        workspace_id, campaign_id, email, linkedin, lead, state, external_lead_id, lead_status, category, pushed_at, sender_id, lead_seen_at
       ) values (
         v_campaign.workspace_id, p_campaign, v_lead.email, v_lead.linkedin, v_lead.lead, 'pushed',
-        v_lead.external_id, v_lead.lead_status, v_lead.category, coalesce(v_lead.added_at, now()), v_lead.sender_id
+        v_lead.external_id, v_lead.lead_status, v_lead.category, coalesce(v_lead.added_at, now()), v_lead.sender_id, now()
       )
       returning id into v_id;
     else
@@ -224,7 +225,8 @@ begin
           lead_status = coalesce(v_lead.lead_status, p.lead_status),
           category = coalesce(v_lead.category, p.category),
           pushed_at = coalesce(p.pushed_at, v_lead.added_at),
-          sender_id = coalesce(p.sender_id, v_lead.sender_id)
+          sender_id = coalesce(p.sender_id, v_lead.sender_id),
+          lead_seen_at = now()
       where p.id = v_id;
     end if;
     v_ids := v_ids || v_id;

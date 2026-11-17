@@ -7,6 +7,7 @@ import Tag from "@/components/_ui/tag";
 import ChannelIcon from "@/components/campaigns/channel-icon";
 import { QuietTabs } from "@/components/crm/contact-activities";
 import SectionHeader from "@/components/crm/section-header";
+import KeyboardList from "@/components/shortcuts/keyboard-list";
 import type { Viewer } from "@/components/crm/viewer";
 import { campaignRates, campaignView, number, STATUS_LABELS, type CampaignView } from "@/lib/campaigns/format";
 import { PROVIDER_CHANNEL, type CampaignChannel, type CampaignProviderId, type CampaignSummary } from "@/lib/campaigns/types";
@@ -46,11 +47,13 @@ export default function CampaignsScreen({
   campaigns,
   connected,
   canAdmin,
+  syncLine,
 }: {
   viewer: Viewer;
   campaigns: CampaignSummary[];
   connected: CampaignProviderId[];
   canAdmin: boolean;
+  syncLine: string | null;
 }) {
   const [view, setView] = useState<CampaignView>("live");
   const [channel, setChannel] = useState<"all" | CampaignChannel>("all");
@@ -74,6 +77,7 @@ export default function CampaignsScreen({
           />
         )}
       </div>
+      {syncLine && <p className="caption-style text-subtle px-4 pb-2">{syncLine}</p>}
       {shown.length === 0 ? (
         <div className="caption-style text-subtle flex flex-col gap-1 px-4 py-8">
           <p>No campaigns</p>
@@ -88,6 +92,7 @@ export default function CampaignsScreen({
           )}
         </div>
       ) : (
+        <KeyboardList sequence className="flex min-h-0 flex-1 flex-col">
         <ul className="min-h-0 flex-1 overflow-auto pb-20">
           <li className={cn("caption-style text-subtle border-border hidden border-b px-4 py-2", GRID_CLASS)}>
             <span>Name</span>
@@ -133,6 +138,7 @@ export default function CampaignsScreen({
             );
           })}
         </ul>
+        </KeyboardList>
       )}
     </section>
   );

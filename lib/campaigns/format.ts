@@ -95,3 +95,19 @@ export function prospectLine(row: ProspectRow, now = Date.now()) {
   }
   return "Added";
 }
+
+export function syncedAgo(iso: string, now = Date.now()) {
+  const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
+  if (!Number.isFinite(minutes) || minutes < 1) return "Synced just now";
+  if (minutes < 60) return `Synced ${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Synced ${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+  const days = Math.floor(hours / 24);
+  return `Synced ${days} ${days === 1 ? "day" : "days"} ago`;
+}
+
+export function syncLine(input: { connected: boolean; error: string | null; syncedAt: string | null }, now = Date.now()) {
+  if (!input.connected) return "Disconnected";
+  if (input.error) return input.error;
+  return input.syncedAt ? syncedAgo(input.syncedAt, now) : "Not synced yet";
+}

@@ -16,12 +16,15 @@ const LEADS_EVERY_MS = 60 * 60_000;
 const IDLE_EVERY_MS = 24 * 60 * 60_000;
 const EVENT_OVERLAP_MS = 10 * 60_000;
 const LOCK_SECONDS = 330;
+const HAND_OVER_BATCH = 500;
 
 export type SyncState = {
   sequenceAt?: string;
   statsAt?: string;
   leadsAt?: string;
   leadsOffset?: number | null;
+  leadsStartedAt?: string | null;
+  missingAt?: string | null;
   eventsAt?: string;
   eventsOffset?: number | null;
   eventsSince?: string | null;
@@ -130,19 +133,28 @@ export async function saveProviderLeads(campaignId: string, leads: ProviderLead[
   return result.rows[0]?.saved ?? 0;
 }
 
-export async function saveProviderEvents(campaignId: string, events: ProviderEvent[]): Promise<SyncedEvent[]> {
+type EventRow = { event_id: string; prospect_id: string; contact_id: string | null; kind: string; occurred_at: Date };
+
+function syncedEvent(row: EventRow): SyncedEvent {
+  return { eventId: row.event_id, prospectId: row.prospect_id, contactId: row.contact_id, kind: row.kind, occurredAt: row.occurred_at.toISOString() };
+}
+
+export async function saveProviderEvents(campaignId: string, events: ProviderEvent[], handled: boolean): Promise<SyncedEvent[]> {
   if (events.length === 0) return [];
-  const result = await query<{ event_id: string; prospect_id: string; contact_id: string | null; kind: string; occurred_at: Date }>(
-    "select * from private.campaign_sync_events($1, $2::jsonb)",
-    [campaignId, JSON.stringify(events.map(eventJson))],
-  );
-  return result.rows.map((row) => ({
-    eventId: row.event_id,
-    prospectId: row.prospect_id,
-    contactId: row.contact_id,
-    kind: row.kind,
-    occurredAt: row.occurred_at.toISOString(),
-  }));
+  const result = await query<EventRow>("select * from private.campaign_sync_events($1, $2::jsonb, $3)", [campaignId, JSON.stringify(events.map(eventJson)), handled]);
+  return result.rows.map(syncedEvent);
+}
+
+async function handOverEvents(pass: Pass, campaign: SyncedCampaign) {
+  const onEvents = pass.options.onEvents;
+  if (!onEvents) return;
+  while (timeLeft(pass.options.deadline, STEP_RESERVE_MS)) {
+    const waiting = await query<EventRow>("select * from private.campaign_unhandled_events($1, $2)", [campaign.id, HAND_OVER_BATCH]);
+    if (waiting.rows.length === 0) return;
+    await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor);
+    await query("select private.campaign_events_handled($1, $2::uuid[])", [campaign.id, waiting.rows.map((row) => row.event_id)]);
+    if (waiting.rows.length < HAND_OVER_BATCH) return;
+  }
 }
 
 type Pass = {
@@ -163,8 +175,10 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   const live = row.status === "active" || row.status === "paused";
   const room = () => timeLeft(options.deadline, STEP_RESERVE_MS);
   const campaign: SyncedCampaign = { id: row.id, workspaceId: pass.workspaceId, provider: provider.id, externalId: row.external_id, name: row.name };
+  if (state.missingAt && !due(state.missingAt, IDLE_EVERY_MS, now)) return;
   const senderIds = pass.listed.get(row.external_id)?.senderIds;
   if (senderIds) await saveCampaign(row.id, { senderIds });
+  if (!backfilling) await handOverEvents(pass, campaign);
 
   if ((backfilling && !state.sequenceAt) || due(state.sequenceAt, live ? SEQUENCE_EVERY_MS : IDLE_EVERY_MS, now)) {
     if (!room()) return;
@@ -182,18 +196,22 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   let leadsComplete = !leadsInProgress && Boolean(state.leadsAt);
   if (leadsInProgress || (backfilling && !leadsComplete) || due(state.leadsAt, live ? LEADS_EVERY_MS : IDLE_EVERY_MS, now)) {
     leadsComplete = false;
+    const leadsStartedAt = state.leadsStartedAt ?? new Date().toISOString();
     let offset = state.leadsOffset ?? 0;
     while (room()) {
       const page = await provider.readLeads(context, row.external_id, offset);
       report.prospects += await saveProviderLeads(row.id, page.items);
       if (page.next === null) {
-        await query("select private.campaign_link_contacts($1, null)", [row.id]);
-        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: new Date().toISOString() } });
+        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsStartedAt: null, leadsAt: new Date().toISOString() } });
         leadsComplete = true;
+        await query("select private.campaign_leads_missing($1, $2)", [row.id, leadsStartedAt]);
+        await query("select private.campaign_link_contacts($1, null)", [row.id]).catch((error) =>
+          console.error("Couldn't link campaign prospects to contacts", redactedError(error)),
+        );
         break;
       }
       offset = page.next;
-      await saveCampaign(row.id, { syncState: { leadsOffset: offset } });
+      await saveCampaign(row.id, { syncState: { leadsOffset: offset, leadsStartedAt } });
     }
   }
 
@@ -205,9 +223,9 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     let offset = state.eventsOffset ?? 0;
     while (room()) {
       const page = await provider.readEvents(context, row.external_id, state.eventsSince ?? null, offset);
-      const inserted = await saveProviderEvents(row.id, page.items);
+      const inserted = await saveProviderEvents(row.id, page.items, backfilling || !options.onEvents);
       report.events += inserted.length;
-      if (!backfilling && inserted.length > 0 && options.onEvents) await options.onEvents(campaign, inserted, pass.actor);
+      if (!backfilling && inserted.length > 0) await handOverEvents(pass, campaign);
       if (page.next === null) {
         await saveCampaign(row.id, {
           syncState: {
@@ -229,7 +247,29 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     await saveCampaign(row.id, { backfilled: true });
     report.backfilled += 1;
   }
+  await saveCampaign(row.id, { syncError: null, syncState: { missingAt: null } });
   report.campaigns += 1;
+}
+
+async function syncCampaignSafely(pass: Pass, row: CampaignRow) {
+  try {
+    await syncCampaign(pass, row);
+    return null;
+  } catch (error) {
+    if (error instanceof ServiceBusy) {
+      pass.report.busy.push(`${pass.provider.name}: ${error.message}`);
+      return null;
+    }
+    const failure = pass.provider.failure(error);
+    if (failure?.rejectedKey) throw error;
+    if (!failure) console.error(`${pass.provider.name} campaign sync failed`, redactedError(error));
+    const message = failure?.missing
+      ? `${pass.provider.name} can't find this campaign.`
+      : (failure?.message ?? `Couldn't sync ${row.name || "a campaign"}. Try again.`);
+    pass.report.errors.push(message);
+    await saveCampaign(row.id, { syncError: message, ...(failure?.missing ? { syncState: { missingAt: new Date().toISOString() } } : {}) });
+    return message;
+  }
 }
 
 async function finish(target: Target, error: string | null, details?: Record<string, unknown>) {
@@ -255,7 +295,12 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
   if (!locked.rows[0]?.ok) return;
   report.connections += 1;
   try {
-    const context: ProviderContext = { key: decryptSecret(target.key_encrypted), workspaceId: target.workspace_id, fetchImpl: options.fetchImpl };
+    const context: ProviderContext = {
+      key: decryptSecret(target.key_encrypted),
+      workspaceId: target.workspace_id,
+      fetchImpl: options.fetchImpl,
+      signal: AbortSignal.timeout(Math.max(1_000, options.deadline - Date.now() - STEP_RESERVE_MS)),
+    };
     const listed = await provider.listCampaigns(context);
     const senders = provider.listSenders ? await provider.listSenders(context) : null;
     if (senders) await saveProviderSenders(actor, provider.id, senders);
@@ -266,11 +311,13 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
       JSON.stringify(listed.map((item) => ({ external_id: item.externalId, name: item.name, status: item.status }))),
     ]);
     const pass: Pass = { provider, context, workspaceId: target.workspace_id, actor, options, report, listed: new Map(listed.map((item) => [item.externalId, item])) };
+    let failed: string | null = null;
     for (const row of rows.rows) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
-      await syncCampaign(pass, row);
+      if (!pass.listed.has(row.external_id)) continue;
+      failed = (await syncCampaignSafely(pass, row)) ?? failed;
     }
-    await finish(target, null, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
+    await finish(target, failed, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
   } catch (error) {
     if (error instanceof ServiceBusy) {
       report.busy.push(`${provider.name}: ${error.message}`);

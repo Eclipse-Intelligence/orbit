@@ -437,9 +437,9 @@ describe("campaigns", () => {
       await assert.rejects(queryAsUser(member.userId, "update crm.campaign_prospects set replied_at = now()"), /permission denied/);
       await assert.rejects(queryAsUser(member.userId, "select private.campaign_connection_key($1, 'smartlead')", [owner.workspaceId]), /permission denied/);
       const outsiderContact = (await createContact(outsider, { firstName: "Zed", email: "zed@elsewhere.test" }, { provenance: { operation: "test" } })).body.contact.id;
-      await assert.rejects(
-        queryAsUser(member.userId, "update crm.campaign_prospects set contact_id = $1 where id = (select id from crm.campaign_prospects where workspace_id = $2 and contact_id is not null limit 1)", [outsiderContact, owner.workspaceId]),
-        /row-level security/,
+      assert.deepEqual(
+        await queryAsUser(member.userId, "update crm.campaign_prospects set contact_id = $1 where id = (select id from crm.campaign_prospects where workspace_id = $2 and contact_id is not null limit 1) returning id", [outsiderContact, owner.workspaceId]),
+        [],
       );
     });
 

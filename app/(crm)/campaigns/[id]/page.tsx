@@ -3,6 +3,8 @@ import { notFound, redirect } from "next/navigation";
 import CampaignScreen from "@/components/campaigns/campaign-screen";
 import MailboxHealth from "@/components/campaigns/mailbox-health";
 import { getUserActor } from "@/lib/auth/user";
+import { connectionStates } from "@/lib/campaigns/connections";
+import { syncLine } from "@/lib/campaigns/format";
 import { PROSPECT_FILTERS, type ProspectFilter } from "@/lib/campaigns/types";
 import { campaignMailboxes, getCampaign, listCampaignProspects } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
@@ -38,17 +40,20 @@ export default async function CampaignPage({
   const filter = (PROSPECT_FILTERS as readonly string[]).includes(param(query.show)) ? (param(query.show) as ProspectFilter) : "all";
   const search = param(query.q);
   const page = Math.max(1, Math.min(Number(param(query.page)) || 1, 1000));
-  const loaded = await Promise.all([getCampaign(user, id), listCampaignProspects(user, id, { filter, search, page })]).catch((error) => {
+  const loaded = await Promise.all([getCampaign(user, id), listCampaignProspects(user, id, { filter, search, page }), connectionStates(user)]).catch((error) => {
     if (error instanceof CrmError && error.status === 404) return null;
     throw error;
   });
   if (!loaded) notFound();
-  const [campaign, prospects] = loaded;
+  const [campaign, prospects, states] = loaded;
+  const state = states.find((item) => item.provider === campaign.provider);
+  const status = syncLine({ connected: Boolean(state), error: campaign.syncError ?? state?.lastError ?? null, syncedAt: campaign.syncedAt });
   return (
     <CampaignScreen
       viewer={{ id: user.userId, name: user.fullName || user.email, email: user.email, role: user.role, workspaceName: user.workspaceName, workspaceId: user.workspaceId }}
       campaign={campaign}
       prospects={prospects}
+      syncLine={status}
       filter={filter}
       search={search}
       canImport={user.scopes.includes("contacts:write") && user.scopes.includes("campaigns:write")}

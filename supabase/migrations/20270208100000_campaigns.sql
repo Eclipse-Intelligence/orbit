@@ -43,6 +43,7 @@ create table if not exists crm.campaigns (
   step_stats jsonb not null default '[]'::jsonb,
   sender_ids text[] not null default '{}',
   sync_state jsonb not null default '{}'::jsonb,
+  sync_error text,
   backfilled_at timestamptz,
   synced_at timestamptz,
   created_at timestamptz not null default now(),
@@ -54,6 +55,7 @@ create table if not exists crm.campaigns (
   constraint campaigns_status check (status in ('active', 'paused', 'drafted', 'completed', 'stopped', 'archived')),
   constraint campaigns_external_id_length check (char_length(external_id) between 1 and 200),
   constraint campaigns_name_length check (char_length(name) <= 500),
+  constraint campaigns_sync_error_length check (sync_error is null or char_length(sync_error) <= 500),
   constraint campaigns_external unique (workspace_id, provider, external_id),
   constraint campaigns_id_workspace unique (id, workspace_id)
 );
@@ -83,6 +85,7 @@ create table if not exists crm.campaign_prospects (
   stop_requested_at timestamptz,
   stopped_at timestamptz,
   last_event_at timestamptz,
+  lead_seen_at timestamptz,
   sync_requested_at timestamptz,
   added_by_user_id uuid references crm.profiles (id) on delete set null,
   added_by_run_id uuid references crm.workflow_runs (id) on delete set null,
@@ -124,6 +127,7 @@ create table if not exists crm.campaign_events (
   occurred_at timestamptz not null,
   dedupe_key text not null,
   payload jsonb not null default '{}'::jsonb,
+  handled_at timestamptz,
   created_at timestamptz not null default now(),
   constraint campaign_events_campaign_fk foreign key (campaign_id, workspace_id)
     references crm.campaigns (id, workspace_id) on delete cascade,
@@ -133,11 +137,12 @@ create table if not exists crm.campaign_events (
   )),
   constraint campaign_events_dedupe_length check (char_length(dedupe_key) between 1 and 500),
   constraint campaign_events_variant_length check (variant is null or char_length(variant) <= 100),
-  constraint campaign_events_dedupe unique (dedupe_key)
+  constraint campaign_events_dedupe unique (campaign_id, dedupe_key)
 );
 
 create index if not exists campaign_events_campaign_idx on crm.campaign_events (campaign_id, occurred_at);
 create index if not exists campaign_events_prospect_idx on crm.campaign_events (prospect_id, occurred_at);
+create index if not exists campaign_events_unhandled_idx on crm.campaign_events (campaign_id, created_at) where handled_at is null;
 
 drop trigger if exists campaign_connections_set_updated_at on crm.campaign_connections;
 create trigger campaign_connections_set_updated_at
@@ -151,6 +156,24 @@ drop trigger if exists campaign_prospects_set_updated_at on crm.campaign_prospec
 create trigger campaign_prospects_set_updated_at
   before update on crm.campaign_prospects
   for each row execute function private.set_updated_at();
+
+create or replace function private.agent_has_scope(p_scope text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from crm.agents a
+    where a.id = nullif(current_setting('app.agent_id', true), '')::uuid
+      and a.workspace_id = nullif(current_setting('app.workspace_id', true), '')::uuid
+      and (p_scope = any(a.scopes) or 'admin' = any(a.scopes))
+  );
+$$;
+
+revoke all on function private.agent_has_scope(text) from public;
+grant execute on function private.agent_has_scope(text) to crm_agent;
 
 alter table crm.campaign_connections enable row level security;
 alter table crm.campaign_connections force row level security;
@@ -194,10 +217,11 @@ create policy campaign_prospects_select_member on crm.campaign_prospects
 drop policy if exists campaign_prospects_update_member on crm.campaign_prospects;
 create policy campaign_prospects_update_member on crm.campaign_prospects
   for update to authenticated
-  using (workspace_id in (select private.user_workspace_ids()))
+  using (workspace_id in (select private.user_workspace_ids()) and contact_id is null)
   with check (
     workspace_id in (select private.user_workspace_ids())
-    and (contact_id is null or exists (select 1 from crm.contacts c where c.id = contact_id and c.workspace_id = campaign_prospects.workspace_id))
+    and contact_id is not null
+    and exists (select 1 from crm.contacts c where c.id = contact_id and c.workspace_id = campaign_prospects.workspace_id and c.archived_at is null)
     and (company_id is null or exists (select 1 from crm.companies c where c.id = company_id and c.workspace_id = campaign_prospects.workspace_id))
   );
 drop policy if exists campaign_prospects_select_agent on crm.campaign_prospects;
@@ -206,10 +230,11 @@ create policy campaign_prospects_select_agent on crm.campaign_prospects
 drop policy if exists campaign_prospects_update_agent on crm.campaign_prospects;
 create policy campaign_prospects_update_agent on crm.campaign_prospects
   for update to crm_agent
-  using (workspace_id = (select private.request_workspace_id()))
+  using (workspace_id = (select private.request_workspace_id()) and contact_id is null and (select private.agent_has_scope('campaigns:write')))
   with check (
     workspace_id = (select private.request_workspace_id())
-    and (contact_id is null or exists (select 1 from crm.contacts c where c.id = contact_id and c.workspace_id = campaign_prospects.workspace_id))
+    and contact_id is not null
+    and exists (select 1 from crm.contacts c where c.id = contact_id and c.workspace_id = campaign_prospects.workspace_id and c.archived_at is null)
     and (company_id is null or exists (select 1 from crm.companies c where c.id = company_id and c.workspace_id = campaign_prospects.workspace_id))
   );
 
@@ -359,9 +384,10 @@ begin
     return;
   end if;
   insert into crm.campaigns as k (workspace_id, provider, channel, external_id, name, status)
-  select p_workspace, p_provider, p_channel, left(x.external_id, 200), left(coalesce(x.name, ''), 500), x.status
+  select distinct on (left(x.external_id, 200)) p_workspace, p_provider, p_channel, left(x.external_id, 200), left(coalesce(x.name, ''), 500), x.status
   from jsonb_to_recordset(coalesce(p_items, '[]'::jsonb)) as x(external_id text, name text, status text)
   where coalesce(x.external_id, '') <> ''
+  order by left(x.external_id, 200)
   on conflict on constraint campaigns_external do update
   set name = excluded.name,
       status = excluded.status
@@ -371,7 +397,7 @@ begin
   select k.id, k.external_id, k.name, k.status, k.backfilled_at, k.synced_at, k.sync_state
   from crm.campaigns k
   where k.workspace_id = p_workspace and k.provider = p_provider
-  order by k.backfilled_at nulls first, k.synced_at nulls first, k.created_at;
+  order by (k.backfilled_at is not null), k.synced_at nulls first, k.created_at;
 end;
 $$;
 
@@ -414,40 +440,47 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_match record;
-  v_linked integer := 0;
+  v_linked integer;
 begin
   if current_user not in ('crm_app', 'postgres') then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-  for v_match in
-    select distinct on (best.contact_id) best.prospect_id, best.contact_id, best.company_id
-    from (
-      select distinct on (p.id) p.id as prospect_id, p.created_at, c.id as contact_id, c.company_id
-      from crm.campaign_prospects p
-      join crm.contacts c
-        on c.workspace_id = p.workspace_id
-       and c.archived_at is null
-       and (
-         (p.email is not null and c.normalized_email = p.email)
-         or (p.linkedin is not null and c.normalized_linkedin = p.linkedin)
-       )
-      where p.campaign_id = p_campaign
-        and p.contact_id is null
-        and (p_ids is null or p.id = any(p_ids))
-        and not exists (
-          select 1 from crm.campaign_prospects o where o.campaign_id = p.campaign_id and o.contact_id = c.id
-        )
-      order by p.id, (p.email is not null and c.normalized_email = p.email) desc, c.created_at, c.id
-    ) best
-    order by best.contact_id, best.created_at, best.prospect_id
-  loop
-    update crm.campaign_prospects p
-    set contact_id = v_match.contact_id,
-        company_id = coalesce(p.company_id, v_match.company_id)
-    where p.id = v_match.prospect_id and p.contact_id is null;
-    v_linked := v_linked + 1;
-  end loop;
+  with unlinked as (
+    select p.id, p.workspace_id, p.email, p.linkedin, p.created_at
+    from crm.campaign_prospects p
+    where p.campaign_id = p_campaign and p.contact_id is null and (p_ids is null or p.id = any(p_ids))
+  ),
+  found as (
+    select u.id as prospect_id, u.created_at, c.id as contact_id, c.company_id, c.created_at as contact_created, 0 as rank
+    from unlinked u
+    join crm.contacts c on c.workspace_id = u.workspace_id and c.normalized_email = u.email and c.archived_at is null
+    where u.email is not null
+    union all
+    select u.id, u.created_at, c.id, c.company_id, c.created_at, 1
+    from unlinked u
+    join crm.contacts c on c.workspace_id = u.workspace_id and c.normalized_linkedin = u.linkedin and c.archived_at is null
+    where u.linkedin is not null
+  ),
+  free as (
+    select f.* from found f
+    where not exists (select 1 from crm.campaign_prospects o where o.campaign_id = p_campaign and o.contact_id = f.contact_id)
+  ),
+  best as (
+    select distinct on (f.prospect_id) f.prospect_id, f.created_at, f.contact_id, f.company_id
+    from free f
+    order by f.prospect_id, f.rank, f.contact_created, f.contact_id
+  ),
+  chosen as (
+    select distinct on (b.contact_id) b.prospect_id, b.contact_id, b.company_id
+    from best b
+    order by b.contact_id, b.created_at, b.prospect_id
+  )
+  update crm.campaign_prospects p
+  set contact_id = chosen.contact_id,
+      company_id = coalesce(p.company_id, chosen.company_id)
+  from chosen
+  where p.id = chosen.prospect_id and p.contact_id is null;
+  get diagnostics v_linked = row_count;
   return v_linked;
 end;
 $$;
@@ -527,7 +560,9 @@ begin
 end;
 $$;
 
-create or replace function private.campaign_sync_events(p_campaign uuid, p_events jsonb)
+drop function if exists private.campaign_sync_events(uuid, jsonb);
+
+create or replace function private.campaign_sync_events(p_campaign uuid, p_events jsonb, p_handled boolean)
 returns table (event_id uuid, prospect_id uuid, contact_id uuid, kind text, occurred_at timestamptz)
 language plpgsql
 security definer
@@ -598,9 +633,9 @@ begin
     end if;
 
     v_inserted := null;
-    insert into crm.campaign_events as e (workspace_id, campaign_id, prospect_id, kind, step, variant, occurred_at, dedupe_key, payload)
+    insert into crm.campaign_events as e (workspace_id, campaign_id, prospect_id, kind, step, variant, occurred_at, dedupe_key, payload, handled_at)
     values (v_campaign.workspace_id, p_campaign, v_prospect, v_event.kind, v_event.step, v_event.variant,
-      v_event.occurred_at, v_event.dedupe_key, v_event.payload)
+      v_event.occurred_at, v_event.dedupe_key, v_event.payload, case when p_handled then now() end)
     on conflict on constraint campaign_events_dedupe do nothing
     returning e.id into v_inserted;
 
@@ -627,6 +662,73 @@ begin
 end;
 $$;
 
+create or replace function private.campaign_unhandled_events(p_campaign uuid, p_limit integer)
+returns table (event_id uuid, prospect_id uuid, contact_id uuid, kind text, occurred_at timestamptz)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  return query
+  select e.id, e.prospect_id, p.contact_id, e.kind, e.occurred_at
+  from crm.campaign_events e
+  join crm.campaign_prospects p on p.id = e.prospect_id
+  where e.campaign_id = p_campaign and e.handled_at is null
+  order by e.created_at, e.id
+  limit least(greatest(p_limit, 1), 1000);
+end;
+$$;
+
+create or replace function private.campaign_events_handled(p_campaign uuid, p_ids uuid[])
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_events e set handled_at = now()
+  where e.campaign_id = p_campaign and e.id = any(p_ids) and e.handled_at is null;
+end;
+$$;
+
+create or replace function private.campaign_leads_missing(p_campaign uuid, p_since timestamptz)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_count integer;
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_prospects p
+  set lead_status = 'stopped'
+  where p.campaign_id = p_campaign
+    and p.state = 'pushed'
+    and p.external_lead_id is not null
+    and (p.lead_seen_at is null or p.lead_seen_at < p_since)
+    and coalesce(p.lead_status, '') not in ('completed', 'stopped', 'blocked', 'unsubscribed', 'bounced');
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke all on function private.campaign_unhandled_events(uuid, integer) from public;
+revoke all on function private.campaign_events_handled(uuid, uuid[]) from public;
+revoke all on function private.campaign_leads_missing(uuid, timestamptz) from public;
+grant execute on function private.campaign_unhandled_events(uuid, integer) to crm_app;
+grant execute on function private.campaign_events_handled(uuid, uuid[]) to crm_app;
+grant execute on function private.campaign_leads_missing(uuid, timestamptz) to crm_app;
+
 revoke all on function private.campaign_key_taken(text, text, uuid) from public;
 revoke all on function private.campaign_connection_key(uuid, text) from public;
 revoke all on function private.campaign_connection_targets(uuid) from public;
@@ -635,7 +737,7 @@ revoke all on function private.campaign_sync_campaigns(uuid, text, text, jsonb) 
 revoke all on function private.campaign_sync_update(uuid, jsonb) from public;
 revoke all on function private.campaign_link_contacts(uuid, uuid[]) from public;
 revoke all on function private.campaign_sync_prospects(uuid, jsonb) from public;
-revoke all on function private.campaign_sync_events(uuid, jsonb) from public;
+revoke all on function private.campaign_sync_events(uuid, jsonb, boolean) from public;
 grant execute on function private.campaign_key_taken(text, text, uuid) to crm_app;
 grant execute on function private.campaign_connection_key(uuid, text) to crm_app;
 grant execute on function private.campaign_connection_targets(uuid) to crm_app;
@@ -644,7 +746,7 @@ grant execute on function private.campaign_sync_campaigns(uuid, text, text, json
 grant execute on function private.campaign_sync_update(uuid, jsonb) to crm_app;
 grant execute on function private.campaign_link_contacts(uuid, uuid[]) to crm_app;
 grant execute on function private.campaign_sync_prospects(uuid, jsonb) to crm_app;
-grant execute on function private.campaign_sync_events(uuid, jsonb) to crm_app;
+grant execute on function private.campaign_sync_events(uuid, jsonb, boolean) to crm_app;
 
 create or replace function private.move_records_to_workspace(
   p_user uuid,
@@ -1949,7 +2051,7 @@ begin
   get diagnostics routes = row_count;
 
   for prospect in
-    select dup.id as merge_id, kept.id as keep_id, dup.replied_at, dup.last_event_at
+    select dup.id as merge_id, kept.id as keep_id, dup.replied_at, dup.last_event_at, dup.external_lead_id, dup.email, dup.linkedin
     from crm.campaign_prospects dup
     join crm.campaign_prospects kept
       on kept.campaign_id = dup.campaign_id and kept.contact_id = p_keep and kept.workspace_id = p_workspace
@@ -1967,6 +2069,12 @@ begin
         last_event_at = greatest(k.last_event_at, prospect.last_event_at)
     where k.id = prospect.keep_id;
     delete from crm.campaign_prospects d where d.id = prospect.merge_id;
+    update crm.campaign_prospects k
+    set external_lead_id = coalesce(k.external_lead_id, prospect.external_lead_id),
+        email = coalesce(k.email, prospect.email),
+        linkedin = coalesce(k.linkedin, prospect.linkedin)
+    where k.id = prospect.keep_id
+      and (k.external_lead_id is null or k.email is null);
     prospects_combined := prospects_combined + 1;
   end loop;
   moved := moved || jsonb_build_object(

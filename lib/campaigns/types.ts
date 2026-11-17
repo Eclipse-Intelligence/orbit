@@ -106,6 +106,7 @@ export type CampaignDetail = CampaignSummary & {
   unlinked: number;
   url: string | null;
   capacity: SenderCapacity | null;
+  syncError: string | null;
 };
 
 export type SenderCapacity = { senders: number; invites: number | null };

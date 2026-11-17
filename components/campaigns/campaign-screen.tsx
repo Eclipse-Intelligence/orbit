@@ -4,7 +4,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Monogram } from "@/components/beautifui/record-marks";
-import Button, { buttonVariants } from "@/components/_ui/button";
+import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import ChannelIcon from "@/components/campaigns/channel-icon";
@@ -184,9 +184,18 @@ function Steps({ campaign }: { campaign: CampaignDetail }) {
               </Tag>
             )}
           </span>
-          <span className={cn("text-right tabular-nums", !linkedin && "hidden md:block")}>{stats ? number(stats.sent) : "·"}</span>
-          <span className="hidden text-right tabular-nums md:block">{stats ? (secondRate(stats, linkedin) ?? "·") : "·"}</span>
-          <span className={cn("text-right tabular-nums", linkedin && "hidden md:block")}>{stats && !linkedin ? (rate(stats.replied, stats.sent) ?? "·") : "·"}</span>
+          <span className={cn("text-right tabular-nums", !linkedin && "hidden md:block")}>
+            <span className="sr-only">Sent </span>
+            {stats ? number(stats.sent) : "·"}
+          </span>
+          <span className="hidden text-right tabular-nums md:block">
+            <span className="sr-only">{linkedin ? "Accepted " : "Opened "}</span>
+            {stats ? (secondRate(stats, linkedin) ?? "·") : "·"}
+          </span>
+          <span className={cn("text-right tabular-nums", linkedin && "hidden md:block")}>
+            <span className="sr-only">Replied </span>
+            {stats && !linkedin ? (rate(stats.replied, stats.sent) ?? "·") : "·"}
+          </span>
         </li>
       ))}
     </ul>
@@ -283,12 +292,17 @@ function ImportLine({ campaignId, unlinked }: { campaignId: string; unlinked: nu
     router.refresh();
   }
 
+  if (unlinked === 0 && !message) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-      <span className="ui-style text-soft">{unlinked === 1 ? "1 prospect isn't in Orbit." : `${unlinked.toLocaleString("en-GB")} prospects aren't in Orbit.`}</span>
-      <Button variant="secondary" size="sm" disabled={pending} onClick={() => void run()}>
-        {pending ? "Importing…" : "Import"}
-      </Button>
+      {unlinked > 0 && (
+        <>
+          <span className="ui-style text-soft">{unlinked === 1 ? "1 prospect isn't in Orbit." : `${unlinked.toLocaleString("en-GB")} prospects aren't in Orbit.`}</span>
+          <Button variant="secondary" size="sm" disabled={pending} onClick={() => void run()}>
+            {pending ? "Importing…" : "Import"}
+          </Button>
+        </>
+      )}
       {message && (
         <span role={message.error ? "alert" : "status"} className={cn("caption-style", message.error ? "text-danger" : "text-subtle")}>
           {message.text}
@@ -306,6 +320,7 @@ export default function CampaignScreen({
   search,
   canImport,
   mailboxes,
+  syncLine,
 }: {
   viewer: Viewer;
   campaign: CampaignDetail;
@@ -314,6 +329,7 @@ export default function CampaignScreen({
   search: string;
   canImport: boolean;
   mailboxes: ReactNode;
+  syncLine: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -351,14 +367,9 @@ export default function CampaignScreen({
         viewer={viewer}
         heading={
           <span className="flex min-w-0 items-center gap-2">
-            <Link
-              href="/campaigns"
-              aria-label="Back to Campaigns"
-              title="Back to Campaigns"
-              className="text-subtle hover:text-foreground hit flex size-[30px] shrink-0 items-center justify-center rounded-full transition-colors duration-150 hover:bg-white/6"
-            >
+            <Button variant="ghost" size="icon" href="/campaigns" data-shortcut="back" aria-label="Back to Campaigns" title="Back to Campaigns" className="text-subtle hit shrink-0">
               <ChevronLeftIcon aria-hidden className="size-3" />
-            </Link>
+            </Button>
             <ChannelIcon channel={campaign.channel} className="text-subtle size-3.5 shrink-0" />
             <h1 className="truncate">{campaign.name || "Untitled campaign"}</h1>
             {campaign.status !== "active" && (
@@ -370,16 +381,18 @@ export default function CampaignScreen({
         }
         action={
           campaign.url ? (
-            <a
+            <Button
+              variant="ghost"
+              size="icon"
               href={campaign.url}
               target="_blank"
               rel="noopener noreferrer"
               aria-label={`Open in ${PROVIDER_NAMES[campaign.provider]}`}
               title={`Open in ${PROVIDER_NAMES[campaign.provider]}`}
-              className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "hit")}
+              className="hit"
             >
               <ExternalIcon aria-hidden className="size-3.5" />
-            </a>
+            </Button>
           ) : undefined
         }
       />
@@ -415,10 +428,10 @@ export default function CampaignScreen({
               </span>
               {extras.length > 0 && <span>{extras.join(" · ")}</span>}
             </div>
-            {!campaign.backfilled && <p className="caption-style text-subtle">Reading from {PROVIDER_NAMES[campaign.provider]}…</p>}
+            <p className="caption-style text-subtle">{campaign.backfilled ? syncLine : `Reading from ${PROVIDER_NAMES[campaign.provider]}…`}</p>
           </Section>
 
-          <Section title="Steps">
+          <Section title="Steps" className={linkedin ? "max-sm:hidden" : undefined}>
             <Steps campaign={campaign} />
             {linkedin && campaign.capacity && <p className="ui-style text-soft">{capacityLine(campaign.capacity)}</p>}
           </Section>
@@ -443,14 +456,16 @@ export default function CampaignScreen({
             title="Prospects"
             action={
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <QuietTabs label="Show prospects" items={FILTER_TABS} value={filter} onChange={(value) => go({ show: value === "all" ? null : value, page: null })} />
+                {!linkedin && (
+                  <QuietTabs label="Show prospects" items={FILTER_TABS} value={filter} onChange={(value) => go({ show: value === "all" ? null : value, page: null })} />
+                )}
                 <form role="search" onSubmit={submitSearch} className="w-full sm:w-48">
                   <Input type="search" aria-label="Search prospects" placeholder="Search" value={draft} onChange={(event) => setDraft(event.target.value)} className="h-8" />
                 </form>
               </div>
             }
           >
-            {canImport && campaign.unlinked > 0 && <ImportLine campaignId={campaign.id} unlinked={campaign.unlinked} />}
+            {canImport && <ImportLine campaignId={campaign.id} unlinked={campaign.unlinked} />}
             <ProspectsList prospects={prospects} linkedin={linkedin} />
             {pages > 1 && (
               <div className="flex items-center justify-between gap-2">

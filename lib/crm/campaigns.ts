@@ -21,7 +21,7 @@ import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { timeLeft } from "@/lib/crm/conversations";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
-import { isUuid } from "@/lib/crm/mutate";
+import { isUuid, lockNamespace } from "@/lib/crm/mutate";
 import { canonicalDomain } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
@@ -61,6 +61,13 @@ function summary(row: CampaignRow): CampaignSummary {
   };
 }
 
+const IMPORTABLE_SQL = `p.contact_id is null and (p.email is not null or p.linkedin is not null)
+  and not exists (
+    select 1 from crm.campaign_prospects o join crm.contacts c on c.id = o.contact_id
+    where o.campaign_id = p.campaign_id
+      and ((p.email is not null and c.normalized_email = p.email) or (p.linkedin is not null and c.normalized_linkedin = p.linkedin))
+  )`;
+
 const SUMMARY_SQL = `select k.id, k.provider, k.channel, k.external_id, k.name, k.status, k.stats, k.synced_at,
        k.backfilled_at is not null as backfilled,
        (select count(*)::int from crm.campaign_prospects p where p.campaign_id = k.id) as prospects
@@ -76,8 +83,8 @@ export async function listCampaigns(actor: Actor): Promise<CampaignSummary[]> {
 
 async function readCampaign(db: Db, actor: Actor, id: string) {
   if (!isUuid(id)) throw notFound("campaign");
-  const result = await db.query<CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[] }>(
-    SUMMARY_SQL.replace("select k.id,", "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.id,") + " where k.id = $1 and k.workspace_id = $2",
+  const result = await db.query<CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[]; sync_error: string | null }>(
+    SUMMARY_SQL.replace("select k.id,", "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.sync_error, k.id,") + " where k.id = $1 and k.workspace_id = $2",
     [id, actor.workspaceId],
   );
   const row = result.rows[0];
@@ -157,7 +164,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
         [row.id, actor.workspaceId, CHART_DAYS + 1],
       ),
       db.query<{ count: number }>(
-        "select count(*)::int as count from crm.campaign_prospects p where p.campaign_id = $1 and p.workspace_id = $2 and p.contact_id is null and (p.email is not null or p.linkedin is not null)",
+        `select count(*)::int as count from crm.campaign_prospects p where p.campaign_id = $1 and p.workspace_id = $2 and ${IMPORTABLE_SQL}`,
         [row.id, actor.workspaceId],
       ),
       linkedin
@@ -186,6 +193,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
       unlinked: unlinked.rows[0]?.count ?? 0,
       url: provider?.campaignUrl(row.external_id) ?? null,
       capacity,
+      syncError: row.sync_error,
     };
   });
 }
@@ -224,7 +232,7 @@ export async function listCampaignProspects(
 ): Promise<ProspectPage> {
   assertScope(actor.scopes, "crm:read");
   const filter = options.filter && options.filter in FILTER_SQL ? options.filter : "all";
-  const page = Math.max(1, Math.floor(options.page ?? 1));
+  const asked = Math.max(1, Math.floor(options.page ?? 1));
   const search = options.search?.trim().slice(0, 200) ?? "";
   return withActor(actor, async (db) => {
     const campaign = await readCampaign(db, actor, campaignId);
@@ -234,8 +242,9 @@ export async function listCampaignProspects(
       left join crm.contacts c on c.id = p.contact_id
       left join crm.companies co on co.id = coalesce(p.company_id, c.company_id)`;
     const escaped = search.replace(/[\\%_]/g, (match) => `\\${match}`);
-    const [rows, total] = await Promise.all([
-      db.query<ProspectSqlRow>(
+    const total = await db.query<{ count: number }>(`select count(*)::int as count ${from} where ${where}`, [campaign.id, actor.workspaceId, escaped]);
+    const page = Math.min(asked, Math.max(1, Math.ceil((total.rows[0]?.count ?? 0) / PROSPECT_PAGE_SIZE)));
+    const rows = await db.query<ProspectSqlRow>(
         `select p.id, p.contact_id, coalesce(p.company_id, c.company_id) as company_id,
                 coalesce(
                   nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), ''),
@@ -270,9 +279,7 @@ export async function listCampaignProspects(
          order by coalesce(p.last_event_at, p.created_at) desc, p.id
          limit $4 offset $5`,
         [campaign.id, actor.workspaceId, escaped, PROSPECT_PAGE_SIZE, (page - 1) * PROSPECT_PAGE_SIZE, campaign.channel === "linkedin"],
-      ),
-      db.query<{ count: number }>(`select count(*)::int as count ${from} where ${where}`, [campaign.id, actor.workspaceId, escaped]),
-    ]);
+    );
     return {
       rows: rows.rows.map((row) => ({
         id: row.id,
@@ -352,6 +359,17 @@ function clean(value: string | null | undefined, max: number) {
   return trimmed ? trimmed.slice(0, max) : undefined;
 }
 
+async function linkProspect(db: Db, workspaceId: string, prospectId: string, contactId: string, companyId: string | null) {
+  const linked = await db.query(
+    `update crm.campaign_prospects p
+     set contact_id = $3, company_id = coalesce(p.company_id, $4)
+     where p.id = $1 and p.workspace_id = $2 and p.contact_id is null
+       and not exists (select 1 from crm.campaign_prospects o where o.campaign_id = p.campaign_id and o.contact_id = $3)`,
+    [prospectId, workspaceId, contactId, companyId],
+  );
+  return (linked.rowCount ?? 0) > 0;
+}
+
 export async function importCampaignProspects(
   actor: Actor,
   campaignId: string,
@@ -359,7 +377,7 @@ export async function importCampaignProspects(
 ): Promise<ImportResult> {
   assertScope(actor.scopes, "campaigns:write");
   assertScope(actor.scopes, "contacts:write");
-  const provenance: Provenance = options.provenance ?? { operation: "import_campaign_prospects", source: "web" };
+  const provenance: Provenance = { ...(options.provenance ?? { operation: "import_campaign_prospects", source: "web" }), catchUp: true };
   const campaign = await withActor(actor, (db) => readCampaign(db, actor, campaignId));
   const result: ImportResult = { imported: 0, linked: 0, failed: 0, left: 0 };
   const tried = new Set<string>();
@@ -367,8 +385,7 @@ export async function importCampaignProspects(
     const batch = await withActor(actor, async (db) => {
       const rows = await db.query<ImportRow>(
         `select p.id, p.email, p.linkedin, p.lead from crm.campaign_prospects p
-         where p.campaign_id = $1 and p.workspace_id = $2 and p.contact_id is null
-           and (p.email is not null or p.linkedin is not null)
+         where p.campaign_id = $1 and p.workspace_id = $2 and ${IMPORTABLE_SQL}
            and not (p.id = any($3::uuid[]))
          order by p.created_at, p.id
          limit $4`,
@@ -382,6 +399,17 @@ export async function importCampaignProspects(
       if (!timeLeft(options.deadline, 1_000)) break;
       try {
         const outcome = await withActor(actor, async (db) => {
+          await lockNamespace(db, actor.workspaceId, "contacts");
+          const existing = await db.query<{ id: string; company_id: string | null }>(
+            `select c.id, c.company_id from crm.contacts c
+             where c.workspace_id = $1 and c.archived_at is null
+               and (($2::text is not null and c.normalized_email = $2) or ($3::text is not null and c.normalized_linkedin = $3))
+             order by (c.normalized_email is not distinct from $2) desc, c.created_at, c.id
+             limit 1`,
+            [actor.workspaceId, row.email, row.linkedin],
+          );
+          const match = existing.rows[0];
+          if (match) return { created: false, linked: await linkProspect(db, actor.workspaceId, row.id, match.id, match.company_id) };
           const companyId = await companyFor(db, actor.workspaceId, row.lead ?? {});
           const saved = await upsertContactInDb(
             db,
@@ -397,14 +425,7 @@ export async function importCampaignProspects(
             provenance,
             { nameMatch: false },
           );
-          const linked = await db.query(
-            `update crm.campaign_prospects p
-             set contact_id = $3, company_id = coalesce(p.company_id, $4)
-             where p.id = $1 and p.workspace_id = $2 and p.contact_id is null
-               and not exists (select 1 from crm.campaign_prospects o where o.campaign_id = p.campaign_id and o.contact_id = $3)`,
-            [row.id, actor.workspaceId, saved.contact.id, saved.contact.companyId ?? null],
-          );
-          return { created: saved.created, linked: (linked.rowCount ?? 0) > 0 };
+          return { created: saved.created, linked: await linkProspect(db, actor.workspaceId, row.id, saved.contact.id, saved.contact.companyId ?? null) };
         });
         if (outcome.created) result.imported += 1;
         if (outcome.linked) result.linked += 1;
@@ -416,7 +437,7 @@ export async function importCampaignProspects(
   }
   result.left = await withActor(actor, async (db) => {
     const left = await db.query<{ count: number }>(
-      "select count(*)::int as count from crm.campaign_prospects p where p.campaign_id = $1 and p.workspace_id = $2 and p.contact_id is null and (p.email is not null or p.linkedin is not null)",
+      `select count(*)::int as count from crm.campaign_prospects p where p.campaign_id = $1 and p.workspace_id = $2 and ${IMPORTABLE_SQL}`,
       [campaign.id, actor.workspaceId],
     );
     return left.rows[0]?.count ?? 0;

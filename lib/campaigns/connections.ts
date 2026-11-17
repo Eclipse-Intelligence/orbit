@@ -162,6 +162,18 @@ async function connectionView(
   };
 }
 
+export type ConnectionState = { provider: CampaignProviderId; lastSyncedAt: string | null; lastError: string | null };
+
+export async function connectionStates(actor: Actor): Promise<ConnectionState[]> {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ provider: CampaignProviderId; last_synced_at: Date | null; last_error: string | null }>(
+      "select provider, last_synced_at, last_error from crm.campaign_connections where workspace_id = $1 order by provider",
+      [actor.workspaceId],
+    );
+    return result.rows.map((row) => ({ provider: row.provider, lastSyncedAt: row.last_synced_at?.toISOString() ?? null, lastError: row.last_error }));
+  });
+}
+
 export async function connectedProviders(actor: Actor) {
   return withActor(actor, async (db) => {
     const result = await db.query<{ provider: CampaignProviderId }>("select provider from crm.campaign_connections where workspace_id = $1", [actor.workspaceId]);
