@@ -189,8 +189,8 @@ export function NudgeItem({ item, now, clearId }: { item: WaitingNudge; now: num
       mark={<IconMark icon={FollowUpIcon} />}
       title={item.subject?.trim() || "(no subject)"}
       titleHref={threadHref(item.key)}
-      when={`Sent ${sinceLabel(item.sentAt, now)}`}
-      meta={`${people ? `To ${people} · ` : ""}${opened}No reply yet`}
+      when={`${item.inbound ? "Received" : "Sent"} ${sinceLabel(item.sentAt, now)}`}
+      meta={`${people ? `To ${people} · ` : ""}${opened}${item.checkIn ? "Time to check in" : "No reply yet"}`}
       detail={<DraftLine text={item.body} />}
       actions={[
         {

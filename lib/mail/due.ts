@@ -10,6 +10,7 @@ import { threadKey } from "@/lib/mail/threads";
 import { sendAlert } from "@/lib/alerts";
 import { mailNotifyLevel } from "@/lib/mail/notify";
 import type { PushSender } from "@/lib/push";
+import { finishDeferralTask, settleDeferrals } from "@/lib/mail/deferrals";
 import { prepareNudge, storeNudge, writeNudge } from "@/lib/mail/prepare";
 import { firstReply, FOLLOW_UP_ROW_COLUMNS, hasStuckFollowUps, recoverStuckFollowUps, sendDueFollowUp, type SendFollowUpRow } from "@/lib/mail/follow-up";
 
@@ -75,6 +76,7 @@ async function checkFollowUp(actor: UserActor, reminder: ReminderRow, options: {
   const replied = await withActor(actor, async (db) => Boolean(await firstReply(db, actor, reminder.id)));
   if (replied) {
     await withActor(actor, (db) => db.query("update crm.mail_reminders set state = 'done' where id = $1", [reminder.id]));
+    if (reminder.deferral) await finishDeferralTask(actor, reminder.id, "deferral_answered");
     return false;
   }
   const deferred = reminder.deferral;
@@ -108,6 +110,9 @@ export async function processDueMail(
   options: { fetchImpl?: typeof fetch; origin?: string | null; send?: PushSender; deadline?: number } = {},
 ): Promise<DueReport> {
   const report: DueReport = { sent: 0, failed: 0, returned: 0, followUps: 0, followUpsSent: 0, stuck: 0, reminderErrors: 0 };
+  await settleDeferrals(actor).catch((error) => {
+    console.error("Settling check-ins failed", error instanceof Error ? error.message : error);
+  });
   if (!(await anythingDue(actor))) return report;
   const deadline = options.deadline ?? Date.now() + DEFAULT_BUDGET_MS;
   const fetchImpl = options.fetchImpl ?? fetch;

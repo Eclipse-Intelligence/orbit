@@ -5,7 +5,6 @@ import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { MAIL_SPLITS, type MailSplit } from "@/lib/mail/view";
-import { ownAddressesSql } from "@/lib/mail/waiting";
 
 export const CALENDAR_SUBJECT =
   "^(accepted|declined|tentative|tentatively accepted|invitation|updated invitation|canceled|cancelled|new time proposed|meeting forward notification|invitation updated)\\M";
@@ -147,4 +146,11 @@ export async function setSenderSplit(actor: UserActor, sender: string, split: Ma
     );
   });
   return { sender: key, split };
+}
+
+export function ownAddressesSql(userParam: string, emailParam: string) {
+  return `select lower(email) as email from crm.mail_sources where user_id = ${userParam}
+    union select lower(email) from crm.send_identities where user_id = ${userParam}
+    union select lower(btrim(other)) from crm.profiles p cross join lateral unnest(coalesce(p.other_emails, '{}'::text[])) as other where p.id = ${userParam}
+    union select lower(${emailParam}::text)`;
 }

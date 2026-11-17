@@ -1,3 +1,4 @@
+import { DEFERRAL_GRACE_MINUTES } from "@/lib/mail/deferral-dates";
 import { dayKey, nonWorkingReason, shiftDay } from "@/lib/crm/task-due";
 import { zonedParts, zonedTimeToDate } from "@/lib/time";
 
@@ -41,7 +42,7 @@ export function replyAfterSql(reminder: string, userParam: string, emailParam: s
     where rp.user_id = ${userParam} and rp.source_id = ${reminder}.source_id
       and rp.thread_key = ${reminder}.thread_key
       and not rp.is_draft and rpf.role not in ('drafts', 'outbox')
-      and coalesce(rp.received_at, rp.sent_at, rp.created_at) > ${reminder}.created_at
+      and coalesce(rp.received_at, rp.sent_at, rp.created_at) > ${reminder}.created_at + case when ${reminder}.deferral then make_interval(mins => ${DEFERRAL_GRACE_MINUTES}) else interval '0' end
       and lower(coalesce(rp.from_email, '')) <> all ${ownMailAddresses(userParam, emailParam)}
     order by coalesce(rp.received_at, rp.sent_at, rp.created_at), rp.id`;
 }

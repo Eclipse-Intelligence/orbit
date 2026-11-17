@@ -13,8 +13,8 @@ import { emailWritingNotes } from "@/lib/learning/memories";
 import { completeJson, windowShare } from "@/lib/llm";
 import { clean, formatThread, recipientContext, threadText, today, voiceSamples } from "@/lib/mail/ai";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
-import { DEFER_SCHEMA, deferralHint } from "@/lib/mail/deferral-dates";
-import { applyDeferral, checkDeferrals, DEFERRAL_RULES, deferralEligible, deferralText } from "@/lib/mail/deferrals";
+import { DEFER_SCHEMA } from "@/lib/mail/deferral-dates";
+import { applyDeferral, checkDeferrals, DEFERRAL_RULES, deferralEligible } from "@/lib/mail/deferrals";
 import { stripQuoted } from "@/lib/mail/format";
 import { ownMailAddresses } from "@/lib/mail/follow-up-rules";
 import { workingDaysLater } from "@/lib/mail/later";
@@ -353,9 +353,7 @@ async function prepareReply(home: UserActor, target: ThreadWorkspace, candidate:
   const name = actor.fullName || actor.email;
   const first = name.split(/\s+/)[0];
   const brand = target.resolved ? await brandOrEmpty(actor) : null;
-  const askDefer =
-    deferralHint(`${candidate.subject ?? ""}\n${deferralText(candidate.body_text, candidate.snippet)}`) &&
-    (await deferralEligible(actor, candidate.id, candidate.from_email).catch(() => false));
+  const askDefer = await deferralEligible(actor, candidate.id, candidate.from_email).catch(() => false);
   const request = {
     system:
       `You prepare email replies for ${name}, who reviews and sends them from their CRM. Reply with JSON only: {"needsReply": boolean, "meeting": boolean, ${askPitch ? '"pitch": boolean, ' : ""}${askDefer ? '"defer": {"note": string, "precision": string, "date": string} or null, ' : ""}"body": string or null}. ` +

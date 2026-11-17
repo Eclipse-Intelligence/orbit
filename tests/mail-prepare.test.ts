@@ -327,9 +327,10 @@ describe("prepared replies and automatic reminders", () => {
   it("does nothing when switched off", async () => {
     await setMailHelp(owner, { prepareReplies: false, autoRemindDays: null });
     await syncMail(owner, { budgetMs: 30_000, fetchImpl: mailbox({ inbox: [message("m-jane-3", { subject: "Lunch" })], sent: [] }) });
-    const { fetchImpl, prompts } = model([]);
+    const { fetchImpl, prompts } = model([{ deferrals: [] }]);
     const report = await prepareMail(owner, { deadline: soon(), fetchImpl });
-    assert.equal(prompts.length, 0);
+    assert.equal(prompts.length, 1, "only the check for someone putting things off, which has no switch");
+    assert.match(prompts[0].system, /put the conversation off until later/);
     assert.deepEqual(report, { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0, deferrals: 0 });
   });
 });

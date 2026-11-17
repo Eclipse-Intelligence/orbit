@@ -302,6 +302,72 @@ describe("Replies waiting on you", () => {
     assert.ok((await keys()).includes(dismissed.key), "a newer email from them brings it back");
   });
 
+  it("waits for the date someone put the conversation off until, and a newer email from them brings it back", async () => {
+    const admin = getAdminPool();
+    const defer = async (thread: string, createdAt: string, state: string) =>
+      admin.query(
+        `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, state, subject, automatic, deferral, created_at)
+         values ($1, $2, $3, $4, 'follow_up', '2026-05-27T08:00:00Z', $5, 'Proposal', true, true, $6)`,
+        [mark.workspaceId, mark.userId, box.sourceId, thread, state, createdAt],
+      );
+    const deferred = await message(mark, box, {
+      thread: "deferred",
+      from: "ross@hvac-replies.test",
+      to: [mark.email],
+      body: "Thanks Mark. We will pick this up Wednesday next week.",
+      at: "2026-05-15T17:03:00Z",
+    });
+    await defer("deferred", "2026-05-15T17:03:30Z", "waiting");
+    const checkedIn = await message(mark, box, { thread: "checked-in", from: "ross@hvac-replies.test", to: [mark.email], at: "2026-05-15T17:03:00Z" });
+    await defer("checked-in", "2026-05-15T17:03:30Z", "done");
+    const plain = await message(mark, box, { thread: "plain-reminder", from: "ross@hvac-replies.test", to: [mark.email], at: "2026-05-15T17:03:00Z" });
+    await admin.query(
+      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, state, subject, created_at)
+       values ($1, $2, $3, 'plain-reminder', 'follow_up', '2026-05-27T08:00:00Z', 'done', 'Proposal', '2026-05-15T17:03:30Z')`,
+      [mark.workspaceId, mark.userId, box.sourceId],
+    );
+
+    const cancelled = await message(mark, box, { thread: "cancelled", from: "ross@hvac-replies.test", to: [mark.email], at: "2026-05-15T17:03:00Z" });
+    await defer("cancelled", "2026-05-15T17:03:30Z", "cancelled");
+    const postscript = await message(mark, box, { thread: "postscript", from: "ross@hvac-replies.test", to: [mark.email], at: "2026-05-15T17:03:00Z" });
+    await defer("postscript", "2026-05-15T17:03:30Z", "waiting");
+    await message(mark, box, { thread: "postscript", from: "ross@hvac-replies.test", to: [mark.email], body: "PS: forgot to attach the drawings.", at: "2026-05-15T17:20:00Z" });
+
+    let listed = await keys();
+    assert.ok(!listed.includes(deferred.key), "a waiting deferral holds it back");
+    assert.ok(listed.includes(cancelled.key), "Cancel brings the email back");
+    assert.ok(!listed.includes(postscript.key), "a quick PS from them doesn't break the hold");
+    assert.ok(!listed.includes(checkedIn.key), "a finished check-in doesn't bring the deferring email back");
+    assert.ok(listed.includes(plain.key), "a plain follow-up reminder doesn't hide their reply");
+
+    await message(mark, box, { thread: "deferred", from: "ross@hvac-replies.test", to: [mark.email], body: "Actually, can you send the pricing?", at: "2026-05-20T09:00:00Z" });
+    listed = await keys();
+    assert.ok(listed.includes(deferred.key), "a newer email from them shows");
+  });
+
+  it("shows a drafted check-in as Time to check in, to the person who put it off", async () => {
+    const admin = getAdminPool();
+    const theirs = await message(mark, box, { thread: "check-in", from: "ross@hvac-replies.test", name: "Ross Burke", to: [mark.email], subject: "Re: Proposal", at: "2026-05-15T17:03:00Z" });
+    await admin.query(
+      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, state, subject, automatic, deferral, surfaced_at, created_at)
+       values ($1, $2, $3, 'check-in', 'follow_up', '2026-05-20T08:00:00Z', 'due', 'Proposal', true, true, '2026-05-20T08:00:00Z', '2026-05-15T17:03:30Z')`,
+      [mark.workspaceId, mark.userId, box.sourceId],
+    );
+    await nudge(mark, box, theirs.id, "check-in");
+    const sent = await message(mark, box, { thread: "plain-nudge", from: mark.email, to: ["olivia@client.test"], folder: "sent", at: "2026-05-15T09:00:00Z" });
+    await nudge(mark, box, sent.id, "plain-nudge");
+
+    const nudges = (await waitingMail(mark, [mark], now)).nudges;
+    const checkIn = nudges.find((item) => item.key === theirs.key)!;
+    assert.equal(checkIn.checkIn, true);
+    assert.equal(checkIn.inbound, true);
+    assert.deepEqual(checkIn.to, [{ name: "Ross Burke", address: "ross@hvac-replies.test" }]);
+    const plain = nudges.find((item) => item.key === sent.key)!;
+    assert.equal(plain.checkIn, false);
+    assert.equal(plain.inbound, false);
+    assert.deepEqual(plain.to.map((person) => person.address), ["olivia@client.test"]);
+  });
+
   it("is private to the person whose mail it is", async () => {
     assert.deepEqual((await waitingMail(james, [james], now)).replies, []);
     const dismissals = await queryAsUser<{ id: string }>(james.userId, "select id from crm.capture_dismissals");
