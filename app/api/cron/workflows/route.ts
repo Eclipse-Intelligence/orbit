@@ -1,5 +1,5 @@
 import { cronAuthorization } from "@/lib/crm/scheduler";
-import { LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
+import { CRON_RUNS_AT_ONCE, LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
 import { startWorkers } from "@/lib/workflows/workers";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ async function handle(request: Request) {
     console.error("Couldn't start workflow workers", error);
     return 0;
   });
-  return Response.json({ ...(await runWorkflowTick({ budgetMs: LONG_TICK_MS, long: true })), workers });
+  return Response.json({ ...(await runWorkflowTick({ budgetMs: LONG_TICK_MS, long: true, limit: CRON_RUNS_AT_ONCE })), workers });
 }
 
 export const GET = handle;

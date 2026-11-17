@@ -1,6 +1,6 @@
 import { EVERY_WORKSPACE_SOURCES } from "@/lib/alert-sources";
 import { withActor } from "@/lib/crm/context";
-import { query } from "@/lib/db/pool";
+import { query, type Db } from "@/lib/db/pool";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { cleanText } from "@/lib/crm/normalize";
@@ -56,6 +56,8 @@ export type RunSummary = {
   itemName: string | null;
   skipReason: string | null;
   children: { total: number; succeeded: number; skipped: number; failed: number } | null;
+  items: ChildRun[];
+  more: { skipped: number; failed: number };
 };
 
 export type ChildRun = {
@@ -476,10 +478,51 @@ function mapRun(row: RunRow): RunSummary {
       row.children_total > 0
         ? { total: row.children_total, succeeded: row.children_succeeded, skipped: row.children_skipped, failed: row.children_failed }
         : null,
+    items: [],
+    more: { skipped: 0, failed: 0 },
   };
 }
 
 export const CHILDREN_SHOWN = 50;
+export const CHILDREN_PREVIEW = 3;
+
+type ChildRow = { parent_run_id: string; id: string; name: string; status: string; skip_reason: string | null; error: string | null; skipped_total: number; failed_total: number };
+
+async function childItems(db: Db, actor: UserActor, runs: RunSummary[], limit: number) {
+  const parents = runs.filter((run) => run.children).map((run) => run.id);
+  if (parents.length === 0) return runs;
+  const result = await db.query<ChildRow>(
+    `select * from (
+       select c.parent_run_id, c.id,
+         coalesce(nullif(co.name, ''), nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''), nullif(c.state->>'itemName', ''), 'Item ' || (c.item_index + 1)) as name,
+         c.status, c.skip_reason, c.error,
+         (count(*) filter (where c.skip_reason is not null) over parent)::int as skipped_total,
+         (count(*) filter (where c.skip_reason is null) over parent)::int as failed_total,
+         row_number() over (parent order by (c.status = 'failed') desc, c.item_index) as place
+       from crm.workflow_runs c
+       join crm.workflow_runs p on p.id = c.parent_run_id
+       left join crm.companies co on co.id = c.company_id
+       left join crm.contacts ct on ct.id = c.contact_id
+       where c.parent_run_id = any($1::uuid[]) and c.owner_id = $2 and (p.test or c.status = 'failed' or c.skip_reason is not null)
+       window parent as (partition by c.parent_run_id)
+     ) listed
+     where place <= $3
+     order by parent_run_id, place`,
+    [parents, actor.userId, limit],
+  );
+  return runs.map((run) => {
+    const rows = result.rows.filter((row) => row.parent_run_id === run.id);
+    const shownSkipped = rows.filter((row) => row.skip_reason).length;
+    return {
+      ...run,
+      items: rows.map((row) => ({ id: row.id, name: row.name, status: row.status, skipReason: row.skip_reason, error: row.error })),
+      more: {
+        skipped: Math.max((rows[0]?.skipped_total ?? 0) - shownSkipped, 0),
+        failed: Math.max((rows[0]?.failed_total ?? 0) - (rows.length - shownSkipped), 0),
+      },
+    };
+  });
+}
 
 export async function listRuns(actor: UserActor, workflowId: string, limit = 25): Promise<RunSummary[]> {
   return withActor(actor, async (db) => {
@@ -487,7 +530,7 @@ export async function listRuns(actor: UserActor, workflowId: string, limit = 25)
       `${RUN_SQL} where r.workflow_id = $1 and r.owner_id = $3 and r.parent_run_id is null order by r.created_at desc limit $2`,
       [workflowId, limit, actor.userId],
     );
-    return result.rows.map(mapRun);
+    return childItems(db, actor, result.rows.map(mapRun), CHILDREN_PREVIEW);
   });
 }
 
@@ -500,7 +543,7 @@ export async function cancelRun(actor: UserActor, runId: string) {
     );
     const run = found.rows[0];
     if (!run) throw new CrmError("not_found", "Run not found.", 404);
-    if (run.parent_run_id) throw new CrmError("invalid_input", "This is one item of a run. Cancel the whole run instead.", 400);
+    if (run.parent_run_id) throw new CrmError("invalid_input", "This is one item of a run. Stop the whole run instead.", 400);
     if (!["queued", "running", "waiting"].includes(run.status)) throw new CrmError("conflict", "This run has already finished.", 409);
     await db.query(
       `update crm.workflow_runs set status = 'cancelled', waiting_for = null, resume_at = null, finished_at = now()
@@ -519,26 +562,12 @@ export async function cancelRun(actor: UserActor, runId: string) {
 export async function getRunSteps(
   actor: UserActor,
   runId: string,
-): Promise<{ run: RunSummary; steps: RunStepLog[]; children: ChildRun[]; more: { skipped: number; failed: number } }> {
+): Promise<{ run: RunSummary; steps: RunStepLog[] }> {
   if (!isUuid(runId)) throw new CrmError("not_found", "Run not found.", 404);
   return withActor(actor, async (db) => {
     const run = await db.query<RunRow>(`${RUN_SQL} where r.id = $1 and r.owner_id = $2`, [runId, actor.userId]);
     if (!run.rows[0]) throw new CrmError("not_found", "Run not found.", 404);
-    const children = run.rows[0].children_total
-      ? await db.query<{ id: string; name: string; status: string; skip_reason: string | null; error: string | null; skipped_total: number; failed_total: number }>(
-          `select c.id, coalesce(nullif(co.name, ''), nullif(trim(concat_ws(' ', ct.first_name, ct.last_name)), ''), nullif(c.state->>'itemName', ''), 'Item ' || (c.item_index + 1)) as name,
-             c.status, c.skip_reason, c.error,
-             (count(*) filter (where c.skip_reason is not null) over ())::int as skipped_total,
-             (count(*) filter (where c.skip_reason is null) over ())::int as failed_total
-           from crm.workflow_runs c
-           left join crm.companies co on co.id = c.company_id
-           left join crm.contacts ct on ct.id = c.contact_id
-           where c.parent_run_id = $1 and c.owner_id = $2 and (c.status = 'failed' or c.skip_reason is not null)
-           order by (c.status = 'failed') desc, c.item_index
-           limit ${CHILDREN_SHOWN}`,
-          [runId, actor.userId],
-        )
-      : { rows: [] };
+    const [summary] = await childItems(db, actor, [mapRun(run.rows[0])], CHILDREN_SHOWN);
     const steps = await db.query<{
       id: string;
       step_id: string;
@@ -551,14 +580,8 @@ export async function getRunSteps(
       started_at: Date;
       finished_at: Date | null;
     }>("select * from crm.workflow_run_steps where run_id = $1 and owner_id = $2 order by started_at, finished_at", [runId, actor.userId]);
-    const shownSkipped = children.rows.filter((row) => row.skip_reason).length;
     return {
-      run: mapRun(run.rows[0]),
-      children: children.rows.map((row) => ({ id: row.id, name: row.name, status: row.status, skipReason: row.skip_reason, error: row.error })),
-      more: {
-        skipped: Math.max((children.rows[0]?.skipped_total ?? 0) - shownSkipped, 0),
-        failed: Math.max((children.rows[0]?.failed_total ?? 0) - (children.rows.length - shownSkipped), 0),
-      },
+      run: summary,
       steps: steps.rows.map((row) => ({
         id: row.id,
         stepId: row.step_id,

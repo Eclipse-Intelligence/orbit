@@ -16,7 +16,6 @@ import {
   setWorkflowStatus,
   setWorkflowTemplate,
   startRun,
-  type ChildRun,
   type RunStepLog,
   type RunSummary,
   type Workflow,
@@ -118,7 +117,7 @@ export async function runWorkflowAction(
 
 export async function runDetailsAction(
   runId: string,
-): Promise<{ run?: RunSummary; steps?: RunStepLog[]; children?: ChildRun[]; more?: { skipped: number; failed: number }; error?: string }> {
+): Promise<{ run?: RunSummary; steps?: RunStepLog[]; error?: string }> {
   const user = await requireUser();
   try {
     return await getRunSteps(user, runId);
@@ -134,7 +133,7 @@ export async function cancelRunAction(runId: string, workflowId: string): Promis
     refresh(workflowId);
     return {};
   } catch (error) {
-    return failure(error, "Couldn't cancel the run. Try again.");
+    return failure(error, "Couldn't stop the run. Try again.");
   }
 }
 

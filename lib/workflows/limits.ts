@@ -89,27 +89,30 @@ export type ServiceTicket = { release: () => Promise<void> };
 
 export async function takeService(service: Service, options: { scope?: string; holder?: string } = {}): Promise<ServiceTicket> {
   const limit = serviceLimit(service);
+  const key = bucketKey(service, options.scope, "slots");
+  const holder = options.holder ?? randomUUID();
+  let released = !limit.atOnce;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    await query("select private.release_slot($1, $2)", [key, holder]).catch((error) => console.error("Couldn't release a service slot", error));
+  };
+  if (limit.atOnce) {
+    const taken = await query<{ ok: boolean }>("select private.take_slot($1, $2, $3, $4) as ok", [key, limit.atOnce, holder, SLOT_SECONDS]);
+    if (!taken.rows[0]?.ok) throw new ServiceBusy(service, new Date(Date.now() + BUSY_SLOT_WAIT_MS + jitter()));
+  }
   for (const window of limit.windows) {
     const allowed = await query<{ ok: boolean }>("select private.consume_rate_limit($1, $2, $3, 1) as ok", [
       bucketKey(service, options.scope, `${window.seconds}s`),
       window.limit,
       window.seconds,
     ]);
-    if (!allowed.rows[0]?.ok) throw new ServiceBusy(service, new Date(windowEnd(window.seconds) + jitter()));
+    if (!allowed.rows[0]?.ok) {
+      await release();
+      throw new ServiceBusy(service, new Date(windowEnd(window.seconds) + jitter()));
+    }
   }
-  if (!limit.atOnce) return { release: async () => undefined };
-  const key = bucketKey(service, options.scope, "slots");
-  const holder = options.holder ?? randomUUID();
-  const taken = await query<{ ok: boolean }>("select private.take_slot($1, $2, $3, $4) as ok", [key, limit.atOnce, holder, SLOT_SECONDS]);
-  if (!taken.rows[0]?.ok) throw new ServiceBusy(service, new Date(Date.now() + BUSY_SLOT_WAIT_MS + jitter()));
-  let released = false;
-  return {
-    release: async () => {
-      if (released) return;
-      released = true;
-      await query("select private.release_slot($1, $2)", [key, holder]).catch((error) => console.error("Couldn't release a service slot", error));
-    },
-  };
+  return { release };
 }
 
 export function retryAfterMs(value: string | null | undefined, now = Date.now()) {

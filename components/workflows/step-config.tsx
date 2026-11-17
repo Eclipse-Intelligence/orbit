@@ -410,7 +410,7 @@ export default function StepConfig({
             <label htmlFor={`${step.id}-parallel`} className="ui-style">
               Run items at the same time
             </label>
-            <Switch id={`${step.id}-parallel`} checked={parallel} label="Run items at the same time" onChange={(on) => update({ ...c, parallel: on, ...(on && c.atOnce === undefined ? { atOnce: AT_ONCE_DEFAULT } : {}) })} />
+            <Switch id={`${step.id}-parallel`} className="hit" checked={parallel} label="Run items at the same time" onChange={(on) => update({ ...c, parallel: on, ...(on && c.atOnce === undefined ? { atOnce: AT_ONCE_DEFAULT } : {}) })} />
           </div>
           {parallel && (
             <>
@@ -426,7 +426,7 @@ export default function StepConfig({
                     max={AT_ONCE_MAX}
                     className="w-20"
                     value={str(c.atOnce) || String(AT_ONCE_DEFAULT)}
-                    onChange={(event) => update({ ...c, atOnce: Number(event.target.value) })}
+                    onChange={(event) => update({ ...c, atOnce: Math.min(Math.max(Math.trunc(Number(event.target.value)) || 1, 1), AT_ONCE_MAX) })}
                   />
                   <span className="caption-style text-subtle">at once</span>
                 </div>

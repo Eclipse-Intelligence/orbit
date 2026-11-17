@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Button from "@/components/_ui/button";
+import HoldButton from "@/components/_ui/hold-button";
 import Tag from "@/components/_ui/tag";
 import { RUN_LABELS } from "@/components/workflows/workflows-screen";
 import { cancelRunAction, runDetailsAction } from "@/app/(crm)/workflows/actions";
@@ -23,7 +23,21 @@ const TONES: Record<string, "green" | "red" | "amber" | "blue" | "neutral"> = {
   cancelled: "neutral",
 };
 
-type Details = { runId: string; steps: RunStepLog[]; children: ChildRun[]; more: { skipped: number; failed: number }; error?: string };
+type Details = { runId: string; steps: RunStepLog[]; run: RunSummary | null; error?: string };
+
+const REFRESH_MS = 5_000;
+
+function runTag(run: RunSummary): { tone: "green" | "red" | "amber" | "blue" | "neutral"; label: string } {
+  if (run.waitingFor === "approval") return { tone: "amber", label: "Needs approval" };
+  if (run.children && run.waitingFor === "children") return { tone: "blue", label: "Running" };
+  if (run.children && run.status === "succeeded") return { tone: "green", label: "Succeeded" };
+  return { tone: TONES[run.status] ?? "neutral", label: RUN_LABELS[run.status] ?? run.status };
+}
+
+function childTag(child: ChildRun): { tone: "green" | "red" | "amber" | "blue" | "neutral"; label: string } {
+  if (child.skipReason) return { tone: "neutral", label: "Skipped" };
+  return { tone: TONES[child.status] ?? "neutral", label: RUN_LABELS[child.status] ?? child.status };
+}
 
 function pretty(value: unknown) {
   if (value === null || value === undefined) return null;
@@ -68,21 +82,33 @@ function StepLog({ step }: { step: RunStepLog }) {
   );
 }
 
-function ChildRow({ child }: { child: ChildRun }) {
-  const [open, setOpen] = useState(false);
+function ChildRow({ child, initiallyOpen = false }: { child: ChildRun; initiallyOpen?: boolean }) {
+  const [open, setOpen] = useState(initiallyOpen);
   const [steps, setSteps] = useState<RunStepLog[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const skipped = Boolean(child.skipReason);
+  const tag = childTag(child);
 
-  function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && !steps) {
-      void runDetailsAction(child.id).then((result) => {
+  useEffect(() => {
+    if (!open || steps) return;
+    let live = true;
+    runDetailsAction(child.id)
+      .then((result) => {
+        if (!live) return;
         setSteps(result.steps ?? []);
         setError(result.error ?? null);
+      })
+      .catch(() => {
+        if (!live) return;
+        setSteps([]);
+        setError("Couldn't load this item. Try again.");
       });
-    }
+    return () => {
+      live = false;
+    };
+  }, [open, steps, child.id]);
+
+  function toggle() {
+    setOpen((value) => !value);
   }
 
   return (
@@ -90,9 +116,9 @@ function ChildRow({ child }: { child: ChildRun }) {
       <button type="button" onClick={toggle} aria-expanded={open} className="flex min-h-10 cursor-pointer items-center gap-2 py-1.5 text-left">
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="ui-style truncate">{child.name}</span>
-          <span className="caption-style text-subtle line-clamp-2">{child.skipReason ?? child.error ?? "Failed"}</span>
+          {(child.skipReason ?? child.error) && <span className="caption-style text-subtle line-clamp-2">{child.skipReason ?? child.error}</span>}
         </span>
-        <Tag tone={skipped ? "neutral" : "red"}>{skipped ? "Skipped" : "Failed"}</Tag>
+        <Tag tone={tag.tone}>{tag.label}</Tag>
       </button>
       {open && (
         <div className="pb-2 pl-3">
@@ -143,13 +169,20 @@ export default function RunHistory({
     let live = true;
     void runDetailsAction(selected).then((result) => {
       if (!live) return;
-      setDetails({ runId: selected, steps: result.steps ?? [], children: result.children ?? [], more: result.more ?? { skipped: 0, failed: 0 }, error: result.error });
+      setDetails({ runId: selected, steps: result.steps ?? [], run: result.run ?? null, error: result.error });
       onSteps?.(result.steps ?? null);
     });
     return () => {
       live = false;
     };
   }, [selected, runs, onSteps]);
+
+  const refreshing = runs.some((run) => run.children && ACTIVE_RUN_STATUSES.includes(run.status));
+  useEffect(() => {
+    if (!refreshing) return;
+    const timer = window.setInterval(() => router.refresh(), REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshing, router]);
 
   async function cancel(run: RunSummary) {
     setCancelling(run.id);
@@ -174,6 +207,8 @@ export default function RunHistory({
         const open = ACTIVE_RUN_STATUSES.includes(run.status);
         const progress = run.children ? runProgress(run.children, !open) : null;
         const share = run.children && run.children.total ? Math.round((childrenDone(run.children) / run.children.total) * 100) : 0;
+        const tag = runTag(run);
+        const listed = shown?.run ?? run;
         return (
           <li key={run.id} className={cn("border-line-strong rounded-lg border", active && "bg-white/2")}>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2.5">
@@ -185,12 +220,12 @@ export default function RunHistory({
                     {run.test ? " · Test run" : ""}
                   </span>
                 </span>
-                <Tag tone={TONES[run.status] ?? "neutral"}>{run.waitingFor === "approval" ? "Needs approval" : (RUN_LABELS[run.status] ?? run.status)}</Tag>
+                <Tag tone={tag.tone}>{tag.label}</Tag>
               </button>
               {open && (
-                <Button variant="secondary" size="sm" className="hit" disabled={cancelling === run.id} onClick={() => void cancel(run)}>
-                  {cancelling === run.id ? "Cancelling…" : "Cancel run"}
-                </Button>
+                <HoldButton disabled={cancelling === run.id} onConfirm={() => void cancel(run)}>
+                  {cancelling === run.id ? "Stopping…" : "Hold to stop"}
+                </HoldButton>
               )}
               {run.children && open && (
                 <div
@@ -208,6 +243,16 @@ export default function RunHistory({
                 <p role="alert" className="caption-style text-danger w-full">
                   {cancelError.message}
                 </p>
+              )}
+              {listed.items.length > 0 && (
+                <div className="flex w-full flex-col">
+                  <ul className="flex flex-col">
+                    {listed.items.map((child) => (
+                      <ChildRow key={`${child.id}-${run.test && active}`} child={child} initiallyOpen={run.test && active} />
+                    ))}
+                  </ul>
+                  {moreLine(listed.more) && <p className="caption-style text-subtle py-1.5">{moreLine(listed.more)}</p>}
+                </div>
               )}
             </div>
             {active && (
@@ -231,23 +276,11 @@ export default function RunHistory({
                 ) : shown.error ? (
                   <p className="caption-style text-danger">{shown.error}</p>
                 ) : (
-                  <>
-                    {shown.children.length > 0 && (
-                      <div className="flex flex-col">
-                        <ul className="flex flex-col">
-                          {shown.children.map((child) => (
-                            <ChildRow key={child.id} child={child} />
-                          ))}
-                        </ul>
-                        {moreLine(shown.more) && <p className="caption-style text-subtle py-1.5">{moreLine(shown.more)}</p>}
-                      </div>
-                    )}
-                    <ol className="flex flex-col">
-                      {shown.steps.map((step) => (
-                        <StepLog key={step.id} step={step} />
-                      ))}
-                    </ol>
-                  </>
+                  <ol className="flex flex-col">
+                    {shown.steps.map((step) => (
+                      <StepLog key={step.id} step={step} />
+                    ))}
+                  </ol>
                 )}
               </div>
             )}

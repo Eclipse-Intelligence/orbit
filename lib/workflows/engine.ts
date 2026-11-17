@@ -87,6 +87,7 @@ export type RunState = {
   itemName?: string;
   loadItem?: boolean;
   busy?: { step: string; count: number } | null;
+  linkedin?: { key: string; text: string } | null;
 };
 
 type WaitingChildren = { key: string; loopId: string; total: number; atOnce: number; created: boolean };
@@ -141,7 +142,8 @@ const STEP_RESERVE_MS = 8_000;
 export const MAX_STEPS_PER_RUN = 200;
 export const MAX_STEPS_TOTAL = 5_000;
 export const TOO_MANY_STEPS = "This workflow ran more than 5,000 steps. Check it doesn't loop.";
-export const RUNS_AT_ONCE = 25;
+export const RUNS_AT_ONCE = 5;
+export const CRON_RUNS_AT_ONCE = 25;
 const CHILD_BATCH = 500;
 const TEST_CHILDREN = 3;
 const MAX_BUSY_WAITS = 60;
@@ -563,7 +565,7 @@ async function aiStep(ctx: Ctx, step: Step): Promise<StepResult> {
     outputs.push({ key: "sources", type: "list", description: "The web addresses you used, most useful first.", choices: [], optional: true });
   }
   const context = step.config.context === true ? await recordContext(ctx) : "";
-  const linkedin = step.config.linkedin === true ? await linkedinContext(ctx) : "";
+  const linkedin = step.config.linkedin === true ? await linkedinContext(ctx, step) : "";
   const shapeLines = outputs.map((output) => {
     const kind =
       output.type === "list"
@@ -797,7 +799,15 @@ async function proposalStep(ctx: Ctx, step: Step): Promise<StepResult> {
   };
 }
 
-async function linkedinContext(ctx: Ctx) {
+async function linkedinContext(ctx: Ctx, step: Step) {
+  const key = effectKey(step.id, ctx.state.frames ?? []);
+  if (ctx.state.linkedin?.key === key) return ctx.state.linkedin.text;
+  const text = await readLinkedin(ctx);
+  ctx.state.linkedin = { key, text };
+  return text;
+}
+
+async function readLinkedin(ctx: Ctx) {
   const contact = ctx.vars.contact as { linkedinUrl?: string | null; name?: string } | undefined;
   if (!contact?.linkedinUrl) return "Their LinkedIn profile: Orbit has no LinkedIn link for this contact, so it wasn't read.";
   try {
@@ -1421,6 +1431,7 @@ async function endRun(actor: UserActor, run: RunRow, outcome: Outcome, fields: R
     finished_at: new Date().toISOString(),
   });
   await withActor(actor, async (db) => {
+    if (run.parent_run_id) await db.query("select id from crm.workflow_runs where id = $1 for update", [run.parent_run_id]);
     const ended = await db.query(`update crm.workflow_runs set ${sets} where id = $1 and status = 'running'`, [run.id, ...values]);
     if (!ended.rowCount) throw new RunStopped();
     if (outcome === "cancelled") await db.query(CANCEL_CHILDREN_SQL, [run.id]);
@@ -1533,8 +1544,10 @@ async function fanOut(ctx: Ctx, step: Step, items: unknown[], atOnce: number): P
         ...(isRecordItem(item) ? { loadItem: true } : {}),
       }),
     );
-    await withActor(actor, (db) =>
-      db.query(INSERT_CHILDREN, [
+    await withActor(actor, async (db) => {
+      const parent = await db.query("select id from crm.workflow_runs where id = $1 and status = 'running' for update", [run.id]);
+      if (!parent.rowCount) throw new RunStopped();
+      await db.query(INSERT_CHILDREN, [
         run.workspace_id,
         run.workflow_id,
         run.owner_id,
@@ -1547,8 +1560,8 @@ async function fanOut(ctx: Ctx, step: Step, items: unknown[], atOnce: number): P
         key,
         start,
         JSON.stringify(batch),
-      ]),
-    );
+      ]);
+    });
   }
   state.waitingChildren = { ...state.waitingChildren, created: true };
   const settled = await withActor(actor, (db) =>
@@ -1772,6 +1785,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
       result = await runStepAction(ctx, step);
       if (state.retried) state.retried = null;
       if (state.busy) state.busy = null;
+      if (state.linkedin) state.linkedin = null;
       if (state.effect || SIDE_EFFECTS.has(step.type)) {
         done = state.effect ?? null;
         state.effect = null;
@@ -1780,7 +1794,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
     } catch (error) {
       if (error instanceof RunStopped) throw error;
       state.effect = null;
-      if (error instanceof ServiceBusy) {
+      if (error instanceof ServiceBusy && !run.test) {
         const waits = state.busy?.step === step.id ? state.busy.count + 1 : 1;
         if (waits <= MAX_BUSY_WAITS) {
           state.busy = { step: step.id, count: waits };
@@ -1789,7 +1803,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
           return "waiting";
         }
       }
-      const message = error instanceof ServiceBusy ? BUSY_TOO_LONG : errorText(error);
+      const message = error instanceof ServiceBusy ? (run.test ? error.message : BUSY_TOO_LONG) : errorText(error);
       if (retryable(error) && !run.test && state.retried !== step.id) {
         state.retried = step.id;
         const until = new Date(Date.now() + RETRY_DELAY_MS).toISOString();

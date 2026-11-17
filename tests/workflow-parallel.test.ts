@@ -6,7 +6,9 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool } from "@/lib/db/pool";
 import { definitionFromInput, FIND_LIMIT_PARALLEL, feedsParallelLoop, type WorkflowDefinition } from "@/lib/workflows/definition";
-import { childVars, executeRun, MAX_STEPS_PER_RUN, runWorkflowTick, TOO_MANY_STEPS } from "@/lib/workflows/engine";
+import { childVars, CRON_RUNS_AT_ONCE, executeRun, MAX_STEPS_PER_RUN, runWorkflowTick, TOO_MANY_STEPS } from "@/lib/workflows/engine";
+import { removeMember } from "@/lib/crm/team";
+import { createContact } from "@/lib/crm/contacts";
 import { ServiceBusy, takeService } from "@/lib/workflows/limits";
 import { runProgress } from "@/lib/workflows/progress";
 import { readFindConfig } from "@/lib/workflows/records";
@@ -113,7 +115,7 @@ async function notesTitled(owner: UserActor, title: string) {
 
 async function drain(fetchImpl: typeof fetch, rounds = 6) {
   for (let round = 0; round < rounds; round += 1) {
-    const tick = await runWorkflowTick({ fetchImpl, budgetMs: 40_000 });
+    const tick = await runWorkflowTick({ fetchImpl, budgetMs: 40_000, limit: CRON_RUNS_AT_ONCE });
     if (tick.processed === 0) return;
   }
 }
@@ -260,8 +262,8 @@ describe("parallel workflows", () => {
     const output = (parent.state.vars as { steps: Record<string, { skipReasons: string[] }> }).steps.loop_1;
     assert.match(output.skipReasons[0], /^Small 2: Research: /);
     const shown = await getRunSteps(owner, runId);
-    assert.equal(shown.children.length, 1);
-    assert.equal(shown.children[0].name, "Small 2");
+    assert.equal(shown.run.items.length, 1);
+    assert.equal(shown.run.items[0].name, "Small 2");
     const [summary] = await listRuns(owner, workflowId);
     assert.equal(runProgress(summary.children!, true), "4 done, 1 skipped");
     const bell = await getAdminPool().query<{ title: string }>("select title from crm.notifications where user_id = $1 and title like '%finished with 1 skipped'", [owner.userId]);
@@ -318,7 +320,7 @@ describe("parallel workflows", () => {
     const changed = await queryAsUser<{ id: string }>(colleague.userId, "update crm.workflow_runs set status = 'cancelled' where id = $1 returning id", [runId]);
     assert.equal(changed.length, 0);
     assert.equal((await runRow(runId)).status, "waiting");
-    await assert.rejects(cancelRun(owner, child.id), /Cancel the whole run instead/);
+    await assert.rejects(cancelRun(owner, child.id), /Stop the whole run instead/);
     await cancelRun(owner, runId);
     assert.deepEqual([...new Set((await children(runId)).map((item) => item.status))], ["cancelled"]);
   });
@@ -374,6 +376,142 @@ describe("parallel workflows", () => {
     assert.equal(failed.status, "failed");
     assert.equal(failed.error, TOO_MANY_STEPS);
     await getAdminPool().query("delete from crm.activities where workspace_id = $1 and type = 'note'", [owner.workspaceId]);
+  });
+
+  it("keeps to At most even when two ticks claim at the same time", async () => {
+    const ai = gateway({ delayMs: 150 });
+    const { runId } = await start(research("small", { atOnce: 2 }), ai.fetchImpl);
+    for (let round = 0; round < 4; round += 1) {
+      await Promise.all([
+        runWorkflowTick({ fetchImpl: ai.fetchImpl, budgetMs: 30_000, limit: CRON_RUNS_AT_ONCE }),
+        runWorkflowTick({ fetchImpl: ai.fetchImpl, budgetMs: 30_000, limit: CRON_RUNS_AT_ONCE }),
+      ]);
+    }
+    assert.equal((await runRow(runId)).status, "succeeded");
+    assert.ok(ai.peak <= 2, `never more than two at once (peak ${ai.peak})`);
+    await getAdminPool().query("delete from crm.activities where workspace_id = $1 and type = 'note'", [owner.workspaceId]);
+  });
+
+  it("counts a reclaimed item once, and an item that ends stopped as failed", async () => {
+    const ai = gateway();
+    const { runId } = await start(research("small"), ai.fetchImpl);
+    const [first, second] = await children(runId);
+    await getAdminPool().query("update crm.workflow_runs set status = 'running', claimed_at = now() - interval '11 minutes' where id = $1", [first.id]);
+    await getAdminPool().query("update crm.workflow_runs set state = state - 'at' where id = $1", [second.id]);
+    await drain(ai.fetchImpl);
+    const counts = (
+      await getAdminPool().query<{ succeeded: number; skipped: number; failed: number }>(
+        "select children_succeeded as succeeded, children_skipped as skipped, children_failed as failed from crm.workflow_runs where id = $1",
+        [runId],
+      )
+    ).rows[0];
+    assert.deepEqual(counts, { succeeded: 3, skipped: 0, failed: 1 });
+    assert.equal((await runRow(runId)).status, "succeeded");
+    assert.equal((await notesTitled(owner, "Batch done"))[0].body, "3 done, 0 skipped, 1 failed");
+    await getAdminPool().query("delete from crm.activities where workspace_id = $1 and type = 'note'", [owner.workspaceId]);
+  });
+
+  it("starts no items once a run is stopped while it is still adding them", async () => {
+    const ai = gateway();
+    const { runId } = await start(research("small"), ai.fetchImpl);
+    const state = (await runRow(runId)).state as { waitingChildren: Record<string, unknown> };
+    await getAdminPool().query("delete from crm.workflow_runs where parent_run_id = $1", [runId]);
+    await getAdminPool().query(
+      "update crm.workflow_runs set status = 'running', waiting_for = null, claimed_at = now(), state = $2::jsonb where id = $1",
+      [runId, JSON.stringify({ ...state, waitingChildren: { ...state.waitingChildren, created: false } })],
+    );
+    const holder = await getAdminPool().connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select id from crm.workflow_runs where id = $1 for update", [runId]);
+      const running = executeRun(runId, owner.userId, owner.workspaceId, { deadline: Date.now() + 30_000, fetchImpl: ai.fetchImpl });
+      await wait(300);
+      await holder.query("update crm.workflow_runs set status = 'cancelled', finished_at = now() where id = $1", [runId]);
+      await holder.query("commit");
+      assert.equal(await running, "cancelled");
+    } finally {
+      holder.release();
+    }
+    assert.equal((await children(runId)).length, 0);
+
+    const other = await start(research("small"), ai.fetchImpl);
+    await getAdminPool().query("update crm.workflow_runs set status = 'cancelled' where id = $1", [other.runId]);
+    await drain(ai.fetchImpl);
+    assert.equal(ai.asked.length, 0, "items under a stopped run are never claimed");
+  });
+
+  it("never deadlocks when a run is stopped while its items finish", async () => {
+    const ai = gateway({ delayMs: 40 });
+    const { runId } = await start(research("batch"), ai.fetchImpl);
+    await Promise.all([drain(ai.fetchImpl), wait(60).then(() => cancelRun(owner, runId))]);
+    assert.deepEqual(errors.filter((line) => /deadlock/i.test(line)), []);
+    assert.equal((await runRow(runId)).status, "cancelled");
+    const left = (await children(runId)).filter((child) => ["queued", "running", "waiting"].includes(child.status));
+    assert.deepEqual(left, []);
+    await getAdminPool().query("delete from crm.activities where workspace_id = $1 and type = 'note'", [owner.workspaceId]);
+  });
+
+  it("stops a member's runs and their items when they leave the workspace", async () => {
+    const admin = getAdminPool();
+    const leaverId = (
+      await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["lee@parallel.test", "Lee Leaver"])
+    ).rows[0].id;
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, leaverId]);
+    const leaver: UserActor = { ...owner, userId: leaverId, email: "lee@parallel.test", fullName: "Lee Leaver", role: "member", scopes: scopesForRole("member") };
+    const ai = gateway();
+    const created = await createWorkflow(leaver, { name: "Leaver run" });
+    await saveWorkflow(leaver, created.id, { definition: research("small") });
+    await setWorkflowStatus(leaver, created.id, "active");
+    const started = await startRun(leaver, created.id, { test: false, record: { type: "company", id: home }, fetchImpl: ai.fetchImpl });
+    assert.equal(started.status, "waiting");
+    await removeMember(owner, leaverId);
+    assert.equal((await runRow(started.runId)).status, "cancelled");
+    assert.deepEqual([...new Set((await children(started.runId)).map((child) => child.status))], ["cancelled"]);
+  });
+
+  it("reads a LinkedIn profile once even when the AI makes the step wait", async () => {
+    process.env.MINDCASE_API_KEY = "test-mindcase-key";
+    const contact = (await createContact(owner, { firstName: "Priya", lastName: "Shah", linkedinUrl: "https://www.linkedin.com/in/priya-shah" })).body.contact.id;
+    let lookups = 0;
+    let busy = true;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (String(input).includes("mindcase")) {
+        lookups += 1;
+        return Response.json({ status: "completed", data: [{ fullName: "Priya Shah", headline: "Founder" }] });
+      }
+      if (busy) return Response.json({ error: { message: "slow down" } }, { status: 429 });
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      return Response.json({ model: body.model, choices: [{ message: { content: JSON.stringify({ role: "Founder" }) }, finish_reason: "stop" }] });
+    };
+    const definition: WorkflowDefinition = {
+      ...graph([node("ai_1", "ai", { prompt: "What does {{contact.name}} do?", linkedin: true, outputs: [{ key: "role", type: "text" }] })], [["trigger", "out", "ai_1"]]),
+      trigger: { type: "manual", object: "contact" },
+    };
+    const id = await workflow(definition);
+    const started = await startRun(owner, id, { test: false, record: { type: "contact", id: contact }, fetchImpl });
+    assert.equal(started.status, "waiting");
+    busy = false;
+    await getAdminPool().query("update crm.workflow_runs set resume_at = now() - interval '1 second' where id = $1", [started.runId]);
+    await drain(fetchImpl);
+    assert.equal((await runRow(started.runId)).status, "succeeded");
+    assert.equal(lookups, 1);
+    delete process.env.MINDCASE_API_KEY;
+  });
+
+  it("fails a step that has waited 60 times for a busy service", async () => {
+    const ai = gateway({ reply: () => Response.json({ error: { message: "slow down" } }, { status: 429 }) });
+    const id = await workflow(graph([node("ai_1", "ai", { prompt: "Hello.", outputs: [{ key: "text", type: "text" }] })], [["trigger", "out", "ai_1"]]));
+    const started = await startRun(owner, id, { test: false, record: { type: "company", id: home }, fetchImpl: ai.fetchImpl });
+    assert.equal(started.status, "waiting");
+    const state = (await runRow(started.runId)).state;
+    await getAdminPool().query("update crm.workflow_runs set resume_at = now() - interval '1 second', state = $2::jsonb where id = $1", [
+      started.runId,
+      JSON.stringify({ ...state, busy: { step: "ai_1", count: 60 } }),
+    ]);
+    await drain(ai.fetchImpl);
+    const failed = await runRow(started.runId);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.error, "ai_1: This step waited too long for a busy service. Try again.");
   });
 });
 
@@ -441,6 +579,11 @@ describe("shared limits and workers", () => {
     await resetDatabase();
   });
 
+  beforeEach(() => {
+    delete process.env.SITE_URL;
+    delete process.env.CRON_SECRET;
+  });
+
   afterEach(() => {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
@@ -455,8 +598,40 @@ describe("shared limits and workers", () => {
     const first = await takeService("hunter", { scope: "limit-test" });
     await assert.rejects(takeService("hunter", { scope: "limit-test" }), (error: unknown) => error instanceof ServiceBusy && error.until.getTime() > Date.now());
     await first.release();
+    await (await takeService("hunter", { scope: "limit-test" })).release();
     const third = takeService("hunter", { scope: "limit-test" });
     await assert.rejects(third, (error: unknown) => error instanceof ServiceBusy && error.until.getTime() >= Math.ceil(Date.now() / 3_600_000) * 3_600_000);
+  });
+
+  it("counts only runs a worker could claim as waiting work", async () => {
+    const owner = await createUser("backlog@parallel.test", "Bea Backlog");
+    const created = await createWorkflow(owner, { name: "Backlog" });
+    const admin = getAdminPool();
+    const parent = (
+      await admin.query<{ id: string }>(
+        `insert into crm.workflow_runs (workspace_id, workflow_id, owner_id, definition, status, waiting_for, children_total, children_at_once)
+         values ($1, $2, $3, '{}'::jsonb, 'waiting', 'children', 7, 2) returning id`,
+        [owner.workspaceId, created.id, owner.userId],
+      )
+    ).rows[0].id;
+    for (let index = 0; index < 7; index += 1) {
+      await admin.query(
+        `insert into crm.workflow_runs (workspace_id, workflow_id, owner_id, definition, parent_run_id, loop_step_id, item_index, status, claimed_at)
+         values ($1, $2, $3, '{}'::jsonb, $4, 'loop_1', $5, $6, now())`,
+        [owner.workspaceId, created.id, owner.userId, parent, index, index < 2 ? "running" : "queued"],
+      );
+    }
+    const backlog = async () => (await admin.query<{ count: number }>("select private.workflow_backlog(true) as count")).rows[0].count;
+    assert.equal(await backlog(), 0, "a parent at its limit has no room");
+    await admin.query("insert into crm.workflow_runs (workspace_id, workflow_id, owner_id, definition) values ($1, $2, $3, '{}'::jsonb)", [
+      owner.workspaceId,
+      created.id,
+      owner.userId,
+    ]);
+    assert.equal(await backlog(), 1);
+    await admin.query("delete from crm.workspace_members where user_id = $1", [owner.userId]);
+    assert.equal(await backlog(), 0, "runs of someone who left aren't waiting work");
+    await admin.query("delete from crm.workflow_runs where workflow_id = $1", [created.id]);
   });
 
   it("keeps at most ten workers and starts only as many as the queue needs", async () => {
