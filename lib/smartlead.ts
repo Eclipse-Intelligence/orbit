@@ -74,7 +74,8 @@ async function call(
     for (const [name, value] of Object.entries(options.query ?? {})) {
       if (value !== null && value !== undefined && value !== "") url.searchParams.set(name, String(value));
     }
-    const signal = options.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     let response: Response;
     try {
       response = await (options.fetchImpl ?? fetch)(url, { headers: { accept: "application/json" }, signal });

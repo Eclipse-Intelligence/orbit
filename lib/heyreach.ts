@@ -72,7 +72,8 @@ async function call(key: string, path: string, options: HeyReachOptions & { meth
   const run = async () => {
     const url = new URL(`${HEYREACH_API}${path}`);
     for (const [name, value] of Object.entries(options.query ?? {})) url.searchParams.set(name, value);
-    const signal = options.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     const method = options.method ?? (options.body ? "POST" : "GET");
     let response: Response;
     try {

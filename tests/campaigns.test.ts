@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { campaignConnectionViews, keyFingerprint, KEY_TAKEN, removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
+import { campaignsSyncLine, campaignSyncLine } from "@/lib/campaigns/format";
 import { syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
 import { getCampaign, importCampaignProspects, listCampaignProspects, listCampaigns } from "@/lib/crm/campaigns";
 import { createContact } from "@/lib/crm/contacts";
@@ -351,7 +352,7 @@ describe("campaigns", () => {
       );
       assert.deepEqual(linked, [{ email: "person7@bulk.test", contact_email: "person7@bulk.test" }]);
       const again = await importCampaignProspects(member, agencyId, { deadline: Date.now() + 60_000 });
-      assert.deepEqual(again, { imported: 0, linked: 0, failed: 0, left: 0 });
+      assert.deepEqual(again, { imported: 0, linked: 0, failed: 0, left: 0, reasons: [] });
     });
   });
 
@@ -414,6 +415,39 @@ describe("campaigns", () => {
       await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
       const [view] = await campaignConnectionViews(member);
       assert.equal(view.lastError, null);
+    });
+  });
+
+  describe("running out of time and the status line", () => {
+    it("saves no error when the run's own deadline cuts a request short", async () => {
+      const slow: typeof fetch = (input, init) => {
+        const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+        if (!url.pathname.endsWith("/analytics")) return fetchImpl(input, init);
+        return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError"))));
+      };
+      await sql("update crm.campaigns set sync_error = null where workspace_id = $1", [owner.workspaceId]);
+      const report = await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 8_000 + 1_500, fetchImpl: slow });
+      assert.deepEqual(report.errors, []);
+      const campaigns = await sql<{ sync_error: string | null }>("select sync_error from crm.campaigns where workspace_id = $1", [owner.workspaceId]);
+      assert.ok(campaigns.every((row) => row.sync_error === null));
+      const connection = await sql<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1", [owner.workspaceId]);
+      assert.equal(connection[0].last_error, null);
+    });
+
+    it("keeps error text as written and lowercases only the synced words", () => {
+      const now = Date.parse("2026-11-17T12:00:00Z");
+      const states = [
+        { provider: "smartlead" as const, lastSyncedAt: "2026-11-17T11:57:00Z", lastError: "Couldn't reach Smartlead. Try again." },
+        { provider: "heyreach" as const, lastSyncedAt: "2026-11-17T11:57:00Z", lastError: null },
+      ];
+      assert.equal(campaignsSyncLine(states, [], now), "Smartlead: Couldn't reach Smartlead. Try again. · HeyReach: synced 3 min ago");
+      assert.equal(campaignsSyncLine([states[1]], ["smartlead"], now), "HeyReach: synced 3 min ago · Smartlead: disconnected");
+      assert.equal(campaignsSyncLine([states[1]], [], now), "Synced 3 min ago");
+      const reading = { provider: "smartlead" as const, syncError: null, syncedAt: null, backfilled: false };
+      assert.equal(campaignSyncLine(reading, { ...states[0], lastError: null }, now), "Reading from Smartlead…");
+      assert.equal(campaignSyncLine(reading, states[0], now), "Couldn't reach Smartlead. Try again.");
+      assert.equal(campaignSyncLine({ ...reading, syncError: "Smartlead can't find this campaign." }, { ...states[0], lastError: null }, now), "Smartlead can't find this campaign.");
+      assert.equal(campaignSyncLine(reading, undefined, now), "Disconnected");
     });
   });
 

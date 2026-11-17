@@ -32,6 +32,8 @@ import { ServiceBusy } from "@/lib/workflows/limits";
 export const PROSPECT_PAGE_SIZE = 100;
 const CHART_DAYS = 30;
 const IMPORT_BATCH = 25;
+const NAME_MAX = 80;
+const TITLE_MAX = 120;
 
 type CampaignRow = {
   id: string;
@@ -61,7 +63,7 @@ function summary(row: CampaignRow): CampaignSummary {
   };
 }
 
-const IMPORTABLE_SQL = `p.contact_id is null and (p.email is not null or p.linkedin is not null)
+const IMPORTABLE_SQL = `p.contact_id is null and p.import_error is null and (p.email is not null or p.linkedin is not null)
   and not exists (
     select 1 from crm.campaign_prospects o join crm.contacts c on c.id = o.contact_id
     where o.campaign_id = p.campaign_id
@@ -236,7 +238,7 @@ export async function listCampaignProspects(
   const search = options.search?.trim().slice(0, 200) ?? "";
   return withActor(actor, async (db) => {
     const campaign = await readCampaign(db, actor, campaignId);
-    const where = `p.campaign_id = $1 and p.workspace_id = $2 and ${FILTER_SQL[filter]}
+    const where = `p.campaign_id = $1 and p.workspace_id = $2 and ${FILTER_SQL[campaign.channel === "linkedin" ? "all" : filter]}
       and ($3 = '' or concat_ws(' ', c.first_name, c.last_name, c.email, p.email, p.linkedin, p.lead->>'firstName', p.lead->>'lastName', p.lead->>'companyName', co.name) ilike '%' || $3 || '%')`;
     const from = `from crm.campaign_prospects p
       left join crm.contacts c on c.id = p.contact_id
@@ -334,7 +336,7 @@ type ImportRow = {
   lead: { firstName?: string | null; lastName?: string | null; companyName?: string | null; website?: string | null; title?: string | null; linkedinUrl?: string | null };
 };
 
-export type ImportResult = { imported: number; linked: number; failed: number; left: number };
+export type ImportResult = { imported: number; linked: number; failed: number; left: number; reasons: string[] };
 
 async function companyFor(db: Db, workspaceId: string, lead: ImportRow["lead"]) {
   const domain = lead.website ? canonicalDomain(lead.website) : null;
@@ -379,7 +381,7 @@ export async function importCampaignProspects(
   assertScope(actor.scopes, "contacts:write");
   const provenance: Provenance = { ...(options.provenance ?? { operation: "import_campaign_prospects", source: "web" }), catchUp: true };
   const campaign = await withActor(actor, (db) => readCampaign(db, actor, campaignId));
-  const result: ImportResult = { imported: 0, linked: 0, failed: 0, left: 0 };
+  const result: ImportResult = { imported: 0, linked: 0, failed: 0, left: 0, reasons: [] };
   const tried = new Set<string>();
   while (timeLeft(options.deadline, 3_000)) {
     const batch = await withActor(actor, async (db) => {
@@ -415,11 +417,11 @@ export async function importCampaignProspects(
             db,
             actor,
             {
-              firstName: clean(row.lead?.firstName, 100),
-              lastName: clean(row.lead?.lastName, 100),
+              firstName: clean(row.lead?.firstName, NAME_MAX),
+              lastName: clean(row.lead?.lastName, NAME_MAX),
               email: row.email ?? undefined,
-              linkedinUrl: clean(row.lead?.linkedinUrl, 500) ?? (row.linkedin ? `https://www.${row.linkedin}` : undefined),
-              jobTitle: clean(row.lead?.title, 200),
+              linkedinUrl: row.linkedin ? `https://www.${row.linkedin}` : undefined,
+              jobTitle: clean(row.lead?.title, TITLE_MAX),
               ...(companyId ? { companyId } : {}),
             },
             provenance,
@@ -431,7 +433,10 @@ export async function importCampaignProspects(
         if (outcome.linked) result.linked += 1;
       } catch (error) {
         if (!(error instanceof CrmError) && !isPgError(error)) throw error;
+        const reason = error instanceof CrmError ? error.message : "Couldn't add this person.";
+        await query("select private.campaign_prospect_import_failed($1, $2, $3)", [actor.workspaceId, row.id, reason]);
         result.failed += 1;
+        if (!result.reasons.includes(reason)) result.reasons.push(reason);
       }
     }
   }

@@ -77,6 +77,7 @@ export default function Button({
   ...props
 }: ButtonProps) {
   const classes = cn(buttonVariants({ variant, size }), className);
+  const linkRel = rel ?? (target === "_blank" ? "noopener noreferrer" : undefined);
   const children = shortcut?.length ? (
     <>
       {label}
@@ -88,7 +89,7 @@ export default function Button({
 
   if (typeof href === "string" && (href.startsWith("/api/") || href.startsWith("#"))) {
     return (
-      <a href={href} target={target} rel={rel} className={classes} {...(props as ComponentProps<"a">)}>
+      <a href={href} target={target} rel={linkRel} className={classes} {...(props as ComponentProps<"a">)}>
         {children}
       </a>
     );
@@ -99,7 +100,7 @@ export default function Button({
       <Link
         href={href}
         target={target}
-        rel={rel}
+        rel={linkRel}
         className={classes}
         {...(props as Omit<ComponentProps<typeof Link>, "href" | "className">)}
       >

@@ -284,10 +284,10 @@ function ImportLine({ campaignId, unlinked }: { campaignId: string; unlinked: nu
       setMessage({ text: outcome.error ?? GENERIC_ERROR, error: true });
       return;
     }
-    const { linked, failed, left } = outcome.result;
+    const { linked, failed, left, reasons } = outcome.result;
     const parts = [`Added ${linked.toLocaleString("en-GB")} to Orbit.`];
-    if (failed > 0) parts.push(`${failed.toLocaleString("en-GB")} couldn't be added.`);
-    if (left > failed) parts.push(`${(left - failed).toLocaleString("en-GB")} left.`);
+    if (failed > 0) parts.push(`${failed.toLocaleString("en-GB")} couldn't be added: ${reasons.join(" ")}`);
+    if (left > 0) parts.push(`${left.toLocaleString("en-GB")} left.`);
     setMessage({ text: parts.join(" "), error: false });
     router.refresh();
   }
@@ -428,7 +428,7 @@ export default function CampaignScreen({
               </span>
               {extras.length > 0 && <span>{extras.join(" · ")}</span>}
             </div>
-            <p className="caption-style text-subtle">{campaign.backfilled ? syncLine : `Reading from ${PROVIDER_NAMES[campaign.provider]}…`}</p>
+            <p className="caption-style text-subtle">{syncLine}</p>
           </Section>
 
           <Section title="Steps" className={linkedin ? "max-sm:hidden" : undefined}>

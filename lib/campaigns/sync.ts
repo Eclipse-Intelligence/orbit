@@ -23,7 +23,6 @@ export type SyncState = {
   statsAt?: string;
   leadsAt?: string;
   leadsOffset?: number | null;
-  leadsStartedAt?: string | null;
   missingAt?: string | null;
   eventsAt?: string;
   eventsOffset?: number | null;
@@ -196,22 +195,20 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   let leadsComplete = !leadsInProgress && Boolean(state.leadsAt);
   if (leadsInProgress || (backfilling && !leadsComplete) || due(state.leadsAt, live ? LEADS_EVERY_MS : IDLE_EVERY_MS, now)) {
     leadsComplete = false;
-    const leadsStartedAt = state.leadsStartedAt ?? new Date().toISOString();
     let offset = state.leadsOffset ?? 0;
     while (room()) {
       const page = await provider.readLeads(context, row.external_id, offset);
       report.prospects += await saveProviderLeads(row.id, page.items);
       if (page.next === null) {
-        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsStartedAt: null, leadsAt: new Date().toISOString() } });
+        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: new Date().toISOString() } });
         leadsComplete = true;
-        await query("select private.campaign_leads_missing($1, $2)", [row.id, leadsStartedAt]);
         await query("select private.campaign_link_contacts($1, null)", [row.id]).catch((error) =>
           console.error("Couldn't link campaign prospects to contacts", redactedError(error)),
         );
         break;
       }
       offset = page.next;
-      await saveCampaign(row.id, { syncState: { leadsOffset: offset, leadsStartedAt } });
+      await saveCampaign(row.id, { syncState: { leadsOffset: offset } });
     }
   }
 
@@ -254,12 +251,12 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
 async function syncCampaignSafely(pass: Pass, row: CampaignRow) {
   try {
     await syncCampaign(pass, row);
-    return null;
   } catch (error) {
     if (error instanceof ServiceBusy) {
       pass.report.busy.push(`${pass.provider.name}: ${error.message}`);
-      return null;
+      return;
     }
+    if (pass.context.signal?.aborted) return;
     const failure = pass.provider.failure(error);
     if (failure?.rejectedKey) throw error;
     if (!failure) console.error(`${pass.provider.name} campaign sync failed`, redactedError(error));
@@ -268,7 +265,6 @@ async function syncCampaignSafely(pass: Pass, row: CampaignRow) {
       : (failure?.message ?? `Couldn't sync ${row.name || "a campaign"}. Try again.`);
     pass.report.errors.push(message);
     await saveCampaign(row.id, { syncError: message, ...(failure?.missing ? { syncState: { missingAt: new Date().toISOString() } } : {}) });
-    return message;
   }
 }
 
@@ -294,13 +290,9 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
   const locked = await query<{ ok: boolean }>("select private.take_slot($1, 1, $2, $3) as ok", [lockKey, holder, LOCK_SECONDS]);
   if (!locked.rows[0]?.ok) return;
   report.connections += 1;
+  const outOfTime = AbortSignal.timeout(Math.max(1_000, options.deadline - Date.now() - STEP_RESERVE_MS));
   try {
-    const context: ProviderContext = {
-      key: decryptSecret(target.key_encrypted),
-      workspaceId: target.workspace_id,
-      fetchImpl: options.fetchImpl,
-      signal: AbortSignal.timeout(Math.max(1_000, options.deadline - Date.now() - STEP_RESERVE_MS)),
-    };
+    const context: ProviderContext = { key: decryptSecret(target.key_encrypted), workspaceId: target.workspace_id, fetchImpl: options.fetchImpl, signal: outOfTime };
     const listed = await provider.listCampaigns(context);
     const senders = provider.listSenders ? await provider.listSenders(context) : null;
     if (senders) await saveProviderSenders(actor, provider.id, senders);
@@ -311,18 +303,18 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
       JSON.stringify(listed.map((item) => ({ external_id: item.externalId, name: item.name, status: item.status }))),
     ]);
     const pass: Pass = { provider, context, workspaceId: target.workspace_id, actor, options, report, listed: new Map(listed.map((item) => [item.externalId, item])) };
-    let failed: string | null = null;
     for (const row of rows.rows) {
-      if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
+      if (!timeLeft(options.deadline, STEP_RESERVE_MS) || outOfTime.aborted) break;
       if (!pass.listed.has(row.external_id)) continue;
-      failed = (await syncCampaignSafely(pass, row)) ?? failed;
+      await syncCampaignSafely(pass, row);
     }
-    await finish(target, failed, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
+    await finish(target, null, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
   } catch (error) {
     if (error instanceof ServiceBusy) {
       report.busy.push(`${provider.name}: ${error.message}`);
       return;
     }
+    if (outOfTime.aborted) return;
     const failure = provider.failure(error);
     const message = failure?.rejectedKey ? `${provider.name} rejected the key. Save a new one.` : (failure?.message ?? `Couldn't sync ${provider.name}. Try again.`);
     if (!failure) console.error(`${provider.name} sync failed`, redactedError(error));

@@ -4,7 +4,7 @@ import CampaignScreen from "@/components/campaigns/campaign-screen";
 import MailboxHealth from "@/components/campaigns/mailbox-health";
 import { getUserActor } from "@/lib/auth/user";
 import { connectionStates } from "@/lib/campaigns/connections";
-import { syncLine } from "@/lib/campaigns/format";
+import { campaignSyncLine } from "@/lib/campaigns/format";
 import { PROSPECT_FILTERS, type ProspectFilter } from "@/lib/campaigns/types";
 import { campaignMailboxes, getCampaign, listCampaignProspects } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
@@ -46,8 +46,7 @@ export default async function CampaignPage({
   });
   if (!loaded) notFound();
   const [campaign, prospects, states] = loaded;
-  const state = states.find((item) => item.provider === campaign.provider);
-  const status = syncLine({ connected: Boolean(state), error: campaign.syncError ?? state?.lastError ?? null, syncedAt: campaign.syncedAt });
+  const status = campaignSyncLine(campaign, states.find((item) => item.provider === campaign.provider));
   return (
     <CampaignScreen
       viewer={{ id: user.userId, name: user.fullName || user.email, email: user.email, role: user.role, workspaceName: user.workspaceName, workspaceId: user.workspaceId }}

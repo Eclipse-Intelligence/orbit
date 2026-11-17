@@ -85,7 +85,7 @@ create table if not exists crm.campaign_prospects (
   stop_requested_at timestamptz,
   stopped_at timestamptz,
   last_event_at timestamptz,
-  lead_seen_at timestamptz,
+  import_error text,
   sync_requested_at timestamptz,
   added_by_user_id uuid references crm.profiles (id) on delete set null,
   added_by_run_id uuid references crm.workflow_runs (id) on delete set null,
@@ -103,6 +103,7 @@ create table if not exists crm.campaign_prospects (
     and (lead_status is null or char_length(lead_status) <= 100)
     and (category is null or char_length(category) <= 200)
     and (sender_id is null or char_length(sender_id) <= 200)
+    and (import_error is null or char_length(import_error) <= 300)
   )
 );
 
@@ -698,36 +699,29 @@ begin
 end;
 $$;
 
-create or replace function private.campaign_leads_missing(p_campaign uuid, p_since timestamptz)
-returns integer
+create or replace function private.campaign_prospect_import_failed(p_workspace uuid, p_prospect uuid, p_reason text)
+returns void
 language plpgsql
 security definer
 set search_path = ''
 as $$
-declare
-  v_count integer;
 begin
   if current_user not in ('crm_app', 'postgres') then
     raise exception 'forbidden' using errcode = '42501';
   end if;
   update crm.campaign_prospects p
-  set lead_status = 'stopped'
-  where p.campaign_id = p_campaign
-    and p.state = 'pushed'
-    and p.external_lead_id is not null
-    and (p.lead_seen_at is null or p.lead_seen_at < p_since)
-    and coalesce(p.lead_status, '') not in ('completed', 'stopped', 'blocked', 'unsubscribed', 'bounced');
-  get diagnostics v_count = row_count;
-  return v_count;
+  set import_error = left(coalesce(nullif(btrim(p_reason), ''), 'Couldn''t add this person.'), 300)
+  where p.id = p_prospect and p.workspace_id = p_workspace and p.contact_id is null;
 end;
 $$;
 
+revoke all on function private.campaign_prospect_import_failed(uuid, uuid, text) from public;
+grant execute on function private.campaign_prospect_import_failed(uuid, uuid, text) to crm_app;
+
 revoke all on function private.campaign_unhandled_events(uuid, integer) from public;
 revoke all on function private.campaign_events_handled(uuid, uuid[]) from public;
-revoke all on function private.campaign_leads_missing(uuid, timestamptz) from public;
 grant execute on function private.campaign_unhandled_events(uuid, integer) to crm_app;
 grant execute on function private.campaign_events_handled(uuid, uuid[]) to crm_app;
-grant execute on function private.campaign_leads_missing(uuid, timestamptz) to crm_app;
 
 revoke all on function private.campaign_key_taken(text, text, uuid) from public;
 revoke all on function private.campaign_connection_key(uuid, text) from public;
@@ -2074,7 +2068,7 @@ begin
         email = coalesce(k.email, prospect.email),
         linkedin = coalesce(k.linkedin, prospect.linkedin)
     where k.id = prospect.keep_id
-      and (k.external_lead_id is null or k.email is null);
+      and (k.external_lead_id is null or k.email is null or k.linkedin is null);
     prospects_combined := prospects_combined + 1;
   end loop;
   moved := moved || jsonb_build_object(

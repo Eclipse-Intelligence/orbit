@@ -3,6 +3,7 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { keyFingerprint, saveCampaignConnection } from "@/lib/campaigns/connections";
 import { linkCampaignSender, listCampaignSenders } from "@/lib/campaigns/senders";
 import { syncActor, syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
+import { campaignSyncLine } from "@/lib/campaigns/format";
 import { getCampaign, importCampaignProspects } from "@/lib/crm/campaigns";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -134,6 +135,18 @@ describe("campaign prospects when records merge or move", () => {
     await mergeContacts(eclipse, keep.id, merge.id, PROVENANCE);
     const rows = await sql<{ id: string; external_lead_id: string; email: string }>("select id, external_lead_id, email from crm.campaign_prospects where campaign_id = $1", [id]);
     assert.deepEqual(rows, [{ id: kept, external_lead_id: "lead-tom", email: "tom@brightlane-merge.test" }]);
+  });
+
+  it("gives the kept row the merged row's LinkedIn profile when it has none", async () => {
+    const keep = await contact({ firstName: "Isla", lastName: "Moore", email: "isla@moorfield-merge.test" });
+    const merge = await contact({ firstName: "Isla", lastName: "Moore", linkedinUrl: "https://www.linkedin.com/in/isla-moore-merge" });
+    const id = await campaign("Merge profiles");
+    const kept = await prospect(id, { contactId: keep.id, email: "isla@moorfield-merge.test", lead: "lead-isla" });
+    const merged = await prospect(id, { contactId: merge.id, lead: "lead-isla-2" });
+    await sql("update crm.campaign_prospects set linkedin = 'linkedin.com/in/isla-moore-merge' where id = $1", [merged]);
+    await mergeContacts(eclipse, keep.id, merge.id, PROVENANCE);
+    const rows = await sql<{ id: string; external_lead_id: string; email: string; linkedin: string }>("select id, external_lead_id, email, linkedin from crm.campaign_prospects where campaign_id = $1", [id]);
+    assert.deepEqual(rows, [{ id: kept, external_lead_id: "lead-isla", email: "isla@moorfield-merge.test", linkedin: "linkedin.com/in/isla-moore-merge" }]);
   });
 
   it("points prospects at the kept company when companies merge", async () => {
@@ -562,7 +575,17 @@ describe("review 391 gaps", () => {
     const elsewhere = (await createContact(bob, { firstName: "Same", email: "p5@alpha.test" }, TEST)).body.contact.id;
     const existing = (await createContact(alice, { firstName: "Late", email: "p6@alpha.test" }, TEST)).body.contact.id;
     const before = await contactTally(alice.workspaceId, bob.workspaceId);
+    await gapSql(
+      `update crm.campaign_prospects set lead = lead || jsonb_build_object('firstName', repeat('A', 100), 'lastName', repeat('B', 95), 'title', repeat('T', 150), 'linkedinUrl', 'linkedin.com/company/acme')
+       where campaign_id = $1 and email = any($2::text[])`,
+      [campaignId, ["p7@alpha.test", "p8@alpha.test"]],
+    );
     const result = await importCampaignProspects(both, campaignId, { deadline: Date.now() + 60_000 });
+    const trimmed = await gapSql<{ first_name: string; last_name: string; job_title: string; linkedin_url: string | null }>(
+      "select c.first_name, c.last_name, c.job_title, c.linkedin_url from crm.campaign_prospects p join crm.contacts c on c.id = p.contact_id where p.campaign_id = $1 and p.email = 'p7@alpha.test'",
+      [campaignId],
+    );
+    assert.deepEqual(trimmed[0], { first_name: "A".repeat(80), last_name: "B".repeat(80), job_title: "T".repeat(120), linkedin_url: null });
     assert.equal(result.left, 0);
     assert.equal(result.failed, 0);
     assert.equal(result.linked, 130);
@@ -579,7 +602,7 @@ describe("review 391 gaps", () => {
     );
     assert.notEqual(five[0].contact_id, elsewhere);
     assert.equal(five[0].workspace_id, alice.workspaceId);
-    assert.deepEqual(await importCampaignProspects(both, campaignId, { deadline: Date.now() + 60_000 }), { imported: 0, linked: 0, failed: 0, left: 0 });
+    assert.deepEqual(await importCampaignProspects(both, campaignId, { deadline: Date.now() + 60_000 }), { imported: 0, linked: 0, failed: 0, left: 0, reasons: [] });
     const bobCampaign = (await gapSql<{ id: string }>("select id from crm.campaigns where workspace_id = $1", [bob.workspaceId]))[0].id;
     await assert.rejects(importCampaignProspects(amy, bobCampaign), /not found|Couldn't find|No /i);
     await assert.rejects(importCampaignProspects(agentA, bobCampaign), /not found|Couldn't find|No /i);
@@ -588,7 +611,13 @@ describe("review 391 gaps", () => {
   it("G12 two Imports at once create each contact once", async () => {
     const campaignId = (await gapSql<{ id: string }>("select id from crm.campaigns where workspace_id = $1", [bob.workspaceId]))[0].id;
     const before = await gapSql<{ count: number }>("select count(*)::int as count from crm.contacts where workspace_id = $1", [bob.workspaceId]);
-    await Promise.all([importCampaignProspects(bob, campaignId), importCampaignProspects(bothInB, campaignId)]);
+    await gapSql(
+      `update crm.campaign_prospects set lead = lead || jsonb_build_object('firstName', repeat('A', 100), 'lastName', repeat('B', 95), 'title', repeat('T', 150), 'linkedinUrl', 'linkedin.com/company/acme')
+       where campaign_id = $1 and email = any($2::text[])`,
+      [campaignId, ["p1@bravo.test", "p2@bravo.test"]],
+    );
+    const results = await Promise.all([importCampaignProspects(bob, campaignId), importCampaignProspects(bothInB, campaignId)]);
+    assert.deepEqual(results.map((result) => result.failed), [0, 0]);
     const afterwards = await gapSql<{ count: number }>("select count(*)::int as count from crm.contacts where workspace_id = $1", [bob.workspaceId]);
     assert.equal(afterwards[0].count - before[0].count, 5);
     assert.equal((await gapSql("select 1 from crm.campaign_prospects where campaign_id = $1 and contact_id is null", [campaignId])).length, 0);
@@ -652,7 +681,7 @@ describe("review 391 gaps", () => {
       )[0];
     const before = await count();
     const result = await importCampaignProspects(alice, campaignId, { deadline: Date.now() + 30_000 });
-    assert.deepEqual(result, { imported: 1, linked: 2, failed: 0, left: 0 });
+    assert.deepEqual(result, { imported: 1, linked: 2, failed: 0, left: 0, reasons: [] });
     const after = await count();
     assert.equal(after.workflow, before.workflow);
     assert.equal(after.created, before.created + 1);
@@ -681,24 +710,6 @@ describe("review 391 gaps", () => {
     await gapSql("delete from crm.campaign_prospects where id = any($1::uuid[])", [[first, second, third]]);
   });
 
-  it("marks a lead missing from a complete provider pass as finished", async () => {
-    const campaignId = (await gapSql<{ id: string }>("select id from crm.campaigns where workspace_id = $1 and provider = 'smartlead'", [alice.workspaceId]))[0].id;
-    const removed = accountA.campaigns[0].leads.splice(0, 1)[0];
-    await gapSql("update crm.campaigns set sync_state = sync_state - 'leadsAt' where id = $1", [campaignId]);
-    const report = await gapSync(alice.workspaceId);
-    assert.deepEqual(report.errors, []);
-    const rows = await gapSql<{ external_lead_id: string; lead_status: string }>(
-      "select external_lead_id, lead_status from crm.campaign_prospects where campaign_id = $1 and external_lead_id in ($2, 'alpha-2')",
-      [campaignId, removed.id],
-    );
-    assert.deepEqual(Object.fromEntries(rows.map((row) => [row.external_lead_id, row.lead_status])), { [removed.id]: "stopped", "alpha-2": "in_progress" });
-    const active = await gapSql<{ active: boolean }>(
-      "select private.campaign_prospect_active(p.state, p.stopped_at, p.lead_status, 'active') as active from crm.campaign_prospects p where p.campaign_id = $1 and p.external_lead_id = $2",
-      [campaignId, removed.id],
-    );
-    assert.equal(active[0].active, false);
-  });
-
   it("keeps syncing the other campaigns when one fails, marks one that is gone, and rotates", async () => {
     accountA.campaigns.push(gapCampaign(102, "Alpha broken", "broken", 2), gapCampaign(103, "Alpha gone", "gone", 2));
     accountA.fail = (url) =>
@@ -713,6 +724,10 @@ describe("review 391 gaps", () => {
       assert.equal(rows[0].sync_error, null);
       assert.equal(rows[1].sync_error, "Couldn't reach Smartlead. Try again.");
       assert.ok(rows[2].sync_state.missingAt);
+      const connection = await gapSql<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = 'smartlead'", [alice.workspaceId]);
+      assert.equal(connection[0].last_error, null);
+      const broken = await getCampaign(alice, (await gapSql<{ id: string }>("select id from crm.campaigns where workspace_id = $1 and external_id = '102'", [alice.workspaceId]))[0].id);
+      assert.equal(campaignSyncLine(broken, { provider: "smartlead", lastSyncedAt: new Date().toISOString(), lastError: null }), "Couldn't reach Smartlead. Try again.");
       const order = await gapSql<{ external_id: string }>("select external_id from private.campaign_sync_campaigns($1, 'smartlead', 'email', '[]'::jsonb)", [alice.workspaceId]);
       assert.equal(order[order.length - 1].external_id, "101");
       accountA.calls.length = 0;
@@ -728,6 +743,26 @@ describe("review 391 gaps", () => {
       accountA.fail = undefined;
       accountA.campaigns.splice(1);
     }
+  });
+
+  it("reports a prospect that can't be imported once, with its reason, and stops counting it", async () => {
+    const campaignId = (await gapSql<{ id: string }>("select id from crm.campaigns where workspace_id = $1 and provider = 'smartlead'", [alice.workspaceId]))[0].id;
+    const bad = (
+      await gapSql<{ id: string }>("insert into crm.campaign_prospects (workspace_id, campaign_id, linkedin, state) values ($1, $2, 'linkedin.com/company/nope', 'pushed') returning id", [
+        alice.workspaceId,
+        campaignId,
+      ])
+    )[0].id;
+    assert.equal((await getCampaign(alice, campaignId)).unlinked, 1);
+    const first = await importCampaignProspects(alice, campaignId, { deadline: Date.now() + 30_000 });
+    assert.equal(first.failed, 1);
+    assert.equal(first.left, 0);
+    assert.equal(first.reasons.length, 1);
+    const stored = await gapSql<{ import_error: string }>("select import_error from crm.campaign_prospects where id = $1", [bad]);
+    assert.equal(stored[0].import_error, first.reasons[0]);
+    assert.equal((await getCampaign(alice, campaignId)).unlinked, 0);
+    assert.deepEqual(await importCampaignProspects(alice, campaignId, { deadline: Date.now() + 30_000 }), { imported: 0, linked: 0, failed: 0, left: 0, reasons: [] });
+    await gapSql("delete from crm.campaign_prospects where id = $1", [bad]);
   });
 
   it("gives the same key's events to a second workspace after it moves there", async () => {

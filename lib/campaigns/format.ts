@@ -1,4 +1,4 @@
-import type { CampaignEventKind, CampaignStats, CampaignStatus, CampaignSummary, ProspectRow } from "@/lib/campaigns/types";
+import { PROVIDER_NAMES, type CampaignEventKind, type CampaignProviderId, type CampaignStats, type CampaignStatus, type CampaignSummary, type ProspectRow } from "@/lib/campaigns/types";
 import { relativeWhen } from "@/lib/companies";
 
 export const STATUS_LABELS: Record<CampaignStatus, string> = {
@@ -110,4 +110,27 @@ export function syncLine(input: { connected: boolean; error: string | null; sync
   if (!input.connected) return "Disconnected";
   if (input.error) return input.error;
   return input.syncedAt ? syncedAgo(input.syncedAt, now) : "Not synced yet";
+}
+
+type ConnectionStatus = { provider: CampaignProviderId; lastSyncedAt: string | null; lastError: string | null };
+
+export function campaignsSyncLine(states: ConnectionStatus[], providers: CampaignProviderId[], now = Date.now()) {
+  const all = [...new Set([...states.map((state) => state.provider), ...providers])];
+  const lines = all.map((provider) => {
+    const state = states.find((item) => item.provider === provider);
+    const text = syncLine({ connected: Boolean(state), error: state?.lastError ?? null, syncedAt: state?.lastSyncedAt ?? null }, now);
+    if (all.length === 1) return text;
+    return `${PROVIDER_NAMES[provider]}: ${state?.lastError ? text : `${text.charAt(0).toLowerCase()}${text.slice(1)}`}`;
+  });
+  return lines.length > 0 ? lines.join(" · ") : null;
+}
+
+export function campaignSyncLine(
+  campaign: { provider: CampaignProviderId; syncError: string | null; syncedAt: string | null; backfilled: boolean },
+  state: ConnectionStatus | undefined,
+  now = Date.now(),
+) {
+  const error = campaign.syncError ?? state?.lastError ?? null;
+  if (state && !error && !campaign.backfilled) return `Reading from ${PROVIDER_NAMES[campaign.provider]}…`;
+  return syncLine({ connected: Boolean(state), error, syncedAt: campaign.syncedAt }, now);
 }

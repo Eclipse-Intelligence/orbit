@@ -210,10 +210,10 @@ begin
     end if;
     if v_id is null then
       insert into crm.campaign_prospects (
-        workspace_id, campaign_id, email, linkedin, lead, state, external_lead_id, lead_status, category, pushed_at, sender_id, lead_seen_at
+        workspace_id, campaign_id, email, linkedin, lead, state, external_lead_id, lead_status, category, pushed_at, sender_id
       ) values (
         v_campaign.workspace_id, p_campaign, v_lead.email, v_lead.linkedin, v_lead.lead, 'pushed',
-        v_lead.external_id, v_lead.lead_status, v_lead.category, coalesce(v_lead.added_at, now()), v_lead.sender_id, now()
+        v_lead.external_id, v_lead.lead_status, v_lead.category, coalesce(v_lead.added_at, now()), v_lead.sender_id
       )
       returning id into v_id;
     else
@@ -225,8 +225,7 @@ begin
           lead_status = coalesce(v_lead.lead_status, p.lead_status),
           category = coalesce(v_lead.category, p.category),
           pushed_at = coalesce(p.pushed_at, v_lead.added_at),
-          sender_id = coalesce(p.sender_id, v_lead.sender_id),
-          lead_seen_at = now()
+          sender_id = coalesce(p.sender_id, v_lead.sender_id)
       where p.id = v_id;
     end if;
     v_ids := v_ids || v_id;
