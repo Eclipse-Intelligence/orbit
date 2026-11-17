@@ -31,6 +31,8 @@ const REPLIES_PER_RUN = 6;
 const CHECKS_PER_RUN = 12;
 const STEP_MS = 20_000;
 const BODY_MAX = 20_000;
+const REPLY_CHECK_MS = 10_000;
+const REPLY_CHECK_MAX_MS = 25_000;
 
 type PreparedKind = "reply" | "nudge";
 
@@ -635,7 +637,8 @@ export async function prepareMail(
 ): Promise<PrepareReport> {
   const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0, deferrals: 0 };
   if (!process.env.LLM_API_KEY?.trim()) return report;
-  await checkCrmReplies(actor, { deadline: options.deadline, fetchImpl: options.fetchImpl }).catch((error) =>
+  const checkDeadline = Math.min(options.deadline, Date.now() + Math.min(REPLY_CHECK_MAX_MS, Math.max(REPLY_CHECK_MS, (options.deadline - Date.now()) / 3)));
+  await checkCrmReplies(actor, { deadline: checkDeadline, fetchImpl: options.fetchImpl }).catch((error) =>
     console.error("Checking CRM mail for replies failed", error instanceof Error ? error.message : error),
   );
   const settings = await mailHelpSettings(actor);

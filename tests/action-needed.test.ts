@@ -628,6 +628,52 @@ describe("Capture after review", () => {
     assert.equal(await known(mark.email), false);
   });
 
+  it("judges only mail Replies could show, and shows it after three misses", async () => {
+    await createContact(mark, { firstName: "Rita", lastName: "Rule", email: "rita@rules-review.test" });
+    const missed = await message(mark, box, { from: "rita@rules-review.test", to: [mark.email], at: ago(7), subject: "Accepted: Review" });
+    const leftOut = await message(mark, box, { from: "rita@rules-review.test", to: [mark.email], at: ago(7), subject: "Invitation: Board" });
+    const trashedLater = await message(mark, box, { thread: "rules-trash", from: "rita@rules-review.test", to: [mark.email], at: ago(7), subject: "Declined: Lunch" });
+    await message(mark, box, { thread: "rules-trash", from: "spam@else-review.test", to: [mark.email], at: ago(6), folder: "trash" });
+    const answered = await message(mark, box, { thread: "rules-sent", from: "rita@rules-review.test", to: [mark.email], at: ago(7), subject: "Tentative: Call" });
+    await message(mark, box, { thread: "rules-sent", from: mark.email, to: ["rita@rules-review.test"], at: ago(6), folder: "sent" });
+    const copied = await message(mark, box, { from: "rita@rules-review.test", to: ["other@rules-review.test"], cc: [mark.email], at: ago(7), subject: "Accepted: Copied" });
+
+    const asked: string[] = [];
+    const down: typeof fetch = async (_input, init) => {
+      asked.push((JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content);
+      return Response.json({ error: "down" }, { status: 503 });
+    };
+    const partial: typeof fetch = async (_input, init) => {
+      const user = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content;
+      asked.push(user);
+      const emails = [...user.matchAll(/Email (\d+)\nFrom: [^\n]*\nSubject: ([^\n]*)/g)]
+        .filter((match) => match[2] === "Declined: Lunch")
+        .map((match) => ({ index: Number(match[1]), needsReply: true }));
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails }) }, finish_reason: "stop" }] });
+    };
+    process.env.LLM_API_KEY = "test-llm-key";
+    try {
+      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: down });
+      assert.equal(asked.length, 1, "one attempt per run");
+      assert.match(asked[0], /Accepted: Review/);
+      assert.match(asked[0], /Declined: Lunch/, "a later message from someone else in trash doesn't count");
+      assert.doesNotMatch(asked[0], /Tentative: Call/, "a thread you answered isn't judged");
+      assert.doesNotMatch(asked[0], /Accepted: Copied/, "mail you were only copied on isn't judged");
+      assert.ok(!(await replyKeys()).includes(missed.key));
+      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: down });
+      assert.ok(!(await replyKeys()).includes(missed.key));
+      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: partial });
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    const keys = await replyKeys();
+    assert.ok(keys.includes(missed.key), "shown after three misses");
+    assert.ok(keys.includes(leftOut.key), "a left-out entry counts as a miss");
+    assert.ok(keys.includes(trashedLater.key), "Replies and the check agree on the latest message");
+    assert.ok(!keys.includes(answered.key));
+    assert.ok(!keys.includes(copied.key));
+  });
+
   it("never shows an admin a colleague's approvals or mail", async () => {
     const ada = await teammate(mark, "ada@eclipse-review.test", "Ada Price", "admin");
     const run = await waitingRun(mark, "Send the contract to Halden", new Date(Date.now() - 30 * DAY_MS));

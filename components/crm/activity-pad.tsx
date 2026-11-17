@@ -83,6 +83,7 @@ export default function ActivityPad({
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState("");
+  const textNow = useRef("");
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [type, setType] = useState<PadActivityType | null>(null);
   const [when, setWhen] = useState<string | null | undefined>(undefined);
@@ -114,6 +115,10 @@ export default function ActivityPad({
   const finalFollowTitle = followTitle ?? fresh?.followUpTitle ?? (firstName ? `Follow up with ${firstName}` : "Follow up");
   const hasText = text.trim() !== "";
   const marks: InputMark[] = parsed.marks.map((mark) => ({ start: mark.start, end: mark.end, className: MARK_CLASSES[mark.kind] }));
+
+  useEffect(() => {
+    textNow.current = text;
+  }, [text]);
 
   useEffect(() => {
     const value = text.trim();
@@ -187,6 +192,7 @@ export default function ActivityPad({
     setBusy(true);
     setError(null);
     setNotice(null);
+    const started = text;
     const encoded = encodeMentions(text, live);
     const judged =
       fresh ??
@@ -218,7 +224,7 @@ export default function ActivityPad({
         .filter(Boolean)
         .join(", ") + (result.warning ? `. ${result.warning}` : "."),
     );
-    reset();
+    if (textNow.current === started) reset();
     if (saved) onAdded?.(saved);
     router.refresh();
     input.current?.focus();

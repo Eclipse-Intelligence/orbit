@@ -17,7 +17,23 @@ const REPLY_AFTER_WORKING_DAYS = 2;
 const REPLY_LIMIT = 100;
 const NUDGE_LIMIT = 50;
 const REMINDER_LIMIT = 50;
-const CLOSED_ROLES = ["drafts", "outbox", "junk", "trash"];
+export const CLOSED_ROLES = ["drafts", "outbox", "junk", "trash"];
+
+export function toOwnSql(alias: string) {
+  return `exists (
+    select 1 from jsonb_array_elements(case when jsonb_typeof(${alias}.to_recipients) = 'array' then ${alias}.to_recipients else '[]'::jsonb end) r
+    where jsonb_typeof(r) = 'object' and lower(r->>'address') in (select email from own)
+  )`;
+}
+
+export function latestForReplySql(alias: string, closedParam: string) {
+  return `not exists (
+    select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+    where o.source_id = ${alias}.source_id and o.thread_key = ${alias}.thread_key and o.id <> ${alias}.id and not o.is_draft
+      and coalesce(o.received_at, o.sent_at, o.created_at) > ${alias}.at
+      and (ofo.role <> all(${closedParam}::text[]) or lower(coalesce(o.from_email, '')) in (select email from own))
+  )`;
+}
 
 export function captureCutoff(nowMs: number) {
   return new Date(nowMs - CAPTURE_LOOKBACK_DAYS * 86_400_000);
@@ -195,19 +211,11 @@ function repliesSql() {
         and nullif(m.from_email, '') is not null
         and lower(m.from_email) not in (select email from own)
         and (not ${automatedLooking("m")} or ${crmSender("m", CRM)})
-        and exists (
-          select 1 from jsonb_array_elements(case when jsonb_typeof(m.to_recipients) = 'array' then m.to_recipients else '[]'::jsonb end) r
-          where jsonb_typeof(r) = 'object' and lower(r->>'address') in (select email from own)
-        )
+        and ${toOwnSql("m")}
     ),
     latest as (
       select n.* from candidates n
-      where not exists (
-        select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-        where o.source_id = n.source_id and o.thread_key = n.thread_key and o.id <> n.id and not o.is_draft
-          and coalesce(o.received_at, o.sent_at, o.created_at) > n.at
-          and (ofo.role <> all($5::text[]) or lower(coalesce(o.from_email, '')) in (select email from own))
-      )
+      where ${latestForReplySql("n", "$5")}
     )
     select l.id, l.source_id, l.tk, l.subject, l.snippet, l.from_email, l.from_name, l.at, l.filed_in,
       exists (
