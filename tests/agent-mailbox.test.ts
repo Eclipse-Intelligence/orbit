@@ -1399,24 +1399,27 @@ describe("the email approval policy", () => {
     };
     process.env.LLM_API_KEY = "test-llm-key";
     const yes = ask("approve");
-    assert.equal(await approvesActions({ text: "Yes, go for it\n\nOn Tue, Orbit wrote:\n> Reply yes to go ahead", subject: "Re: Tidy up", actions }, { fetchImpl: yes.fetchImpl }), true);
+    assert.equal(await approvesActions({ text: "Yes, go for it\n\nOn Tue, Orbit wrote:\n> Reply yes to go ahead", actions }, { fetchImpl: yes.fetchImpl }), true);
     assert.match(yes.prompts[0], /- Archive 1 record\n- Create task: Check Old Co is gone/);
     assert.match(yes.prompts[0], /Yes, go for it/);
     assert.doesNotMatch(yes.prompts[0], /Reply yes to go ahead/);
     for (const decision of ["decline", "change", "unclear"]) {
-      assert.equal(await approvesActions({ text: "Yes, but don't email Bob", subject: null, actions }, { fetchImpl: ask(decision).fetchImpl }), false, decision);
+      assert.equal(await approvesActions({ text: "Yes, but don't email Bob", actions }, { fetchImpl: ask(decision).fetchImpl }), false, decision);
     }
-    assert.equal(await approvesActions({ text: "Yes", subject: null, actions }, { fetchImpl: ask(null).fetchImpl }), false);
+    assert.equal(await approvesActions({ text: "Yes", actions }, { fetchImpl: ask(null).fetchImpl }), false);
     const empty = ask("approve");
-    assert.equal(await approvesActions({ text: "", subject: "Re: Tidy up", actions: [] }, { fetchImpl: empty.fetchImpl }), false);
+    for (const text of ["", "On Tue, Orbit wrote:\n> Reply yes to go ahead", "> Yes, go ahead", "-- \nMark Ridgeon"]) {
+      assert.equal(await approvesActions({ text, actions }, { fetchImpl: empty.fetchImpl }), false, text);
+    }
+    assert.equal(await approvesActions({ text: "Yes", actions: [] }, { fetchImpl: empty.fetchImpl }), false);
     assert.equal(empty.prompts.length, 0);
     delete process.env.LLM_API_KEY;
     const unset = ask("approve");
-    assert.equal(await approvesActions({ text: "Yes", subject: null, actions }, { fetchImpl: unset.fetchImpl }), false);
+    assert.equal(await approvesActions({ text: "Yes", actions }, { fetchImpl: unset.fetchImpl }), false);
     assert.equal(unset.prompts.length, 0);
-    assert.equal(replyWords("", "Re: Yes"), "Yes");
-    assert.equal(replyWords("Go ahead\n\n-- \nMark Ridgeon", null), "Go ahead");
-    assert.equal(replyWords("> earlier text\nYes", null), "Yes");
+    assert.equal(replyWords(""), "");
+    assert.equal(replyWords("Go ahead\n\n-- \nMark Ridgeon"), "Go ahead");
+    assert.equal(replyWords("> earlier text\nYes"), "Yes");
   });
 
   it("finds forwarded and quoted text in Gmail, Apple Mail and Outlook formats", () => {

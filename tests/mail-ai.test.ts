@@ -81,6 +81,7 @@ describe("mail AI", () => {
         inbox: [
           message("m-1"),
           message("m-2", { conversationId: "conv-hi", subject: "Hi", body: { contentType: "text", content: "Thanks!" }, receivedDateTime: "2026-09-01T09:00:00Z" }),
+          message("m-4", { conversationId: "conv-empty", subject: "Nothing much", receivedDateTime: "2026-09-01T11:00:00Z" }),
           message("m-3", {
             conversationId: "conv-stranger",
             subject: "Hello there",
@@ -159,6 +160,18 @@ describe("mail AI", () => {
     const skipped = model([]);
     assert.equal(await summariseThread(owner, stranger, { fetchImpl: skipped.fetchImpl }), null);
     assert.equal(skipped.prompts.length, 0);
+  });
+
+  it("remembers when the model had nothing to summarise, so opening the thread again doesn't ask", async () => {
+    const inbox = await listThreads(owner, { view: { role: "inbox" } });
+    const key = inbox.threads.find((thread) => thread.subject === "Nothing much")!.key;
+    const first = model([{ summary: "", todo: "Something" }]);
+    assert.equal(await summariseThread(owner, key, { fetchImpl: first.fetchImpl }), null);
+    assert.equal(first.prompts.length, 1);
+    const again = model([]);
+    assert.equal(await summariseThread(owner, key, { fetchImpl: again.fetchImpl }), null);
+    assert.equal(again.prompts.length, 0);
+    assert.deepEqual((await getThread(owner, key, { reader: true })).cachedSummary?.summary, null);
   });
 
   it("drafts a reply with the thread, what the CRM knows and the user's own voice", async () => {

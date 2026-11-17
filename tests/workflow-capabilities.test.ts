@@ -150,6 +150,21 @@ describe("workflow capabilities", () => {
     assert.match(prompts[0], /out of the office until Monday/);
     assert.match(prompts[0], /I've left Pulse/);
     assert.doesNotMatch(prompts[0], /postmaster|robot@stranger/);
+    const many = Array.from({ length: 45 }, (_, index) => ({ from: `person${index}@pulse.test`, subject: "Away", text: `Out of office ${index}`, known: true }));
+    const calls: number[] = [];
+    const sorted = await classifyArrivals(many, {
+      fetchImpl: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as { max_tokens: number; messages: { content: string }[] };
+        const count = (body.messages[1].content.match(/^Email \d+$/gm) ?? []).length;
+        calls.push(count);
+        assert.ok(body.max_tokens >= 100 + count * 30);
+        const emails = Array.from({ length: count }, (_, index) => ({ index, kind: "auto_reply" }));
+        return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails }) }, finish_reason: "stop" }] });
+      },
+      deadline: Date.now() + 60_000,
+    });
+    assert.deepEqual(calls, [20, 20, 5]);
+    assert.ok(sorted.every((kind) => kind === "auto_reply"));
     const fallback = await classifyArrivals(arrivals, { fetchImpl: answer(null), deadline: Date.now() + 60_000 });
     assert.deepEqual(fallback, ["any", "any", "auto_reply", "bounce", "auto_reply"]);
   });

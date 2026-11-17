@@ -8,12 +8,12 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { completeJson, windowShare, withinWindow } from "@/lib/llm";
+import { completeJson, MODEL_WINDOW_CHARS, windowShare, withinWindow } from "@/lib/llm";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
 export { stripQuoted } from "@/lib/mail/format";
 import { mailFullWhen, personName, stripQuoted, stripSignature } from "@/lib/mail/format";
 import { addressHomesInDb } from "@/lib/mail/routing";
-import { isCrmSender } from "@/lib/mail/split";
+import { crmValues, isCrmSender } from "@/lib/mail/split";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { parseThreadKey, threadKey } from "@/lib/mail/threads";
 import type { MailAddress } from "@/lib/mail/types";
@@ -21,8 +21,7 @@ import type { DraftMode } from "@/lib/mail/view";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
 const THREAD_KEY = "m.thread_key";
-const MESSAGE_CHARS = 20_000;
-const THREAD_CHARS = 100_000;
+const THREAD_CHARS = (MODEL_WINDOW_CHARS * 2) / 3;
 const SHORT_THREAD = 280;
 
 type ThreadText = { id: string; from: MailAddress | null; to: MailAddress[]; cc: MailAddress[]; at: string | null; text: string };
@@ -83,7 +82,7 @@ export async function threadText(db: Db, actor: UserActor, sourceId: string, key
       to: row.to_recipients ?? [],
       cc: row.cc_recipients ?? [],
       at: row.at ? new Date(row.at).toISOString() : null,
-      text: stripQuoted(row.body_text ?? row.snippet ?? "").slice(0, MESSAGE_CHARS),
+      text: withinWindow(stripQuoted(row.body_text ?? row.snippet ?? ""), THREAD_CHARS),
     }));
   return { messages, subject: result.rows[result.rows.length - 1]?.subject ?? null };
 }
@@ -119,9 +118,9 @@ export async function summariseThread(
           [sourceId, tk, latest.id],
         )
       : null;
-    return { ...text, cached: stored?.rows[0] ?? null, known: only ? await isCrmSender(db, workspaceIds, only.from?.address) : false };
+    return { ...text, cached: stored?.rows[0] ?? null, known: only ? await isCrmSender(db, await crmValues(db, actor, workspaceIds), only.from?.address) : false };
   });
-  if (cached) return { summary: cached.summary, todo: cached.todo };
+  if (cached) return cached.summary ? { summary: cached.summary, todo: cached.todo } : null;
   const latest = messages[messages.length - 1];
   if (!latest) return null;
   const attachments = await attachmentNotes(
@@ -145,8 +144,7 @@ export async function summariseThread(
     fetchImpl: options.fetchImpl,
   });
   const summary = clean(result.data.summary).slice(0, 1000);
-  const todo = result.data.todo ? clean(result.data.todo).slice(0, 500) || null : null;
-  if (!summary) return null;
+  const todo = summary && result.data.todo ? clean(result.data.todo).slice(0, 500) || null : null;
   await withActor(actor, (db) =>
     db.query(
       `insert into crm.mail_summaries (workspace_id, user_id, source_id, thread_key, latest_message_id, summary, todo)
@@ -156,7 +154,7 @@ export async function summariseThread(
       [actor.workspaceId, actor.userId, sourceId, tk, latest.id, summary, todo],
     ),
   );
-  return { summary, todo };
+  return summary ? { summary, todo } : null;
 }
 
 export async function recipientContext(db: Db, actor: UserActor, addresses: string[]) {

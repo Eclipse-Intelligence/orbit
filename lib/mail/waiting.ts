@@ -7,7 +7,9 @@ import type { UserActor } from "@/lib/crm/types";
 import { addWorkingDays, dayKeyAt, nonWorkingReason, shiftDay, wallClockAt } from "@/lib/crm/working-days";
 import type { Db } from "@/lib/db/pool";
 import { filingDomain, parseRouteKey, routedParams, routedSql } from "@/lib/mail/routing";
-import { automatedLooking, crmSender, replyableSplit, sameThread, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+import { automatedLooking, crmSender, crmValues, replyableSplit, sameThread, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+
+const CRM = { workspaces: "$7", free: "$8", own: "$9" };
 import type { MailAddress } from "@/lib/mail/types";
 
 export const CAPTURE_LOOKBACK_DAYS = 30;
@@ -192,7 +194,7 @@ function repliesSql() {
         and m.received_at >= $3 and m.received_at < $4
         and nullif(m.from_email, '') is not null
         and lower(m.from_email) not in (select email from own)
-        and (not ${automatedLooking("m")} or ${crmSender("m", "$7", "$8")})
+        and (not ${automatedLooking("m")} or ${crmSender("m", CRM)})
         and exists (
           select 1 from jsonb_array_elements(case when jsonb_typeof(m.to_recipients) = 'array' then m.to_recipients else '[]'::jsonb end) r
           where jsonb_typeof(r) = 'object' and lower(r->>'address') in (select email from own)
@@ -214,11 +216,11 @@ function repliesSql() {
       ) as ready
     from (
     select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at, rt.filed_in,
-      ${crmSender("n", "$7", "$8")} as known, ${automatedLooking("n")} as flagged
+      ${crmSender("n", CRM)} as known
     from latest n
     ${splitJoin("n", "$1")}
     left join crm.mail_thread_routes rt on rt.user_id = $1 and rt.source_id = n.source_id and rt.thread_key = n.tk
-    where ${replyableSplit("n", "$7", "$8")}
+    where ${replyableSplit("n", CRM)}
       and rt.ignored_at is null
       and not exists (
         select 1 from crm.capture_dismissals d
@@ -236,20 +238,18 @@ function repliesSql() {
     order by n.at asc
     offset 0
     ) l
-    cross join lateral (
-      select exists (
-        select 1 from crm.mail_messages b where b.id = l.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
-      ) as bulk
-    ) b
-    where (l.known or not b.bulk)
-      and not (
-        l.known and (l.flagged or b.bulk)
-        and exists (select 1 from crm.mail_prepared p where p.user_id = $1 and p.message_id = l.id and p.kind = 'reply' and p.state = 'skipped')
-      )
+    where l.known or not exists (
+      select 1 from crm.mail_messages b where b.id = l.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
+    )
     limit $6`;
 }
 
 async function waitingRepliesInDb(db: Db, actor: UserActor, actors: UserActor[], now: Date) {
+  const crm = await crmValues(
+    db,
+    actor,
+    actors.map((item) => item.workspaceId),
+  );
   const result = await db.query<ReplyRow>(repliesSql(), [
     actor.userId,
     actor.email,
@@ -257,8 +257,9 @@ async function waitingRepliesInDb(db: Db, actor: UserActor, actors: UserActor[],
     workingDaysCutoff(now, REPLY_AFTER_WORKING_DAYS),
     CLOSED_ROLES,
     REPLY_LIMIT,
-    actors.length ? actors.map((item) => item.workspaceId) : [actor.workspaceId],
-    [...FREE_MAIL_DOMAINS],
+    crm.workspaceIds,
+    crm.free,
+    crm.own,
   ]);
   return result.rows.sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime());
 }

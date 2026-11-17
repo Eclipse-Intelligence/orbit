@@ -123,6 +123,7 @@ const DEFAULT_BUDGET_MS = 45_000;
 const STEP_RESERVE_MS = 8_000;
 const MAX_STEPS_PER_RUN = 200;
 const WEBHOOK_TIMEOUT_MS = 10_000;
+const WEBHOOK_BODY_MAX = 2_000_000;
 const OPEN_TASKS_BESIDE = 10;
 
 export async function ownerActor(ownerId: string, workspaceId: string): Promise<UserActor | null> {
@@ -856,6 +857,7 @@ async function postWebhook(ctx: Ctx, step: Step) {
         contact: ctx.vars.contact ?? null,
         steps: ctx.vars.steps,
       });
+  if (payload.length > WEBHOOK_BODY_MAX) throw new CrmError("invalid_input", "The webhook body is over 2 MB. Send fewer fields.", 400);
   let json = true;
   try {
     JSON.parse(payload);
@@ -871,7 +873,7 @@ async function postWebhook(ctx: Ctx, step: Step) {
         "user-agent": "Orbit-Workflows",
         "idempotency-key": runStepKey(ctx.run.id, step.id, ctx.state.frames ?? []),
       },
-      body: payload.slice(0, 100_000),
+      body: payload,
       redirect: "manual",
       signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     });

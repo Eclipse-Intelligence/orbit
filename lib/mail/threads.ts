@@ -8,7 +8,7 @@ import { threadDrafts } from "@/lib/mail/compose";
 import { freshPrepared, preparedFor } from "@/lib/mail/prepare";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
-import { isCrmSender, splitCase, splitJoin } from "@/lib/mail/split";
+import { crmValues, isCrmSender, splitCase, splitJoin } from "@/lib/mail/split";
 import { opensSql, readsSql } from "@/lib/mail/tracking";
 import { threadSubscription } from "@/lib/mail/subscriptions";
 import { firstName } from "@/lib/mail/format";
@@ -407,7 +407,7 @@ async function readThread(actor: UserActor, key: string, actorsReady: Promise<Us
       counterpart: sender ?? people[0]?.email ?? null,
       own,
     });
-    const cachedSummary = options.reader && target ? await readerSummary(db, sourceId, tk, target.id, rows, actors) : undefined;
+    const cachedSummary = options.reader && target ? await readerSummary(db, actor, sourceId, tk, target.id, rows, actors) : undefined;
     const detail: ThreadDetail = {
       subscription,
       filing,
@@ -459,6 +459,7 @@ async function readThread(actor: UserActor, key: string, actorsReady: Promise<Us
 
 async function readerSummary(
   db: Db,
+  actor: UserActor,
   sourceId: string,
   tk: string,
   latestId: string,
@@ -468,7 +469,7 @@ async function readerSummary(
   if (!process.env.LLM_API_KEY?.trim()) return { latestId, summary: null, todo: null };
   const sent = rows.filter((row) => !row.is_draft);
   const short = sent.length === 1 && !sent[0].has_attachments && (sent[0].body_text ?? sent[0].snippet ?? "").length < SHORT_SUMMARY;
-  if (short && !(await isCrmSender(db, actors.map((item) => item.workspaceId), sent[0].from_email))) {
+  if (short && !(await isCrmSender(db, await crmValues(db, actor, actors.map((item) => item.workspaceId)), sent[0].from_email))) {
     return { latestId, summary: null, todo: null };
   }
   const stored = await db.query<{ summary: string; todo: string | null }>(
@@ -476,7 +477,7 @@ async function readerSummary(
     [sourceId, tk, latestId],
   );
   const row = stored.rows[0];
-  return row ? { latestId, summary: row.summary, todo: row.todo } : null;
+  return row ? { latestId, summary: row.summary || null, todo: row.summary ? row.todo : null } : null;
 }
 
 async function splitCounts(db: Db, actor: UserActor, unreadOnly = false) {

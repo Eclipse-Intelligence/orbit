@@ -121,17 +121,15 @@ function ownWords(text: string) {
 const APPROVAL_SCHEMA = z.object({ decision: z.enum(["approve", "decline", "change", "unclear"]) });
 const APPROVAL_TIMEOUT_MS = 15_000;
 
-export function replyWords(text: string, subject: string | null) {
-  const body = ownWords(text).trim();
-  if (body) return body;
-  return subject ? subject.replace(/^\s*(?:(?:re|fwd?|aw)\s*:\s*)+/i, "").trim() : "";
+export function replyWords(text: string) {
+  return ownWords(text).trim();
 }
 
 export async function approvesActions(
-  input: { text: string; subject: string | null; actions: string[] },
+  input: { text: string; actions: string[] },
   options: Options = {},
 ) {
-  const words = replyWords(input.text, input.subject);
+  const words = replyWords(input.text);
   if (!words || input.actions.length === 0) return false;
   try {
     const result = await completeJson({
@@ -711,7 +709,7 @@ export async function processAgentMail(actor: UserActor, mailId: string, options
     }
     const waitingOn = existing ? await yesTarget(actor, existing, row.id) : null;
     const target =
-      waitingOn && (await approvesActions({ text: row.text ?? "", subject: row.subject, actions: waitingOn.titles }, { deadline: options.deadline, fetchImpl: options.fetchImpl }))
+      waitingOn && (await approvesActions({ text: row.text ?? "", actions: waitingOn.titles }, { deadline: options.deadline, fetchImpl: options.fetchImpl }))
         ? waitingOn
         : null;
     if (existing && target?.state === "handled") {

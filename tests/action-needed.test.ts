@@ -16,6 +16,9 @@ import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace, workspaceActors } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { unknownMail } from "@/lib/mail/filing";
+import { checkCrmReplies } from "@/lib/mail/reply-checks";
+import { crmValues, isCrmSender } from "@/lib/mail/split";
+import { withActor } from "@/lib/crm/context";
 import { dismissReply, replyArrival, waitingMail, workingDaysCutoff, workingDaysSince } from "@/lib/mail/waiting";
 import { startOfDay } from "@/lib/time";
 import { listNotifications } from "@/lib/workflows/store";
@@ -564,31 +567,65 @@ describe("Capture after review", () => {
     }
   });
 
-  it("keeps mail from people in the CRM in Replies even when it looks automated, until the model says no reply is needed", async () => {
+  it("shows CRM mail that looks automated only once the reply check says it needs a reply, and never counts colleagues as the CRM", async () => {
     await createContact(mark, { firstName: "Bill", lastName: "Desk", email: "billing@known-review.test" });
     await createContact(mark, { firstName: "Olive", lastName: "Out", email: "olive@known-review.test" });
     await createCompany(mark, { name: "Client Review", domain: "client-co-review.test" });
+    await createCompany(mark, { name: "Eclipse Review", domain: "eclipse-review.test" });
+    const plain = await message(mark, box, { from: "olive@known-review.test", to: [mark.email], at: ago(8), subject: "Order form", focused: false });
     const optOut = await message(mark, box, {
       from: "olive@known-review.test",
       to: [mark.email],
       at: ago(8),
+      subject: "Signed copy",
       body: "Can you send the signed order form?\n\nTo opt out of these emails, reply STOP.",
     });
     const billing = await message(mark, box, { from: "billing@known-review.test", to: [mark.email], at: ago(8), subject: "Question on invoice 42" });
     const invitation = await message(mark, box, { from: "olive@known-review.test", to: [mark.email], at: ago(8), subject: "Invitation to speak at our summit" });
-    const companyInfo = await message(mark, box, { from: "info@client-co-review.test", to: [mark.email], at: ago(8), focused: false });
+    const companyInfo = await message(mark, box, { from: "info@client-co-review.test", to: [mark.email], at: ago(8), subject: "Your question" });
     const accepted = await message(mark, box, { from: "olive@known-review.test", to: [mark.email], at: ago(8), subject: "Accepted: Kick-off" });
+    const colleague = await message(mark, box, { from: "kim@eclipse-review.test", to: [mark.email], at: ago(8), subject: "Accepted: Standup" });
     const stranger = await message(mark, box, { from: "billing@stranger-review.test", to: [mark.email], at: ago(8) });
     const strangerOptOut = await message(mark, box, { from: "ella@stranger-review.test", to: [mark.email], at: ago(8), body: "Big news.\n\nUnsubscribe here." });
-    const freeMail = await message(mark, box, { from: "news@gmail.com", to: [mark.email], at: ago(8) });
-    await getAdminPool().query(
-      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state)
-       values ($1, $2, $3, $4, $5, 'reply', 'skipped')`,
-      [mark.workspaceId, mark.userId, box.sourceId, accepted.key.split("|")[1], accepted.id],
+    const flagged = [optOut, billing, invitation, companyInfo, accepted];
+
+    const before = await replyKeys([mark, personal]);
+    assert.ok(before.includes(plain.key), "plain CRM mail waits on you");
+    for (const item of [...flagged, colleague, stranger, strangerOptOut]) assert.ok(!before.includes(item.key), `${item.key} waits for a verdict or stays out`);
+
+    const prompts: string[] = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const user = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content;
+      prompts.push(user);
+      const emails = [...user.matchAll(/Email (\d+)\nFrom: [^\n]*\nSubject: ([^\n]*)/g)].map((match) => ({ index: Number(match[1]), needsReply: !match[2].startsWith("Accepted") }));
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails }) }, finish_reason: "stop" }] });
+    };
+    process.env.LLM_API_KEY = "test-llm-key";
+    try {
+      assert.equal(await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl }), flagged.length);
+      assert.equal(await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl }), 0);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /opt out of these emails/);
+    assert.doesNotMatch(prompts[0], /kim@eclipse-review|stranger-review|Order form/);
+    const used = await getAdminPool().query<{ count: number }>(
+      "select count(*)::int as count from crm.mail_prepared where user_id = $1 and kind in ('reply', 'nudge')",
+      [mark.userId],
     );
-    const keys = await replyKeys([mark, personal]);
-    for (const shown of [optOut, billing, invitation, companyInfo]) assert.ok(keys.includes(shown.key), `${shown.key} waits on you`);
-    for (const hidden of [accepted, stranger, strangerOptOut, freeMail]) assert.ok(!keys.includes(hidden.key), `${hidden.key} stays out`);
+    assert.equal(used.rows[0].count, 0);
+
+    const after = await replyKeys([mark, personal]);
+    for (const shown of [plain, optOut, billing, invitation, companyInfo]) assert.ok(after.includes(shown.key), `${shown.key} waits on you`);
+    for (const hidden of [accepted, colleague, stranger, strangerOptOut]) assert.ok(!after.includes(hidden.key), `${hidden.key} stays out`);
+
+    const crm = await withActor(mark, (db) => crmValues(db, mark, [mark.workspaceId]));
+    const known = (email: string) => withActor(mark, (db) => isCrmSender(db, crm, email));
+    assert.equal(await known("olive@known-review.test"), true);
+    assert.equal(await known("anyone@client-co-review.test"), true);
+    assert.equal(await known("kim@eclipse-review.test"), false);
+    assert.equal(await known(mark.email), false);
   });
 
   it("never shows an admin a colleague's approvals or mail", async () => {

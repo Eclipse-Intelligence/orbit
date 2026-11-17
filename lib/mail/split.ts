@@ -5,6 +5,7 @@ import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { MAIL_SPLITS, type MailSplit } from "@/lib/mail/view";
+import { ownAddressesSql } from "@/lib/mail/waiting";
 
 export const CALENDAR_SUBJECT =
   "^(accepted|declined|tentative|tentatively accepted|invitation|updated invitation|canceled|cancelled|new time proposed|meeting forward notification|invitation updated)\\M";
@@ -44,17 +45,43 @@ export function splitCase(alias: string) {
   end`;
 }
 
-export function crmSender(alias: string, workspacesParam: string, freeParam: string) {
+export type CrmParams = { workspaces: string; free: string; own: string };
+
+export type CrmValues = { workspaceIds: string[]; free: string[]; own: string[] };
+
+export async function crmValues(db: Db, actor: UserActor, workspaceIds: string[]): Promise<CrmValues> {
+  const ids = workspaceIds.length ? workspaceIds : [actor.workspaceId];
+  const result = await db.query<{ email: string }>(
+    `select own.email from (${ownAddressesSql("$1", "$2")}) as own(email) where own.email is not null
+     union select lower(p.email) from crm.workspace_members wm join crm.profiles p on p.id = wm.user_id where wm.workspace_id = any($3::uuid[]) and p.email is not null`,
+    [actor.userId, actor.email, ids],
+  );
+  const own = new Set<string>();
+  for (const row of result.rows) {
+    const email = row.email.trim().toLowerCase();
+    if (!email.includes("@")) continue;
+    own.add(email);
+    const domain = email.split("@")[1];
+    if (domain && !FREE_MAIL_DOMAINS.has(domain)) own.add(`@${domain}`);
+  }
+  return { workspaceIds: ids, free: [...FREE_MAIL_DOMAINS], own: [...own] };
+}
+
+export function crmSender(alias: string, params: CrmParams) {
   return `(
-    exists (
-      select 1 from crm.contacts c
-      where c.workspace_id = any(${workspacesParam}::uuid[]) and c.archived_at is null and c.normalized_email = lower(${alias}.from_email)
-    )
-    or (
-      split_part(lower(${alias}.from_email), '@', 2) <> all(${freeParam}::text[])
-      and exists (
-        select 1 from crm.companies co
-        where co.workspace_id = any(${workspacesParam}::uuid[]) and co.archived_at is null and co.domain = split_part(lower(${alias}.from_email), '@', 2)
+    lower(${alias}.from_email) <> all(${params.own}::text[])
+    and '@' || split_part(lower(${alias}.from_email), '@', 2) <> all(${params.own}::text[])
+    and (
+      exists (
+        select 1 from crm.contacts c
+        where c.workspace_id = any(${params.workspaces}::uuid[]) and c.archived_at is null and c.normalized_email = lower(${alias}.from_email)
+      )
+      or (
+        split_part(lower(${alias}.from_email), '@', 2) <> all(${params.free}::text[])
+        and exists (
+          select 1 from crm.companies co
+          where co.workspace_id = any(${params.workspaces}::uuid[]) and co.archived_at is null and co.domain = split_part(lower(${alias}.from_email), '@', 2)
+        )
       )
     )
   )`;
@@ -67,21 +94,31 @@ export function automatedLooking(alias: string) {
   )`;
 }
 
-export function replyableSplit(alias: string, workspacesParam: string, freeParam: string) {
+export function needsReplyCheck(alias: string) {
+  return `(
+    ${automatedLooking(alias)}
+    or exists (select 1 from crm.mail_messages b where b.id = ${alias}.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}')
+  )`;
+}
+
+export function replyCheckSaysReply(alias: string) {
+  return `exists (select 1 from crm.mail_prepared v where v.message_id = ${alias}.id and v.kind = 'reply_check' and v.state = 'ready')`;
+}
+
+export function replyableSplit(alias: string, params: CrmParams) {
   return `case
     when rule.split is not null then rule.split = 'important'
-    when ${crmSender(alias, workspacesParam, freeParam)} then true
+    when ${crmSender(alias, params)} then (not ${needsReplyCheck(alias)} or ${replyCheckSaysReply(alias)})
     else ${splitCase(alias)} = 'important'
   end`;
 }
 
-export async function isCrmSender(db: Db, workspaceIds: string[], email: string | null | undefined) {
-  if (!email || workspaceIds.length === 0) return false;
-  const result = await db.query<{ known: boolean }>(`select ${crmSender("m", "$1", "$2")} as known from (select $3::text as from_email) m`, [
-    workspaceIds,
-    [...FREE_MAIL_DOMAINS],
-    email,
-  ]);
+export async function isCrmSender(db: Db, values: CrmValues, email: string | null | undefined) {
+  if (!email) return false;
+  const result = await db.query<{ known: boolean }>(
+    `select ${crmSender("m", { workspaces: "$1", free: "$2", own: "$3" })} as known from (select $4::text as from_email) m`,
+    [values.workspaceIds, values.free, values.own, email],
+  );
   return Boolean(result.rows[0]?.known);
 }
 

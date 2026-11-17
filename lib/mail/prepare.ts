@@ -19,8 +19,8 @@ import { stripQuoted } from "@/lib/mail/format";
 import { ownMailAddresses } from "@/lib/mail/follow-up-rules";
 import { workingDaysLater } from "@/lib/mail/later";
 import { offerTimes, refreshTimes, TIMES_MARK } from "@/lib/mail/scheduling";
-import { replyableSplit, splitJoin } from "@/lib/mail/split";
-import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
+import { crmValues, replyableSplit, splitJoin } from "@/lib/mail/split";
+import { checkCrmReplies } from "@/lib/mail/reply-checks";
 import { markColdPitch } from "@/lib/mail/subscriptions";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailAddress } from "@/lib/mail/types";
@@ -216,6 +216,7 @@ function pitchEligible(alias: string, userParam: string, workspacesParam: string
 }
 
 async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[], limit: number, pitches: { check: boolean; only?: boolean } = { check: false }) {
+  const crm = await crmValues(db, actor, workspaceIds);
   const result = await db.query<ReplyCandidate>(
     `select n.id, n.source_id, n.tk, n.provider_message_id, n.from_email, n.from_name, n.subject, n.body_text, n.snippet,
        ($6 and ${pitchEligible("n", "$1", "$2")}) as pitch
@@ -244,10 +245,10 @@ async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[],
          )
      ) n
      ${splitJoin("n", "$1")}
-     where ${replyableSplit("n", "$2", "$8")} and (not $7 or ${pitchEligible("n", "$1", "$2")})
+     where ${replyableSplit("n", { workspaces: "$2", free: "$8", own: "$9" })} and (not $7 or ${pitchEligible("n", "$1", "$2")})
      order by n.at desc
      limit $5`,
-    [actor.userId, workspaceIds.length ? workspaceIds : [actor.workspaceId], LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only), [...FREE_MAIL_DOMAINS]],
+    [actor.userId, crm.workspaceIds, LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only), crm.free, crm.own],
   );
   return result.rows;
 }
@@ -634,6 +635,9 @@ export async function prepareMail(
 ): Promise<PrepareReport> {
   const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0, deferrals: 0 };
   if (!process.env.LLM_API_KEY?.trim()) return report;
+  await checkCrmReplies(actor, { deadline: options.deadline, fetchImpl: options.fetchImpl }).catch((error) =>
+    console.error("Checking CRM mail for replies failed", error instanceof Error ? error.message : error),
+  );
   const settings = await mailHelpSettings(actor);
   if (settings.autoRemindDays && options.deadline - Date.now() > STEP_MS) {
     try {

@@ -117,7 +117,7 @@ export default function ActivityPad({
 
   useEffect(() => {
     const value = text.trim();
-    if (!value || (value.length < TIDY_LENGTH && !parsed.followUp) || dictation.listening) return;
+    if (!value || dictation.listening) return;
     if (tidy?.text === text) return;
     let live = true;
     const timer = window.setTimeout(() => {
@@ -135,7 +135,7 @@ export default function ActivityPad({
       live = false;
       window.clearTimeout(timer);
     };
-  }, [text, mentions, parsed.followUp, dictation.listening, tidy?.text]);
+  }, [text, mentions, dictation.listening, tidy?.text]);
 
   function loadStarters() {
     setFocused(true);
@@ -187,13 +187,23 @@ export default function ActivityPad({
     setBusy(true);
     setError(null);
     setNotice(null);
+    const encoded = encodeMentions(text, live);
+    const judged =
+      fresh ??
+      (type
+        ? null
+        : await tidyActivityAction(
+            encoded,
+            live.map((mention) => mention.name),
+          ).catch(() => null));
+    const savedType: PadActivityType = type ?? judged?.type ?? parsed.type;
     const result = await logPadActivityAction({
-      text: encodeMentions(text, live),
-      type: finalType,
+      text: encoded,
+      type: savedType,
       when: finalWhen ?? null,
       contactId: contact?.id ?? null,
       companyId: company?.id ?? null,
-      title: fresh && text.trim().length >= TIDY_LENGTH ? fresh.title : null,
+      title: judged && text.trim().length >= TIDY_LENGTH ? judged.title : null,
       followUp: follow && followDue ? { title: finalFollowTitle, due: followDue } : null,
       eventId,
     }).catch((): { activity?: Activity; warning?: string | null; error?: string } => ({ error: "That didn't save. Try again." }));
@@ -204,7 +214,7 @@ export default function ActivityPad({
     }
     const saved = result.activity;
     setNotice(
-      [`${TYPE_LABELS[finalType]} logged`, follow && followDue ? `task added for ${formatDateLabel(followDue.slice(0, 10))}` : null]
+      [`${TYPE_LABELS[savedType]} logged`, follow && followDue ? `task added for ${formatDateLabel(followDue.slice(0, 10))}` : null]
         .filter(Boolean)
         .join(", ") + (result.warning ? `. ${result.warning}` : "."),
     );
