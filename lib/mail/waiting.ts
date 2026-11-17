@@ -8,6 +8,8 @@ import { addWorkingDays, dayKeyAt, nonWorkingReason, shiftDay, wallClockAt } fro
 import type { Db } from "@/lib/db/pool";
 import { filingDomain, NOT_AUTOMATED, parseRouteKey, routedParams, routedSql } from "@/lib/mail/routing";
 import { CALENDAR_SENDER, CALENDAR_SUBJECT, sameThread, splitCase, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+import { DEFERRAL_GRACE_MINUTES } from "@/lib/mail/deferral-dates";
+import { finishDeferralTask } from "@/lib/mail/deferrals";
 import type { MailAddress } from "@/lib/mail/types";
 
 export const CAPTURE_LOOKBACK_DAYS = 30;
@@ -65,6 +67,8 @@ export type WaitingNudge = {
   body: string;
   sentAt: string;
   opens: number;
+  checkIn: boolean;
+  inbound: boolean;
   arrivedAt: string;
 };
 
@@ -226,6 +230,12 @@ function repliesSql() {
         where d.user_id = $1 and d.kind = 'reply' and d.source_id = n.source_id and d.thread_key = n.tk and d.message_at >= n.at
       )
       and not exists (
+        select 1 from crm.mail_reminders dr
+        where dr.user_id = $1 and dr.source_id = n.source_id and dr.thread_key = n.tk
+          and dr.kind = 'follow_up' and dr.deferral and dr.state <> 'cancelled'
+          and n.at <= dr.created_at + make_interval(mins => ${DEFERRAL_GRACE_MINUTES})
+      )
+      and not exists (
         select 1 from crm.mail_subscriptions ms
         where ms.user_id = $1 and (ms.sender = n.from_email or ms.sender = '@' || split_part(n.from_email, '@', 2))
           and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
@@ -266,12 +276,19 @@ type NudgeRow = {
   sent_at: Date;
   filed_in: string[] | null;
   opens: number;
+  from_email: string | null;
+  from_name: string | null;
+  check_in: boolean;
 };
 
 async function readyNudgesInDb(db: Db, actor: UserActor) {
   const result = await db.query<NudgeRow>(
     `select p.id, p.source_id, p.thread_key, p.body, p.updated_at, m.subject, m.to_recipients,
-       coalesce(m.sent_at, m.received_at, m.created_at) as sent_at, rt.filed_in,
+       coalesce(m.sent_at, m.received_at, m.created_at) as sent_at, rt.filed_in, lower(m.from_email) as from_email, m.from_name,
+       exists (
+         select 1 from crm.mail_reminders r
+         where r.user_id = $1 and r.source_id = p.source_id and r.thread_key = p.thread_key and r.kind = 'follow_up' and r.deferral and r.state = 'due'
+       ) as check_in,
        case when m.tracking_id is null then 0 else (select count(*)::int from crm.mail_opens o where o.tracking_id = m.tracking_id) end as opens
      from crm.mail_prepared p
      join crm.mail_messages m on m.id = p.message_id
@@ -381,8 +398,11 @@ export async function waitingMail(actor: UserActor, actors: UserActor[], now: Da
     const replies = replyRows ?? [];
     const nudgeRows = followUps?.nudges ?? [];
     const reminderRows = followUps?.reminders ?? [];
-    const own = actors.length > 1 ? await ownAddresses(db, actor) : new Set<string>();
-    const nudgeTo = nudgeRows.map((row) => addresses(row.to_recipients));
+    const own = await ownAddresses(db, actor);
+    const nudgeInbound = nudgeRows.map((row) => Boolean(row.from_email) && !own.has(row.from_email!));
+    const nudgeTo = nudgeRows.map((row, index) =>
+      nudgeInbound[index] ? [{ name: row.from_name?.trim() || null, address: row.from_email! }] : addresses(row.to_recipients),
+    );
     const reminderTo = reminderRows.map((row) => addresses(row.to_recipients));
     const placed = await placeThreads(db, actor, actors, [
       ...replies.map((row) => ({ sourceId: row.source_id, key: row.tk, counterpart: row.from_email, filedIn: row.filed_in })),
@@ -428,6 +448,8 @@ export async function waitingMail(actor: UserActor, actors: UserActor[], now: Da
       body: row.body,
       sentAt: new Date(row.sent_at).toISOString(),
       opens: row.opens,
+      checkIn: row.check_in,
+      inbound: nudgeInbound[index],
       arrivedAt: iso(row.updated_at) ?? new Date(0).toISOString(),
     }));
     const reminders: WaitingReminder[] = reminderRows.map((row, index) => {
@@ -451,9 +473,13 @@ export async function waitingMail(actor: UserActor, actors: UserActor[], now: Da
 export async function finishReminder(actor: UserActor, id: string) {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(id)) throw new CrmError("not_found", "That reminder has gone.", 404);
-  await withActor(actor, (db) =>
-    db.query("update crm.mail_reminders set state = 'done' where id = $1 and user_id = $2 and kind = 'follow_up' and state = 'due'", [id, actor.userId]),
+  const finished = await withActor(actor, (db) =>
+    db.query<{ deferral: boolean }>(
+      "update crm.mail_reminders set state = 'done' where id = $1 and user_id = $2 and kind = 'follow_up' and state = 'due' returning deferral",
+      [id, actor.userId],
+    ),
   );
+  if (finished.rows[0]?.deferral) await finishDeferralTask(actor, id, "deferral_checked_in");
   return { id };
 }
 

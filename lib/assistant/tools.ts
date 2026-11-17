@@ -2729,6 +2729,7 @@ const TOOL_LIST: AssistantTool[] = [
             thread: item.key,
             subject: item.subject,
             to: item.to.map((person) => person.address),
+            kind: item.checkIn ? "time to check in" : "no reply yet",
             sentAt: item.sentAt,
             opens: item.opens,
             draft: item.body,

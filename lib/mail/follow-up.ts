@@ -390,7 +390,7 @@ export async function restoreFollowUp(actor: UserActor, id: string) {
          and not exists (
            select 1 from crm.mail_reminders o
            where o.user_id = r.user_id and o.source_id = r.source_id and o.thread_key = r.thread_key
-             and o.kind = 'follow_up' and o.state = 'waiting' and o.id <> r.id
+             and o.kind = 'follow_up' and o.state = 'waiting' and not o.deferral and o.id <> r.id
          )
        returning r.id`,
       [id, actor.userId],
