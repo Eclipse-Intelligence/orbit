@@ -5,6 +5,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail, likePattern, normalizeCompanyName, normalizeTag } from "@/lib/crm/normalize";
 import type { Provenance, UserActor } from "@/lib/crm/types";
+import { FIND_LIMIT, FIND_LIMIT_PARALLEL } from "@/lib/workflows/definition";
 
 type RecordItem = {
   type: "company" | "contact";
@@ -38,7 +39,7 @@ function text(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function readFindConfig(config: Record<string, unknown>, ownerId: string): FindRecordsConfig {
+export function readFindConfig(config: Record<string, unknown>, ownerId: string, options: { feedsParallel?: boolean } = {}): FindRecordsConfig {
   const owner = text(config.owner);
   const order = text(config.order);
   return {
@@ -53,7 +54,7 @@ export function readFindConfig(config: Record<string, unknown>, ownerId: string)
     quietDays: integer(config.quietDays, 1, 3650),
     search: text(config.search)?.slice(0, 200) ?? null,
     order: order === "oldest" || order === "newest" || order === "name" ? order : "least_contacted",
-    limit: integer(config.limit, 1, 100) ?? 25,
+    limit: integer(config.limit, 1, options.feedsParallel ? FIND_LIMIT_PARALLEL : FIND_LIMIT) ?? 25,
     skipDays: integer(config.skipDays, 1, 365),
   };
 }

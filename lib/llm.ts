@@ -34,20 +34,22 @@ function missingKey(viewer?: Viewer) {
 function gatewayFailure(status: number, fallback: string, viewer: Viewer, retryable: boolean) {
   if (status === 401 || status === 403 || status === 429) {
     const owner = viewer?.type !== "agent" && viewer?.role === "owner";
-    return new LlmError(upstreamMessage("The AI", status, { fix: owner ? "Check LLM_API_KEY." : undefined }), retryable, true);
+    return new LlmError(upstreamMessage("The AI", status, { fix: owner ? "Check LLM_API_KEY." : undefined }), retryable, true, status);
   }
-  return new LlmError(fallback, retryable);
+  return new LlmError(fallback, retryable, false, status);
 }
 
 export class LlmError extends ShownError {
   readonly retryable: boolean;
   readonly actionable: boolean;
+  readonly status: number | null;
 
-  constructor(message: string, retryable = false, actionable = false) {
+  constructor(message: string, retryable = false, actionable = false, status: number | null = null) {
     super(message);
     this.name = "LlmError";
     this.retryable = retryable;
     this.actionable = actionable;
+    this.status = status;
   }
 }
 

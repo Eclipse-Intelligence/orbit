@@ -1,5 +1,6 @@
 import { cronAuthorization } from "@/lib/crm/scheduler";
-import { LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
+import { CRON_RUNS_AT_ONCE, LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
+import { startWorkers } from "@/lib/workflows/workers";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -8,7 +9,11 @@ async function handle(request: Request) {
   const auth = cronAuthorization(request.headers.get("authorization"));
   if (auth === "unconfigured") return Response.json({ error: "Set CRON_SECRET to run workflows on a schedule." }, { status: 503 });
   if (auth === "unauthorized") return Response.json({ error: "Unauthorized." }, { status: 401 });
-  return Response.json(await runWorkflowTick({ budgetMs: LONG_TICK_MS, long: true }));
+  const workers = await startWorkers().catch((error) => {
+    console.error("Couldn't start workflow workers", error);
+    return 0;
+  });
+  return Response.json({ ...(await runWorkflowTick({ budgetMs: LONG_TICK_MS, long: true, limit: CRON_RUNS_AT_ONCE })), workers });
 }
 
 export const GET = handle;

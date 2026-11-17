@@ -5,7 +5,7 @@ import { Input } from "@/components/_ui/input";
 import { GROUP_STYLE, STEP_META, TRIGGER_ICON } from "@/components/workflows/canvas/node-meta";
 import StepConfig, { type BuilderOptions } from "@/components/workflows/step-config";
 import TriggerEditor from "@/components/workflows/trigger-editor";
-import { STEP_LABELS, TRIGGER_NODE, type WorkflowDefinition, type WorkflowNode } from "@/lib/workflows/definition";
+import { feedsParallelLoop, STEP_LABELS, TRIGGER_NODE, type WorkflowDefinition, type WorkflowNode } from "@/lib/workflows/definition";
 import { variableOptions } from "@/lib/workflows/variables";
 import { cn } from "@/lib/utils";
 
@@ -85,7 +85,7 @@ export default function Inspector({
           onChange={(event) => update({ ...node, label: event.target.value || undefined })}
         />
       </div>
-      <StepConfig step={node} update={(config) => update({ ...node, config })} variables={variableOptions(definition, node.id)} options={options} />
+      <StepConfig step={node} update={(config) => update({ ...node, config })} variables={variableOptions(definition, node.id)} options={options} feedsParallel={feedsParallelLoop(definition, node.id)} />
       {OUTPUT_HINTS[node.type] && <p className="caption-style text-subtle leading-[1.45]">{OUTPUT_HINTS[node.type]}</p>}
     </div>
   );

@@ -6,10 +6,12 @@ import { getUserActor } from "@/lib/auth/user";
 import { CrmError } from "@/lib/crm/errors";
 import {
   archiveWorkflow,
+  cancelRun,
   discardUntouchedWorkflow,
   createWorkflow,
   decideApproval,
   getRunSteps,
+  listRuns,
   markNotificationsRead,
   saveWorkflow,
   setWorkflowStatus,
@@ -114,12 +116,34 @@ export async function runWorkflowAction(
   }
 }
 
-export async function runDetailsAction(runId: string): Promise<{ run?: RunSummary; steps?: RunStepLog[]; error?: string }> {
+export async function runDetailsAction(
+  runId: string,
+): Promise<{ run?: RunSummary; steps?: RunStepLog[]; error?: string }> {
   const user = await requireUser();
   try {
     return await getRunSteps(user, runId);
   } catch (error) {
     return failure(error, "Couldn't load the run.");
+  }
+}
+
+export async function runsProgressAction(workflowId: string): Promise<{ runs?: RunSummary[]; error?: string }> {
+  const user = await requireUser();
+  try {
+    return { runs: await listRuns(user, workflowId) };
+  } catch (error) {
+    return failure(error, "Couldn't load the runs. Try again.");
+  }
+}
+
+export async function cancelRunAction(runId: string, workflowId: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await cancelRun(user, runId);
+    refresh(workflowId);
+    return {};
+  } catch (error) {
+    return failure(error, "Couldn't stop the run. Try again.");
   }
 }
 
