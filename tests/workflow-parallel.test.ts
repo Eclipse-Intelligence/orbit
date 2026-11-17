@@ -469,6 +469,32 @@ describe("parallel workflows", () => {
     assert.deepEqual([...new Set((await children(started.runId)).map((child) => child.status))], ["cancelled"]);
   });
 
+  it("never deadlocks when a member is removed while one of their items finishes", async () => {
+    const admin = getAdminPool();
+    const leaverId = (
+      await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", ["ray@parallel.test", "Ray Racer"])
+    ).rows[0].id;
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, leaverId]);
+    const leaver: UserActor = { ...owner, userId: leaverId, email: "ray@parallel.test", fullName: "Ray Racer", role: "member", scopes: scopesForRole("member") };
+    let removal: Promise<void> | null = null;
+    const ai = gateway({
+      delayMs: 30,
+      onCall: async () => {
+        removal ??= wait(25).then(() => removeMember(owner, leaverId));
+      },
+    });
+    const created = await createWorkflow(leaver, { name: "Racing leaver" });
+    await saveWorkflow(leaver, created.id, { definition: research("batch") });
+    await setWorkflowStatus(leaver, created.id, "active");
+    const started = await startRun(leaver, created.id, { test: false, record: { type: "company", id: home }, fetchImpl: ai.fetchImpl });
+    await drain(ai.fetchImpl);
+    await removal;
+    assert.deepEqual(errors.filter((line) => /deadlock/i.test(line)), []);
+    assert.equal((await runRow(started.runId)).status, "cancelled");
+    assert.deepEqual((await children(started.runId)).filter((child) => ["queued", "running", "waiting"].includes(child.status)), []);
+    await admin.query("delete from crm.activities where workspace_id = $1 and type = 'note'", [owner.workspaceId]);
+  });
+
   it("reads a LinkedIn profile once even when the AI makes the step wait", async () => {
     process.env.MINDCASE_API_KEY = "test-mindcase-key";
     const contact = (await createContact(owner, { firstName: "Priya", lastName: "Shah", linkedinUrl: "https://www.linkedin.com/in/priya-shah" })).body.contact.id;

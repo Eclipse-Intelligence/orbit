@@ -479,7 +479,10 @@ begin
 
   update crm.workflow_runs r
     set status = 'cancelled', waiting_for = null, resume_at = null, finished_at = now()
-  where r.workspace_id = p_workspace and r.owner_id = p_user and r.status in ('queued', 'running', 'waiting');
+  where r.workspace_id = p_workspace and r.owner_id = p_user and r.parent_run_id is null and r.status in ('queued', 'running', 'waiting');
+  update crm.workflow_runs r
+    set status = 'cancelled', waiting_for = null, resume_at = null, finished_at = now()
+  where r.workspace_id = p_workspace and r.owner_id = p_user and r.parent_run_id is not null and r.status in ('queued', 'running', 'waiting');
 
   if next_home is not null then
     perform private.move_personal_rows(p_user, p_workspace, next_home);

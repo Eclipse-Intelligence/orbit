@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import HoldButton from "@/components/_ui/hold-button";
 import Tag from "@/components/_ui/tag";
 import { RUN_LABELS } from "@/components/workflows/workflows-screen";
-import { cancelRunAction, runDetailsAction } from "@/app/(crm)/workflows/actions";
+import { cancelRunAction, runDetailsAction, runsProgressAction } from "@/app/(crm)/workflows/actions";
 import { formatWhen, relativeWhen } from "@/lib/companies";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { ChildRun, RunStepLog, RunSummary } from "@/lib/workflows/store";
@@ -145,8 +145,12 @@ function moreLine(more: { skipped: number; failed: number }) {
   return [more.failed ? `${more.failed} more failed` : "", more.skipped ? `${more.skipped} more skipped` : ""].filter(Boolean).join(", ");
 }
 
+function progressing(run: RunSummary) {
+  return run.status === "queued" || run.status === "running" || run.waitingFor === "children";
+}
+
 export default function RunHistory({
-  runs,
+  runs: given,
   selected,
   onSelect,
   onSteps,
@@ -157,6 +161,8 @@ export default function RunHistory({
   onSteps?: (steps: RunStepLog[] | null) => void;
 }) {
   const router = useRouter();
+  const [polled, setPolled] = useState<{ from: RunSummary[]; runs: RunSummary[] } | null>(null);
+  const runs = polled?.from === given ? polled.runs : given;
   const [details, setDetails] = useState<Details | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<{ runId: string; message: string } | null>(null);
@@ -177,12 +183,23 @@ export default function RunHistory({
     };
   }, [selected, runs, onSteps]);
 
-  const refreshing = runs.some((run) => run.children && ACTIVE_RUN_STATUSES.includes(run.status));
+  const workflowId = given[0]?.workflowId ?? null;
+  const moving = runs.some(progressing);
   useEffect(() => {
-    if (!refreshing) return;
-    const timer = window.setInterval(() => router.refresh(), REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [refreshing, router]);
+    if (!moving || !workflowId) return;
+    let live = true;
+    const timer = window.setInterval(() => {
+      void runsProgressAction(workflowId)
+        .then((result) => {
+          if (live && result.runs) setPolled({ from: given, runs: result.runs });
+        })
+        .catch(() => undefined);
+    }, REFRESH_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [moving, workflowId, given]);
 
   async function cancel(run: RunSummary) {
     setCancelling(run.id);

@@ -11,6 +11,7 @@ import {
   createWorkflow,
   decideApproval,
   getRunSteps,
+  listRuns,
   markNotificationsRead,
   saveWorkflow,
   setWorkflowStatus,
@@ -123,6 +124,15 @@ export async function runDetailsAction(
     return await getRunSteps(user, runId);
   } catch (error) {
     return failure(error, "Couldn't load the run.");
+  }
+}
+
+export async function runsProgressAction(workflowId: string): Promise<{ runs?: RunSummary[]; error?: string }> {
+  const user = await requireUser();
+  try {
+    return { runs: await listRuns(user, workflowId) };
+  } catch (error) {
+    return failure(error, "Couldn't load the runs. Try again.");
   }
 }
 

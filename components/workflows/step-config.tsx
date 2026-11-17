@@ -19,6 +19,7 @@ import {
   FIND_LIMIT,
   FIND_LIMIT_PARALLEL,
   LOOP_ITEMS_MAX,
+  loopAtOnce,
   type Step,
 } from "@/lib/workflows/definition";
 import type { Condition, VariableOption } from "@/lib/workflows/variables";
@@ -425,8 +426,9 @@ export default function StepConfig({
                     min={1}
                     max={AT_ONCE_MAX}
                     className="w-20"
-                    value={str(c.atOnce) || String(AT_ONCE_DEFAULT)}
-                    onChange={(event) => update({ ...c, atOnce: Math.min(Math.max(Math.trunc(Number(event.target.value)) || 1, 1), AT_ONCE_MAX) })}
+                    value={c.atOnce === undefined ? String(AT_ONCE_DEFAULT) : str(c.atOnce)}
+                    onChange={(event) => update({ ...c, atOnce: event.target.value === "" ? "" : Number(event.target.value) })}
+                    onBlur={() => update({ ...c, atOnce: loopAtOnce(c) })}
                   />
                   <span className="caption-style text-subtle">at once</span>
                 </div>

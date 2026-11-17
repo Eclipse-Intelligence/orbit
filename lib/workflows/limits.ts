@@ -106,7 +106,10 @@ export async function takeService(service: Service, options: { scope?: string; h
       bucketKey(service, options.scope, `${window.seconds}s`),
       window.limit,
       window.seconds,
-    ]);
+    ]).catch(async (error) => {
+      await release();
+      throw error;
+    });
     if (!allowed.rows[0]?.ok) {
       await release();
       throw new ServiceBusy(service, new Date(windowEnd(window.seconds) + jitter()));

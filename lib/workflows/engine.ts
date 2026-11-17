@@ -1420,6 +1420,9 @@ async function saveRun(actor: UserActor, runId: string, fields: Record<string, u
 export const CANCEL_CHILDREN_SQL = `update crm.workflow_runs set status = 'cancelled', waiting_for = null, resume_at = null, finished_at = now()
   where parent_run_id = $1 and status in ('queued', 'waiting', 'running')`;
 
+const CANCEL_WAITING_CHILDREN_SQL = `update crm.workflow_runs set status = 'cancelled', waiting_for = null, resume_at = null, finished_at = now()
+  where parent_run_id = $1 and status in ('queued', 'waiting')`;
+
 const LAST_CHILD = "p.status = 'waiting' and p.waiting_for = 'children' and p.children_succeeded + p.children_skipped + p.children_failed + 1 >= p.children_total";
 
 async function endRun(actor: UserActor, run: RunRow, outcome: Outcome, fields: Record<string, unknown>) {
@@ -1434,7 +1437,7 @@ async function endRun(actor: UserActor, run: RunRow, outcome: Outcome, fields: R
     if (run.parent_run_id) await db.query("select id from crm.workflow_runs where id = $1 for update", [run.parent_run_id]);
     const ended = await db.query(`update crm.workflow_runs set ${sets} where id = $1 and status = 'running'`, [run.id, ...values]);
     if (!ended.rowCount) throw new RunStopped();
-    if (outcome === "cancelled") await db.query(CANCEL_CHILDREN_SQL, [run.id]);
+    await db.query(outcome === "cancelled" ? CANCEL_CHILDREN_SQL : CANCEL_WAITING_CHILDREN_SQL, [run.id]);
     if (!run.parent_run_id) return;
     await db.query(
       `update crm.workflow_runs p set
