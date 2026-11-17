@@ -674,44 +674,85 @@ describe("Capture after review", () => {
     assert.ok(!keys.includes(copied.key));
   });
 
-  it("counts a miss only when the model answered without the email, never for a skipped or timed-out call", async () => {
+  async function checkState(id: string) {
+    const row = (
+      await getAdminPool().query<{ state: string; misses: number }>("select state, misses from crm.mail_prepared where message_id = $1 and kind = 'reply_check'", [id])
+    ).rows[0];
+    return row ?? { state: "none", misses: 0 };
+  }
+
+  function judge(decide: (subjects: string[]) => number | { index: number; needsReply: boolean }[], calls: string[][]): typeof fetch {
+    return async (_input, init) => {
+      const user = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content;
+      const subjects = [...user.matchAll(/Email \d+\nFrom: [^\n]*\nSubject: ([^\n]*)/g)].map((match) => match[1]);
+      calls.push(subjects);
+      const answer = decide(subjects);
+      if (typeof answer === "number") return Response.json({ error: "no" }, { status: answer });
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails: answer }) }, finish_reason: "stop" }] });
+    };
+  }
+
+  it("never counts a miss for a skipped call or a left-out batch entry it hasn't asked alone", async () => {
     await createContact(mark, { firstName: "Tess", lastName: "Time", email: "tess@timing-review.test" });
     const item = await message(mark, box, { from: "tess@timing-review.test", to: [mark.email], at: ago(7), subject: "Accepted: Timing" });
-    const misses = async () =>
-      (
-        await getAdminPool().query<{ misses: number }>("select misses from crm.mail_prepared where message_id = $1 and kind = 'reply_check'", [item.id])
-      ).rows[0]?.misses ?? 0;
-    let calls = 0;
-    const hangs: typeof fetch = (_input, init) =>
-      new Promise((_resolve, reject) => {
-        calls += 1;
-        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
-      });
-    const leavesOut: typeof fetch = async () => {
-      calls += 1;
-      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails: [] }) }, finish_reason: "stop" }] });
-    };
+    const calls: string[][] = [];
+    const answers = judge((subjects) => subjects.map((_, index) => ({ index, needsReply: false })), calls);
     process.env.LLM_API_KEY = "test-llm-key";
     try {
-      await checkCrmReplies(mark, { deadline: Date.now() + 5_000, fetchImpl: leavesOut });
-      assert.equal(calls, 0);
-      assert.equal(await misses(), 0, "a skipped run adds no miss");
-      await checkCrmReplies(mark, { deadline: Date.now() + 9_500, fetchImpl: hangs });
-      assert.equal(calls, 1);
-      assert.equal(await misses(), 0, "a call cut off at the deadline adds no miss");
-      const outage: typeof fetch = async () => {
-        calls += 1;
-        return Response.json({ error: "down" }, { status: 503 });
-      };
-      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: outage });
-      assert.equal(calls, 2, "one attempt per run");
-      assert.equal(await misses(), 0, "a 503 adds no miss");
-      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: leavesOut });
-      assert.equal(await misses(), 1, "an entry the model left out adds one");
+      await checkCrmReplies(mark, { deadline: Date.now() + 5_000, fetchImpl: answers });
+      await checkCrmReplies(mark, { deadline: Date.now() + 9_500, fetchImpl: answers });
+      assert.equal(calls.length, 0, "no call without a full allowance");
+      assert.deepEqual(await checkState(item.id), { state: "none", misses: 0 }, "skipped runs add no miss");
+      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: judge(() => [], calls) });
+      assert.deepEqual(await checkState(item.id), { state: "scheduled", misses: 1 }, "an entry left out of an answer adds one");
+      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: answers });
+      assert.equal((await checkState(item.id)).state, "skipped");
     } finally {
       delete process.env.LLM_API_KEY;
     }
     assert.ok(!(await replyKeys()).includes(item.key));
+  });
+
+  it("asks a failing batch's emails one at a time and judges them", async () => {
+    await createContact(mark, { firstName: "Bea", lastName: "Batch", email: "bea@batch-review.test" });
+    const items = await Promise.all(
+      ["Accepted: One", "Accepted: Two", "Invitation: Three"].map((subject) => message(mark, box, { from: "bea@batch-review.test", to: [mark.email], at: ago(6), subject })),
+    );
+    const calls: string[][] = [];
+    const fetchImpl = judge((subjects) => (subjects.length > 1 ? 503 : [{ index: 0, needsReply: subjects[0].startsWith("Invitation") }]), calls);
+    process.env.LLM_API_KEY = "test-llm-key";
+    try {
+      assert.equal(await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl }), 3);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    assert.deepEqual(calls.map((subjects) => subjects.length).sort(), [1, 1, 1, 3]);
+    assert.deepEqual(
+      await Promise.all(items.map(async (item) => (await checkState(item.id)).state)),
+      ["skipped", "skipped", "ready"],
+    );
+    const keys = await replyKeys();
+    assert.ok(keys.includes(items[2].key));
+    assert.ok(!keys.includes(items[0].key) && !keys.includes(items[1].key));
+  });
+
+  it("shows an email that keeps failing on its own after three misses, and judges the rest", async () => {
+    await createContact(mark, { firstName: "Pia", lastName: "Poison", email: "pia@poison-review.test" });
+    const poison = await message(mark, box, { from: "pia@poison-review.test", to: [mark.email], at: ago(5), subject: "Accepted: Poison" });
+    const fine = await message(mark, box, { from: "pia@poison-review.test", to: [mark.email], at: ago(5), subject: "Accepted: Fine" });
+    const calls: string[][] = [];
+    const fetchImpl = judge((subjects) => (subjects.includes("Accepted: Poison") ? 400 : subjects.map((_, index) => ({ index, needsReply: false }))), calls);
+    process.env.LLM_API_KEY = "test-llm-key";
+    try {
+      for (let run = 0; run < 3; run += 1) await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl });
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    assert.equal((await checkState(fine.id)).state, "skipped");
+    assert.deepEqual(await checkState(poison.id), { state: "ready", misses: 3 });
+    const keys = await replyKeys();
+    assert.ok(keys.includes(poison.key), "shown after three misses");
+    assert.ok(!keys.includes(fine.key));
   });
 
   it("never shows an admin a colleague's approvals or mail", async () => {
