@@ -226,6 +226,11 @@ function repliesSql() {
         where d.user_id = $1 and d.kind = 'reply' and d.source_id = n.source_id and d.thread_key = n.tk and d.message_at >= n.at
       )
       and not exists (
+        select 1 from crm.mail_reminders dr
+        where dr.user_id = $1 and dr.source_id = n.source_id and dr.thread_key = n.tk
+          and dr.kind = 'follow_up' and dr.deferral and dr.created_at >= n.at
+      )
+      and not exists (
         select 1 from crm.mail_subscriptions ms
         where ms.user_id = $1 and (ms.sender = n.from_email or ms.sender = '@' || split_part(n.from_email, '@', 2))
           and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
