@@ -116,7 +116,6 @@ function pushedThread() {
   return Boolean(state?.mailThread);
 }
 const POLL_MS = 60_000;
-const QUESTION = /\?\s*$|^(who|what|when|where|why|how|which|did|does|do|is|are|was|were|has|have|had|can|could|should|would|will|find|show|list|summari[sz]e|tell)\s+\S+\s+\S+/i;
 const FIRST_POLL_MS = 12_000;
 const MIN_POLL_GAP_MS = 20_000;
 const READ_DWELL_MS = 700;
@@ -1237,10 +1236,6 @@ export default function MailScreen({
   function submitSearch(event: FormEvent) {
     event.preventDefault();
     const text = search.trim();
-    if (text && QUESTION.test(text)) {
-      runAsk(text);
-      return;
-    }
     setAsk(null);
     if (text === query.query) return;
     show({ ...query, query: text, view: text ? query.view : query.view });

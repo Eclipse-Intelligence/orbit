@@ -107,7 +107,7 @@ export default function ActivityPad({
   const taggedCompany = [...live].reverse().find((mention) => mention.kind === "company");
   const contact: PadRecord | null = fixedContact ?? (taggedContact ? { id: taggedContact.id, name: taggedContact.name } : null);
   const company: PadRecord | null = fixedCompany ?? (taggedCompany ? { id: taggedCompany.id, name: taggedCompany.name } : null);
-  const finalType: PadActivityType = type ?? (parsed.typeFound ? parsed.type : (fresh?.type ?? parsed.type));
+  const finalType: PadActivityType = type ?? fresh?.type ?? parsed.type;
   const finalWhen = when !== undefined ? when : parsed.when;
   const followDue = parsed.followUp?.due ?? fresh?.followUpDue ?? null;
   const firstName = contact?.name.split(" ")[0] ?? company?.name ?? null;

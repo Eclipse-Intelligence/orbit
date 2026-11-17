@@ -44,7 +44,7 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
        where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and a.occurred_at <= $3::timestamptz
          and a.archived_at is null
          and a.type in ('email', 'meeting', 'call')
-         and coalesce(a.title, '') !~* $4
+         and (t.activity_id is not null or coalesce(a.title, '') !~* $4)
          and not coalesce(t.automatic, false)
      ),
      theirs as (

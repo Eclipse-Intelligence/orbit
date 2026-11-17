@@ -8,7 +8,7 @@ import { threadDrafts } from "@/lib/mail/compose";
 import { freshPrepared, preparedFor } from "@/lib/mail/prepare";
 import { cleanEmailHtml, richEmail } from "@/lib/mail/html";
 import type { MailAddress, MailRole } from "@/lib/mail/types";
-import { splitCase, splitJoin } from "@/lib/mail/split";
+import { isCrmSender, splitCase, splitJoin } from "@/lib/mail/split";
 import { opensSql, readsSql } from "@/lib/mail/tracking";
 import { threadSubscription } from "@/lib/mail/subscriptions";
 import { firstName } from "@/lib/mail/format";
@@ -407,7 +407,7 @@ async function readThread(actor: UserActor, key: string, actorsReady: Promise<Us
       counterpart: sender ?? people[0]?.email ?? null,
       own,
     });
-    const cachedSummary = options.reader && target ? await readerSummary(db, sourceId, tk, target.id, rows) : undefined;
+    const cachedSummary = options.reader && target ? await readerSummary(db, sourceId, tk, target.id, rows, actors) : undefined;
     const detail: ThreadDetail = {
       subscription,
       filing,
@@ -462,11 +462,13 @@ async function readerSummary(
   sourceId: string,
   tk: string,
   latestId: string,
-  rows: { id: string; is_draft: boolean; body_text: string | null; snippet: string | null; has_attachments: boolean }[],
+  rows: { id: string; is_draft: boolean; body_text: string | null; snippet: string | null; has_attachments: boolean; from_email: string | null }[],
+  actors: UserActor[],
 ): Promise<CachedSummary | null> {
   if (!process.env.LLM_API_KEY?.trim()) return { latestId, summary: null, todo: null };
   const sent = rows.filter((row) => !row.is_draft);
-  if (sent.length === 1 && !sent[0].has_attachments && (sent[0].body_text ?? sent[0].snippet ?? "").length < SHORT_SUMMARY) {
+  const short = sent.length === 1 && !sent[0].has_attachments && (sent[0].body_text ?? sent[0].snippet ?? "").length < SHORT_SUMMARY;
+  if (short && !(await isCrmSender(db, actors.map((item) => item.workspaceId), sent[0].from_email))) {
     return { latestId, summary: null, todo: null };
   }
   const stored = await db.query<{ summary: string; todo: string | null }>(

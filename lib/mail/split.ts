@@ -1,7 +1,9 @@
+import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
+import type { Db } from "@/lib/db/pool";
 import { MAIL_SPLITS, type MailSplit } from "@/lib/mail/view";
 
 export const CALENDAR_SUBJECT =
@@ -40,6 +42,47 @@ export function splitCase(alias: string) {
     when ${alias}.focused is false then 'other'
     else 'important'
   end`;
+}
+
+export function crmSender(alias: string, workspacesParam: string, freeParam: string) {
+  return `(
+    exists (
+      select 1 from crm.contacts c
+      where c.workspace_id = any(${workspacesParam}::uuid[]) and c.archived_at is null and c.normalized_email = lower(${alias}.from_email)
+    )
+    or (
+      split_part(lower(${alias}.from_email), '@', 2) <> all(${freeParam}::text[])
+      and exists (
+        select 1 from crm.companies co
+        where co.workspace_id = any(${workspacesParam}::uuid[]) and co.archived_at is null and co.domain = split_part(lower(${alias}.from_email), '@', 2)
+      )
+    )
+  )`;
+}
+
+export function automatedLooking(alias: string) {
+  return `(
+    coalesce(${alias}.from_email, '') ~* '${AUTOMATED_SENDER}' or coalesce(${alias}.from_email, '') ~* '${AUTOMATED_DOMAIN}'
+    or coalesce(${alias}.subject, '') ~* '${CALENDAR_SUBJECT}' or coalesce(${alias}.from_email, '') ~* '${CALENDAR_SENDER}'
+  )`;
+}
+
+export function replyableSplit(alias: string, workspacesParam: string, freeParam: string) {
+  return `case
+    when rule.split is not null then rule.split = 'important'
+    when ${crmSender(alias, workspacesParam, freeParam)} then true
+    else ${splitCase(alias)} = 'important'
+  end`;
+}
+
+export async function isCrmSender(db: Db, workspaceIds: string[], email: string | null | undefined) {
+  if (!email || workspaceIds.length === 0) return false;
+  const result = await db.query<{ known: boolean }>(`select ${crmSender("m", "$1", "$2")} as known from (select $3::text as from_email) m`, [
+    workspaceIds,
+    [...FREE_MAIL_DOMAINS],
+    email,
+  ]);
+  return Boolean(result.rows[0]?.known);
 }
 
 export function senderKey(value: string) {

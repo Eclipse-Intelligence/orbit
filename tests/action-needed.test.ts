@@ -564,6 +564,33 @@ describe("Capture after review", () => {
     }
   });
 
+  it("keeps mail from people in the CRM in Replies even when it looks automated, until the model says no reply is needed", async () => {
+    await createContact(mark, { firstName: "Bill", lastName: "Desk", email: "billing@known-review.test" });
+    await createContact(mark, { firstName: "Olive", lastName: "Out", email: "olive@known-review.test" });
+    await createCompany(mark, { name: "Client Review", domain: "client-co-review.test" });
+    const optOut = await message(mark, box, {
+      from: "olive@known-review.test",
+      to: [mark.email],
+      at: ago(8),
+      body: "Can you send the signed order form?\n\nTo opt out of these emails, reply STOP.",
+    });
+    const billing = await message(mark, box, { from: "billing@known-review.test", to: [mark.email], at: ago(8), subject: "Question on invoice 42" });
+    const invitation = await message(mark, box, { from: "olive@known-review.test", to: [mark.email], at: ago(8), subject: "Invitation to speak at our summit" });
+    const companyInfo = await message(mark, box, { from: "info@client-co-review.test", to: [mark.email], at: ago(8), focused: false });
+    const accepted = await message(mark, box, { from: "olive@known-review.test", to: [mark.email], at: ago(8), subject: "Accepted: Kick-off" });
+    const stranger = await message(mark, box, { from: "billing@stranger-review.test", to: [mark.email], at: ago(8) });
+    const strangerOptOut = await message(mark, box, { from: "ella@stranger-review.test", to: [mark.email], at: ago(8), body: "Big news.\n\nUnsubscribe here." });
+    const freeMail = await message(mark, box, { from: "news@gmail.com", to: [mark.email], at: ago(8) });
+    await getAdminPool().query(
+      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state)
+       values ($1, $2, $3, $4, $5, 'reply', 'skipped')`,
+      [mark.workspaceId, mark.userId, box.sourceId, accepted.key.split("|")[1], accepted.id],
+    );
+    const keys = await replyKeys([mark, personal]);
+    for (const shown of [optOut, billing, invitation, companyInfo]) assert.ok(keys.includes(shown.key), `${shown.key} waits on you`);
+    for (const hidden of [accepted, stranger, strangerOptOut, freeMail]) assert.ok(!keys.includes(hidden.key), `${hidden.key} stays out`);
+  });
+
   it("never shows an admin a colleague's approvals or mail", async () => {
     const ada = await teammate(mark, "ada@eclipse-review.test", "Ada Price", "admin");
     const run = await waitingRun(mark, "Send the contract to Halden", new Date(Date.now() - 30 * DAY_MS));

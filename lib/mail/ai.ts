@@ -8,11 +8,13 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { completeJson } from "@/lib/llm";
+import { completeJson, windowShare, withinWindow } from "@/lib/llm";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
 export { stripQuoted } from "@/lib/mail/format";
 import { mailFullWhen, personName, stripQuoted, stripSignature } from "@/lib/mail/format";
 import { addressHomesInDb } from "@/lib/mail/routing";
+import { isCrmSender } from "@/lib/mail/split";
+import { workspaceActors } from "@/lib/crm/workspaces";
 import { parseThreadKey, threadKey } from "@/lib/mail/threads";
 import type { MailAddress } from "@/lib/mail/types";
 import type { DraftMode } from "@/lib/mail/view";
@@ -106,16 +108,18 @@ export async function summariseThread(
   options: { fetchImpl?: typeof fetch } = {},
 ): Promise<MailSummaryText | null> {
   const { sourceId, key: tk } = parseThreadKey(key);
-  const { messages, subject, cached } = await withActor(actor, async (db) => {
+  const workspaceIds = (await workspaceActors(actor).catch(() => [actor])).map((item) => item.workspaceId);
+  const { messages, subject, cached, known } = await withActor(actor, async (db) => {
     const text = await threadText(db, actor, sourceId, tk);
     const latest = text.messages[text.messages.length - 1];
+    const only = text.messages.length === 1 ? text.messages[0] : null;
     const stored = latest
       ? await db.query<{ summary: string; todo: string | null }>(
           "select summary, todo from crm.mail_summaries where source_id = $1 and thread_key = $2 and latest_message_id = $3",
           [sourceId, tk, latest.id],
         )
       : null;
-    return { ...text, cached: stored?.rows[0] ?? null };
+    return { ...text, cached: stored?.rows[0] ?? null, known: only ? await isCrmSender(db, workspaceIds, only.from?.address) : false };
   });
   if (cached) return { summary: cached.summary, todo: cached.todo };
   const latest = messages[messages.length - 1];
@@ -126,7 +130,7 @@ export async function summariseThread(
     { budget: 100_000, deadline: Date.now() + 15_000, fetchImpl: options.fetchImpl },
   );
   const length = messages.reduce((sum, message) => sum + message.text.length, 0);
-  if (messages.length === 1 && length < SHORT_THREAD && attachments.length === 0) return null;
+  if (messages.length === 1 && length < SHORT_THREAD && attachments.length === 0 && !known) return null;
   const name = actor.fullName || actor.email;
   const result = await completeJson({
     system:
@@ -202,7 +206,7 @@ export async function voiceSamples(db: Db, actor: UserActor) {
     [actor.userId, addresses],
   );
   return result.rows
-    .map((row) => stripSignature(stripQuoted(row.body_text ?? ""), { signature: row.signature, name: actor.fullName }).slice(0, 2_000))
+    .map((row) => stripSignature(stripQuoted(row.body_text ?? ""), { signature: row.signature, name: actor.fullName }))
     .filter((text) => text.length > 40)
     .slice(0, 4);
 }
@@ -213,7 +217,7 @@ export async function draftWithAi(
   options: { fetchImpl?: typeof fetch } = {},
 ): Promise<{ body: string }> {
   const instruction = input.instruction.trim().slice(0, 2_000);
-  const current = input.current.trim().slice(0, 8_000);
+  const current = withinWindow(input.current.trim());
   if (input.messageId && !isUuid(input.messageId)) throw new CrmError("not_found", "Email not found.", 404);
   const found = input.messageId
     ? await withActor(viewer, async (db) => {
@@ -402,7 +406,7 @@ export async function askMail(
   const numbered = found
     .map(
       (row, index) =>
-        `[${index + 1}] From: ${row.from_name || row.from_email || "Unknown"} <${row.from_email ?? ""}>\nWhen: ${mailFullWhen(row.at ? new Date(row.at).toISOString() : null)}\nSubject: ${row.subject ?? "(no subject)"}\n${(row.body_text?.startsWith('Attachment "') ? row.body_text : stripQuoted(row.body_text ?? row.snippet ?? "")).slice(0, 6_000)}`,
+        `[${index + 1}] From: ${row.from_name || row.from_email || "Unknown"} <${row.from_email ?? ""}>\nWhen: ${mailFullWhen(row.at ? new Date(row.at).toISOString() : null)}\nSubject: ${row.subject ?? "(no subject)"}\n${(row.body_text?.startsWith('Attachment "') ? row.body_text : stripQuoted(row.body_text ?? row.snippet ?? "")).slice(0, windowShare(found.length))}`,
     )
     .join("\n\n---\n\n");
   const name = actor.fullName || actor.email;

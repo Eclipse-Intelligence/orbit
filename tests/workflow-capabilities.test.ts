@@ -12,7 +12,7 @@ import { syncMail } from "@/lib/mail/sync";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { nextScheduleRun, type WorkflowDefinition } from "@/lib/workflows/definition";
 import { LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
-import { classifyEmail, failedRecipient } from "@/lib/workflows/mail-events";
+import { classifyArrivals, classifyEmail, failedRecipient } from "@/lib/workflows/mail-events";
 import { createWorkflow, decideApproval, getRunSteps, listApprovals, listRuns, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import { createProduct, createTemplate, updateTemplate } from "@/lib/proposals/catalogue";
 import { listDocuments } from "@/lib/proposals/documents";
@@ -123,6 +123,37 @@ describe("workflow capabilities", () => {
     assert.equal(failedRecipient("Delivery has failed to these recipients:\nandrew@pulse.test\nFrom mark@eclipse.test", ["mark@eclipse.test", "postmaster@pulse.test"]), "andrew@pulse.test");
   });
 
+  it("lets the model sort arrived mail from people in the CRM, and keeps the cheap rules for strangers and when the model fails", async () => {
+    const prompts: string[] = [];
+    const answer = (emails: { index: number; kind: string }[] | null): typeof fetch => async (_input, init) => {
+      prompts.push((JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages[1].content);
+      if (!emails) return Response.json({ error: "down" }, { status: 503 });
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails }) }, finish_reason: "stop" }] });
+    };
+    const arrivals = [
+      { from: "andrew@pulse.test", subject: "Re: Pulse in ChatGPT", text: "Thank you for your email. I'm out of the office until Monday with limited access to email.", known: true },
+      { from: "kay@pulse.test", subject: "Pulse in ChatGPT", text: "Hi, I've left Pulse. Please contact sam@pulse.test instead.", known: true },
+      { from: "sam@pulse.test", subject: "Out of office plans for Q3", text: "Can we talk through the out of office plans for Q3 next week?", known: true },
+      { from: "postmaster@pulse.test", subject: "Undeliverable: Pulse", text: "Delivery has failed.", known: false },
+      { from: "robot@stranger.test", subject: "Automatic reply: hello", text: "I'm away.", known: false },
+    ];
+    const kinds = await classifyArrivals(arrivals, {
+      fetchImpl: answer([
+        { index: 0, kind: "auto_reply" },
+        { index: 1, kind: "auto_reply" },
+        { index: 2, kind: "normal" },
+      ]),
+      deadline: Date.now() + 60_000,
+    });
+    assert.deepEqual(kinds, ["auto_reply", "auto_reply", "any", "bounce", "auto_reply"]);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /out of the office until Monday/);
+    assert.match(prompts[0], /I've left Pulse/);
+    assert.doesNotMatch(prompts[0], /postmaster|robot@stranger/);
+    const fallback = await classifyArrivals(arrivals, { fetchImpl: answer(null), deadline: Date.now() + 60_000 });
+    assert.deepEqual(fallback, ["any", "any", "auto_reply", "bounce", "auto_reply"]);
+  });
+
   it("finds quiet customers, checks each on the web, and on approval moves them and creates both leads", async () => {
     const workflow = await createWorkflow(owner, { template: "job-changes" });
     const definition = structuredClone(workflow.definition) as WorkflowDefinition;
@@ -197,8 +228,9 @@ describe("workflow capabilities", () => {
     const report = await syncMail(owner, { budgetMs: 30_000, fetchImpl: llm.fetchImpl });
     assert.equal(report.workflowEvents, 1);
     await runWorkflowTick({ fetchImpl: llm.fetchImpl, budgetMs: LONG_TICK_MS, long: true });
-    assert.equal(llm.seen.ai.length, 1);
-    assert.match(llm.seen.ai[0].user, /Beth Jones \(CFO\) still works at Pulse/);
+    const steps = llm.seen.ai.filter((call) => !/how each sender feels/.test(call.system));
+    assert.equal(steps.length, 1);
+    assert.match(steps[0].user, /Beth Jones \(CFO\) still works at Pulse/);
     const runs = await listRuns(owner, workflow.id);
     assert.equal(runs[0].contactName, "Beth Jones");
     assert.equal(runs[0].status, "succeeded");

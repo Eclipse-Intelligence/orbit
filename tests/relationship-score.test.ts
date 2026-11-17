@@ -185,4 +185,55 @@ describe("relationship signals", () => {
     assert.equal((await classifyEmailTones(owner, { fetchImpl: async () => { asked += 1; return classifies("", {}); } })).classified, 0);
     assert.equal(asked, 0);
   });
+
+  it("trusts the model over the subject once it has judged an email, and judges mail filed only on a company", async () => {
+    const otherId = (await createCompany(owner, { name: "Q3 Plans Co", domain: "q3plans.test" })).body.company.id;
+    const personId = (await createContact(owner, { companyId: otherId, firstName: "Ola", lastName: "Q", email: "ola@q3plans.test" })).body.contact.id;
+    await createActivity(owner, {
+      type: "email",
+      title: "Out of office plans for Q3",
+      body: "Can we talk through the out of office plans for Q3 next week?",
+      contactId: personId,
+      occurredAt: new Date(Date.now() - 3_600_000).toISOString(),
+      metadata: { source: "microsoft", direction: "inbound", from: "ola@q3plans.test" },
+    });
+    await createActivity(owner, {
+      type: "email",
+      title: "Your request",
+      body: "Thank you for your email. I'm away until Monday.",
+      companyId: otherId,
+      occurredAt: new Date(Date.now() - 1_800_000).toISOString(),
+      metadata: { source: "microsoft", direction: "inbound", from: "desk@q3plans.test" },
+    });
+    assert.equal((await relationshipsFor(owner, "contact", [personId]))[personId].label, "new");
+    const asked: string[] = [];
+    const judge: typeof fetch = async (_input, init) => {
+      asked.push(String(init?.body ?? ""));
+      return Response.json({
+        model: "test-model",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: JSON.stringify({
+                emails: [
+                  { index: 0, tone: "neutral", automatic: true, reason: "Away notice" },
+                  { index: 1, tone: "positive", automatic: false, reason: "Wants to talk" },
+                ],
+              }),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    };
+    assert.equal((await classifyEmailTones(owner, { fetchImpl: judge })).classified, 2);
+    assert.match(asked[0], /I'm away until Monday/);
+    assert.match(asked[0], /out of office plans for Q3 next week/);
+    const person = (await relationshipsFor(owner, "contact", [personId]))[personId];
+    assert.equal(person.label, "warm");
+    const company = (await relationshipsFor(owner, "company", [otherId]))[otherId];
+    assert.equal(company.label, "warm");
+    assert.match(company.reason, /1 reply or meeting|Tone is positive/);
+  });
 });

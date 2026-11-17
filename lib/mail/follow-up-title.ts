@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { completeJson } from "@/lib/llm";
+import { completeJson, withinWindow } from "@/lib/llm";
 import { writingStyle } from "@/lib/writing-style";
 
 const SUBJECT_PREFIX = /^\s*(?:(?:re|fw|fwd|aw|wg|sv|vs|tr|antw)\s*(?:\[\d+\])?\s*:|\[external\]|external:)\s*/i;
 const TITLE_MAX = 120;
-const TEXT_MAX = 4_000;
 const TITLE_TIMEOUT_MS = 10_000;
 const TITLE = z.object({ title: z.string() });
 
@@ -41,7 +40,7 @@ export async function followUpTitle(
   options: { fetchImpl?: typeof fetch; deadline?: number; timeoutMs?: number; logged?: boolean } = {},
 ) {
   const fallback = options.logged ? loggedTitle(email) : subjectTitle(email);
-  const text = (email.text ?? "").replace(/\s+/g, " ").trim().slice(0, TEXT_MAX);
+  const text = withinWindow((email.text ?? "").replace(/\s+/g, " ").trim());
   if (!process.env.LLM_API_KEY?.trim() || (!text && !cleanSubject(email.subject))) return fallback;
   try {
     const result = await completeJson({

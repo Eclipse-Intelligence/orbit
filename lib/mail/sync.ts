@@ -687,7 +687,7 @@ export async function syncMail(
   if (report.arrived.length) {
     const fresh = report.arrived.filter((id) => !routed.includes(id));
     if (fresh.length) await notifyNewMail(actor, fresh, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
-    report.workflowEvents = await queueMailWorkflowEvents(actor, report.arrived).catch((error) => {
+    report.workflowEvents = await queueMailWorkflowEvents(actor, report.arrived, { deadline, fetchImpl: options.fetchImpl }).catch((error) => {
       console.error("Queueing mail workflows failed", error);
       return 0;
     });

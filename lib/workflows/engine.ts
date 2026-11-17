@@ -29,7 +29,7 @@ import { query } from "@/lib/db/pool";
 import { createLinearIssue, LINEAR_PRIORITIES, LinearError } from "@/lib/linear";
 import { assertLinearHere } from "@/lib/crm/linear-connection";
 import { pushToUser, type PushSender } from "@/lib/push";
-import { completeJson, LlmError } from "@/lib/llm";
+import { completeJson, LlmError, withinWindow } from "@/lib/llm";
 import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
 import { siteOrigin } from "@/lib/site-url";
 import { alertLink } from "@/lib/crm/workspaces";
@@ -122,8 +122,6 @@ type TickOptions = { budgetMs?: number; fetchImpl?: typeof fetch; limit?: number
 const DEFAULT_BUDGET_MS = 45_000;
 const STEP_RESERVE_MS = 8_000;
 const MAX_STEPS_PER_RUN = 200;
-const TRANSCRIPT_LIMIT = 60_000;
-const EMAIL_TEXT_LIMIT = 12_000;
 const WEBHOOK_TIMEOUT_MS = 10_000;
 const OPEN_TASKS_BESIDE = 10;
 
@@ -231,7 +229,7 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
       sentimentReason: insight?.sentimentReason ?? null,
       keyPoints: insight?.keyPoints ?? [],
       actionItems: (insight?.actionItems ?? []).map((item) => item.title),
-      transcript: transcript ? transcript.slice(0, TRANSCRIPT_LIMIT) : null,
+      transcript: transcript ? withinWindow(transcript) : null,
       source: insight?.source ?? null,
     };
     companyId = activity.companyId;
@@ -401,7 +399,7 @@ async function emailVars(actor: UserActor, messageId: string) {
       fromName: row.from_name ?? row.from_email ?? null,
       to: (row.to_recipients ?? []).map((item) => item.address).join(", "),
       snippet: row.snippet ?? "",
-      text: (row.body_text ?? row.snippet ?? "").slice(0, EMAIL_TEXT_LIMIT),
+      text: withinWindow(row.body_text ?? row.snippet ?? ""),
       receivedAt: row.at ? new Date(row.at).toISOString() : null,
       url: link(`/mail?thread=${encodeURIComponent(`${row.source_id}|${row.tk}`)}`),
     };
@@ -720,7 +718,7 @@ async function proposalStep(ctx: Ctx, step: Step): Promise<StepResult> {
           call.summary ? `Call summary:\n${call.summary}` : "",
           call.keyPoints?.length ? `Key points:\n- ${call.keyPoints.join("\n- ")}` : "",
           call.actionItems?.length ? `Action items:\n- ${call.actionItems.join("\n- ")}` : "",
-          call.transcript ? `Transcript:\n${call.transcript.slice(0, 20_000)}` : "",
+          call.transcript ? `Transcript:\n${call.transcript}` : "",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -787,7 +785,7 @@ async function recordContext(ctx: Ctx) {
   if (!company?.id && !contact?.id) return "";
   const found = await withActor(ctx.actor, async (db) => {
     const activities = await db.query<{ occurred_at: Date; type: string; title: string | null; body: string | null }>(
-      `select occurred_at, type, title, left(body, 400) as body from crm.activities
+      `select occurred_at, type, title, body from crm.activities
        where workspace_id = $1 and archived_at is null and (($2::uuid is not null and company_id = $2) or ($3::uuid is not null and contact_id = $3))
        order by occurred_at desc limit 10`,
       [ctx.actor.workspaceId, company?.id ?? null, contact?.id ?? null],
@@ -824,11 +822,11 @@ async function recordContext(ctx: Ctx) {
   if (found.emails.length) {
     lines.push(
       `Recent emails with them:\n${found.emails
-        .map((item) => `- ${new Date(item.at).toISOString().slice(0, 10)} from ${item.from_email ?? "unknown"}: ${item.subject ?? "(no subject)"}. ${(item.snippet ?? "").replace(/\s+/g, " ").slice(0, 200)}`)
+        .map((item) => `- ${new Date(item.at).toISOString().slice(0, 10)} from ${item.from_email ?? "unknown"}: ${item.subject ?? "(no subject)"}. ${(item.snippet ?? "").replace(/\s+/g, " ")}`)
         .join("\n")}`,
     );
   }
-  return lines.join("\n\n").slice(0, 16_000);
+  return withinWindow(lines.join("\n\n"));
 }
 
 const PRIVATE_HOST = /^(localhost|.*\.local|.*\.internal|.*\.localhost|0\.0\.0\.0|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|\[?::1\]?|\[?f[cd][0-9a-f]{2}:.*)$/i;

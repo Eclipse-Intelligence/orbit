@@ -4,6 +4,7 @@ import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { unknownMail, unknownMailOnce, type UnknownEmail } from "@/lib/mail/filing";
+import { MODEL_WINDOW_CHARS } from "@/lib/llm";
 import { fetchMicrosoftHeaders } from "@/lib/mail/microsoft";
 import {
   cacheSenderDecision,
@@ -15,7 +16,7 @@ import {
   removeSenderRuleInDb,
   pendingIsFresh,
   RETRY_MS,
-  signatureOf,
+  emailBodyText,
   storeThreadDecision,
   verdictFor,
   workspaceContext,
@@ -153,7 +154,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
           withActor(target, (db) => historyInDb(db, actor, workspaceId, group.map(({ item }) => item.email))),
           withActor(actor, async (db) => {
             const result = await db.query<{ id: string; body_text: string | null }>(
-              "select id, left(coalesce(body_text, ''), 20000) as body_text from crm.mail_messages where id = any($1::uuid[]) and user_id = $2",
+              `select id, left(coalesce(body_text, ''), ${MODEL_WINDOW_CHARS}) as body_text from crm.mail_messages where id = any($1::uuid[]) and user_id = $2`,
               [group.map(({ item }) => item.messageId), actor.userId],
             );
             return new Map(result.rows.map((row) => [row.id, row.body_text]));
@@ -176,7 +177,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
               receivedBy: item.address,
               subject: item.subject,
               snippet: item.snippet,
-              signature: signatureOf(bodies.get(item.messageId) ?? null),
+              body: emailBodyText(bodies.get(item.messageId) ?? null),
               listedAs: hint,
             },
             history.get(item.email),
