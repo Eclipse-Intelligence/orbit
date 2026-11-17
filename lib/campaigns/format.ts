@@ -36,6 +36,7 @@ export function campaignRates(campaign: Pick<CampaignSummary, "stats" | "prospec
     replied: percent(campaign.stats.replied, contacted),
     positive: percent(campaign.stats.positive, contacted),
     opened: percent(campaign.stats.opened, contacted),
+    accepted: campaign.channel === "linkedin" ? percent(campaign.stats.accepted, campaign.stats.invites) : null,
     bounced: campaign.channel === "email" ? percent(campaign.stats.bounced, campaign.stats.sent) : null,
   };
 }
@@ -60,6 +61,8 @@ export function prospectTag(row: ProspectRow): { label: string; tone: TagTone } 
   if (row.leadStatus === "bounced" || row.lastEvent?.kind === "bounced") return { label: "Bounced", tone: "red" };
   if (row.category) return { label: row.category, tone: categoryTone(row.category) };
   if (row.state === "queued" || row.state === "filling" || row.state === "pushing") return { label: "Queued", tone: "neutral" };
+  if (row.stage === "accepted") return { label: "Accepted", tone: "neutral" };
+  if (row.stage === "invited") return { label: "Invited", tone: "neutral" };
   return null;
 }
 
@@ -85,6 +88,7 @@ export function prospectLine(row: ProspectRow, now = Date.now()) {
   if (row.repliedAt) return `Replied ${when(row.repliedAt, now)}`;
   const event = row.lastEvent;
   const word = event ? EVENT_WORDS[event.kind] : undefined;
+  if (event?.kind === "message_sent" && event.step) return `Message ${event.step} sent ${when(event.at, now)}`;
   if (event && word) {
     const text = `${event.step ? `Step ${event.step} ` : ""}${word} ${when(event.at, now)}`;
     return text.charAt(0).toUpperCase() + text.slice(1);

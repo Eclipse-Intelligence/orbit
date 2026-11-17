@@ -71,9 +71,12 @@ export type StepStats = {
   sent: number;
   opened: number;
   replied: number;
+  accepted?: number;
 };
 
-export type DayStats = { day: string; sent: number; replied: number };
+export type DayStats = { day: string; sent: number; replied: number; accepted?: number };
+
+export type ProviderDay = { day: string; invites: number; accepted: number; messages: number; replies: number };
 
 export type Mailbox = {
   address: string;
@@ -102,7 +105,10 @@ export type CampaignDetail = CampaignSummary & {
   days: DayStats[];
   unlinked: number;
   url: string | null;
+  capacity: SenderCapacity | null;
 };
+
+export type SenderCapacity = { senders: number; invites: number | null };
 
 export const PROSPECT_FILTERS = ["all", "replied", "skipped"] as const;
 export type ProspectFilter = (typeof PROSPECT_FILTERS)[number];
@@ -122,7 +128,26 @@ export type ProspectRow = {
   stopRequestedAt: string | null;
   stoppedAt: string | null;
   lastEvent: { kind: CampaignEventKind; step: number | null; at: string } | null;
+  stage: LinkedinStage | null;
+  sender: string | null;
 };
+
+export type LinkedinStage = "invited" | "accepted";
+
+export type CampaignSender = {
+  id: string;
+  externalId: string;
+  name: string;
+  linkedin: string | null;
+  email: string | null;
+  userId: string | null;
+  inviteLimit: number | null;
+  messageLimit: number | null;
+};
+
+export type SenderMember = { userId: string; name: string };
+
+export type SendersView = { senders: CampaignSender[]; members: SenderMember[]; canAdmin: boolean };
 
 export type ProspectPage = { rows: ProspectRow[]; total: number; page: number; pageSize: number };
 
@@ -134,4 +159,5 @@ export type ConnectionView = {
   lastError: string | null;
   keyHint: string | null;
   canAdmin: boolean;
+  senders?: SendersView;
 };

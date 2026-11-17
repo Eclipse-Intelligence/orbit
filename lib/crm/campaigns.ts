@@ -11,6 +11,9 @@ import type {
   ProspectFilter,
   ProspectPage,
   ProspectState,
+  LinkedinStage,
+  ProviderDay,
+  SenderCapacity,
   SequenceStep,
   StepStats,
 } from "@/lib/campaigns/types";
@@ -73,8 +76,8 @@ export async function listCampaigns(actor: Actor): Promise<CampaignSummary[]> {
 
 async function readCampaign(db: Db, actor: Actor, id: string) {
   if (!isUuid(id)) throw notFound("campaign");
-  const result = await db.query<CampaignRow & { sequence: SequenceStep[]; variables: string[] }>(
-    SUMMARY_SQL.replace("select k.id,", "select k.sequence, k.variables, k.id,") + " where k.id = $1 and k.workspace_id = $2",
+  const result = await db.query<CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[] }>(
+    SUMMARY_SQL.replace("select k.id,", "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.id,") + " where k.id = $1 and k.workspace_id = $2",
     [id, actor.workspaceId],
   );
   const row = result.rows[0];
@@ -86,21 +89,50 @@ function dayKey(date: Date) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 }
 
-export function fillDays(rows: DayStats[], now = new Date(), count = CHART_DAYS): DayStats[] {
+export function fillDays(rows: DayStats[], now = new Date(), count = CHART_DAYS, accepted = false): DayStats[] {
   const byDay = new Map(rows.map((row) => [row.day, row]));
   const days: DayStats[] = [];
   for (let offset = count - 1; offset >= 0; offset -= 1) {
     const day = dayKey(new Date(now.getTime() - offset * 86_400_000));
-    days.push(byDay.get(day) ?? { day, sent: 0, replied: 0 });
+    days.push(byDay.get(day) ?? (accepted ? { day, sent: 0, replied: 0, accepted: 0 } : { day, sent: 0, replied: 0 }));
   }
   return days;
+}
+
+function linkedinSteps(sequence: SequenceStep[], counts: { kind: string; step: number | null; count: number }[]): StepStats[] {
+  const total = (kind: string, step: number | null = null) =>
+    counts.filter((row) => row.kind === kind && (step === null || row.step === step)).reduce((sum, row) => sum + row.count, 0);
+  let message = 0;
+  return sequence.map((step) => {
+    if (step.subject === "Invite") return { step: step.step, variant: step.variant, sent: total("invite_sent"), opened: 0, replied: 0, accepted: total("invite_accepted") };
+    message += 1;
+    return { step: step.step, variant: step.variant, sent: total("message_sent", message), opened: 0, replied: 0 };
+  });
+}
+
+function providerDays(rows: ProviderDay[]): DayStats[] {
+  return rows.map((row) => ({ day: row.day, sent: row.invites, replied: row.replies, accepted: row.accepted }));
+}
+
+async function senderCapacity(db: Db, workspaceId: string, senderIds: string[]): Promise<SenderCapacity | null> {
+  if (senderIds.length === 0) return null;
+  const result = await db.query<{ senders: number; invites: number | null }>(
+    `select count(*)::int as senders,
+            case when count(*) = count(s.invite_limit) then sum(s.invite_limit)::int end as invites
+     from crm.campaign_senders s
+     where s.workspace_id = $1 and s.provider = 'heyreach' and s.external_id = any($2::text[])`,
+    [workspaceId, senderIds],
+  );
+  const row = result.rows[0];
+  return row && row.senders > 0 ? { senders: row.senders, invites: row.invites } : null;
 }
 
 export async function getCampaign(actor: Actor, id: string): Promise<CampaignDetail> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const row = await readCampaign(db, actor, id);
-    const [steps, days, unlinked] = await Promise.all([
+    const linkedin = row.channel === "linkedin";
+    const [steps, days, unlinked, kinds, capacity] = await Promise.all([
       db.query<{ step: number; variant: string | null; sent: number; opened: number; replied: number }>(
         `select e.step, e.variant,
                 count(*) filter (where e.kind = 'sent')::int as sent,
@@ -112,10 +144,12 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
          order by e.step, e.variant nulls first`,
         [row.id, actor.workspaceId],
       ),
-      db.query<{ day: string; sent: number; replied: number }>(
+      db.query<{ day: string; sent: number; replied: number; invites: number; accepted: number }>(
         `select to_char(e.occurred_at at time zone 'Europe/London', 'YYYY-MM-DD') as day,
                 count(*) filter (where e.kind in ('sent', 'message_sent', 'invite_sent', 'inmail_sent'))::int as sent,
-                count(*) filter (where e.kind = 'replied')::int as replied
+                count(*) filter (where e.kind = 'replied')::int as replied,
+                count(*) filter (where e.kind = 'invite_sent')::int as invites,
+                count(*) filter (where e.kind = 'invite_accepted')::int as accepted
          from crm.campaign_events e
          where e.campaign_id = $1 and e.workspace_id = $2 and e.occurred_at >= now() - make_interval(days => $3)
          group by 1
@@ -126,17 +160,32 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
         "select count(*)::int as count from crm.campaign_prospects p where p.campaign_id = $1 and p.workspace_id = $2 and p.contact_id is null and (p.email is not null or p.linkedin is not null)",
         [row.id, actor.workspaceId],
       ),
+      linkedin
+        ? db.query<{ kind: string; step: number | null; count: number }>(
+            `select e.kind, e.step, count(*)::int as count from crm.campaign_events e
+             where e.campaign_id = $1 and e.workspace_id = $2 and e.kind in ('invite_sent', 'invite_accepted', 'message_sent')
+             group by e.kind, e.step`,
+            [row.id, actor.workspaceId],
+          )
+        : null,
+      linkedin ? senderCapacity(db, actor.workspaceId, row.sender_ids ?? []) : null,
     ]);
     const provider = campaignProvider(row.provider);
+    const sequence = row.sequence ?? [];
+    const eventDays: DayStats[] = days.rows.map((day) =>
+      linkedin ? { day: day.day, sent: day.invites, replied: day.replied, accepted: day.accepted } : { day: day.day, sent: day.sent, replied: day.replied },
+    );
+    const storedDays = linkedin && Array.isArray(row.day_stats) && row.day_stats.length > 0 ? providerDays(row.day_stats) : null;
     return {
       ...summary(row),
-      sequence: row.sequence ?? [],
+      sequence,
       variables: row.variables ?? [],
       standardVariables: [...(provider?.standardVariables ?? [])],
-      stepStats: steps.rows as StepStats[],
-      days: fillDays(days.rows),
+      stepStats: kinds ? linkedinSteps(sequence, kinds.rows) : (steps.rows as StepStats[]),
+      days: fillDays(storedDays ?? eventDays, new Date(), CHART_DAYS, linkedin),
       unlinked: unlinked.rows[0]?.count ?? 0,
       url: provider?.campaignUrl(row.external_id) ?? null,
+      capacity,
     };
   });
 }
@@ -158,6 +207,8 @@ type ProspectSqlRow = {
   last_kind: CampaignEventKind | null;
   last_step: number | null;
   last_at: Date | null;
+  stage: LinkedinStage | null;
+  sender: string | null;
 };
 
 const FILTER_SQL: Record<ProspectFilter, string> = {
@@ -178,7 +229,7 @@ export async function listCampaignProspects(
   return withActor(actor, async (db) => {
     const campaign = await readCampaign(db, actor, campaignId);
     const where = `p.campaign_id = $1 and p.workspace_id = $2 and ${FILTER_SQL[filter]}
-      and ($3 = '' or concat_ws(' ', c.first_name, c.last_name, c.email, p.email, p.lead->>'firstName', p.lead->>'lastName', p.lead->>'companyName', co.name) ilike '%' || $3 || '%')`;
+      and ($3 = '' or concat_ws(' ', c.first_name, c.last_name, c.email, p.email, p.linkedin, p.lead->>'firstName', p.lead->>'lastName', p.lead->>'companyName', co.name) ilike '%' || $3 || '%')`;
     const from = `from crm.campaign_prospects p
       left join crm.contacts c on c.id = p.contact_id
       left join crm.companies co on co.id = coalesce(p.company_id, c.company_id)`;
@@ -194,18 +245,31 @@ export async function listCampaignProspects(
                 coalesce(co.name, nullif(p.lead->>'companyName', '')) as company_name,
                 coalesce(c.email, p.email) as email,
                 p.state, p.skip_reason, p.lead_status, p.category, p.replied_at, p.stop_requested_at, p.stopped_at,
-                last.kind as last_kind, last.step as last_step, last.occurred_at as last_at
+                last.kind as last_kind, last.step as last_step, last.occurred_at as last_at,
+                case
+                  when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_accepted') then 'accepted'
+                  when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_sent') then 'invited'
+                end as stage,
+                sender.name as sender
          ${from}
+         left join lateral (
+           select coalesce(nullif(btrim(pr.full_name), ''), pr.email, nullif(s.name, '')) as name
+           from crm.campaign_senders s
+           left join crm.profiles pr on pr.id = s.user_id
+           where $6 and s.workspace_id = p.workspace_id and s.provider = 'heyreach' and s.external_id = p.sender_id
+         ) sender on true
          left join lateral (
            select e.kind, e.step, e.occurred_at from crm.campaign_events e
            where e.prospect_id = p.id
-           order by e.occurred_at desc, e.created_at desc
+           order by e.occurred_at desc, e.created_at desc,
+                    case e.kind when 'message_sent' then 3 when 'invite_accepted' then 2 when 'invite_sent' then 1 else 0 end desc,
+                    e.step desc nulls last
            limit 1
          ) last on true
          where ${where}
          order by coalesce(p.last_event_at, p.created_at) desc, p.id
          limit $4 offset $5`,
-        [campaign.id, actor.workspaceId, escaped, PROSPECT_PAGE_SIZE, (page - 1) * PROSPECT_PAGE_SIZE],
+        [campaign.id, actor.workspaceId, escaped, PROSPECT_PAGE_SIZE, (page - 1) * PROSPECT_PAGE_SIZE, campaign.channel === "linkedin"],
       ),
       db.query<{ count: number }>(`select count(*)::int as count ${from} where ${where}`, [campaign.id, actor.workspaceId, escaped]),
     ]);
@@ -225,6 +289,8 @@ export async function listCampaignProspects(
         stopRequestedAt: row.stop_requested_at?.toISOString() ?? null,
         stoppedAt: row.stopped_at?.toISOString() ?? null,
         lastEvent: row.last_kind && row.last_at ? { kind: row.last_kind, step: row.last_step, at: row.last_at.toISOString() } : null,
+        stage: row.stage,
+        sender: row.sender,
       })),
       total: total.rows[0]?.count ?? 0,
       page,

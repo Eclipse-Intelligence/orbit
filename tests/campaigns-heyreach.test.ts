@@ -1,0 +1,484 @@
+import assert from "node:assert/strict";
+import { after, before, beforeEach, describe, it } from "node:test";
+import { campaignConnectionViews, keyFingerprint, KEY_TAKEN, saveCampaignConnection } from "@/lib/campaigns/connections";
+import { heyReachEvents } from "@/lib/campaigns/providers";
+import { linkCampaignSender, listCampaignSenders, SENDER_LINKED } from "@/lib/campaigns/senders";
+import { syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
+import { getCampaign, importCampaignProspects, listCampaignProspects, listCampaigns } from "@/lib/crm/campaigns";
+import { createContact } from "@/lib/crm/contacts";
+import { withActor } from "@/lib/crm/context";
+import { CrmError } from "@/lib/crm/errors";
+import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
+import { removeMember } from "@/lib/crm/team";
+import type { UserActor } from "@/lib/crm/types";
+import { decryptSecret } from "@/lib/crypto/secret";
+import { getAdminPool, getPool } from "@/lib/db/pool";
+import { campaignStatus, listHeyReachLeads, variablesIn } from "@/lib/heyreach";
+import { fakeHeyReach, type FakeHeyReachAccount, type FakeHeyReachCampaign, type FakeHeyReachLead } from "./campaigns-fake";
+import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
+
+const KEY = "hr_key_eclipse_0001";
+const OTHER_KEY = "hr_key_ridgeon_0002";
+const LIMIT_ENV = "WORKFLOW_LIMIT_HEYREACH_PER_MINUTE";
+
+let owner: UserActor;
+let adminUser: UserActor;
+let member: UserActor;
+let jess: UserActor;
+let outsider: UserActor;
+let savedLimit: string | undefined;
+
+async function sql<T extends Record<string, unknown>>(text: string, values: unknown[] = []) {
+  return (await getAdminPool().query<T>(text, values)).rows;
+}
+
+function refused(code: string, pattern?: RegExp) {
+  return (error: unknown) => {
+    assert.ok(error instanceof CrmError, String(error));
+    assert.equal(error.code, code);
+    if (pattern) assert.match(error.message, pattern);
+    return true;
+  };
+}
+
+function daysAgo(days: number) {
+  const date = new Date(Date.now() - days * 86_400_000);
+  return `${date.toISOString().slice(0, 10)}T00:00:00Z`;
+}
+
+function bulkLeads(count: number): FakeHeyReachLead[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `bulk-${index + 1}`,
+    profileUrl: `https://www.linkedin.com/in/bulk-person-${index + 1}/`,
+    first: `Bulk${index + 1}`,
+    last: "Person",
+    company: "Bulk Ltd",
+    accountId: index % 2 === 0 ? 1 : 2,
+    connection: "ConnectionSent",
+    lastActionTime: "2026-11-09T10:00:00.000Z",
+  }));
+}
+
+function foundersCampaign(): FakeHeyReachCampaign {
+  return {
+    id: 9001,
+    name: "Agency founders",
+    status: "IN_PROGRESS",
+    accountIds: [1, 2],
+    sequence: [
+      { actionType: "ConnectionRequest", message: "{connection_note}" },
+      { actionType: "Message", message: "Thanks for connecting, {first_name}. {opener}", delayInDays: 1 },
+      { actionType: "Message", message: "{follow_up}", delayInDays: 5 },
+    ],
+    leads: [
+      {
+        id: "lead-jane",
+        profileUrl: "https://www.linkedin.com/in/Jane-Doe/",
+        first: "Jane",
+        last: "Doe",
+        company: "Acme",
+        position: "Founder",
+        accountId: 1,
+        connection: "ConnectionAccepted",
+        messages: 2,
+        lastActionTime: "2026-11-12T09:00:00.000Z",
+      },
+      ...bulkLeads(129),
+    ],
+    overall: { connectionsSent: 130, connectionsAccepted: 1, messagesSent: 2, totalMessageReplies: 0 },
+    byDay: { [daysAgo(3)]: { connectionsSent: 20, connectionsAccepted: 8, messagesSent: 5, totalMessageReplies: 1 } },
+  };
+}
+
+function draftCampaign(): FakeHeyReachCampaign {
+  return { id: 9002, name: "Draft outreach", status: "DRAFT", accountIds: [], sequence: [], leads: [], overall: {}, byDay: {} };
+}
+
+function heyReachAccount(key: string, campaigns: FakeHeyReachCampaign[], accounts: FakeHeyReachAccount["accounts"]): FakeHeyReachAccount {
+  return { key, accounts, campaigns, calls: [] };
+}
+
+async function counts(workspaceId: string) {
+  const rows = await sql<{ events: number; notifications: number; contacts: number }>(
+    `select (select count(*)::int from crm.workflow_events where workspace_id = $1) as events,
+            (select count(*)::int from crm.notifications where workspace_id = $1) as notifications,
+            (select count(*)::int from crm.contacts where workspace_id = $1) as contacts`,
+    [workspaceId],
+  );
+  return rows[0];
+}
+
+async function senderAudits(workspaceId: string) {
+  return sql<{ entity_id: string; actor_user_id: string | null; operation: string; changes: { linked: string | null; unlinked: string | null; sender: { name: string } } }>(
+    "select entity_id, actor_user_id, operation, changes from crm.audit_events where workspace_id = $1 and event_type = $2 order by created_at, id",
+    [workspaceId, SENDER_LINKED],
+  );
+}
+
+describe("campaigns through HeyReach", () => {
+  const eclipse = heyReachAccount(KEY, [foundersCampaign(), draftCampaign()], [
+    { id: 1, firstName: "Mark", lastName: "Ridgeon", emailAddress: "Mark@HeyReach-Campaigns.test", profileUrl: "https://www.linkedin.com/in/markridgeon", connectionRequestsDailyLimit: 20 },
+    { id: 2, firstName: "Jess", lastName: "Cole", emailAddress: "jess@heyreach-campaigns.test", profileUrl: "https://www.linkedin.com/in/jesscole", connectionRequestsDailyLimit: 20 },
+    { id: 3, firstName: "Shared", lastName: "Inbox", emailAddress: "shared@heyreach-campaigns.test", profileUrl: "https://www.linkedin.com/in/sharedinbox" },
+    { id: 4, firstName: "Nobody", lastName: "Here", emailAddress: null, profileUrl: "https://www.linkedin.com/in/nobodyhere" },
+  ]);
+  const ridgeon = heyReachAccount(OTHER_KEY, [{ ...draftCampaign(), id: 7001, name: "Ridgeon LinkedIn", status: "PAUSED" }], [
+    { id: 50, firstName: "Oscar", lastName: "Outsider", emailAddress: "oscar@elsewhere-heyreach.test", profileUrl: "https://www.linkedin.com/in/oscar" },
+  ]);
+  const fetchImpl = fakeHeyReach([eclipse, ridgeon]);
+
+  before(async () => {
+    await resetDatabase();
+    savedLimit = process.env[LIMIT_ENV];
+    process.env[LIMIT_ENV] = "100000";
+    owner = await createUser("mark@heyreach-campaigns.test", "Mark Ridgeon");
+    const second = await createUser("ann@heyreach-campaigns.test", "Ann Admin");
+    const third = await createUser("mo@heyreach-campaigns.test", "Mo Member");
+    const fourth = await createUser("jess@heyreach-campaigns.test", "Jess Cole");
+    outsider = await createUser("oscar@elsewhere-heyreach.test", "Oscar Outsider");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'admin'), ($1, $3, 'member'), ($1, $4, 'member')", [
+      owner.workspaceId,
+      second.userId,
+      third.userId,
+      fourth.userId,
+    ]);
+    await sql("update crm.profiles set email = 'shared@heyreach-campaigns.test' where id = any($1::uuid[])", [[second.userId, third.userId]]);
+    adminUser = { ...second, workspaceId: owner.workspaceId, role: "admin", scopes: scopesForRole("admin") };
+    member = { ...third, workspaceId: owner.workspaceId, role: "member", scopes: scopesForRole("member") };
+    jess = { ...fourth, workspaceId: owner.workspaceId, role: "member", scopes: scopesForRole("member") };
+  });
+
+  after(async () => {
+    if (savedLimit === undefined) delete process.env[LIMIT_ENV];
+    else process.env[LIMIT_ENV] = savedLimit;
+    await getPool().end();
+    await getAdminPool().end();
+  });
+
+  beforeEach(async () => {
+    await sql("delete from private.rate_limit_buckets where bucket_key like 'workflow-service:heyreach%'");
+  });
+
+  useServerlessPool();
+
+  describe("the parser", () => {
+    it("reads statuses, single-brace variables and lead events", async () => {
+      assert.equal(campaignStatus("IN_PROGRESS"), "active");
+      assert.equal(campaignStatus("SCHEDULED"), "drafted");
+      assert.equal(campaignStatus("FINISHED"), "completed");
+      assert.equal(campaignStatus("FAILED"), "stopped");
+      assert.deepEqual(variablesIn([{ step: 1, variant: null, subject: "Message", body: "Hi {first_name}, {{not_this}} { opener }", delayDays: null }]), ["first_name", "opener"]);
+      const page = await listHeyReachLeads(KEY, "9001", 0, { fetchImpl, workspaceId: "parser-test" });
+      assert.equal(page.leads.length, 100);
+      assert.equal(page.next, 100);
+      const events = heyReachEvents("9001", page.leads.slice(0, 1));
+      assert.deepEqual(
+        events.map((event) => [event.kind, event.step, event.dedupeKey, event.linkedin]),
+        [
+          ["invite_sent", null, "heyreach:9001:lead-jane:invite_sent", "linkedin.com/in/jane-doe"],
+          ["invite_accepted", null, "heyreach:9001:lead-jane:invite_accepted", "linkedin.com/in/jane-doe"],
+          ["message_sent", 1, "heyreach:9001:lead-jane:message_sent:1", "linkedin.com/in/jane-doe"],
+          ["message_sent", 2, "heyreach:9001:lead-jane:message_sent:2", "linkedin.com/in/jane-doe"],
+        ],
+      );
+      eclipse.calls.length = 0;
+    });
+  });
+
+  describe("connecting HeyReach", () => {
+    it("refuses a key HeyReach rejects", async () => {
+      await assert.rejects(saveCampaignConnection(owner, "heyreach", "hr_wrong_key_1", { fetchImpl }), refused("invalid_input", /^HeyReach rejected the key\.$/));
+      assert.equal((await sql("select 1 from crm.campaign_connections")).length, 0);
+      assert.equal((await sql("select 1 from crm.campaign_senders")).length, 0);
+    });
+
+    it("lets only owners and admins save a key", async () => {
+      await assert.rejects(saveCampaignConnection(member, "heyreach", KEY, { fetchImpl }), refused("forbidden", /owner or admin/));
+      const agent = (await createAgent(owner.workspaceId, [...SCOPES], "Admin agent")).actor;
+      await assert.rejects(saveCampaignConnection(agent, "heyreach", KEY, { fetchImpl }), refused("forbidden"));
+    });
+
+    it("checks the key with the header, stores it encrypted and lists the senders", async () => {
+      const saved = await saveCampaignConnection(adminUser, "heyreach", KEY, { fetchImpl });
+      assert.equal(saved.line, "Connected. 4 LinkedIn accounts, 2 campaigns.");
+      assert.ok(eclipse.calls.some((call) => call.path === "/auth/CheckApiKey"));
+      const rows = await sql<{ key_encrypted: string; key_fingerprint: string; connected_by: string }>(
+        "select key_encrypted, key_fingerprint, connected_by from crm.campaign_connections where workspace_id = $1 and provider = 'heyreach'",
+        [owner.workspaceId],
+      );
+      assert.equal(rows.length, 1);
+      assert.ok(!rows[0].key_encrypted.includes(KEY));
+      assert.equal(decryptSecret(rows[0].key_encrypted), KEY);
+      assert.equal(rows[0].key_fingerprint, keyFingerprint("heyreach", KEY));
+      assert.equal(rows[0].connected_by, adminUser.userId);
+    });
+
+    it("matches senders to members by sign-in email, and leaves no match or two matches unlinked", async () => {
+      const view = await listCampaignSenders(member);
+      const byName = Object.fromEntries(view.senders.map((sender) => [sender.name, sender]));
+      assert.equal(byName["Mark Ridgeon"].userId, owner.userId);
+      assert.equal(byName["Jess Cole"].userId, jess.userId);
+      assert.equal(byName["Shared Inbox"].userId, null);
+      assert.equal(byName["Nobody Here"].userId, null);
+      assert.equal(byName["Mark Ridgeon"].linkedin, "linkedin.com/in/markridgeon");
+      assert.equal(byName["Mark Ridgeon"].inviteLimit, 20);
+      assert.equal(view.canAdmin, false);
+      const audits = await senderAudits(owner.workspaceId);
+      assert.deepEqual(audits.map((row) => [row.changes.sender.name, row.changes.linked, row.changes.unlinked, row.actor_user_id]).sort(), [
+        ["Jess Cole", jess.userId, null, adminUser.userId],
+        ["Mark Ridgeon", owner.userId, null, adminUser.userId],
+      ]);
+    });
+
+    it("keeps links made by hand when the senders are read again", async () => {
+      const shared = (await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Shared Inbox")!;
+      await linkCampaignSender(owner, shared.id, member.userId);
+      await saveCampaignConnection(owner, "heyreach", KEY, { fetchImpl });
+      const again = (await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Shared Inbox")!;
+      assert.equal(again.userId, member.userId);
+      await linkCampaignSender(owner, shared.id, null);
+      await sql("delete from crm.notifications where workspace_id = $1", [owner.workspaceId]);
+    });
+
+    it("refuses a key already connected to another workspace", async () => {
+      await assert.rejects(saveCampaignConnection(outsider, "heyreach", KEY, { fetchImpl }), refused("conflict", new RegExp(`^${KEY_TAKEN}$`)));
+      await assert.rejects(
+        sql("insert into crm.campaign_connections (workspace_id, provider, key_encrypted, key_fingerprint) values ($1, 'heyreach', 'x', $2)", [
+          outsider.workspaceId,
+          keyFingerprint("heyreach", KEY),
+        ]),
+        /campaign_connections_fingerprint_uidx/,
+      );
+      assert.equal((await sql("select 1 from crm.campaign_senders where workspace_id = $1", [outsider.workspaceId])).length, 0);
+    });
+
+    it("shows the card's senders and the key hint only to owners and admins", async () => {
+      const views = await campaignConnectionViews(member);
+      const heyreach = views.find((view) => view.provider === "heyreach")!;
+      assert.equal(heyreach.connected, true);
+      assert.equal(heyreach.line, "Connected. 4 LinkedIn accounts, 2 campaigns.");
+      assert.equal(heyreach.keyHint, null);
+      assert.equal(heyreach.senders?.senders.length, 4);
+      assert.ok(heyreach.senders?.members.some((item) => item.userId === jess.userId));
+      const ownerView = (await campaignConnectionViews(owner)).find((view) => view.provider === "heyreach")!;
+      assert.equal(ownerView.keyHint, KEY.slice(-4));
+      assert.equal(ownerView.senders?.canAdmin, true);
+    });
+  });
+
+  describe("linking senders", () => {
+    it("lets owners and admins change a link, audits it and tells both members", async () => {
+      const jessSender = (await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Jess Cole")!;
+      const before = (await senderAudits(owner.workspaceId)).length;
+      const saved = await linkCampaignSender(adminUser, jessSender.id, member.userId);
+      assert.equal(saved.userId, member.userId);
+      const audits = await senderAudits(owner.workspaceId);
+      assert.equal(audits.length, before + 1);
+      const last = audits[audits.length - 1];
+      assert.equal(last.actor_user_id, adminUser.userId);
+      assert.equal(last.changes.linked, member.userId);
+      assert.equal(last.changes.unlinked, jess.userId);
+      const told = await sql<{ user_id: string; title: string }>("select user_id, title from crm.notifications where workspace_id = $1 order by title", [owner.workspaceId]);
+      assert.deepEqual(told.map((row) => [row.user_id, row.title]), [
+        [member.userId, "Linked to Jess Cole on LinkedIn"],
+        [jess.userId, "Unlinked from Jess Cole on LinkedIn"],
+      ]);
+
+      await linkCampaignSender(owner, jessSender.id, jess.userId);
+      assert.equal((await senderAudits(owner.workspaceId)).length, before + 2);
+      await linkCampaignSender(owner, jessSender.id, jess.userId);
+      assert.equal((await senderAudits(owner.workspaceId)).length, before + 2);
+    });
+
+    it("refuses members, agent tokens and people outside the workspace", async () => {
+      const markSender = (await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Mark Ridgeon")!;
+      const before = (await senderAudits(owner.workspaceId)).length;
+      await assert.rejects(linkCampaignSender(member, markSender.id, member.userId), refused("forbidden", /owner or admin/));
+      const agent = (await createAgent(owner.workspaceId, [...SCOPES], "Admin agent")).actor;
+      await assert.rejects(linkCampaignSender(agent, markSender.id, null), refused("forbidden"));
+      await assert.rejects(linkCampaignSender(owner, markSender.id, outsider.userId), refused("invalid_input", /^Pick someone in this workspace\.$/));
+      await assert.rejects(linkCampaignSender(outsider, markSender.id, null), refused("not_found"));
+      assert.deepEqual(await queryAsUser(member.userId, "update crm.campaign_senders set user_id = $1 returning id", [member.userId]), []);
+      await assert.rejects(queryAsUser(owner.userId, "update crm.campaign_senders set name = 'x'"), /permission denied/);
+      await assert.rejects(
+        queryAsUser(owner.userId, "update crm.campaign_senders set user_id = $1 where id = $2", [outsider.userId, markSender.id]),
+        /row-level security/,
+      );
+      assert.equal((await senderAudits(owner.workspaceId)).length, before);
+      assert.equal((await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Mark Ridgeon")!.userId, owner.userId);
+    });
+  });
+
+  describe("sync and backfill", () => {
+    let jane: string;
+    let foundersId: string;
+    const seen: SyncedEvent[][] = [];
+    const onEvents = async (_campaign: unknown, events: SyncedEvent[]) => {
+      seen.push(events);
+    };
+
+    it("backfills every campaign, matches people by LinkedIn profile and fires nothing", async () => {
+      jane = (await createContact(owner, { firstName: "Jane", lastName: "Doe", linkedinUrl: "linkedin.com/in/jane-doe" }, { provenance: { operation: "test" } })).body.contact.id;
+      const before = await counts(owner.workspaceId);
+      const report = await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl, onEvents });
+      assert.deepEqual(report.errors, []);
+      assert.deepEqual(report.busy, []);
+      assert.ok(report.backfilled >= 1);
+
+      const campaigns = await sql<{ id: string; external_id: string; status: string; channel: string; variables: string[]; stats: Record<string, number>; sender_ids: string[]; day_stats: unknown[]; backfilled_at: Date | null }>(
+        "select id, external_id, status, channel, variables, stats, sender_ids, day_stats, backfilled_at from crm.campaigns where workspace_id = $1 and provider = 'heyreach' order by external_id",
+        [owner.workspaceId],
+      );
+      assert.deepEqual(campaigns.map((row) => [row.external_id, row.status, row.channel]), [["9001", "active", "linkedin"], ["9002", "drafted", "linkedin"]]);
+      assert.ok(campaigns.every((row) => row.backfilled_at));
+      const founders = campaigns[0];
+      foundersId = founders.id;
+      assert.deepEqual(founders.variables, ["connection_note", "first_name", "follow_up", "opener"]);
+      assert.deepEqual(founders.sender_ids.sort(), ["1", "2"]);
+      assert.equal(founders.stats.invites, 130);
+      assert.equal(founders.stats.accepted, 1);
+      assert.equal(founders.day_stats.length, 1);
+
+      const prospects = await sql<{ external_lead_id: string; contact_id: string | null; linkedin: string; sender_id: string | null; state: string; lead_status: string; email: string | null }>(
+        "select external_lead_id, contact_id, linkedin, sender_id, state, lead_status, email from crm.campaign_prospects where campaign_id = $1",
+        [foundersId],
+      );
+      assert.equal(prospects.length, 130);
+      const janeRow = prospects.find((row) => row.external_lead_id === "lead-jane")!;
+      assert.equal(janeRow.contact_id, jane);
+      assert.equal(janeRow.linkedin, "linkedin.com/in/jane-doe");
+      assert.equal(janeRow.sender_id, "1");
+      assert.equal(janeRow.state, "pushed");
+      assert.equal(janeRow.lead_status, "in_progress");
+      assert.equal(janeRow.email, null);
+      assert.equal(prospects.filter((row) => row.contact_id).length, 1);
+
+      const events = await sql<{ kind: string; count: number }>(
+        "select kind, count(*)::int as count from crm.campaign_events where campaign_id = $1 group by kind order by kind",
+        [foundersId],
+      );
+      assert.deepEqual(events.map((row) => [row.kind, row.count]), [["invite_accepted", 1], ["invite_sent", 130], ["message_sent", 2]]);
+
+      const afterCounts = await counts(owner.workspaceId);
+      assert.equal(afterCounts.events, before.events);
+      assert.equal(afterCounts.notifications, before.notifications);
+      assert.equal(afterCounts.contacts, before.contacts);
+      assert.equal(seen.length, 0);
+    });
+
+    it("adds only new events on later syncs, and hands them on", async () => {
+      const lead = eclipse.campaigns[0].leads.find((item) => item.id === "bulk-2")!;
+      lead.connection = "ConnectionAccepted";
+      lead.lastActionTime = new Date().toISOString();
+      const report = await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl, onEvents });
+      assert.deepEqual(report.errors, []);
+      assert.equal(report.events, 1);
+      assert.equal(seen.length, 1);
+      assert.deepEqual(seen[0].map((event) => event.kind), ["invite_accepted"]);
+    });
+
+    it("shows the LinkedIn campaign with its senders, steps and capacity", async () => {
+      const list = await listCampaigns(member);
+      assert.ok(list.some((item) => item.name === "Agency founders" && item.channel === "linkedin"));
+      const detail = await getCampaign(member, foundersId);
+      assert.deepEqual(detail.sequence.map((step) => [step.subject, step.body]), [
+        ["Invite", "{connection_note}"],
+        ["Message", "Thanks for connecting, {first_name}. {opener}"],
+        ["Message", "{follow_up}"],
+      ]);
+      assert.deepEqual(detail.stepStats.map((row) => [row.sent, row.accepted ?? null]), [[130, 2], [1, null], [1, null]]);
+      assert.deepEqual(detail.capacity, { senders: 2, invites: 40 });
+      assert.match(detail.url ?? "", /app\.heyreach\.io\/app\/campaigns\/9001/);
+      const charted = detail.days.find((day) => day.sent === 20);
+      assert.equal(charted?.accepted, 8);
+      const prospects = await listCampaignProspects(member, foundersId, { search: "jane" });
+      assert.equal(prospects.rows.length, 1);
+      assert.equal(prospects.rows[0].stage, "accepted");
+      assert.equal(prospects.rows[0].sender, "Mark Ridgeon");
+      const bulkThree = await listCampaignProspects(member, foundersId, { search: "bulk-person-3 bulk3" });
+      assert.equal(bulkThree.rows.length, 1);
+      assert.equal(bulkThree.rows[0]?.stage, "invited");
+      assert.equal(bulkThree.rows[0]?.sender, "Mark Ridgeon");
+    });
+
+    it("imports the people who aren't in Orbit yet with their LinkedIn profiles", async () => {
+      const before = await counts(owner.workspaceId);
+      const result = await importCampaignProspects(member, foundersId, { deadline: Date.now() + 60_000 });
+      assert.equal(result.linked, 129);
+      assert.equal(result.left, 0);
+      const afterCounts = await counts(owner.workspaceId);
+      assert.equal(afterCounts.contacts, before.contacts + 129);
+      const linked = await sql<{ linkedin: string; contact_linkedin: string }>(
+        "select p.linkedin, c.normalized_linkedin as contact_linkedin from crm.campaign_prospects p join crm.contacts c on c.id = p.contact_id where p.campaign_id = $1 and p.external_lead_id = 'bulk-7'",
+        [foundersId],
+      );
+      assert.deepEqual(linked, [{ linkedin: "linkedin.com/in/bulk-person-7", contact_linkedin: "linkedin.com/in/bulk-person-7" }]);
+    });
+
+    it("waits when HeyReach answers 429", async () => {
+      let refusedOnce = false;
+      eclipse.fail = (path) => {
+        if (refusedOnce || path !== "/stats/GetOverallStats") return null;
+        refusedOnce = true;
+        return new Response("{}", { status: 429, headers: { "retry-after": "30" } });
+      };
+      try {
+        const report = await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        assert.deepEqual(report.errors, []);
+        assert.equal(report.busy.length, 1);
+        assert.match(report.busy[0], /HeyReach/);
+      } finally {
+        eclipse.fail = undefined;
+      }
+    });
+  });
+
+  describe("removing a member", () => {
+    it("clears their sender links and audits each one", async () => {
+      const jessSender = (await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Jess Cole")!;
+      assert.equal(jessSender.userId, jess.userId);
+      const before = (await senderAudits(owner.workspaceId)).length;
+      const notesBefore = await counts(owner.workspaceId);
+      await removeMember(owner, jess.userId);
+      const after = (await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Jess Cole")!;
+      assert.equal(after.userId, null);
+      const audits = await senderAudits(owner.workspaceId);
+      assert.equal(audits.length, before + 1);
+      const last = audits[audits.length - 1];
+      assert.equal(last.entity_id, jessSender.id);
+      assert.equal(last.actor_user_id, owner.userId);
+      assert.equal(last.operation, "remove_member");
+      assert.equal(last.changes.linked, null);
+      assert.equal(last.changes.unlinked, jess.userId);
+      assert.equal((await counts(owner.workspaceId)).notifications, notesBefore.notifications);
+      assert.equal((await listCampaignSenders(owner)).senders.find((sender) => sender.name === "Mark Ridgeon")!.userId, owner.userId);
+    });
+  });
+
+  describe("privacy", () => {
+    it("shows other workspaces nothing", async () => {
+      await saveCampaignConnection(outsider, "heyreach", OTHER_KEY, { fetchImpl });
+      await syncCampaigns({ workspaceId: outsider.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      const theirs = await listCampaigns(outsider);
+      assert.deepEqual(theirs.map((item) => item.name), ["Ridgeon LinkedIn"]);
+      const theirSenders = await listCampaignSenders(outsider);
+      assert.deepEqual(theirSenders.senders.map((sender) => sender.name), ["Oscar Outsider"]);
+      assert.equal(theirSenders.senders[0].userId, outsider.userId);
+      assert.ok(theirSenders.members.every((item) => item.userId === outsider.userId));
+      const ours = (await listCampaigns(owner)).map((item) => item.id);
+      for (const id of ours) await assert.rejects(getCampaign(outsider, id), refused("not_found"));
+      for (const table of ["campaigns", "campaign_prospects", "campaign_events", "campaign_senders"]) {
+        const rows = await queryAsUser<{ count: number }>(outsider.userId, `select count(*)::int as count from crm.${table} where workspace_id = $1`, [owner.workspaceId]);
+        assert.equal(rows[0].count, 0, table);
+      }
+      const elsewhere = (await createAgent(outsider.workspaceId, [...SCOPES], "Elsewhere agent")).actor;
+      const agentSenders = await withActor(elsewhere, (db) => db.query<{ workspace_id: string }>("select workspace_id from crm.campaign_senders"));
+      assert.ok(agentSenders.rows.every((row) => row.workspace_id === outsider.workspaceId));
+      assert.equal(agentSenders.rows.length, 1);
+      const reader = (await createAgent(owner.workspaceId, ["crm:read"], "Reader")).actor;
+      assert.equal((await listCampaignSenders(reader)).senders.length, 4);
+      await assert.rejects(withActor(reader, (db) => db.query("update crm.campaign_senders set user_id = null")), /permission denied/);
+      await assert.rejects(queryAsUser(member.userId, "select * from private.campaign_sync_senders($1, 'heyreach', '[]'::jsonb)", [owner.workspaceId]), /permission denied/);
+    });
+  });
+});

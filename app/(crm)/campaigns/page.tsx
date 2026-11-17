@@ -17,7 +17,7 @@ export default async function CampaignsPage() {
     <CampaignsScreen
       viewer={{ id: user.userId, name: user.fullName || user.email, email: user.email, role: user.role, workspaceName: user.workspaceName, workspaceId: user.workspaceId }}
       campaigns={campaigns}
-      connected={providers.length > 0}
+      connected={providers}
       canAdmin={user.role === "owner" || user.role === "admin"}
     />
   );

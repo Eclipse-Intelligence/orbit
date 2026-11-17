@@ -5,6 +5,7 @@ import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
+import { linkCampaignSender } from "@/lib/campaigns/senders";
 import { syncCampaigns } from "@/lib/campaigns/sync";
 import { importCampaignProspects, type ImportResult } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
@@ -66,5 +67,16 @@ export async function importCampaignProspectsAction(campaignId: string): Promise
     return { result };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't import. Try again." };
+  }
+}
+
+export async function linkCampaignSenderAction(senderId: string, userId: string | null): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await linkCampaignSender(user, senderId, userId);
+    revalidatePath(SETTINGS_PATHS.tools);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't save. Try again." };
   }
 }

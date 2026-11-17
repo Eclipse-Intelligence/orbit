@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { query } from "@/lib/db/pool";
 
-export const SERVICES = ["llm", "web_search", "parallel", "context_dev", "mindcase", "enrow", "icypeas", "hunter", "smartlead", "smartlead_stats"] as const;
+export const SERVICES = ["llm", "web_search", "parallel", "context_dev", "mindcase", "enrow", "icypeas", "hunter", "smartlead", "smartlead_stats", "heyreach"] as const;
 export type Service = (typeof SERVICES)[number];
 
 type Window = { limit: number; seconds: number };
@@ -23,6 +23,7 @@ const DEFAULTS: Record<Service, { perMinute?: number; perHour?: number; atOnce?:
   hunter: { perMinute: 60, atOnce: 10 },
   smartlead: { perMinute: 60, perHour: 1000 },
   smartlead_stats: { perMinute: 10 },
+  heyreach: { perMinute: 300 },
 };
 
 function envNumber(name: string, fallback: number | undefined) {
@@ -58,6 +59,7 @@ const SERVICE_NAMES: Record<Service, string> = {
   hunter: "Hunter",
   smartlead: "Smartlead",
   smartlead_stats: "Smartlead",
+  heyreach: "HeyReach",
 };
 
 export class ServiceBusy extends Error {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { campaignProvider, type CampaignProvider, type ProviderContext, type ProviderEvent, type ProviderLead } from "@/lib/campaigns/providers";
+import { campaignProvider, type CampaignProvider, type ProviderCampaign, type ProviderContext, type ProviderEvent, type ProviderLead } from "@/lib/campaigns/providers";
+import { saveProviderSenders } from "@/lib/campaigns/senders";
 import type { CampaignProviderId, CampaignStatus } from "@/lib/campaigns/types";
 import { memberActor, timeLeft } from "@/lib/crm/conversations";
 import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
@@ -103,6 +104,7 @@ function leadJson(lead: ProviderLead) {
     lead_status: lead.leadStatus,
     category: lead.category,
     added_at: lead.addedAt,
+    sender_id: lead.senderId ?? null,
   };
 }
 
@@ -150,6 +152,7 @@ type Pass = {
   actor: UserActor;
   options: CampaignSyncOptions;
   report: CampaignSyncReport;
+  listed: Map<string, ProviderCampaign>;
 };
 
 async function syncCampaign(pass: Pass, row: CampaignRow) {
@@ -160,6 +163,8 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   const live = row.status === "active" || row.status === "paused";
   const room = () => timeLeft(options.deadline, STEP_RESERVE_MS);
   const campaign: SyncedCampaign = { id: row.id, workspaceId: pass.workspaceId, provider: provider.id, externalId: row.external_id, name: row.name };
+  const senderIds = pass.listed.get(row.external_id)?.senderIds;
+  if (senderIds) await saveCampaign(row.id, { senderIds });
 
   if ((backfilling && !state.sequenceAt) || due(state.sequenceAt, live ? SEQUENCE_EVERY_MS : IDLE_EVERY_MS, now)) {
     if (!room()) return;
@@ -169,8 +174,8 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
 
   if (backfilling || live || due(state.statsAt, IDLE_EVERY_MS, now)) {
     if (!room()) return;
-    const stats = await provider.readStats(context, row.external_id);
-    await saveCampaign(row.id, { stats, syncState: { statsAt: new Date().toISOString() } });
+    const read = await provider.readStats(context, row.external_id);
+    await saveCampaign(row.id, { stats: read.stats, ...(read.days ? { dayStats: read.days } : {}), syncState: { statsAt: new Date().toISOString() } });
   }
 
   const leadsInProgress = typeof state.leadsOffset === "number";
@@ -252,18 +257,20 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
   try {
     const context: ProviderContext = { key: decryptSecret(target.key_encrypted), workspaceId: target.workspace_id, fetchImpl: options.fetchImpl };
     const listed = await provider.listCampaigns(context);
+    const senders = provider.listSenders ? await provider.listSenders(context) : null;
+    if (senders) await saveProviderSenders(actor, provider.id, senders);
     const rows = await query<CampaignRow>("select * from private.campaign_sync_campaigns($1, $2, $3, $4::jsonb)", [
       target.workspace_id,
       provider.id,
       provider.channel,
       JSON.stringify(listed.map((item) => ({ external_id: item.externalId, name: item.name, status: item.status }))),
     ]);
-    const pass: Pass = { provider, context, workspaceId: target.workspace_id, actor, options, report };
+    const pass: Pass = { provider, context, workspaceId: target.workspace_id, actor, options, report, listed: new Map(listed.map((item) => [item.externalId, item])) };
     for (const row of rows.rows) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS)) break;
       await syncCampaign(pass, row);
     }
-    await finish(target, null, { campaigns: listed.length });
+    await finish(target, null, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
   } catch (error) {
     if (error instanceof ServiceBusy) {
       report.busy.push(`${provider.name}: ${error.message}`);

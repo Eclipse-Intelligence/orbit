@@ -118,3 +118,96 @@ export function sequenceOf(steps: { subject: string; body: string; variants?: { 
     })),
   }));
 }
+
+export type FakeHeyReachLead = {
+  id: string;
+  profileUrl: string;
+  first: string;
+  last: string;
+  company?: string;
+  position?: string;
+  accountId?: number;
+  status?: string;
+  connection?: "None" | "ConnectionSent" | "ConnectionAccepted";
+  messages?: number;
+  lastActionTime?: string;
+  created?: string;
+};
+
+export type FakeHeyReachCampaign = {
+  id: number;
+  name: string;
+  status: string;
+  accountIds: number[];
+  sequence: unknown;
+  leads: FakeHeyReachLead[];
+  overall: Record<string, number>;
+  byDay: Record<string, Record<string, number>>;
+};
+
+export type FakeHeyReachAccount = {
+  key: string;
+  accounts: { id: number; firstName: string; lastName: string; emailAddress: string | null; profileUrl: string; connectionRequestsDailyLimit?: number }[];
+  campaigns: FakeHeyReachCampaign[];
+  calls: { path: string; body: Record<string, unknown> | null }[];
+  fail?: (path: string) => Response | null;
+};
+
+function page<T>(items: T[], body: Record<string, unknown> | null) {
+  const offset = Number(body?.offset ?? 0);
+  const limit = Number(body?.limit ?? 100);
+  return { totalCount: items.length, items: items.slice(offset, offset + limit) };
+}
+
+export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
+  return async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin !== "https://api.heyreach.io") throw new Error(`Unexpected request to ${url.origin}`);
+    if (url.searchParams.has("api_key")) throw new Error("The key must not be in the URL");
+    const key = new Headers(init?.headers).get("x-api-key");
+    const account = accounts.find((item) => item.key === key);
+    if (!account) return json({ message: "Unauthorized" }, 401);
+    const path = url.pathname.replace(/^\/api\/public/, "");
+    const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+    account.calls.push({ path, body });
+    const failure = account.fail?.(path);
+    if (failure) return failure;
+    if (path === "/auth/CheckApiKey") return new Response(null, { status: 200 });
+    if (path === "/campaign/GetAll") {
+      return json(page(account.campaigns.map((campaign) => ({ id: campaign.id, name: campaign.name, status: campaign.status, campaignAccountIds: campaign.accountIds })), body));
+    }
+    if (path === "/li_account/GetAll") return json(page(account.accounts, body));
+    if (path === "/campaign/GetById") {
+      const campaign = account.campaigns.find((item) => String(item.id) === url.searchParams.get("campaignId"));
+      return campaign ? json({ id: campaign.id, name: campaign.name, status: campaign.status, sequence: campaign.sequence }) : json({ message: "Not found" }, 404);
+    }
+    if (path === "/stats/GetOverallStats") {
+      const ids = ((body?.campaignIds as unknown[] | undefined) ?? []).map(String);
+      const campaign = account.campaigns.find((item) => ids.includes(String(item.id)));
+      return campaign ? json({ overallStats: campaign.overall, byDayStats: campaign.byDay }) : json({ message: "Not found" }, 404);
+    }
+    if (path === "/campaign/GetLeadsFromCampaign") {
+      const campaign = account.campaigns.find((item) => String(item.id) === String(body?.campaignId));
+      if (!campaign) return json({ message: "Not found" }, 404);
+      const since = typeof body?.timeFrom === "string" ? Date.parse(body.timeFrom) : null;
+      const leads = campaign.leads.filter((lead) => since === null || Date.parse(lead.lastActionTime ?? lead.created ?? "2026-11-01T09:00:00.000Z") > since);
+      return json(
+        page(
+          leads.map((lead) => ({
+            id: lead.id,
+            linkedInAccountId: lead.accountId ?? null,
+            leadCampaignStatus: lead.status ?? "InSequence",
+            leadConnectionStatus: lead.connection ?? "None",
+            leadMessageStatus: (lead.messages ?? 0) > 0 ? "MessageSent" : "None",
+            messagesSent: lead.messages ?? 0,
+            lastActionTime: lead.lastActionTime ?? null,
+            creationTime: lead.created ?? "2026-11-01T09:00:00.000Z",
+            linkedInUserProfile: { firstName: lead.first, lastName: lead.last, profileUrl: lead.profileUrl, companyName: lead.company ?? null, position: lead.position ?? null },
+          })),
+          body,
+        ),
+      );
+    }
+    return json({ message: "Not found" }, 404);
+  };
+}

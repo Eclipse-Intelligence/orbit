@@ -9,7 +9,7 @@ import { QuietTabs } from "@/components/crm/contact-activities";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { campaignRates, campaignView, number, STATUS_LABELS, type CampaignView } from "@/lib/campaigns/format";
-import type { CampaignChannel, CampaignSummary } from "@/lib/campaigns/types";
+import { PROVIDER_CHANNEL, type CampaignChannel, type CampaignProviderId, type CampaignSummary } from "@/lib/campaigns/types";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
@@ -49,12 +49,12 @@ export default function CampaignsScreen({
 }: {
   viewer: Viewer;
   campaigns: CampaignSummary[];
-  connected: boolean;
+  connected: CampaignProviderId[];
   canAdmin: boolean;
 }) {
   const [view, setView] = useState<CampaignView>("live");
   const [channel, setChannel] = useState<"all" | CampaignChannel>("all");
-  const channels = new Set(campaigns.map((campaign) => campaign.channel));
+  const bothChannels = new Set(connected.map((provider) => PROVIDER_CHANNEL[provider])).size > 1;
   const shown = campaigns.filter(
     (campaign) => campaignView(campaign.status) === view && (channel === "all" || campaign.channel === channel),
   );
@@ -64,7 +64,7 @@ export default function CampaignsScreen({
       <SectionHeader title="Campaigns" viewer={viewer} />
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
         <QuietTabs label="Campaign status" items={VIEW_TABS} value={view} onChange={setView} />
-        {channels.size > 1 && (
+        {bothChannels && (
           <FilterMenu
             label="Channel"
             value={channel}
@@ -77,9 +77,9 @@ export default function CampaignsScreen({
       {shown.length === 0 ? (
         <div className="caption-style text-subtle flex flex-col gap-1 px-4 py-8">
           <p>No campaigns</p>
-          {!connected && canAdmin && (
+          {connected.length === 0 && canAdmin && (
             <p>
-              Connect Smartlead in{" "}
+              Connect Smartlead or HeyReach in{" "}
               <Link href={`${SETTINGS_PATHS.tools}#smartlead`} className="text-foreground underline-offset-2 hover:underline">
                 Settings › Tools
               </Link>

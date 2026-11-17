@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { campaignProvider, CAMPAIGN_PROVIDER_CLIENTS, type CampaignProvider } from "@/lib/campaigns/providers";
+import { listCampaignSenders, saveProviderSenders } from "@/lib/campaigns/senders";
 import type { CampaignProviderId, ConnectionView } from "@/lib/campaigns/types";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError } from "@/lib/crm/errors";
@@ -65,8 +66,9 @@ export async function saveCampaignConnection(
   const taken = await query<{ taken: boolean }>("select private.campaign_key_taken($1, $2, $3) as taken", [provider.id, fingerprint, actor.workspaceId]);
   if (taken.rows[0]?.taken) throw new CrmError("conflict", KEY_TAKEN, 409, { field: "key" });
   const checked = await checkKey(provider, key, actor.workspaceId, options.fetchImpl);
+  let connection: { id: string; line: string };
   try {
-    return await withActor(actor, async (db) => {
+    connection = await withActor(actor, async (db) => {
       const saved = await db.query<{ id: string }>(
         `insert into crm.campaign_connections (workspace_id, provider, key_encrypted, key_fingerprint, details, connected_by)
          values ($1, $2, $3, $4, $5::jsonb, $6)
@@ -87,6 +89,8 @@ export async function saveCampaignConnection(
     if (fingerprintClash(error)) throw new CrmError("conflict", KEY_TAKEN, 409, { field: "key" });
     throw error;
   }
+  if (checked.senders) await saveProviderSenders(actor, provider.id, checked.senders, options.provenance ?? { operation: "connect_campaign_tool", source: "web" });
+  return connection;
 }
 
 export async function removeCampaignConnection(actor: Actor, providerId: string, options: { provenance?: Provenance } = {}) {
@@ -130,22 +134,32 @@ export async function campaignConnectionViews(actor: Actor): Promise<ConnectionV
     return result.rows;
   });
   const canAdmin = isAdmin(actor);
-  return Promise.all(
-    Object.values(CAMPAIGN_PROVIDER_CLIENTS).map(async (provider): Promise<ConnectionView> => {
-      const row = rows.find((item) => item.provider === provider.id);
-      if (!row) return { provider: provider.id, connected: false, line: null, lastSyncedAt: null, lastError: null, keyHint: null, canAdmin };
-      const campaigns = row.campaigns || (typeof row.details.campaigns === "number" ? row.details.campaigns : 0);
-      return {
-        provider: provider.id,
-        connected: true,
-        line: provider.connectedLine(row.details, campaigns),
-        lastSyncedAt: row.last_synced_at?.toISOString() ?? null,
-        lastError: row.last_error,
-        keyHint: canAdmin ? await keyHint(actor.workspaceId, provider.id) : null,
-        canAdmin,
-      };
-    }),
-  );
+  const views: ConnectionView[] = [];
+  for (const provider of Object.values(CAMPAIGN_PROVIDER_CLIENTS)) {
+    const row = rows.find((item) => item.provider === provider.id);
+    views.push(await connectionView(actor, provider, row, canAdmin));
+  }
+  return views;
+}
+
+async function connectionView(
+  actor: Actor,
+  provider: CampaignProvider,
+  row: { details: Record<string, unknown>; last_synced_at: Date | null; last_error: string | null; campaigns: number } | undefined,
+  canAdmin: boolean,
+): Promise<ConnectionView> {
+  if (!row) return { provider: provider.id, connected: false, line: null, lastSyncedAt: null, lastError: null, keyHint: null, canAdmin };
+  const campaigns = row.campaigns || (typeof row.details.campaigns === "number" ? row.details.campaigns : 0);
+  return {
+    provider: provider.id,
+    connected: true,
+    line: provider.connectedLine(row.details, campaigns),
+    lastSyncedAt: row.last_synced_at?.toISOString() ?? null,
+    lastError: row.last_error,
+    keyHint: canAdmin ? await keyHint(actor.workspaceId, provider.id) : null,
+    canAdmin,
+    ...(provider.listSenders ? { senders: await listCampaignSenders(actor, provider.id) } : {}),
+  };
 }
 
 export async function connectedProviders(actor: Actor) {

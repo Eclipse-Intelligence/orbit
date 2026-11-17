@@ -2,6 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import AgentMailboxSettings from "@/components/crm/agent-mailbox-settings";
 import CampaignConnectionCard from "@/components/campaigns/campaign-connection-card";
+import CampaignSenders from "@/components/campaigns/campaign-senders";
 import ApiSettings from "@/components/crm/api-settings";
 import ClickUpSettings from "@/components/crm/clickup-settings";
 import { LinearSettings } from "@/components/crm/connection-cards";
@@ -58,7 +59,9 @@ export default async function ToolsSettingsPage() {
       <AgentMailboxSettings view={agentMailbox} isOwner={user.role === "owner"} />
       <MetaLeadsSettings view={metaLeads} canAdmin={canAdmin} />
       {campaignTools.map((view) => (
-        <CampaignConnectionCard key={view.provider} view={view} />
+        <CampaignConnectionCard key={view.provider} view={view}>
+          {view.connected && view.senders ? <CampaignSenders view={view.senders} /> : null}
+        </CampaignConnectionCard>
       ))}
       <LinearSettings linear={linear} connection={linearHere} workspaceName={user.workspaceName} canAdmin={canAdmin} isOwner={user.role === "owner"} />
       <ApiSettings origin={origin} scopes={[...SCOPES]} />
