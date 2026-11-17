@@ -170,13 +170,15 @@ export async function sendContactEmailAction(
     keepAttachments?: boolean;
     from?: string | null;
     signature?: boolean;
+    bulk?: boolean;
   },
 ) {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again.", stopsRun: true as const };
   let warning: string | null;
+  const { bulk, ...message } = email;
   try {
-    ({ warning } = await sendContactEmail(user, contactId, { ...email, origin: mailOriginFromHeaders(await headers()) }));
+    ({ warning } = await sendContactEmail(user, contactId, { ...message, suppression: bulk ? "refuse" : "warn", origin: mailOriginFromHeaders(await headers()) }));
   } catch (error) {
     return actionError(error);
   }

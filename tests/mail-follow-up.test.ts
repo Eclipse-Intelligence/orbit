@@ -297,6 +297,24 @@ describe("follow-ups Orbit sends when nobody replies", () => {
     assert.ok((await listNotifications(owner, 20)).some((note) => note.title === "Follow-up not sent: RE: Acme pilot"));
   });
 
+  it("refuses a follow-up to someone on the do not contact list, before writing it, and says why", async () => {
+    await startThread("conv-suppressed", { followUpDays: 1 });
+    await admin().query("insert into crm.suppressions (workspace_id, contact_id, kind, value, reason, source) values ($1, null, 'email', 'jane@acme.test', 'manual', 'web')", [owner.workspaceId]);
+    try {
+      await makeDue("conv-suppressed");
+      const run = outlook({ reply: "Hi Jane, any thoughts?\n\nMark" });
+      const report = await processDueMail(owner, { fetchImpl: run.fetchImpl, origin: ORIGIN });
+      assert.equal(report.followUpsSent, 0);
+      assert.equal(sends(run.calls).length, 0);
+      assert.equal(run.prompts.length, 0);
+      assert.equal((await reminder("conv-suppressed")).state, "due");
+      const note = (await listNotifications(owner, 20)).find((item) => item.title === "Follow-up not sent: RE: Acme pilot" && (item.body ?? "").includes("do not contact"));
+      assert.equal(note?.body, "Couldn't send. Jane Doe is on the do not contact list. Back at the top of your inbox.");
+    } finally {
+      await admin().query("delete from crm.suppressions where value = 'jane@acme.test'");
+    }
+  });
+
   it("doesn't send when the latest email in the thread isn't the user's", async () => {
     await startThread("conv-theirs", { followUpDays: 1, followUpBody: "Any news?", syncSent: false });
     await makeDue("conv-theirs");

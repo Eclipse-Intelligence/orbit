@@ -723,7 +723,7 @@ export async function sendDocument(
       const sent = await sendContactEmail(
         actor,
         prepared.row.contact_id,
-        { subject, body: `${message}\n\n${url}`, from: typeof input.from === "string" ? input.from : null },
+        { subject, body: `${message}\n\n${url}`, from: typeof input.from === "string" ? input.from : null, suppression: "warn" },
         options.fetchImpl,
       );
       warning = sent.warning;
@@ -791,6 +791,7 @@ export async function countersignDocument(
     emailed = await sendContactEmail(actor, detail.contactId, {
       subject: `Signed: ${detail.title}`,
       body: `Hi ${first},\n\nWe've countersigned ${detail.title}, so it's now fully signed. You can download the signed copy here:\n\n${detail.link}`,
+      suppression: "warn",
     }).then(
       () => true,
       (error) => {

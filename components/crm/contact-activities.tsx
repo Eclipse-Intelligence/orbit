@@ -311,6 +311,7 @@ export default function ContactActivities({
   campaignRows,
   insights,
   reads,
+  caution = null,
   className,
 }: {
   contactId: string;
@@ -323,6 +324,7 @@ export default function ContactActivities({
   campaignRows?: CampaignTimelineRow[];
   insights?: Record<string, CallInsight>;
   reads?: Record<string, EmailRead>;
+  caution?: string | null;
   className?: string;
 }) {
   const draft = useActivityDraft();
@@ -338,6 +340,7 @@ export default function ContactActivities({
             email={email}
             recipient={recipient}
             mailboxConnected={mailboxConnected}
+            caution={caution}
           />
         }
       />

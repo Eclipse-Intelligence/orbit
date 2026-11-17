@@ -2,7 +2,8 @@ import { connectedContext, providerError, type ProviderOptions } from "@/lib/cam
 import { leadRef, readProspectRef } from "@/lib/campaigns/manage";
 import { saveThread, threadFetched } from "@/lib/campaigns/messages";
 import { linkedinReplyPermission } from "@/lib/campaigns/replies";
-import type { CampaignChannel, CampaignEventKind, CampaignProviderId, ProspectState } from "@/lib/campaigns/types";
+import { doNotContactIn, type DoNotContact } from "@/lib/campaigns/suppression";
+import type { CampaignChannel, CampaignEventKind, CampaignProviderId, ProspectState, StopReason } from "@/lib/campaigns/types";
 import { withActor } from "@/lib/crm/context";
 import { notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -87,6 +88,7 @@ export type ProspectThread = {
   defaultChannel: CampaignChannel;
   variables: ThreadVariable[];
   fetchedAt: string | null;
+  doNotContact: DoNotContact | null;
 };
 
 type PersonRow = {
@@ -103,7 +105,7 @@ type PersonRow = {
   replied_at: Date | null;
   stop_requested_at: Date | null;
   stopped_at: Date | null;
-  stop_reason: "replied" | "removed" | null;
+  stop_reason: StopReason | null;
   contact_id: string | null;
   email: string | null;
   linkedin: string | null;
@@ -331,6 +333,7 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
       defaultChannel: latestInbound?.channel ?? opened.channel,
       variables: variablesOf(opened),
       fetchedAt: fetched ? new Date(fetched).toISOString() : null,
+      doNotContact: await doNotContactIn(db, actor, { prospectId: opened.id }),
     };
   });
 }

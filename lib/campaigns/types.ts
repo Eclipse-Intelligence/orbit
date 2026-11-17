@@ -23,6 +23,8 @@ export type LeadStatus = (typeof LEAD_STATUSES)[number];
 export const PROSPECT_STATES = ["queued", "filling", "pushing", "pushed", "skipped", "failed"] as const;
 export type ProspectState = (typeof PROSPECT_STATES)[number];
 
+export type StopReason = "replied" | "removed" | "suppressed";
+
 export const EVENT_KINDS = [
   "added",
   "sent",

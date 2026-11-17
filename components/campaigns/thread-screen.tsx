@@ -20,6 +20,7 @@ import { Radio } from "@/components/_ui/radio";
 import Tag from "@/components/_ui/tag";
 import { Textarea } from "@/components/_ui/textarea";
 import ChannelIcon from "@/components/campaigns/channel-icon";
+import { DoNotContactDialog, DoNotContactStatus } from "@/components/campaigns/do-not-contact";
 import DetailSection from "@/components/companies/detail/detail-section";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
@@ -290,16 +291,18 @@ function MoreMenu({
   canAct,
   busy,
   onAction,
+  onDoNotContact,
 }: {
   campaigns: ThreadCampaign[];
   contactId: string | null;
   canAct: boolean;
   busy: boolean;
   onAction: (action: Action) => void;
+  onDoNotContact?: () => void;
 }) {
   const router = useRouter();
   const actionable = canAct ? campaigns.filter((campaign) => campaign.canPause || campaign.canResume || campaign.canRemove) : [];
-  if (!contactId && actionable.length === 0) return null;
+  if (!contactId && actionable.length === 0 && !onDoNotContact) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -333,6 +336,14 @@ function MoreMenu({
             )}
           </div>
         ))}
+        {onDoNotContact && (
+          <>
+            {(contactId || actionable.length > 0) && <DropdownMenuSeparator />}
+            <DropdownMenuItem disabled={busy} onSelect={onDoNotContact} className="text-danger">
+              Do not contact…
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -376,6 +387,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [removing, setRemoving] = useState<ThreadCampaign | null>(null);
+  const [blocking, setBlocking] = useState(false);
   const [draft, setDraftState] = useState<Draft>({ text: "", chosen: null });
   const [sendError, setSendError] = useState<{ text: string; detail: string | null } | null>(null);
   const draftNow = useRef(draft);
@@ -509,12 +521,22 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
             <CategoryPicker category={shownCategory} disabled={!canAct} onChange={(value) => void chooseCategory(value)} />
           </span>
         }
-        action={<MoreMenu campaigns={thread.campaigns} contactId={thread.person.contactId} canAct={canAct} busy={busy} onAction={(action) => (action.kind === "remove" ? setRemoving(action.campaign) : void act(action))} />}
+        action={
+          <MoreMenu
+            campaigns={thread.campaigns}
+            contactId={thread.person.contactId}
+            canAct={canAct}
+            busy={busy}
+            onAction={(action) => (action.kind === "remove" ? setRemoving(action.campaign) : void act(action))}
+            onDoNotContact={canAct && !thread.doNotContact ? () => setBlocking(true) : undefined}
+          />
+        }
       />
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_300px]">
           <div className="border-border flex min-w-0 flex-col gap-3 border-b px-3 py-4 sm:px-5 lg:border-r lg:border-b-0">
             <div className="mx-auto flex w-full max-w-[47.5em] flex-col gap-3 pb-20">
+              {thread.doNotContact && <DoNotContactStatus status={thread.doNotContact} target={{ prospectId: thread.prospectId }} canLift={canAct} />}
               {problem && (
                 <p role="alert" className="caption-style text-danger">
                   {problem}
@@ -592,6 +614,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
           if (removing) void act({ kind: "remove", campaign: removing });
         }}
       />
+      <DoNotContactDialog open={blocking} onOpenChange={setBlocking} name={thread.person.name} target={{ prospectId: thread.prospectId }} onError={setProblem} />
     </section>
   );
 }

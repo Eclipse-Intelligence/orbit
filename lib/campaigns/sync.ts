@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { saveThread, threadFetched } from "@/lib/campaigns/messages";
 import { campaignProvider, type CampaignProvider, type ProviderCampaign, type ProviderContext, type ProviderEvent, type ProviderLead } from "@/lib/campaigns/providers";
 import { processStops } from "@/lib/campaigns/stops";
+import { pushBlockList } from "@/lib/campaigns/suppression";
 import { campaignWebhookUrl, ensureWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { saveProviderSenders } from "@/lib/campaigns/senders";
 import type { CampaignProviderId, CampaignStatus } from "@/lib/campaigns/types";
@@ -488,6 +489,7 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
       await syncCampaignSafely(pass, row);
     }
     if (timeLeft(options.deadline, STEP_RESERVE_MS)) report.stopped += await processStops(target.workspace_id, provider, context, options.deadline);
+    if (timeLeft(options.deadline, STEP_RESERVE_MS)) await pushBlockList(target.workspace_id, provider, context);
     await finish(target, null, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
   } catch (error) {
     if (error instanceof ServiceBusy) {

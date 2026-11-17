@@ -6,8 +6,10 @@ import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import { enrichmentAllowed } from "@/lib/enrichment/limits";
 import {
+  CHECK_SOURCES,
   PROVIDER_BY_ID,
   configuredVerifiers,
+  type CheckSourceId,
   verifyWith,
   type ProviderGate,
   type ProviderId,
@@ -25,7 +27,7 @@ export type EmailCheck = {
   email: string;
   verdict: Verdict;
   source: "check" | "find";
-  provider: ProviderId | null;
+  provider: ProviderId | CheckSourceId | null;
   providerName: string | null;
   checkedAt: string;
   stale: boolean;
@@ -61,7 +63,8 @@ function cleanAddress(value: unknown) {
   return email;
 }
 
-function providerOf(value: string | null) {
+function providerOf(value: string | null): { provider: ProviderId | CheckSourceId | null; providerName: string | null } {
+  if (value && value in CHECK_SOURCES) return { provider: value as CheckSourceId, providerName: CHECK_SOURCES[value as CheckSourceId] };
   const provider = value ? PROVIDER_BY_ID.get(value as ProviderId) : undefined;
   return provider ? { provider: provider.id, providerName: provider.name } : { provider: null, providerName: null };
 }
