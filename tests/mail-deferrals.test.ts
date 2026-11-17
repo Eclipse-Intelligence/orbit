@@ -646,4 +646,28 @@ describe("deferrals after review", () => {
     assert.equal(task.workspace_id, created.id);
     assert.equal(task.title, "Check in with Priya Shah");
   });
+
+  it("asks each email on its own when a batch call fails, so one bad email never sinks the rest", async () => {
+    const ross = { from: { emailAddress: { name: "Ross Burke", address: "ross@hvac.test" } } };
+    inbox.push(
+      message("r-batch-defer", "We will pick this up Wednesday next week.", { ...ross, conversationId: "conv-batch-defer" }),
+      message("r-batch-plain", "Thanks for the drawings.", { ...ross, conversationId: "conv-batch-plain" }),
+      message("r-batch-huge", "HUGE pasted report", { ...ross, conversationId: "conv-batch-huge" }),
+    );
+    await sync();
+    const wednesday = dayKeyAt(new Date(Date.now() + 8 * 86_400_000));
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
+      const user = body.messages[1].content;
+      if (/\[2\]/.test(user) || /HUGE/.test(user)) return new Response("upstream timeout", { status: 504 });
+      const deferrals = /pick this up Wednesday/.test(user) ? [{ n: 1, note: "Asked to pick this up Wednesday next week.", precision: "day", date: wednesday }] : [];
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ deferrals }) }, finish_reason: "stop" }] });
+    };
+    await prepareMail(owner, { deadline: Date.now() + 120_000, fetchImpl });
+    const state = async (provider: string) =>
+      (await admin().query<{ state: string; failures: number }>("select state, failures from crm.mail_deferral_checks where message_id = $1", [await messageId(provider)])).rows[0];
+    assert.equal((await threadDeferrals("conv-batch-defer")).length, 1, "the real postponement is still found");
+    assert.equal((await state("r-batch-plain")).state, "none");
+    assert.deepEqual(await state("r-batch-huge"), { state: "failed", failures: 1 }, "only the email that fails on its own counts a failure");
+  });
 });

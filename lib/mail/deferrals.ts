@@ -460,7 +460,7 @@ async function askBatch(actor: UserActor, batch: Candidate[], options: { deadlin
     result = await completeJson({
       system:
         `You read new emails sent to ${name} and find the ones that put the conversation off until later. Reply with JSON only: {"deferrals": [{"n": number, "note": string, "precision": string, "date": string}]}, listing only the emails that defer. ` +
-        `${DEFERRAL_RULES} When unsure, leave it out. ${UNTRUSTED}`,
+        `${DEFERRAL_RULES} ${UNTRUSTED}`,
       user: listed,
       schema: BATCH_SCHEMA,
       maxTokens: 800,
@@ -470,20 +470,20 @@ async function askBatch(actor: UserActor, batch: Candidate[], options: { deadlin
     });
   } catch (error) {
     console.error("Deferral check failed", error instanceof Error ? error.message : error);
-    await noteFailures(actor, batch.map((item) => item.id));
-    return 0;
+    return askEach(actor, batch, options);
   }
   const found = new Map<number, FoundDeferral>();
   for (const entry of result.data.deferrals) {
     if (entry && Number.isInteger(entry.n) && entry.n >= 1 && entry.n <= batch.length && !found.has(entry.n)) found.set(entry.n, entry);
   }
   const malformed = result.data.deferrals.some((entry) => entry === null);
+  const unclear: Candidate[] = [];
   let recorded = 0;
   for (const [index, item] of batch.entries()) {
     try {
       const entry = found.get(index + 1);
       if (!entry && malformed) {
-        await noteFailures(actor, [item.id]);
+        unclear.push(item);
         continue;
       }
       const outcome = await applyDeferral(
@@ -497,6 +497,19 @@ async function askBatch(actor: UserActor, batch: Candidate[], options: { deadlin
       console.error("Recording a deferral failed", error instanceof Error ? error.message : error);
       await noteFailures(actor, [item.id]);
     }
+  }
+  return recorded + (unclear.length > 0 ? await askEach(actor, unclear, options) : 0);
+}
+
+async function askEach(actor: UserActor, batch: Candidate[], options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
+  if (batch.length === 1) {
+    await noteFailures(actor, [batch[0].id]);
+    return 0;
+  }
+  let recorded = 0;
+  for (const item of batch) {
+    if (options.deadline - Date.now() < STEP_MS) break;
+    recorded += await askBatch(actor, [item], options);
   }
   return recorded;
 }
