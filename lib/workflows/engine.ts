@@ -56,8 +56,12 @@ import {
   type WorkflowDefinition,
 } from "@/lib/workflows/definition";
 import { conditionsPass, display, render, resolve, webCheckVars, type Vars } from "@/lib/workflows/variables";
-import { findRecords, isRecordItem, readFindConfig, upsertRecord } from "@/lib/workflows/records";
+import { findRecords, isRecordItem, readFindConfig, tagsFrom, upsertRecord } from "@/lib/workflows/records";
 import { ServiceBusy, withService, type Service } from "@/lib/workflows/limits";
+import { addTags, removeTags } from "@/lib/crm/tags";
+import { enrichContact, type FindProgress } from "@/lib/enrichment/contacts";
+import { verifyContactEmail } from "@/lib/enrichment/email-check";
+import { ProviderFailure, type ProviderGate, type ProviderId, type VerifyAttempt } from "@/lib/enrichment/providers";
 import { startWorkers } from "@/lib/workflows/workers";
 
 type LoopFrame = {
@@ -88,7 +92,10 @@ export type RunState = {
   loadItem?: boolean;
   busy?: { step: string; count: number } | null;
   linkedin?: { key: string; text: string } | null;
+  lookup?: Lookup | null;
 };
+
+type Lookup = { key: string; find?: FindProgress | null; checks?: VerifyAttempt[] };
 
 type WaitingChildren = { key: string; loopId: string; total: number; atOnce: number; created: boolean };
 
@@ -622,8 +629,20 @@ const RETRY_DELAY_MS = 60_000;
 const LONG_AI_MS = 180_000;
 export const LONG_TICK_MS = 280_000;
 
-function needsLongTime(step: Step) {
-  return step.type === "ai" && step.config.webSearch === true;
+function needsLongTime(step: Step, test: boolean) {
+  return (step.type === "ai" && step.config.webSearch === true) || (step.type === "find_email" && !test);
+}
+
+const ENDS_ITEM = new Set<string>(["ai", "find_email"]);
+
+class ItemSkipped extends Error {
+  readonly output: unknown;
+
+  constructor(message: string, output: unknown) {
+    super(message);
+    this.name = "ItemSkipped";
+    this.output = output;
+  }
 }
 
 function retryable(error: unknown) {
@@ -945,7 +964,7 @@ async function assigneeFor(ctx: Ctx, value: unknown) {
   return isUuid(choice) ? choice : ctx.actor.userId;
 }
 
-const SIDE_EFFECTS = new Set(["create_task", "add_note", "update_record", "board", "notify", "post_to_chat", "send_email", "linear_issue", "upsert_record", "webhook"]);
+const SIDE_EFFECTS = new Set(["create_task", "add_note", "update_record", "board", "notify", "post_to_chat", "send_email", "linear_issue", "upsert_record", "find_email", "webhook"]);
 
 export function effectKey(stepId: string, frames: Pick<LoopFrame, "id" | "index">[] = []) {
   return [stepId, ...frames.map((frame) => `${frame.id}.${frame.index}`)].join(":");
@@ -1080,6 +1099,81 @@ async function emailThread(actor: UserActor, vars: Vars) {
   }
 }
 
+async function changeTags(ctx: Ctx, step: Step, object: "company" | "contact", id: string, tags: string[], action: "add" | "remove") {
+  const change = action === "remove" ? removeTags : addTags;
+  const [outcome] = await change(ctx.actor, object, [id], tags, provenance(ctx, step));
+  if (!outcome?.ok) throw new CrmError("invalid_input", outcome?.error ?? "Couldn't change the tags.", 400);
+}
+
+async function tagStep(ctx: Ctx, step: Step, object: "company" | "contact", id: string): Promise<StepResult> {
+  const tags = tagsFrom(step.config.value, ctx.vars);
+  if (tags.length === 0) throw new CrmError("invalid_input", "Enter a tag.", 400);
+  const action = str(step.config.tagAction) === "remove" ? "remove" : "add";
+  await changeTags(ctx, step, object, id, tags, action);
+  if (object === "company") ctx.vars.company = companyVars(await getCompany(ctx.actor, id));
+  else ctx.vars.contact = contactVars(await getContact(ctx.actor, id));
+  return { kind: "next", output: { field: "tags", [action === "remove" ? "removed" : "added"]: tags } };
+}
+
+const PROVIDER_SERVICES: Record<ProviderId, Service> = { context: "context_dev", hunter: "hunter", enrow: "enrow", icypeas: "icypeas" };
+
+const providerLimits: ProviderGate = (provider, run) =>
+  withService(PROVIDER_SERVICES[provider], run, {
+    statusOf: (error) => (error instanceof ProviderFailure ? { status: error.status, retryAfter: error.retryAfter } : null),
+  });
+
+async function findEarlier(ctx: Ctx, contactId: string, since: number) {
+  return withActor(ctx.actor, async (db) => {
+    const result = await db.query<{ status: string }>(
+      `select status from crm.enrichment_lookups
+       where workspace_id = $1 and record_type = 'contact' and record_id = $2 and field = 'email'
+         and created_by_user_id = $3 and created_at >= $4
+       order by created_at desc limit 1`,
+      [ctx.actor.workspaceId, contactId, ctx.actor.userId, new Date(since).toISOString()],
+    );
+    return result.rows[0]?.status ?? null;
+  });
+}
+
+async function findEmailStep(ctx: Ctx, step: Step): Promise<StepResult> {
+  const contactId = (ctx.vars.contact as { id?: string } | undefined)?.id;
+  if (!contactId) throw new ItemSkipped("This run has no contact to find an email for.", { status: "not_found", address: null });
+  const key = effectKey(step.id, ctx.state.frames ?? []);
+  const lookup: Lookup = ctx.state.lookup?.key === key ? ctx.state.lookup : { key };
+  ctx.state.lookup = lookup;
+  const earlier = await startEffect(ctx, step);
+  let contact = await getContact(ctx.actor, contactId);
+  if (!contact.email) {
+    const before = earlier ? await findEarlier(ctx, contact.id, earlier.at) : null;
+    if (before === "not_found") throw new ItemSkipped(`No email found for ${contact.name}.`, { status: "not_found", address: null });
+    const found = await enrichContact(ctx.actor, contact.id, "email", {
+      fetchImpl: ctx.fetchImpl,
+      workflowLimits: providerLimits,
+      resume: lookup.find,
+      onProgress: (progress) => {
+        lookup.find = progress;
+      },
+    });
+    if (found.status === "failed") throw new CrmError("upstream_error", found.message, 502);
+    if (found.status !== "found") throw new ItemSkipped(found.message, { status: "not_found", address: null });
+    contact = await getContact(ctx.actor, contact.id);
+    ctx.vars.contact = contactVars(contact);
+  }
+  const check = await verifyContactEmail(ctx.actor, contact.id, {
+    fetchImpl: ctx.fetchImpl,
+    deadline: ctx.deadline,
+    workflowLimits: providerLimits,
+    resume: lookup.checks,
+    onAttempt: (attempts) => {
+      lookup.checks = attempts;
+    },
+  });
+  const output = { status: check.verdict, address: check.email };
+  if (check.verdict === "invalid") throw new ItemSkipped(`${check.email} is invalid.`, output);
+  if (check.verdict !== "valid") throw new ItemSkipped(`Couldn't confirm ${check.email}.`, output);
+  return { kind: "next", output };
+}
+
 async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
   const config = step.config;
   if (ctx.run.test && (SIDE_EFFECTS.has(step.type) || step.type === "delay" || step.type === "approval")) {
@@ -1175,6 +1269,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       const object = str(config.object) === "contact" ? "contact" : "company";
       const field = str(config.field);
       const id = requireRecord(ctx, object);
+      if (field === "tags") return tagStep(ctx, step, object, id);
       let value: unknown = render(config.value, ctx.vars).trim();
       if (field === "ownerId" && value === "owner") value = ctx.actor.userId;
       if (value === "") value = null;
@@ -1243,6 +1338,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     }
     case "upsert_record": {
       const object = str(config.object) === "contact" ? "contact" : "company";
+      const tags = tagsFrom(config.tags, ctx.vars);
       const result = await upsertRecord(
         ctx.actor,
         {
@@ -1259,14 +1355,17 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
         },
         provenance(ctx, step),
       );
+      if (result.id && tags.length) await changeTags(ctx, step, object, result.id, tags, "add");
       if (result.id && config.useInRun === true) {
         const loaded = await recordVars(ctx.actor, { type: object, id: result.id });
         if (loaded?.company && object === "company") ctx.vars.company = loaded.company;
         if (loaded?.contact) ctx.vars.contact = loaded.contact;
       }
       const href = result.id ? (object === "company" ? companyHref(result.id) : contactHref(result.id)) : null;
-      return { kind: "next", output: { ...result, url: href ? link(href) : null } };
+      return { kind: "next", output: { ...result, url: href ? link(href) : null, ...(result.id && tags.length ? { tags } : {}) } };
     }
+    case "find_email":
+      return findEmailStep(ctx, step);
     case "webhook":
       return postWebhook(ctx, step);
     case "create_proposal":
@@ -1750,7 +1849,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
       at = follow(definition, at, "missing", state, vars);
       continue;
     }
-    if (state.waitingStep !== step.id && needsLongTime(step) && options.deadline - Date.now() < LONG_AI_MS + STEP_RESERVE_MS) {
+    if (state.waitingStep !== step.id && needsLongTime(step, run.test) && options.deadline - Date.now() < LONG_AI_MS + STEP_RESERVE_MS) {
       state.needsTime = true;
       await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "queued" });
       return "paused";
@@ -1789,6 +1888,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
       if (state.retried) state.retried = null;
       if (state.busy) state.busy = null;
       if (state.linkedin) state.linkedin = null;
+      if (state.lookup) state.lookup = null;
       if (state.effect || SIDE_EFFECTS.has(step.type)) {
         done = state.effect ?? null;
         state.effect = null;
@@ -1806,7 +1906,9 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
           return "waiting";
         }
       }
-      const message = error instanceof ServiceBusy ? (run.test ? error.message : BUSY_TOO_LONG) : errorText(error);
+      state.lookup = null;
+      const skipped = error instanceof ItemSkipped ? error : null;
+      const message = error instanceof ServiceBusy ? (run.test ? error.message : BUSY_TOO_LONG) : skipped ? skipped.message : errorText(error);
       if (retryable(error) && !run.test && state.retried !== step.id) {
         state.retried = step.id;
         const until = new Date(Date.now() + RETRY_DELAY_MS).toISOString();
@@ -1814,20 +1916,21 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
         await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "delay", resume_at: until });
         return "waiting";
       }
-      await logStep(ctx, step, "failed", input, null, message, started);
-      if (step.type === "ai" && (state.frames?.length ?? 0) > 0) {
+      const endsItem = ENDS_ITEM.has(step.type) && ((state.frames?.length ?? 0) > 0 || Boolean(run.parent_run_id));
+      await logStep(ctx, step, skipped && endsItem ? "skipped" : "failed", input, skipped?.output ?? null, message, started);
+      if (endsItem && (state.frames?.length ?? 0) > 0) {
         state.retried = null;
         state.busy = null;
         state.skipped = [...(state.skipped ?? []), { name: loopItemName(vars), error: message }];
-        (vars.steps as Record<string, unknown>)[step.id] = null;
+        (vars.steps as Record<string, unknown>)[step.id] = skipped?.output ?? null;
         at = nextLoopItem(definition, state, vars);
         checkpoint = true;
         continue;
       }
-      if (step.type === "ai" && run.parent_run_id) {
+      if (endsItem && run.parent_run_id) {
         state.retried = null;
         state.busy = null;
-        (vars.steps as Record<string, unknown>)[step.id] = null;
+        (vars.steps as Record<string, unknown>)[step.id] = skipped?.output ?? null;
         await endRun(actor, run, "skipped", { state: { ...state, at: null, vars }, skip_reason: `${step.label || step.id}: ${message}`.slice(0, 2000) });
         return "succeeded";
       }

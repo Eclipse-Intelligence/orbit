@@ -501,7 +501,7 @@ export default function StepConfig({
       );
     case "update_record": {
       const object = str(c.object) === "contact" ? "contact" : "company";
-      const fields = FIELD_OPTIONS[object];
+      const fields = [...FIELD_OPTIONS[object], { key: "tags", label: "Tags" }];
       return (
         <div className="flex flex-col gap-3">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -509,7 +509,7 @@ export default function StepConfig({
               <option value="company">Company</option>
               <option value="contact">Contact</option>
             </Select>
-            <Select id={`${step.id}-field`} label="Field" value={str(c.field) || fields[0].key} onChange={(value) => update({ ...c, field: value })}>
+            <Select id={`${step.id}-field`} label="Field" value={str(c.field) || fields[0].key} onChange={(value) => update({ ...c, field: value, ...(value === "tags" || c.field === "tags" ? { value: "" } : {}) })}>
               {fields.map((item) => (
                 <option key={item.key} value={item.key}>
                   {item.label}
@@ -536,6 +536,14 @@ export default function StepConfig({
               <option value="watch">Watch</option>
               <option value="at_risk">At risk</option>
             </Select>
+          ) : str(c.field) === "tags" ? (
+            <div className="grid gap-3 sm:grid-cols-[9rem_1fr]">
+              <Select id={`${step.id}-tag-action`} label="Change" value={str(c.tagAction) === "remove" ? "remove" : "add"} onChange={(value) => update({ ...c, tagAction: value })}>
+                <option value="add">Add</option>
+                <option value="remove">Remove</option>
+              </Select>
+              {field("value", "Tags", { placeholder: "Agency run {{today}}", hint: "Separate tags with commas." })}
+            </div>
           ) : (str(c.field) || fields[0].key) === "ownerId" ? (
             <Select id={`${step.id}-value`} label="New owner" value={str(c.value) || "owner"} onChange={(value) => update({ ...c, value })}>
               <option value="owner">Me</option>
@@ -756,6 +764,7 @@ export default function StepConfig({
               {field("companyId", "Company id (optional)", { placeholder: "{{steps.upsert_record_1.id}}" })}
             </>
           )}
+          {field("tags", "Tags (optional)", { placeholder: "Agency run {{today}}", hint: "Separate tags with commas." })}
           <label className="caption-style text-subtle flex items-center gap-2">
             <Checkbox checked={c.create !== false} onCheckedChange={(value) => update({ ...c, create: value === true })} />
             Create it if it isn&apos;t in Orbit
@@ -767,6 +776,8 @@ export default function StepConfig({
         </div>
       );
     }
+    case "find_email":
+      return <p className="caption-style text-subtle leading-[1.4]">Ends the item when no valid email is found.</p>;
     case "webhook":
       return (
         <div className="flex flex-col gap-3">

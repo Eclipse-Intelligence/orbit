@@ -40,10 +40,21 @@ type Provider = {
 };
 
 export class ProviderFailure extends ShownError {
-  constructor(message: string) {
+  readonly status: number | null;
+  readonly retryAfter: string | null;
+
+  constructor(message: string, status: number | null = null, retryAfter: string | null = null) {
     super(message);
     this.name = "ProviderFailure";
+    this.status = status;
+    this.retryAfter = retryAfter;
   }
+}
+
+export type ProviderGate = <T>(provider: ProviderId, run: () => Promise<T>) => Promise<T>;
+
+export function throughGate<T>(gate: ProviderGate | undefined, provider: ProviderId, run: () => Promise<T>) {
+  return gate ? gate(provider, run) : run();
 }
 
 const CALL_TIMEOUT_MS = 30_000;
@@ -83,8 +94,8 @@ async function call(
   } catch {}
   if (response.status === 402 || response.status === 401 || response.status === 403 || response.status === 429 || response.status >= 500) {
     logUpstream(provider, response.status, body);
-    if (response.status === 402) throw new ProviderFailure(`${provider} is out of credits.`);
-    throw new ProviderFailure(upstreamMessage(provider, response.status, { busy: "It may be out of credits." }));
+    if (response.status === 402) throw new ProviderFailure(`${provider} is out of credits.`, 402);
+    throw new ProviderFailure(upstreamMessage(provider, response.status, { busy: "It may be out of credits." }), response.status, response.headers.get("retry-after"));
   }
   return { status: response.status, body };
 }
@@ -349,24 +360,38 @@ export function configuredVerifiers(env: Record<string, string | undefined> = pr
   return VERIFIER_ORDER.filter((id) => providerKey(id, env) && PROVIDER_BY_ID.get(id)?.verify);
 }
 
-export async function verifyWith(
-  email: string,
-  options: { env: Record<string, string | undefined>; fetchImpl: typeof fetch; deadline: number; pollMs?: number },
-): Promise<{ verdict: Verdict; by: ProviderId | null; attempts: VerifyAttempt[] }> {
-  const attempts: VerifyAttempt[] = [];
+export type VerifyOptions = {
+  env: Record<string, string | undefined>;
+  fetchImpl: typeof fetch;
+  deadline: number;
+  pollMs?: number;
+  gate?: ProviderGate;
+  resume?: VerifyAttempt[];
+  onAttempt?: (attempts: VerifyAttempt[]) => void;
+};
+
+export async function verifyWith(email: string, options: VerifyOptions): Promise<{ verdict: Verdict; by: ProviderId | null; attempts: VerifyAttempt[] }> {
+  const attempts: VerifyAttempt[] = [...(options.resume ?? [])];
+  const done = new Set(attempts.map((attempt) => attempt.provider));
   for (const id of configuredVerifiers(options.env)) {
+    if (done.has(id)) continue;
     const provider = PROVIDER_BY_ID.get(id)!;
     try {
-      const verdict = await provider.verify!(email, {
-        key: providerKey(id, options.env)!,
-        fetchImpl: options.fetchImpl,
-        deadline: options.deadline,
-        pollMs: options.pollMs,
-      });
+      const verdict = await throughGate(options.gate, id, () =>
+        provider.verify!(email, {
+          key: providerKey(id, options.env)!,
+          fetchImpl: options.fetchImpl,
+          deadline: options.deadline,
+          pollMs: options.pollMs,
+        }),
+      );
       attempts.push({ provider: id, outcome: verdict });
+      options.onAttempt?.([...attempts]);
       if (verdict !== "unknown") return { verdict, by: id, attempts };
     } catch (error) {
+      if (!(error instanceof ProviderFailure) && options.gate) throw error;
       attempts.push({ provider: id, outcome: "failed", detail: error instanceof ProviderFailure ? error.message : "Check failed." });
+      options.onAttempt?.([...attempts]);
     }
   }
   return { verdict: "unknown", by: null, attempts };

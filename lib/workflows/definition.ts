@@ -33,6 +33,7 @@ export const STEP_TYPES = [
   "linear_issue",
   "find_records",
   "upsert_record",
+  "find_email",
   "webhook",
   "create_proposal",
 ] as const;
@@ -441,6 +442,7 @@ export const STEP_LABELS: Record<StepType, string> = {
   linear_issue: "Create Linear issue",
   find_records: "Find records",
   upsert_record: "Find or create record",
+  find_email: "Find and check email",
   webhook: "Send to a webhook",
   create_proposal: "New proposal",
 };
@@ -453,6 +455,7 @@ export const STEP_HINTS: Partial<Record<StepType, string>> = {
   notify: "Sends an in-app notification.",
   post_to_chat: "Posts in a Chat room as you.",
   find_records: "Lists matching records for For each item.",
+  find_email: "Ends the item when no valid email is found.",
   webhook: "Posts the run's data to another app.",
   create_proposal: "Drafts a proposal. Nothing is sent.",
 };

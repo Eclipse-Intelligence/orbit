@@ -59,7 +59,7 @@ function StepLog({ step }: { step: RunStepLog }) {
           )}
         />
         <span className="min-w-0 flex-1 truncate text-[13.5px] leading-5">{step.label || STEP_LABELS[step.stepType as StepType] || step.stepId}</span>
-        <span className="caption-style text-subtle">{step.status === "waiting" ? "Waiting" : step.status === "failed" ? "Failed" : "Done"}</span>
+        <span className="caption-style text-subtle">{step.status === "waiting" ? "Waiting" : step.status === "failed" ? "Failed" : step.status === "skipped" ? "Skipped" : "Done"}</span>
       </button>
       {step.error && <p className="caption-style text-danger pl-3.5">{step.error}</p>}
       {open && (

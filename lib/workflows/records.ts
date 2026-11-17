@@ -3,9 +3,10 @@ import { createContact, upsertContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
-import { canonicalDomain, canonicalEmail, likePattern, normalizeCompanyName, normalizeTag } from "@/lib/crm/normalize";
+import { canonicalDomain, canonicalEmail, likePattern, normalizeCompanyName, normalizeTag, normalizeTags } from "@/lib/crm/normalize";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { FIND_LIMIT, FIND_LIMIT_PARALLEL } from "@/lib/workflows/definition";
+import { render, type Vars } from "@/lib/workflows/variables";
 
 type RecordItem = {
   type: "company" | "contact";
@@ -128,6 +129,15 @@ export async function findRecords(actor: UserActor, workflowId: string, config: 
     }
     return records;
   });
+}
+
+export function tagsFrom(template: unknown, vars: Vars) {
+  const pieces = (typeof template === "string" ? template : "")
+    .split(",")
+    .flatMap((piece) => render(piece, vars).split("\n"))
+    .map((tag) => tag.replace(/^\s*-\s+/, "").trim())
+    .filter(Boolean);
+  return normalizeTags(pieces);
 }
 
 export function isRecordItem(value: unknown): value is { type: "company" | "contact"; id: string } {
