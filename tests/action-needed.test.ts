@@ -700,7 +700,7 @@ describe("Capture after review", () => {
     process.env.LLM_API_KEY = "test-llm-key";
     try {
       await checkCrmReplies(mark, { deadline: Date.now() + 5_000, fetchImpl: answers });
-      await checkCrmReplies(mark, { deadline: Date.now() + 9_500, fetchImpl: answers });
+      await checkCrmReplies(mark, { deadline: Date.now() + 7_000, fetchImpl: answers });
       assert.equal(calls.length, 0, "no call without a full allowance");
       assert.deepEqual(await checkState(item.id), { state: "none", misses: 0 }, "skipped runs add no miss");
       await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: judge(() => [], calls) });
@@ -734,6 +734,25 @@ describe("Capture after review", () => {
     const keys = await replyKeys();
     assert.ok(keys.includes(items[2].key));
     assert.ok(!keys.includes(items[0].key) && !keys.includes(items[1].key));
+  });
+
+  it("asks single emails within the shortest share the check is given", async () => {
+    await createContact(mark, { firstName: "Sol", lastName: "Short", email: "sol@short-review.test" });
+    const lone = await message(mark, box, { from: "sol@short-review.test", to: [mark.email], at: ago(4), subject: "Invitation: Short" });
+    const pair = await Promise.all(
+      ["Accepted: Short one", "Accepted: Short two"].map((subject) => message(mark, box, { from: "sol@short-review.test", to: [mark.email], at: ago(4), subject })),
+    );
+    const calls: string[][] = [];
+    const fetchImpl = judge((subjects) => (subjects.length > 1 ? 503 : [{ index: 0, needsReply: subjects[0].startsWith("Invitation") }]), calls);
+    process.env.LLM_API_KEY = "test-llm-key";
+    try {
+      await checkCrmReplies(mark, { deadline: Date.now() + 10_000, fetchImpl });
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    assert.ok(calls.some((subjects) => subjects.length === 1), "a single ask fits in a 10 second share");
+    assert.equal((await checkState(lone.id)).state, "ready");
+    for (const item of pair) assert.notEqual((await checkState(item.id))?.state ?? "unjudged", "ready");
   });
 
   it("shows an email that keeps failing on its own after three misses, and judges the rest", async () => {

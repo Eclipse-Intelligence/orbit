@@ -12,8 +12,8 @@ const SCAN = 200;
 const TIMEOUT_MS = 20_000;
 const MIN_LEFT_MS = 8_000;
 const MIN_CALL_MS = 7_000;
-const SINGLE_TIMEOUT_MS = 8_000;
-const DEADLINE_ROOM_MS = 2_500;
+const SINGLE_TIMEOUT_MS = 6_000;
+const DEADLINE_ROOM_MS = 1_500;
 export const REPLY_CHECK_MISSES = 3;
 
 const CHECK_SCHEMA = z.object({ emails: z.array(z.object({ index: z.number().int(), needsReply: z.boolean() })) });
