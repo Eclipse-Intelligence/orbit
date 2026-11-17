@@ -84,6 +84,7 @@ export default function ActivityPad({
   const input = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState("");
   const textNow = useRef("");
+  const mentionsNow = useRef<Mention[]>([]);
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [type, setType] = useState<PadActivityType | null>(null);
   const [when, setWhen] = useState<string | null | undefined>(undefined);
@@ -118,7 +119,8 @@ export default function ActivityPad({
 
   useEffect(() => {
     textNow.current = text;
-  }, [text]);
+    mentionsNow.current = mentions;
+  }, [text, mentions]);
 
   useEffect(() => {
     const value = text.trim();
@@ -224,7 +226,17 @@ export default function ActivityPad({
         .filter(Boolean)
         .join(", ") + (result.warning ? `. ${result.warning}` : "."),
     );
-    if (textNow.current === started) reset();
+    const typed = textNow.current;
+    const kept = mentionsNow.current;
+    if (typed === started) reset();
+    else if (typed.startsWith(started)) {
+      const rest = typed.slice(started.length).trimStart();
+      reset();
+      if (rest) {
+        setText(rest);
+        setMentions(liveMentions(rest, kept));
+      }
+    }
     if (saved) onAdded?.(saved);
     router.refresh();
     input.current?.focus();

@@ -11,6 +11,8 @@ const BATCH = 20;
 const SCAN = 200;
 const TIMEOUT_MS = 20_000;
 const MIN_LEFT_MS = 8_000;
+const MIN_CALL_MS = 7_000;
+const SPARE_MS = 3_000;
 export const REPLY_CHECK_MISSES = 3;
 
 const CHECK_SCHEMA = z.object({ emails: z.array(z.object({ index: z.number().int(), needsReply: z.boolean() })) });
@@ -66,17 +68,23 @@ async function recordMisses(actor: UserActor, items: { id: string; source_id: st
 
 async function recordStates(actor: UserActor, items: { item: { id: string; source_id: string; tk: string }; state: "ready" | "skipped" | "dismissed" }[]) {
   if (items.length === 0) return;
-  await withActor(actor, async (db) => {
-    for (const { item, state } of items) {
-      await db.query(
-        `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state)
-         values ($1, $2, $3, $4, $5, 'reply_check', $6)
-         on conflict (message_id, kind) do update set state = excluded.state, updated_at = now()
-         where crm.mail_prepared.state = 'scheduled'`,
-        [actor.workspaceId, actor.userId, item.source_id, item.tk, item.id, state],
-      );
-    }
-  });
+  await withActor(actor, (db) =>
+    db.query(
+      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state)
+       select $1, $2, x.source_id, x.thread_key, x.message_id, 'reply_check', x.state
+       from unnest($3::uuid[], $4::text[], $5::uuid[], $6::text[]) as x(source_id, thread_key, message_id, state)
+       on conflict (message_id, kind) do update set state = excluded.state, updated_at = now()
+       where crm.mail_prepared.state = 'scheduled'`,
+      [
+        actor.workspaceId,
+        actor.userId,
+        items.map(({ item }) => item.source_id),
+        items.map(({ item }) => item.tk),
+        items.map(({ item }) => item.id),
+        items.map(({ state }) => state),
+      ],
+    ),
+  );
 }
 
 export async function checkCrmReplies(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
@@ -109,10 +117,12 @@ export async function checkCrmReplies(actor: UserActor, options: { deadline: num
     actor,
     plain.map((item) => ({ item, state: "dismissed" as const })),
   );
-  if (flagged.length === 0) return 0;
+  if (flagged.length === 0 || options.deadline - Date.now() < MIN_CALL_MS) return 0;
   const name = actor.fullName || actor.email;
   const share = windowShare(flagged.length);
   let emails: { index: number; needsReply: boolean }[] = [];
+  let answered = false;
+  let failedEarly = false;
   try {
     const result = await completeJson({
       system:
@@ -135,7 +145,9 @@ export async function checkCrmReplies(actor: UserActor, options: { deadline: num
       fetchImpl: options.fetchImpl,
     });
     emails = result.data.emails;
+    answered = true;
   } catch (error) {
+    failedEarly = options.deadline - Date.now() > SPARE_MS;
     console.error("Checking CRM mail for replies failed", error instanceof Error ? error.message : error);
   }
   const verdicts = new Map<number, boolean>();
@@ -144,9 +156,11 @@ export async function checkCrmReplies(actor: UserActor, options: { deadline: num
     actor,
     [...verdicts].map(([index, needsReply]) => ({ item: flagged[index], state: needsReply ? ("ready" as const) : ("skipped" as const) })),
   );
-  await recordMisses(
-    actor,
-    flagged.filter((_, index) => !verdicts.has(index)),
-  );
+  if (answered || failedEarly) {
+    await recordMisses(
+      actor,
+      flagged.filter((_, index) => !verdicts.has(index)),
+    );
+  }
   return verdicts.size;
 }

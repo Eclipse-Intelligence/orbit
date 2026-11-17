@@ -674,6 +674,39 @@ describe("Capture after review", () => {
     assert.ok(!keys.includes(copied.key));
   });
 
+  it("counts a miss only when the model answered without the email, never for a skipped or timed-out call", async () => {
+    await createContact(mark, { firstName: "Tess", lastName: "Time", email: "tess@timing-review.test" });
+    const item = await message(mark, box, { from: "tess@timing-review.test", to: [mark.email], at: ago(7), subject: "Accepted: Timing" });
+    const misses = async () =>
+      (
+        await getAdminPool().query<{ misses: number }>("select misses from crm.mail_prepared where message_id = $1 and kind = 'reply_check'", [item.id])
+      ).rows[0]?.misses ?? 0;
+    let calls = 0;
+    const hangs: typeof fetch = (_input, init) =>
+      new Promise((_resolve, reject) => {
+        calls += 1;
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    const leavesOut: typeof fetch = async () => {
+      calls += 1;
+      return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ emails: [] }) }, finish_reason: "stop" }] });
+    };
+    process.env.LLM_API_KEY = "test-llm-key";
+    try {
+      await checkCrmReplies(mark, { deadline: Date.now() + 5_000, fetchImpl: leavesOut });
+      assert.equal(calls, 0);
+      assert.equal(await misses(), 0, "a skipped run adds no miss");
+      await checkCrmReplies(mark, { deadline: Date.now() + 9_500, fetchImpl: hangs });
+      assert.equal(calls, 1);
+      assert.equal(await misses(), 0, "a call cut off at the deadline adds no miss");
+      await checkCrmReplies(mark, { deadline: Date.now() + 60_000, fetchImpl: leavesOut });
+      assert.equal(await misses(), 1, "an entry the model left out adds one");
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+    assert.ok(!(await replyKeys()).includes(item.key));
+  });
+
   it("never shows an admin a colleague's approvals or mail", async () => {
     const ada = await teammate(mark, "ada@eclipse-review.test", "Ada Price", "admin");
     const run = await waitingRun(mark, "Send the contract to Halden", new Date(Date.now() - 30 * DAY_MS));
