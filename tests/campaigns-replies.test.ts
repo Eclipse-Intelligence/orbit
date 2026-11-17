@@ -5,7 +5,8 @@ import { campaignConnectionViews, removeCampaignConnection, saveCampaignConnecti
 import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused } from "@/lib/campaigns/manage";
 import { replyToProspect } from "@/lib/campaigns/replies";
-import { syncCampaigns } from "@/lib/campaigns/sync";
+import { saveProviderEvents, syncCampaigns } from "@/lib/campaigns/sync";
+import { saveThread } from "@/lib/campaigns/messages";
 import { contactCampaignLines, contactCampaignTimeline, getProspectThread, refreshProspectThread } from "@/lib/campaigns/threads";
 import { campaignWebhookUrl, ensureWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { handleCampaignWebhook } from "@/lib/campaigns/webhooks";
@@ -100,12 +101,18 @@ function agencyOutreach() {
       { id: "lead-ben", email: "ben@lumen.test", first: "Ben", last: "Hart", company: "Lumen & Co" },
       { id: "lead-tom", email: "tom@brightlane.test", first: "Tom", last: "Avery", company: "Brightlane" },
       { id: "lead-ivy", email: "ivy@kiln.test", first: "Ivy", last: "Bell", company: "Kiln" },
+      { id: "lead-uma", email: "uma@north.test", first: "Uma", last: "Reed", company: "North" },
+      { id: "lead-vic", email: "vic@lane.test", first: "Vic", last: "Lane", company: "Lane" },
+      { id: "lead-wes", email: "wes@gone.test", first: "Wes", last: "Gone", company: "Gone" },
     ],
     stats: [
       { lead_id: "lead-priya", lead_email: "priya@halcyon.test", lead_name: "Priya Shah", sequence_number: 1, sent_time: T0 },
       { lead_id: "lead-ben", lead_email: "ben@lumen.test", lead_name: "Ben Hart", sequence_number: 1, sent_time: T0 },
       { lead_id: "lead-tom", lead_email: "tom@brightlane.test", lead_name: "Tom Avery", sequence_number: 1, sent_time: T0 },
       { lead_id: "lead-ivy", lead_email: "ivy@kiln.test", lead_name: "Ivy Bell", sequence_number: 1, sent_time: T0 },
+      { lead_id: "lead-uma", lead_email: "uma@north.test", lead_name: "Uma Reed", sequence_number: 1, sent_time: T0 },
+      { lead_id: "lead-vic", lead_email: "vic@lane.test", lead_name: "Vic Lane", sequence_number: 1, sent_time: T0 },
+      { lead_id: "lead-wes", lead_email: "wes@gone.test", lead_name: "Wes Gone", sequence_number: 1, sent_time: T0 },
     ],
     sequences: sequenceOf([{ subject: "Quick question", body: "Hi {{first_name}}" }]),
     analytics: {},
@@ -114,6 +121,9 @@ function agencyOutreach() {
         { type: "SENT", stats_id: "stats-priya", message_id: "<sent-priya@getridgeon.test>", time: T0, subject: "Quick question", email_body: "<p>Hi Priya, saw the Shopify Plus news.</p>", email_seq_number: 1, from: "mark@getridgeon.test" },
       ],
       "lead-ben": [{ type: "SENT", stats_id: "stats-ben", message_id: "<sent-ben@getridgeon.test>", time: T0, subject: "Quick question", email_body: "<p>Hi Ben</p>", email_seq_number: 1, from: "mark@getridgeon.test" }],
+      "lead-uma": [],
+      "lead-vic": [],
+      "lead-wes": [],
       "lead-ivy": [{ type: "SENT", stats_id: "stats-ivy", message_id: "<sent-ivy@getridgeon.test>", time: T0, subject: "Quick question", email_body: "<p>Hi Ivy</p>", email_seq_number: 1, from: "mark@getridgeon.test" }],
     } as Record<string, unknown[]>,
   };
@@ -417,6 +427,7 @@ describe("campaign events and replies", () => {
       );
       assert.deepEqual(waiting, [{ counted: false, fired: false, handled: false }]);
       assert.ok(!(await notifications(owner.workspaceId)).some((row) => row.title.startsWith("Ivy")));
+      await sql("update crm.campaign_events set claimed_at = now() - interval '6 minutes' where prospect_id = $1 and claimed_at is not null and handled_at is null", [ivy.id]);
       await sync(owner.workspaceId);
       assert.equal((await prospect("lead-ivy")).replied_at, null);
       assert.equal((await sql("select 1 from crm.campaign_events where prospect_id = $1 and kind = 'replied'", [ivy.id])).length, 0);
@@ -677,7 +688,7 @@ describe("campaign events and replies", () => {
       const savedSite = process.env.SITE_URL;
       process.env.SITE_URL = ORIGIN;
       const hook = campaignWebhookUrl(owner.workspaceId, "smartlead", secret)!;
-      alpha.fail = (url) => (url.pathname.endsWith("/campaigns/801/webhooks") ? new Response(`Refused webhook_url ${hook}`, { status: 400 }) : null);
+      alpha.fail = (url) => (url.pathname.endsWith("/campaigns/801/webhooks") ? new Response(`Refused webhook_url ${encodeURIComponent(hook)} and ${hook.replace("&", "&amp;")}`, { status: 400 }) : null);
       const logged: string[] = [];
       const original = console.error;
       console.error = (...parts: unknown[]) => {
@@ -735,6 +746,211 @@ describe("campaign events and replies", () => {
       const state = await sql<{ hooked: boolean }>("select sync_state ? 'webhookId' as hooked from crm.campaigns where external_id = '901'");
       assert.deepEqual(state, [{ hooked: false }]);
       await saveCampaignConnection(owner, "heyreach", HR_A, { fetchImpl });
+    });
+  });
+
+  describe("guards from the second review", () => {
+    const smartleadOnly = (fetcher: typeof fetch, deadline = Date.now() + 60_000, onEvents = handleCampaignEvents) =>
+      syncCampaigns({ workspaceId: owner.workspaceId, provider: "smartlead", deadline, fetchImpl: fetcher, onEvents });
+    const heyreachOnly = (onEvents = handleCampaignEvents) => syncCampaigns({ workspaceId: owner.workspaceId, provider: "heyreach", deadline: Date.now() + 60_000, fetchImpl, onEvents });
+    const replyFrom = (lead: string, email: string, name: string, body: string) => {
+      const at = new Date(Date.now() - 15_000).toISOString();
+      const campaign = alpha.campaigns[0];
+      campaign.stats.push({ lead_id: lead, lead_email: email, lead_name: name, sequence_number: 1, sent_time: T0, reply_time: at });
+      campaign.threads![lead].push({ type: "REPLY", stats_id: `stats-${lead}`, message_id: `<reply-${lead}@test>`, time: at, subject: "Re: Quick question", email_body: body, from: email });
+    };
+    const replyState = async (lead: string) =>
+      (
+        await sql<{ handled: boolean; claimed: boolean; counted: boolean }>(
+          `select e.handled_at is not null as handled, e.claimed_at is not null as claimed, e.counted_at is not null as counted
+           from crm.campaign_events e join crm.campaign_prospects p on p.id = e.prospect_id
+           where p.external_lead_id = $1 and e.kind = 'replied'`,
+          [lead],
+        )
+      )[0];
+    const hangOn = (match: (url: string, init?: RequestInit) => boolean): typeof fetch => (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!match(url, init)) return fetchImpl(input, init);
+      return new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+    };
+
+    it("hands over the rest of a batch when one reply's thread can't be read, keeping only that one for later", async () => {
+      replyFrom("lead-uma", "uma@north.test", "Uma Reed", "Tell me more.");
+      replyFrom("lead-vic", "vic@lane.test", "Vic Lane", "Yes please.");
+      alpha.fail = (url) => (url.pathname.endsWith("/leads/lead-uma/message-history") ? new Response("{}", { status: 500 }) : null);
+      try {
+        await smartleadOnly(fetchImpl);
+      } finally {
+        alpha.fail = undefined;
+      }
+      assert.deepEqual(await replyState("lead-uma"), { handled: false, claimed: true, counted: false });
+      assert.deepEqual(await replyState("lead-vic"), { handled: true, claimed: true, counted: true });
+      assert.ok((await notifications(owner.workspaceId)).some((row) => row.title === "Vic Lane replied"));
+      assert.equal((await sql<{ sync_error: string | null }>("select sync_error from crm.campaigns where external_id = '801'"))[0].sync_error, null);
+    });
+
+    it("reads a deleted lead's missing thread as empty without marking the campaign missing", async () => {
+      replyFrom("lead-wes", "wes@gone.test", "Wes Gone", "Gone soon.");
+      alpha.fail = (url) => (url.pathname.endsWith("/leads/lead-wes/message-history") ? new Response("{}", { status: 404 }) : null);
+      try {
+        await smartleadOnly(fetchImpl);
+      } finally {
+        alpha.fail = undefined;
+      }
+      assert.equal((await replyState("lead-wes")).handled, true);
+      const campaign = await sql<{ missing: boolean; sync_error: string | null }>("select sync_state ? 'missingAt' as missing, sync_error from crm.campaigns where external_id = '801'");
+      assert.deepEqual(campaign, [{ missing: false, sync_error: null }]);
+    });
+
+    it("skips a tombstoned reply when the poll brings it back", async () => {
+      const tomb = (await sql<{ campaign_id: string; dedupe_key: string }>("select campaign_id, dedupe_key from crm.campaign_event_tombstones order by created_at limit 1"))[0];
+      const inserted = await saveProviderEvents(tomb.campaign_id, [
+        { externalLeadId: "lead-ben", email: "ben@lumen.test", linkedin: null, lead: {}, kind: "replied", step: 1, variant: null, occurredAt: new Date().toISOString(), dedupeKey: tomb.dedupe_key, category: null },
+      ], false);
+      assert.deepEqual(inserted, []);
+      assert.equal((await sql("select 1 from crm.campaign_events where dedupe_key = $1", [tomb.dedupe_key])).length, 0);
+    });
+
+    it("confirms a reply only from a provider message sent after it", async () => {
+      const priya = await prospectId("lead-priya");
+      await sql(
+        `insert into crm.campaign_messages (workspace_id, campaign_id, prospect_id, channel, direction, body, sent_at, send_state, client_key, sent_by_user_id)
+         select p.workspace_id, p.campaign_id, p.id, 'email', 'outbound', 'Window check reply', now(), 'unknown', 'window-1', $2 from crm.campaign_prospects p where p.id = $1`,
+        [priya, owner.userId],
+      );
+      await saveThread(priya, [
+        { externalId: "<old-copy@test>", direction: "outbound", step: null, subject: null, body: "Window check reply", sentAt: new Date(Date.now() - 60 * 60_000).toISOString(), conversationId: null, senderId: null, statsId: null, providerMessageId: null, fromAddress: null, automatic: false, replyKey: null },
+      ], { replyEvents: false, handled: true });
+      const row = await sql<{ send_state: string; external_id: string | null }>("select send_state, external_id from crm.campaign_messages where client_key = 'window-1'");
+      assert.deepEqual(row, [{ send_state: "unknown", external_id: null }]);
+    });
+
+    it("keeps a webhook's sync request when the request fails before its receipt", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "smartlead"))!;
+      const body = { event_type: "EMAIL_REPLY", campaign_id: 801, sl_email_lead_id: "lead-vic", sl_lead_email: "vic@lane.test" };
+      await sql("revoke execute on function private.campaign_request_sync(uuid, text, text, text, text, text) from crm_app");
+      try {
+        await assert.rejects(webhook("smartlead", owner.workspaceId, secret, body, { "x-request-id": "req-15" }));
+      } finally {
+        await sql("grant execute on function private.campaign_request_sync(uuid, text, text, text, text, text) to crm_app");
+      }
+      const again = await webhook("smartlead", owner.workspaceId, secret, body, { "x-request-id": "req-15" });
+      assert.deepEqual(await again.json(), { queued: 1 });
+    });
+
+    it("reads queued threads and sends stops before a slow poll can use up the run", async () => {
+      await sql("update crm.campaign_prospects set sync_requested_at = now(), sync_claimed_at = null where external_lead_id = 'lead-tom'");
+      await sql("update crm.campaign_prospects set stop_requested_at = now(), stop_reason = 'removed' where external_lead_id = 'lead-ivy'");
+      await smartleadOnly(hangOn((url) => url.includes("/leads-statistics")), Date.now() + 9_000);
+      assert.equal((await prospect("lead-tom")).sync_requested_at, null);
+      assert.ok((await prospect("lead-ivy")).stopped_at);
+    });
+
+    it("carries on with the connection when the handover after queued threads fails", async () => {
+      await sql("update crm.campaign_prospects set sync_requested_at = now(), sync_claimed_at = null where external_lead_id = 'lead-hr-dan'");
+      heyreach.campaigns[0].conversations!.find((item) => item.id === "c-dan")!.messages.push({ createdAt: new Date().toISOString(), body: "One more thing.", sender: "CORRESPONDENT" });
+      await heyreachOnly(async () => {
+        throw new Error("handler down");
+      });
+      const connection = await sql<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]);
+      assert.equal(connection[0].last_error, null);
+      await heyreachOnly();
+    });
+
+    it("doesn't mark the reply webhook failed when the run's own deadline cuts registration short", async () => {
+      await sql("update crm.campaigns set sync_state = sync_state - 'webhookId' - 'webhookFailedAt' where external_id = '801'");
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = ORIGIN;
+      try {
+        await smartleadOnly(hangOn((url, init) => url.endsWith("/campaigns/801/webhooks") || (url.includes("/campaigns/801/webhooks?") && init?.method === "POST")), Date.now() + 9_000);
+      } finally {
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+      const state = await sql<{ failed: boolean }>("select sync_state ? 'webhookFailedAt' as failed from crm.campaigns where external_id = '801'");
+      assert.deepEqual(state, [{ failed: false }]);
+    });
+
+    it("audits a removal once, even when Remove is pressed twice", async () => {
+      const campaign = (await sql<{ id: string }>("select id from crm.campaigns where external_id = '801'"))[0].id;
+      const zed = (
+        await sql<{ id: string }>(
+          "insert into crm.campaign_prospects (workspace_id, campaign_id, email, external_lead_id, state, pushed_at) values ($1, $2, 'zed@test.test', 'lead-zed', 'pushed', now()) returning id",
+          [owner.workspaceId, campaign],
+        )
+      )[0].id;
+      alpha.fail = (url) => (url.pathname.endsWith("/leads/lead-zed") ? new Response("{}", { status: 500 }) : null);
+      try {
+        assert.deepEqual(await removeProspect(owner, zed, { fetchImpl }), { state: "stopping" });
+        await assert.rejects(removeProspect(owner, zed, { fetchImpl }), refused("conflict"));
+      } finally {
+        alpha.fail = undefined;
+      }
+      assert.equal((await audits(owner.workspaceId, "campaign.prospect_removed")).filter((row) => row.entity_id === zed).length, 1);
+    });
+
+    it("refreshes the rest of a thread when one campaign can't be read", async () => {
+      const priya = await prospectId("lead-priya");
+      const reads = heyreach.calls.filter((call) => call.path === "/inbox/GetConversationsV2").length;
+      alpha.fail = (url) => (url.pathname.endsWith("/leads/lead-priya/message-history") ? new Response("{}", { status: 500 }) : null);
+      try {
+        const result = await refreshProspectThread(owner, priya, { fetchImpl, force: true });
+        assert.equal(result.failed, true);
+      } finally {
+        alpha.fail = undefined;
+      }
+      assert.ok(heyreach.calls.filter((call) => call.path === "/inbox/GetConversationsV2").length > reads);
+    });
+
+    it("keeps at most 1,000 stray conversations", async () => {
+      const ids = Array.from({ length: 1000 }, (_, index) => `stray-${index}`);
+      await sql("update crm.campaigns set sync_state = sync_state || jsonb_build_object('strayIds', $1::jsonb, 'strayConversations', 1000) where external_id = '901'", [JSON.stringify(ids)]);
+      heyreach.campaigns[0].conversations!.push({ id: "c-stranger-2", accountId: 1, profileUrl: "https://www.linkedin.com/in/another-stranger/", messages: [{ createdAt: new Date().toISOString(), body: "Hello?", sender: "CORRESPONDENT" }] });
+      await heyreachOnly();
+      const founders = (await sql<{ id: string }>("select id from crm.campaigns where external_id = '901'"))[0].id;
+      assert.equal((await getCampaign(owner, founders)).strayConversations, 1000);
+    });
+
+    it("guards a counted reply with counted_at, not with fired_at", async () => {
+      const zed = await prospectId("lead-zed");
+      const campaign = (await sql<{ id: string }>("select id from crm.campaigns where external_id = '801'"))[0].id;
+      const events = await sql<{ id: string }>(
+        `insert into crm.campaign_events (workspace_id, campaign_id, prospect_id, kind, occurred_at, dedupe_key, fired_at, counted_at)
+         values ($1, $2, $3, 'replied', now(), 'guard-fired', now(), null), ($1, $2, $3, 'replied', now(), 'guard-counted', null, now())
+         returning id`,
+        [owner.workspaceId, campaign, zed],
+      );
+      const done = async (id: string) => (await sql<{ done: boolean }>("select private.campaign_reply_uncount($1) as done", [id]))[0].done;
+      assert.equal(await done(events[0].id), true);
+      assert.equal(await done(events[1].id), false);
+    });
+
+    it("resumes a long conversation read where it stopped, so a big backfill finishes", async () => {
+      const conversations = Array.from({ length: 2100 }, (_, index) => ({
+        id: `c-many-${index}`,
+        accountId: 1,
+        profileUrl: `https://www.linkedin.com/in/many-${index}/`,
+        messages: [{ createdAt: "2026-11-13T10:00:00.000Z", body: "Hi", sender: "CORRESPONDENT" as const }],
+      }));
+      heyreach.campaigns.push({ id: 903, name: "Founders three", status: "IN_PROGRESS", accountIds: [1], sequence: [], leads: [], overall: {}, byDay: {}, conversations });
+      await heyreachOnly();
+      const first = await sql<{ backfilled: boolean; offset: string | null }>("select backfilled_at is not null as backfilled, sync_state->>'repliesOffset' as offset from crm.campaigns where external_id = '903'");
+      assert.deepEqual(first, [{ backfilled: false, offset: "2000" }]);
+      await heyreachOnly();
+      const second = await sql<{ backfilled: boolean; offset: string | null }>("select backfilled_at is not null as backfilled, sync_state->>'repliesOffset' as offset from crm.campaigns where external_id = '903'");
+      assert.deepEqual(second, [{ backfilled: true, offset: null }]);
+    });
+
+    it("finishes a backfill even when its conversations can't be read", async () => {
+      heyreach.campaigns.push({ id: 902, name: "Founders two", status: "IN_PROGRESS", accountIds: [1], sequence: [], leads: [], overall: {}, byDay: {} });
+      heyreach.fail = (path) => (path === "/inbox/GetConversationsV2" ? new Response("{}", { status: 500 }) : null);
+      try {
+        await heyreachOnly();
+      } finally {
+        heyreach.fail = undefined;
+      }
+      const row = await sql<{ backfilled: boolean }>("select backfilled_at is not null as backfilled from crm.campaigns where external_id = '902'");
+      assert.deepEqual(row, [{ backfilled: true }]);
     });
   });
 });

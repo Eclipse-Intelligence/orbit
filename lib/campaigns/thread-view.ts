@@ -45,14 +45,18 @@ export function withPending(items: ThreadItem[], pending: PendingReply[]): Shown
   return [...items, ...left.map((reply) => ({ type: "pending" as const, id: `pending:${reply.clientKey}`, reply }))];
 }
 
-export type DraftRestore = { text: string; channel: CampaignChannel; at: number };
+export type Draft = { text: string; chosen: CampaignChannel | null };
 
 export function withoutReply(pending: PendingReply[], clientKey: string) {
   return pending.filter((reply) => reply.clientKey !== clientKey);
 }
 
-export function draftAfterRestore(current: string, restore: DraftRestore) {
-  return current.trim() ? current : restore.text;
+export function failedSendPlan(draftText: string, stored: boolean): "restore" | "keep" {
+  return !stored && !draftText.trim() ? "restore" : "keep";
+}
+
+export function restoredDraft(draft: Draft, failed: { text: string; channel: CampaignChannel }): Draft {
+  return draft.text.trim() ? draft : { text: failed.text, chosen: failed.channel };
 }
 
 export function retryable(message: ThreadMessage) {

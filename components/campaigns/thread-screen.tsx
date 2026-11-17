@@ -35,7 +35,8 @@ import {
 import { CAMPAIGN_CATEGORIES, categoryTone } from "@/lib/campaigns/format";
 import {
   campaignStateLine,
-  draftAfterRestore,
+  failedSendPlan,
+  restoredDraft,
   messageStatus,
   newClientKey,
   noteLabel,
@@ -45,7 +46,7 @@ import {
   sourceLink,
   withoutReply,
   withPending,
-  type DraftRestore,
+  type Draft,
   type PendingReply,
 } from "@/lib/campaigns/thread-view";
 import type { ProspectThread, ReplyOption, ThreadCampaign, ThreadMessage } from "@/lib/campaigns/threads";
@@ -111,11 +112,11 @@ function Bubble({
   );
 }
 
-function SendLine({ status, onRetry }: { status: { text: string; failed: boolean } | null; onRetry?: () => void }) {
+function SendLine({ status, onRetry }: { status: { text: string; failed: boolean; detail?: string | null } | null; onRetry?: () => void }) {
   if (!status) return null;
   return (
     <p role={status.failed ? "alert" : "status"} className={cn("caption-style flex flex-wrap items-center gap-x-2", status.failed ? "text-danger" : "text-subtle")}>
-      <span>{status.text}</span>
+      <span title={status.detail ?? undefined}>{status.text}</span>
       {onRetry && (
         <Button variant="link" size="none" onClick={onRetry} className="caption-style hit font-normal">
           Try again
@@ -137,7 +138,9 @@ function ChannelSwitch({ options, value, onChange }: { options: ReplyOption[]; v
           )}
         >
           <Radio name="reply-channel" value={option.channel} checked={value === option.channel} onChange={() => onChange(option.channel)} className="sr-only" />
-          <ChannelIcon channel={option.channel} className="size-3" />
+          <span aria-hidden className="flex">
+            <ChannelIcon channel={option.channel} className="size-3" />
+          </span>
           <span>{CHANNEL_LABELS[option.channel]}</span>
         </label>
       ))}
@@ -148,23 +151,22 @@ function ChannelSwitch({ options, value, onChange }: { options: ReplyOption[]; v
 function Composer({
   options,
   preferred,
-  restore,
+  draft,
+  error,
+  onDraft,
   onSend,
 }: {
   options: ReplyOption[];
   preferred: CampaignChannel;
-  restore: DraftRestore | null;
+  draft: Draft;
+  error: { text: string; detail: string | null } | null;
+  onDraft: (draft: Draft) => void;
   onSend: (option: ReplyOption, text: string) => void;
 }) {
   const { mac } = useShortcuts();
-  const [chosen, setChosen] = useState<CampaignChannel | null>(null);
-  const [text, setText] = useState("");
-  const [restored, setRestored] = useState<number | null>(null);
-  if (restore && restore.at !== restored) {
-    setRestored(restore.at);
-    setText((current) => draftAfterRestore(current, restore));
-    setChosen(restore.channel);
-  }
+  const { text, chosen } = draft;
+  const setText = (value: string) => onDraft({ text: value, chosen });
+  const setChosen = (value: CampaignChannel) => onDraft({ text, chosen: value });
   const field = useRef<HTMLTextAreaElement>(null);
   const channel = replyChannel(options, preferred, chosen);
   const option = options.find((item) => item.channel === channel) ?? null;
@@ -186,7 +188,7 @@ function Composer({
     const body = text.trim();
     if (!option?.canReply || !body) return;
     onSend(option, body);
-    setText("");
+    onDraft({ text: "", chosen });
   }
 
   const placeholder = option.channel === "linkedin" ? (option.senderName ? `Send on LinkedIn as ${option.senderName}` : "Reply on LinkedIn") : "Reply by email";
@@ -226,6 +228,11 @@ function Composer({
         )}
         {options.length > 1 && <ChannelSwitch options={options} value={option.channel} onChange={setChosen} />}
       </div>
+      {error && (
+        <p role="alert" title={error.detail ?? undefined} className="caption-style text-danger">
+          {error.text}
+        </p>
+      )}
     </form>
   );
 }
@@ -369,7 +376,9 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [removing, setRemoving] = useState<ThreadCampaign | null>(null);
-  const [restore, setRestore] = useState<DraftRestore | null>(null);
+  const [draft, setDraftState] = useState<Draft>({ text: "", chosen: null });
+  const [sendError, setSendError] = useState<{ text: string; detail: string | null } | null>(null);
+  const draftNow = useRef(draft);
   const end = useRef<HTMLDivElement>(null);
   const opened = thread.campaigns.find((campaign) => campaign.prospectId === thread.prospectId) ?? null;
   const shownCategory = category ? category.value : thread.category;
@@ -400,13 +409,14 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
     setSends((current) => ({ ...current, [clientKey]: { state: "sending", error: null } }));
     const outcome = await replyToProspectAction(prospectId, text, clientKey).catch(() => ({ error: SEND_FAILED, result: undefined }));
     if (outcome.error || !outcome.result) {
+      const stored = "stored" in outcome && outcome.stored === true;
       setSends((current) => ({ ...current, [clientKey]: { state: "failed", error: outcome.error ?? SEND_FAILED } }));
-      if (channel) {
+      if (channel && failedSendPlan(draftNow.current.text, stored) === "restore") {
         setPending((current) => withoutReply(current, clientKey));
-        setRestore((current) => ({ text, channel, at: (current?.at ?? 0) + 1 }));
-        setProblem(outcome.error ?? SEND_FAILED);
-        router.refresh();
+        setDraft(restoredDraft(draftNow.current, { text, channel }));
+        setSendError({ text: SEND_FAILED, detail: outcome.error ?? null });
       }
+      if (stored) router.refresh();
       return;
     }
     const messageId = outcome.result.messageId;
@@ -428,8 +438,13 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
     };
     setPending((current) => [...current, reply]);
     window.requestAnimationFrame(() => end.current?.scrollIntoView({ block: "nearest" }));
-    setProblem(null);
+    setSendError(null);
     void deliver(reply.clientKey, reply.prospectId, reply.text, reply.channel);
+  }
+
+  function setDraft(next: Draft) {
+    draftNow.current = next;
+    setDraftState(next);
   }
 
   async function chooseCategory(value: string | null) {
@@ -465,10 +480,10 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
   function statusOf(clientKey: string | null, fallback: ReturnType<typeof messageStatus>, sendError: string | null = null) {
     const local = clientKey ? sends[clientKey] : undefined;
     if (local?.state === "sending") return { text: "Sending…", failed: false };
-    if (local?.state === "failed") return { text: local.error ?? SEND_FAILED, failed: true };
+    if (local?.state === "failed") return { text: "Couldn't send.", failed: true, detail: local.error };
     if (local?.state === "sent" && fallback === "Sending…") return null;
     const failed = fallback === "Couldn't send.";
-    return fallback ? { text: failed && sendError ? sendError : fallback, failed } : null;
+    return fallback ? { text: fallback, failed, detail: failed ? sendError : null } : null;
   }
 
   return (
@@ -540,7 +555,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
                   </Bubble>
                 );
               })}
-              <Composer options={thread.replyOptions} preferred={thread.defaultChannel} restore={restore} onSend={send} />
+              <Composer options={thread.replyOptions} preferred={thread.defaultChannel} draft={draft} error={sendError} onDraft={setDraft} onSend={send} />
               <div ref={end} />
             </div>
           </div>

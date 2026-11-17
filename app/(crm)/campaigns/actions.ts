@@ -85,14 +85,16 @@ function errorText(error: unknown, fallback: string) {
   return error instanceof CrmError ? error.message : fallback;
 }
 
-export async function replyToProspectAction(prospectId: string, text: string, clientKey: string): Promise<{ error?: string; result?: ReplyResult }> {
+export async function replyToProspectAction(prospectId: string, text: string, clientKey: string): Promise<{ error?: string; stored?: boolean; result?: ReplyResult }> {
   const user = await requireUser();
   try {
     const result = await replyToProspect(user, prospectId, { text, clientKey });
     revalidateCampaign(null, prospectId);
     return { result };
   } catch (error) {
-    return { error: errorText(error, "Couldn't send. Try again.") };
+    const stored = error instanceof CrmError && typeof error.details?.messageId === "string";
+    if (stored) revalidateCampaign(null, prospectId);
+    return { error: errorText(error, "Couldn't send. Try again."), stored };
   }
 }
 

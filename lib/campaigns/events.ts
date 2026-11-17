@@ -73,6 +73,7 @@ async function refreshForReply(provider: CampaignProvider, context: ProviderCont
     await saveThread(event.prospect_id, messages, { replyEvents: provider.repliesFromThreads, handled: false });
     await threadFetched(event.prospect_id);
   } catch (error) {
+    if (provider.failure(error)?.missing) return;
     if (!(error instanceof ServiceBusy)) console.error(`Couldn't read a ${provider.name} thread after a reply`, redactedError(error));
     throw error;
   }
@@ -160,12 +161,20 @@ export async function fireCampaignEvents(ids: string[]) {
 }
 
 export async function handleCampaignEvents(campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor, context?: ProviderContext) {
-  if (events.length === 0) return;
+  if (events.length === 0) return { retry: [] };
   const provider = campaignProvider(campaign.provider);
-  if (!provider) return;
+  if (!provider) return { retry: [] };
   const details = await eventDetails(actor, events.map((event) => event.eventId));
+  const retry: string[] = [];
   for (const event of details) {
-    if (event.kind === "replied") await handleReply(actor, provider, context, event);
+    if (event.kind !== "replied") continue;
+    try {
+      await handleReply(actor, provider, context, event);
+    } catch (error) {
+      if (!(error instanceof ServiceBusy)) console.error("Couldn't handle a campaign reply", redactedError(error));
+      retry.push(event.id);
+    }
   }
-  await fireCampaignEvents(events.map((event) => event.eventId));
+  await fireCampaignEvents(events.map((event) => event.eventId).filter((id) => !retry.includes(id)));
+  return { retry };
 }

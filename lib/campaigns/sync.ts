@@ -36,6 +36,8 @@ export type SyncState = {
   eventsSince?: string | null;
   eventsStartedAt?: string | null;
   repliesSince?: string | null;
+  repliesOffset?: number | null;
+  repliesStartedAt?: string | null;
   repliesAt?: string;
   strayConversations?: number;
   strayIds?: string[];
@@ -47,7 +49,7 @@ export type SyncedEvent = { eventId: string; prospectId: string; contactId: stri
 
 export type SyncedCampaign = { id: string; workspaceId: string; provider: CampaignProviderId; externalId: string; name: string };
 
-export type EventHandler = (campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor, context: ProviderContext) => Promise<void>;
+export type EventHandler = (campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor, context: ProviderContext) => Promise<void | { retry: string[] }>;
 
 export type CampaignSyncOptions = {
   deadline: number;
@@ -169,13 +171,14 @@ async function handOverEvents(pass: Pass, campaign: SyncedCampaign) {
     const waiting = await query<EventRow>("select * from private.campaign_claim_events($1, $2)", [campaign.id, HAND_OVER_BATCH]);
     if (waiting.rows.length === 0) return;
     const ids = waiting.rows.map((row) => row.event_id);
+    let retry: string[] = [];
     try {
-      await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor, pass.context);
+      retry = (await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor, pass.context))?.retry ?? [];
     } catch (error) {
       await query("select private.campaign_events_release($1, $2::uuid[])", [campaign.id, ids]).catch(() => undefined);
       throw error;
     }
-    await query("select private.campaign_events_handled($1, $2::uuid[])", [campaign.id, ids]);
+    await query("select private.campaign_events_handled($1, $2::uuid[])", [campaign.id, ids.filter((id) => !retry.includes(id))]);
     if (waiting.rows.length < HAND_OVER_BATCH) return;
   }
 }
@@ -185,11 +188,15 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
   if (!provider.readReplies) return true;
   const state = row.sync_state ?? {};
   const since = state.repliesSince ? Date.parse(state.repliesSince) : null;
-  const startedAt = new Date().toISOString();
+  const startedAt = state.repliesStartedAt ?? new Date().toISOString();
   const stray = new Set(state.strayIds ?? []);
-  let offset: number | null = 0;
-  for (let pages = 0; offset !== null && pages < REPLY_PAGES; pages += 1) {
-    if (!timeLeft(options.deadline, STEP_RESERVE_MS)) return false;
+  let offset: number | null = state.repliesOffset ?? 0;
+  const pause = async () => {
+    await saveCampaign(row.id, { syncState: { repliesOffset: offset, repliesStartedAt: startedAt, strayConversations: stray.size, strayIds: [...stray] } });
+    return false;
+  };
+  for (let pages = 0; offset !== null; pages += 1) {
+    if (pages >= REPLY_PAGES || !timeLeft(options.deadline, STEP_RESERVE_MS)) return pause();
     const page = await provider.readReplies(context, row.external_id, offset);
     let fresh = 0;
     for (const thread of page.items) {
@@ -205,13 +212,14 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
       const saved = await saveThread(prospectId, thread.messages, { replyEvents: true, handled });
       if (saved.length > 0) pass.report.threads += 1;
     }
-    if (since !== null && fresh === 0) break;
-    offset = page.next;
+    offset = since !== null && fresh === 0 ? null : page.next;
   }
   await saveCampaign(row.id, {
     syncState: {
+      repliesOffset: null,
+      repliesStartedAt: null,
       repliesSince: new Date(Date.parse(startedAt) - EVENT_OVERLAP_MS).toISOString(),
-      repliesAt: startedAt,
+      repliesAt: new Date().toISOString(),
       strayConversations: stray.size,
       strayIds: [...stray],
     },
@@ -377,7 +385,7 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   }
 
   let repliesComplete = !provider.readReplies || (!backfilling && Boolean(state.repliesAt));
-  if (provider.readReplies && (backfilling || live || due(state.repliesAt, IDLE_EVERY_MS, now)) && room()) {
+  if (provider.readReplies && (backfilling || live || typeof state.repliesOffset === "number" || due(state.repliesAt, IDLE_EVERY_MS, now)) && room()) {
     try {
       repliesComplete = await syncReplies(pass, row, backfilling || !options.onEvents);
     } catch (error) {
@@ -456,8 +464,17 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
     const touched = await syncRequested(pass, byId);
     for (const id of touched) {
       const row = byId.get(id);
-      if (row?.backfilled_at && timeLeft(options.deadline, STEP_RESERVE_MS)) {
+      if (!row?.backfilled_at || !timeLeft(options.deadline, STEP_RESERVE_MS)) continue;
+      try {
         await handOverEvents(pass, { id: row.id, workspaceId: target.workspace_id, provider: provider.id, externalId: row.external_id, name: row.name });
+      } catch (error) {
+        if (error instanceof ServiceBusy) {
+          report.busy.push(`${provider.name}: ${error.message}`);
+          continue;
+        }
+        if (provider.failure(error)?.rejectedKey) throw error;
+        console.error(`Couldn't hand over ${row.name || "a campaign"}'s events`, redactedError(error));
+        report.errors.push(`Couldn't sync ${row.name || "a campaign"}. Try again.`);
       }
     }
     if (timeLeft(options.deadline, STEP_RESERVE_MS)) report.stopped += await processStops(target.workspace_id, provider, context, options.deadline);

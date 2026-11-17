@@ -193,7 +193,7 @@ export async function replyToProspect(
     }
   }
   await query("select private.campaign_reply_finish($1, $2, $3, $4, $5)", [actor.workspaceId, row.message_id, state, providerMessageId, failure?.message ?? (state === "unknown" ? "May not have gone." : null)]);
-  if (failure) throw failure;
+  if (failure) throw new CrmError(failure.code, failure.message, failure.status, { ...(failure.details ?? {}), messageId: row.message_id });
 
   await fileSent(actor, row.message_id, provenance);
   await withActor(actor, (db) =>

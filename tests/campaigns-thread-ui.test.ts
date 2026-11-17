@@ -4,11 +4,12 @@ import {
   campaignRowMeta,
   campaignStateLine,
   contactLineText,
-  draftAfterRestore,
+  failedSendPlan,
   messageStatus,
   newClientKey,
   noteLabel,
   replyChannel,
+  restoredDraft,
   retryable,
   sourceLink,
   timelineEntries,
@@ -64,13 +65,19 @@ describe("optimistic replies", () => {
     assert.deepEqual(unsettled([...items, message({ id: "m2", clientKey: "web-1" })], [pending(), pending({ clientKey: "web-2" })]).map((reply) => reply.clientKey), ["web-2"]);
   });
 
-  it("puts a reply that failed back in the composer, without overwriting new typing", () => {
-    const failed = pending({ clientKey: "web-9", text: "Does Tuesday work?" });
-    assert.deepEqual(withoutReply([pending(), failed], "web-9").map((reply) => reply.clientKey), ["web-1"]);
-    const restore = { text: failed.text, channel: failed.channel, at: 1 };
-    assert.equal(draftAfterRestore("", restore), "Does Tuesday work?");
-    assert.equal(draftAfterRestore("  ", restore), "Does Tuesday work?");
-    assert.equal(draftAfterRestore("Something new", restore), "Something new");
+  it("puts unsaved failed text back only into an empty composer, and keeps a stored failure as a bubble", () => {
+    assert.equal(failedSendPlan("", false), "restore");
+    assert.equal(failedSendPlan("   ", false), "restore");
+    assert.equal(failedSendPlan("New words", false), "keep");
+    assert.equal(failedSendPlan("", true), "keep");
+    assert.deepEqual(withoutReply([pending(), pending({ clientKey: "web-9" })], "web-9").map((reply) => reply.clientKey), ["web-1"]);
+  });
+
+  it("restores the channel together with the text, and leaves new typing and its channel alone", () => {
+    const failed = { text: "Does Tuesday work?", channel: "linkedin" as const };
+    assert.deepEqual(restoredDraft({ text: "", chosen: "email" }, failed), { text: "Does Tuesday work?", chosen: "linkedin" });
+    assert.deepEqual(restoredDraft({ text: "Something new", chosen: "email" }, failed), { text: "Something new", chosen: "email" });
+    assert.deepEqual(restoredDraft({ text: "Something new", chosen: null }, failed), { text: "Something new", chosen: null });
   });
 
   it("keeps the same items when nothing is waiting", () => {
