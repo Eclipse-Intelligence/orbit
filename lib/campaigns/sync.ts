@@ -34,6 +34,7 @@ export type SyncState = {
   sequenceAt?: string;
   sequenceFormat?: number;
   leadStateAt?: string;
+  leadStateStarted?: boolean;
   statsAt?: string;
   leadsAt?: string;
   leadsOffset?: number | null;
@@ -379,18 +380,22 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     if (read.listId !== undefined) state.listId = read.listId;
   }
 
-  const leadsInProgress = typeof state.leadsOffset === "number";
-  let leadsComplete = !leadsInProgress && Boolean(state.leadsAt);
+  const freshRead = !state.leadStateAt && !state.leadStateStarted;
+  const leadsInProgress = typeof state.leadsOffset === "number" && !freshRead;
+  let leadsComplete = !leadsInProgress && Boolean(state.leadsAt) && !freshRead;
   let leadsReadNow = false;
-  if (leadsInProgress || (backfilling && !leadsComplete) || due(state.leadsAt, live ? LEADS_EVERY_MS : IDLE_EVERY_MS, now)) {
+  if (freshRead || leadsInProgress || (backfilling && !leadsComplete) || due(state.leadsAt, live ? LEADS_EVERY_MS : IDLE_EVERY_MS, now)) {
     leadsComplete = false;
-    let offset = state.leadsOffset ?? 0;
+    let offset = freshRead ? 0 : (state.leadsOffset ?? 0);
+    if (freshRead && room()) {
+      await saveCampaign(row.id, { syncState: { leadsOffset: 0, leadStateStarted: true } });
+    }
     while (room()) {
       const page = await provider.readLeads(context, row.external_id, offset);
       report.prospects += await saveProviderLeads(row.id, page.items, backfilling || !options.onEvents);
       if (page.next === null) {
         const finishedAt = new Date().toISOString();
-        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: finishedAt, leadStateAt: finishedAt } });
+        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: finishedAt, leadStateAt: finishedAt, leadStateStarted: null } });
         leadsComplete = true;
         leadsReadNow = true;
         await query("select private.campaign_link_contacts($1, null)", [row.id]).catch((error) =>

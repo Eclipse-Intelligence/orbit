@@ -645,6 +645,42 @@ describe("campaigns through HeyReach", () => {
       assert.equal(linkedinStatus(row), "Paused");
     });
 
+    it("starts a lead read already part-way through again from the first page before counting the funnel", async () => {
+      await sql(
+        `update crm.campaigns set sync_state = (sync_state - 'leadStateAt' - 'leadStateStarted') || '{"leadsOffset": 100}'::jsonb, status = 'completed' where id = $1`,
+        [foundersId],
+      );
+      await sql("update crm.campaign_prospects set provider_state = '{}'::jsonb where campaign_id = $1", [foundersId]);
+      assert.equal((await getCampaign(member, foundersId)).leadFunnel, null);
+      eclipse.calls.length = 0;
+      const report = await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      assert.deepEqual(report.errors, []);
+      const reads = eclipse.calls.filter((call) => call.path === "/campaign/GetLeadsFromCampaign" && call.body?.timeFilter === undefined);
+      assert.deepEqual(
+        reads.map((call) => call.body?.offset),
+        [0, 100],
+        "an ended campaign reads every page from the start, not only the rest",
+      );
+      const state = (await sql<{ state: Record<string, unknown> }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+      assert.ok(state.leadStateAt);
+      assert.equal(state.leadStateStarted, undefined);
+      assert.equal(state.leadsOffset, undefined);
+      assert.deepEqual((await getCampaign(member, foundersId)).leadFunnel, { contacted: 130, accepted: 2, replied: 1 });
+      await sql("update crm.campaigns set status = 'active' where id = $1", [foundersId]);
+    });
+
+    it("reads the steps once after the parser change, not on every sync", async () => {
+      const state = (await sql<{ state: Record<string, unknown> }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+      assert.equal(state.sequenceFormat, 2);
+      eclipse.calls.length = 0;
+      await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      assert.equal(eclipse.calls.filter((call) => call.path === "/campaign/GetCampaignSequence").length, 0, "a second sync doesn't read the steps again");
+      await sql("update crm.campaigns set sync_state = sync_state - 'sequenceFormat' where id = $1", [foundersId]);
+      eclipse.calls.length = 0;
+      await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      assert.equal(eclipse.calls.filter((call) => call.path === "/campaign/GetCampaignSequence").length, 1, "only a campaign whose steps were parsed by the old reader reads them again");
+    });
+
     it("keeps registering the other HeyReach webhooks when one is refused", async () => {
       const savedSite = process.env.SITE_URL;
       process.env.SITE_URL = "https://orbit.test";
