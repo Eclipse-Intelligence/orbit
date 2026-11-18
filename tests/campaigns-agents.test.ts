@@ -25,7 +25,7 @@ import {
 } from "@/lib/assistant/tools";
 import { NO_LIFT, replyInCampaign, runCampaignAction } from "@/lib/campaigns/agent";
 import { saveCampaignConnection } from "@/lib/campaigns/connections";
-import { KEY_ELSEWHERE, KEY_REUSED, replyToProspect } from "@/lib/campaigns/replies";
+import { KEY_ELSEWHERE, KEY_REUSED, repeatedNote, replyToProspect } from "@/lib/campaigns/replies";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { setDoNotContact } from "@/lib/campaigns/suppression";
 import { syncCampaigns } from "@/lib/campaigns/sync";
@@ -471,6 +471,52 @@ describe("campaigns for the assistant, MCP and the API", () => {
       const audits = await sql("select 1 from crm.audit_events where event_type = 'campaign.prospect_added' and changes->>'campaignId' = $1 and changes->>'contactId' = $2", [email, people.rae]);
       assert.equal(audits.length, 1);
     });
+
+    const claimSend = (key: string, contactId: string) =>
+      addProspectsRoute(
+        api(agentToken, `/campaigns/${email}/prospects`, { method: "POST", body: JSON.stringify({ contactIds: [contactId] }), headers: { "idempotency-key": key } }),
+        params(email),
+      );
+
+    it("runs a failed request again at once with the same key and body", async () => {
+      const vera = (await createContact(owner, { firstName: "Vera", lastName: "Lowe", email: "vera@lowe.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      await sql("update crm.campaigns set status = 'completed' where id = $1", [email]);
+      try {
+        const failedRun = await claimSend("fails-first", vera);
+        assert.equal(failedRun.status, 409);
+        assert.match(((await failedRun.json()) as { error: { message: string } }).error.message, /ended/);
+      } finally {
+        await sql("update crm.campaigns set status = 'active' where id = $1", [email]);
+      }
+      const retried = await claimSend("fails-first", vera);
+      assert.equal(retried.status, 200);
+      assert.equal(((await retried.json()) as { added: number }).added, 1);
+    });
+
+    it("lets exactly one of two simultaneous retries take over a claim left by a process that died", async () => {
+      const wim = (await createContact(owner, { firstName: "Wim", lastName: "Holt", email: "wim@holt.test" }, { provenance: { operation: "test" } })).body.contact.id;
+      await sql("update crm.campaigns set status = 'completed' where id = $1", [email]);
+      try {
+        assert.equal((await claimSend("died", wim)).status, 409);
+      } finally {
+        await sql("update crm.campaigns set status = 'active' where id = $1", [email]);
+      }
+      const stale = await sql<{ status_code: number }>("update crm.idempotency_keys set created_at = now() - interval '6 minutes' where idempotency_key = 'died' returning status_code");
+      assert.deepEqual(stale.map((row) => row.status_code), [0]);
+      pool.allowNestedConnections();
+      const answers = await Promise.all([claimSend("died", wim), claimSend("died", wim)]);
+      const bodies = await Promise.all(answers.map(async (answer) => ({ status: answer.status, body: (await answer.json()) as Record<string, unknown> })));
+      const ran = bodies.filter((answer) => answer.status === 200);
+      assert.ok(ran.length >= 1);
+      for (const answer of bodies) {
+        if (answer.status !== 200) assert.equal((answer.body.error as { code: string }).code, "idempotency_in_progress");
+        else assert.deepEqual(answer.body, ran[0].body);
+      }
+      const audits = await sql("select 1 from crm.audit_events where event_type = 'campaign.prospect_added' and changes->>'contactId' = $1", [wim]);
+      assert.equal(audits.length, 1);
+      const stored = await sql<{ status_code: number }>("select status_code from crm.idempotency_keys where idempotency_key = 'died'");
+      assert.deepEqual(stored.map((row) => row.status_code), [200]);
+    });
   });
 
   describe("acting on a contact in several campaigns", () => {
@@ -487,6 +533,13 @@ describe("campaigns for the assistant, MCP and the API", () => {
         }
       } finally {
         await client.close();
+      }
+      for (const action of ["pause", "resume", "remove", "set_category"]) {
+        const args = { action, contactId: people.tom, ...(action === "set_category" ? { category: "Interested" } : {}) };
+        const card = describeAction("campaign_action", args, await recordNames(owner, [args], ["campaign_action"]));
+        assert.ok(card.title.includes("Tom Avery"), card.title);
+        assert.ok(!card.title.includes("can't find"), card.title);
+        assert.ok(card.lines.includes(SEVERAL_CAMPAIGNS), `${action}: ${JSON.stringify(card)}`);
       }
       const act = (input: Record<string, unknown>) => runCampaignAction(owner, input, { provenance: { operation: "test" }, allowReply: false, fetchImpl }) as Promise<{ campaign: { id: string; name: string } }>;
       const chosen = await act({ action: "set_category", contactId: people.tom, campaignId: linkedin, category: "Interested" });
@@ -671,6 +724,10 @@ describe("campaigns for the assistant, MCP and the API", () => {
         const retry = await client.call("campaign_reply", { prospect_id: dan, text: "See you then." });
         assert.equal(first.json!.repeated, false, first.text);
         assert.equal(retry.json!.repeated, true, retry.text);
+        assert.match(String(retry.json!.note), /^Already sent (just now|\d+ minutes? ago), not sent again\.$/);
+        assert.equal(first.json!.note, undefined);
+        assert.equal(repeatedNote(new Date(Date.now() - 4 * 60_000)), "Already sent 4 minutes ago, not sent again.");
+        assert.match(repeatedNote(new Date(), "unknown"), /may not have gone/);
         assert.equal(retry.json!.messageId, first.json!.messageId);
         assert.deepEqual(first.json!.campaign, { id: linkedin, name: "Agency founders", channel: "linkedin" });
         assert.equal(sent(), before + 1);

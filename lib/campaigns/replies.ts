@@ -18,7 +18,15 @@ const CLIENT_KEY = /^[A-Za-z0-9_:.-]{1,200}$/;
 
 export type SendState = "sending" | "sent" | "unknown" | "failed";
 
-export type ReplyResult = { messageId: string; sendState: SendState; repeated: boolean };
+export type ReplyResult = { messageId: string; sendState: SendState; repeated: boolean; note?: string };
+
+export function repeatedNote(at: Date, state: SendState = "sent", now = Date.now()) {
+  const minutes = Math.max(0, Math.round((now - at.getTime()) / 60_000));
+  const when = minutes === 0 ? "just now" : minutes === 1 ? "1 minute ago" : `${minutes.toLocaleString("en-GB")} minutes ago`;
+  if (state === "unknown") return `Already tried ${when} and it may not have gone. Not sent again; check the thread.`;
+  if (state === "sending") return `Started sending ${when}, not sent again.`;
+  return `Already sent ${when}, not sent again.`;
+}
 
 type StoredTarget = {
   conversation_id: string | null;
@@ -47,8 +55,8 @@ function derivedKey(actor: UserActor, prospectId: string, text: string) {
 
 async function recentSameReply(actor: UserActor, prospectId: string, text: string) {
   return withActor(actor, async (db) => {
-    const found = await db.query<{ id: string; send_state: SendState }>(
-      `select id, send_state from crm.campaign_messages
+    const found = await db.query<{ id: string; send_state: SendState; created_at: Date }>(
+      `select id, send_state, created_at from crm.campaign_messages
        where workspace_id = $1 and prospect_id = $2 and direction = 'outbound' and sent_by_user_id = $3 and body = $4
          and send_state is not null and send_state <> 'failed' and created_at > now() - make_interval(secs => $5)
        order by created_at desc limit 1`,
@@ -170,7 +178,7 @@ export async function replyToProspect(
   const text = cleanText(input.text, read.prospect.channel);
   if (!given) {
     const recent = await recentSameReply(actor, read.prospect.id, text);
-    if (recent) return { messageId: recent.id, sendState: recent.send_state, repeated: true };
+    if (recent) return { messageId: recent.id, sendState: recent.send_state, repeated: true, note: repeatedNote(recent.created_at, recent.send_state) };
   }
   const clientKey = given ?? derivedKey(actor, read.prospect.id, text);
   if (read.permission && !read.permission.canReply) throw new CrmError("forbidden", read.permission.reason ?? "You can't reply from this account.", 403);
@@ -209,9 +217,9 @@ export async function replyToProspect(
   const row = begun.rows[0];
   if (!row) throw new CrmError("internal_error", "Couldn't send. Try again.", 500);
   if (!row.created) {
-    const stored = await withActor(actor, (db) => db.query<{ body: string }>("select body from crm.campaign_messages where id = $1 and workspace_id = $2", [row.message_id, actor.workspaceId]));
+    const stored = await withActor(actor, (db) => db.query<{ body: string; created_at: Date }>("select body, created_at from crm.campaign_messages where id = $1 and workspace_id = $2", [row.message_id, actor.workspaceId]));
     if ((stored.rows[0]?.body ?? null) !== text) throw new CrmError("conflict", KEY_REUSED, 409, { field: "clientKey" });
-    return { messageId: row.message_id, sendState: row.send_state, repeated: true };
+    return { messageId: row.message_id, sendState: row.send_state, repeated: true, note: repeatedNote(stored.rows[0]!.created_at, row.send_state) };
   }
   try {
     return await sendBegun(actor, provider, context, read.prospect, target, text, row.message_id, provenance);

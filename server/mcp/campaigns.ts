@@ -121,7 +121,7 @@ function registerReplyTool(server: McpServer, actor: Actor, options: CampaignToo
     {
       title: "Reply in a campaign",
       description:
-        "Reply to a person in their campaign thread, by email through Smartlead or on LinkedIn through HeyReach, as this person. This really sends. A LinkedIn reply goes out from the LinkedIn account linked to its member, so only that member can send it. Pass prospect_id, or contact_id with channel. Reuse client_key when retrying a call whose answer was lost: the same key never sends twice.",
+        "Reply to a person in their campaign thread, by email through Smartlead or on LinkedIn through HeyReach, as this person. This really sends. A LinkedIn reply goes out from the LinkedIn account linked to its member, so only that member can send it. Pass prospect_id, or contact_id with channel. Reuse client_key when retrying a call whose answer was lost: the same key never sends twice. A result with repeated true was sent before and not sent again (note says when): report it that way, never as a new send.",
       annotations: { title: "Reply in a campaign", readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
       inputSchema: {
         prospect_id: z.uuid().optional(),

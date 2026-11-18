@@ -207,7 +207,10 @@ export async function campaignActionNames(actor: Actor, input: CampaignActionInp
     return names;
   }
   if (action !== "remove" && action !== "set_category" && input.campaignId && !input.prospectId && !input.contactId) return names;
-  const prospectId = await resolveProspect(actor, input, { single: true }).catch(() => null);
+  const prospectId = await resolveProspect(actor, input, { single: true }).catch((error: unknown) => {
+    if (error instanceof CrmError && error.status < 500) names["prospect:refused"] = error.message;
+    return null;
+  });
   if (!prospectId) return names;
   const thread = await getProspectThread(actor, prospectId).catch(() => null);
   const row = thread?.campaigns.find((item) => item.prospectId === prospectId);

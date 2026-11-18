@@ -3271,7 +3271,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Updating a campaign",
     write: true,
     description:
-      "Change a campaign or a person in one. add puts contactIds (or the people at companyIds) into campaignId, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact (Do not contact, customers, open opportunities, people the workspace has written to or met, already in another campaign on that channel) with the reason. pause and resume take campaignId alone for the whole campaign, or a person (prospectId, or contactId with campaignId) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (category null clears it). reply sends text to a person in their campaign thread, by email or on LinkedIn (channel); a LinkedIn reply goes out as the LinkedIn account's own member, so only they can send it. Nothing here lifts Do not contact: only a person can, in Orbit.",
+      "Change a campaign or a person in one. add puts contactIds (or the people at companyIds) into campaignId, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact (Do not contact, customers, open opportunities, people the workspace has written to or met, already in another campaign on that channel) with the reason. pause and resume take campaignId alone for the whole campaign, or a person (prospectId, or contactId with campaignId) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (category null clears it). reply sends text to a person in their campaign thread, by email or on LinkedIn (channel); a LinkedIn reply goes out as the LinkedIn account's own member, so only they can send it. A reply result with repeated true was sent before and not sent again (its note says when): tell the user that, never report it as a new send. Nothing here lifts Do not contact: only a person can, in Orbit.",
     parameters: {
       type: "object",
       properties: {
@@ -3298,8 +3298,9 @@ const TOOL_LIST: AssistantTool[] = [
     describe: (args, name) => {
       const action = str(args.action);
       const campaign = chatTargetName(name, str(args.campaignId), "a campaign Orbit can't find");
-      const person = chatTargetName(name, "prospect:person", "someone Orbit can't find");
-      const inCampaign = chatTargetName(name, "prospect:campaign", campaign);
+      const refusedProspect = chatTargetName(name, "prospect:refused", "");
+      const person = chatTargetName(name, "prospect:person", str(args.contactId) ? name(args.contactId) : "someone Orbit can't find");
+      const inCampaign = chatTargetName(name, "prospect:campaign", str(args.campaignId) || !refusedProspect ? campaign : "a campaign");
       if (action === "add") {
         const companies = strings(args.companyIds);
         const people = companies.length > 0 ? companies : strings(args.contactIds);
@@ -3314,12 +3315,12 @@ const TOOL_LIST: AssistantTool[] = [
       if (action === "pause" || action === "resume") {
         const verb = action === "pause" ? "Pause" : "Resume";
         if (str(args.campaignId) && !str(args.prospectId) && !str(args.contactId)) return { title: `${verb} ${campaign}`, lines: [] };
-        return { title: `${verb} ${person} in ${inCampaign}`, lines: [] };
+        return { title: `${verb} ${person} in ${inCampaign}`, lines: [refusedProspect] };
       }
-      if (action === "remove") return { title: `Remove ${person} from ${inCampaign}`, lines: [] };
+      if (action === "remove") return { title: `Remove ${person} from ${inCampaign}`, lines: [refusedProspect] };
       if (action === "set_category") {
         const category = str(args.category);
-        return { title: category ? `Set ${person} to ${category}` : `Clear ${person}'s category`, lines: [`In ${inCampaign}`] };
+        return { title: category ? `Set ${person} to ${category}` : `Clear ${person}'s category`, lines: [`In ${inCampaign}`, refusedProspect] };
       }
       if (action === "reply") {
         const to = chatTargetName(name, "reply:person", "someone Orbit can't find");
