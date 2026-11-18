@@ -139,7 +139,7 @@ export async function listCalendarGroups(actor: UserActor): Promise<CalendarGrou
       `select id, account_id, connection_id, name, color, is_default, is_visible, use_for_crm, can_edit,
               owner_email, last_synced_at, last_error
        from crm.calendars
-       where user_id = $1
+       where user_id = $1 and removed_at is null
        order by is_default desc, lower(name), id`,
       [actor.userId],
     );

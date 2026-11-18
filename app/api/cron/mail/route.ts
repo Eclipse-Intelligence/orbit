@@ -7,7 +7,7 @@ import { readInviteReplies } from "@/lib/mail/invite-replies";
 import { classifyCapture } from "@/lib/mail/capture-filter";
 import { prepareMail } from "@/lib/mail/prepare";
 import { runWorkflowTick } from "@/lib/workflows/engine";
-import { syncMail, type MailSyncReport } from "@/lib/mail/sync";
+import { SCHEDULED_FLOOR_MS, syncMail, type MailSyncReport } from "@/lib/mail/sync";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ async function handle(request: Request) {
     if (remaining < 5_000) break;
     const share = Math.floor(remaining / (targets.length - index));
     try {
-      const report = await syncMail(target.actor, { deadline: Date.now() + share });
+      const report = await syncMail(target.actor, { deadline: Date.now() + share, skipRecentMs: SCHEDULED_FLOOR_MS, announce: true });
       await processDueMail(target.actor, { deadline: Math.min(mailDeadline, Date.now() + 30_000) }).catch((error) => console.error("Due mail failed", error));
       await prepareMail(target.actor, { deadline: Math.min(mailDeadline, Date.now() + Math.max(share, 30_000)) }).catch((error) =>
         console.error("Preparing mail failed", error),

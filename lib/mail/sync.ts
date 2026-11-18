@@ -9,6 +9,8 @@ import { mailOrigin } from "@/lib/mail/origin";
 import {
   classificationUrl,
   createMailSubscription,
+  deleteMailSubscription,
+  MAILBOX_SUBSCRIPTION_SCOPE,
   renewMailSubscription,
   fetchMicrosoftClassifications,
   fetchMicrosoftDelta,
@@ -32,6 +34,7 @@ import { MailSyncReset, type MailRole, type ProviderMessage } from "@/lib/mail/t
 import { SYNC_RETRYING } from "@/lib/mail/view";
 import { grantsMailWrite, type MicrosoftToken } from "@/lib/microsoft/oauth";
 import { announceSharedThreads, ownsShares, shareVisibleRole } from "@/lib/mail/share-live";
+import { signalSynced } from "@/lib/sync-signals";
 
 const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const FOLDER_LIST_RETRY_MS = 15 * 60 * 1000;
@@ -47,6 +50,8 @@ const LOOKUP_BATCH = 4;
 const SKIPPED_ROLES: MailRole[] = ["outbox"];
 const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "snoozed", "archive", "other", "trash", "junk"];
 const DEFAULT_STORAGE_LIMIT_MB = 400;
+const MAX_PASSES = 2;
+const AGAIN_MIN_MS = 4_000;
 
 type SourceRow = {
   id: string;
@@ -57,8 +62,20 @@ type SourceRow = {
   snooze_folder_id: string | null;
   graph_subscription_id: string | null;
   graph_subscription_expires_at: Date | string | null;
+  graph_subscription_scope: string | null;
+  graph_subscription_retry_at: Date | string | null;
   retry_at: Date | string | null;
+  last_synced_at: Date | string | null;
+  last_full_synced_at: Date | string | null;
+  resync_pending: boolean;
+  resync_full: boolean;
+  backfilling: boolean;
 };
+
+const SOURCE_COLUMNS = `s.id, s.email, s.connection_id, s.account_id, s.folders_synced_at, s.snooze_folder_id, s.graph_subscription_id,
+  s.graph_subscription_expires_at, s.graph_subscription_scope, s.graph_subscription_retry_at, s.retry_at, s.last_synced_at, s.last_full_synced_at,
+  s.resync_pending, s.resync_full,
+  exists (select 1 from crm.mail_folders f where f.source_id = s.id and f.sync_state in ('pending', 'backfill')) as backfilling`;
 
 type FolderRow = {
   id: string;
@@ -95,6 +112,9 @@ export type MailSyncReport = {
   busy: string[];
   waiting: string[];
   synced: string[];
+  recent: string[];
+  passes: number;
+  lookups: number;
 };
 
 function mailStorageLimitBytes() {
@@ -160,9 +180,9 @@ async function loadSources(actor: UserActor): Promise<Source[]> {
       );
     }
     const rows = await db.query<SourceRow>(
-      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id, graph_subscription_id, graph_subscription_expires_at, retry_at
-       from crm.mail_sources where user_id = $1
-       order by last_synced_at nulls first, connection_id is null, created_at`,
+      `select ${SOURCE_COLUMNS}
+       from crm.mail_sources s where s.user_id = $1
+       order by s.last_synced_at nulls first, s.connection_id is null, s.created_at`,
       [actor.userId],
     );
     const sources: Source[] = [];
@@ -198,8 +218,8 @@ async function saveToken(db: Db, source: Source, token: MicrosoftToken) {
 async function loadSource(actor: UserActor, sourceId: string): Promise<Source | null> {
   return withActor(actor, async (db) => {
     const found = await db.query<SourceRow>(
-      `select id, email, connection_id, account_id, folders_synced_at, snooze_folder_id, graph_subscription_id, graph_subscription_expires_at, retry_at
-       from crm.mail_sources where id = $1 and user_id = $2`,
+      `select ${SOURCE_COLUMNS}
+       from crm.mail_sources s where s.id = $1 and s.user_id = $2`,
       [sourceId, actor.userId],
     );
     const row = found.rows[0];
@@ -244,7 +264,7 @@ async function claim(actor: UserActor, sourceId: string, until: number) {
   const seconds = Math.max(1, Math.ceil((until - Date.now()) / 1000)) + LOCK_GRACE_SECONDS;
   return withActor(actor, async (db) => {
     const result = await db.query(
-      `update crm.mail_sources set locked_until = now() + make_interval(secs => $2)
+      `update crm.mail_sources set locked_until = now() + make_interval(secs => $2), resync_pending = false
        where id = $1 and (locked_until is null or locked_until < now())
        returning id`,
       [sourceId, seconds],
@@ -570,28 +590,89 @@ async function syncFolder(
 
 const RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;
 
+const SUBSCRIBE_RETRY_MS = 6 * 60 * 60 * 1000;
+
+export function subscriptionRefused(error: unknown) {
+  return error instanceof GraphMailError && (error.status === 400 || error.status === 403) && !/validat/i.test(`${error.message} ${error.code}`);
+}
+
+async function renewLegacy(actor: UserActor, source: Source, id: string, token: string, fetchImpl: typeof fetch, deadline: number) {
+  try {
+    const expiresAt = await renewMailSubscription(token, id, fetchImpl, { deadline });
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_sources set graph_subscription_expires_at = $3 where id = $1 and graph_subscription_id = $2", [source.id, id, expiresAt]),
+    );
+  } catch (error) {
+    if (!(error instanceof GraphMailError && error.status === 404)) throw error;
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_sources set graph_subscription_id = null, graph_subscription_expires_at = null where id = $1 and graph_subscription_id = $2", [source.id, id]),
+    );
+  }
+}
+
 async function keepSubscription(actor: UserActor, source: Source, token: string, fetchImpl: typeof fetch, deadline: number) {
   const origin = mailOrigin();
   if (!origin) return;
+  const current = source.graph_subscription_scope === MAILBOX_SUBSCRIPTION_SCOPE;
   const expires = source.graph_subscription_expires_at ? new Date(source.graph_subscription_expires_at).getTime() : 0;
-  if (source.graph_subscription_id && expires - Date.now() > RENEW_BEFORE_MS) return;
-  if (source.graph_subscription_id) {
+  const due = expires - Date.now() <= RENEW_BEFORE_MS;
+  if (source.graph_subscription_id && current && !due) return;
+  let gone = false;
+  if (source.graph_subscription_id && current) {
     try {
       const expiresAt = await renewMailSubscription(token, source.graph_subscription_id, fetchImpl, { deadline });
-      await withActor(actor, (db) => db.query("update crm.mail_sources set graph_subscription_expires_at = $2 where id = $1", [source.id, expiresAt]));
+      await withActor(actor, (db) =>
+        db.query("update crm.mail_sources set graph_subscription_expires_at = $3 where id = $1 and graph_subscription_id = $2", [source.id, source.graph_subscription_id, expiresAt]),
+      );
       return;
     } catch (error) {
       if (!(error instanceof GraphMailError && error.status === 404)) throw error;
+      gone = true;
     }
   }
+  const legacy = source.graph_subscription_id && !current ? source.graph_subscription_id : null;
+  if (waitingUntil(source.graph_subscription_retry_at)) {
+    if (legacy && due) await renewLegacy(actor, source, legacy, token, fetchImpl, deadline);
+    return;
+  }
   const clientState = randomBytes(24).toString("hex");
-  const created = await createMailSubscription(token, { notificationUrl: `${origin}/api/microsoft/mail-webhook`, clientState }, fetchImpl, { deadline });
-  await withActor(actor, (db) =>
+  let created: { id: string; expiresAt: string };
+  try {
+    created = await createMailSubscription(token, { notificationUrl: `${origin}/api/microsoft/mail-webhook`, clientState }, fetchImpl, { deadline });
+  } catch (error) {
+    if (!subscriptionRefused(error)) throw error;
+    const message = `Microsoft refused mail notifications: ${error instanceof Error ? error.message : "unknown"}`.slice(0, 480);
+    console.error("Mail subscription refused", source.email, message);
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_sources set graph_subscription_error = $2, graph_subscription_retry_at = now() + make_interval(secs => $3) where id = $1", [
+        source.id,
+        message,
+        SUBSCRIBE_RETRY_MS / 1000,
+      ]),
+    );
+    if (legacy && due) await renewLegacy(actor, source, legacy, token, fetchImpl, deadline);
+    return;
+  }
+  const stored = await withActor(actor, (db) =>
     db.query(
-      "update crm.mail_sources set graph_subscription_id = $2, graph_subscription_expires_at = $3, graph_client_state = $4 where id = $1",
-      [source.id, created.id, created.expiresAt, clientState],
+      `update crm.mail_sources set graph_subscription_id = $2, graph_subscription_expires_at = $3, graph_client_state = $4, graph_subscription_scope = $5,
+         graph_subscription_error = null, graph_subscription_retry_at = null
+       where id = $1 and graph_subscription_id is not distinct from $6
+       returning id`,
+      [source.id, created.id, created.expiresAt, clientState, MAILBOX_SUBSCRIPTION_SCOPE, source.graph_subscription_id],
     ),
   );
+  if ((stored.rowCount ?? 0) === 0) {
+    await deleteMailSubscription(token, created.id, fetchImpl, { deadline }).catch((error) =>
+      console.error("Couldn't remove a spare mail subscription", error instanceof Error ? error.message : error),
+    );
+    return;
+  }
+  if (source.graph_subscription_id && !gone) {
+    await deleteMailSubscription(token, source.graph_subscription_id, fetchImpl, { deadline }).catch((error) =>
+      console.error("Couldn't remove the old mail subscription", error instanceof Error ? error.message : error),
+    );
+  }
 }
 
 async function classifyFolder(actor: UserActor, source: Source, folder: FolderRow, token: string, deadline: number, fetchImpl: typeof fetch) {
@@ -670,13 +751,15 @@ type FolderRun = { deadline: number; fetchImpl: typeof fetch; guard: boolean; pl
 async function runFolder(actor: UserActor, source: Source, folder: FolderRow, token: string, options: FolderRun, report: MailSyncReport) {
   try {
     await syncFolder(actor, source, folder, token, options, report);
+    return true;
   } catch (error) {
     if (error instanceof GraphOutOfTime) {
       report.backfilling += 1;
-      return;
+      return true;
     }
     if (await stopsSource(actor, source, error)) throw error;
     await folderFailed(actor, source, folder, error, report);
+    return false;
   }
 }
 
@@ -709,16 +792,71 @@ async function classifyFolderSafely(actor: UserActor, source: Source, folder: Fo
   }
 }
 
-async function releaseSource(actor: UserActor, sourceId: string, lastError: string | null, retryAt: Date | null) {
+async function changedAgain(actor: UserActor, sourceId: string, until: number) {
+  const seconds = Math.max(1, Math.ceil((until - Date.now()) / 1000)) + LOCK_GRACE_SECONDS;
+  const result = await withActor(actor, (db) =>
+    db.query(
+      `update crm.mail_sources set resync_pending = false, locked_until = now() + make_interval(secs => $2)
+       where id = $1 and resync_pending
+       returning id`,
+      [sourceId, seconds],
+    ),
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+async function readMailVersion(actor: UserActor) {
+  const result = await withActor(actor, (db) =>
+    db.query<{ version: string }>("select version::text as version from crm.mail_versions where user_id = $1", [actor.userId]),
+  ).catch(() => null);
+  return result?.rows[0]?.version ?? "0";
+}
+
+function syncedWithin(value: Date | string | null, ms: number) {
+  return value !== null && Date.now() - new Date(value).getTime() < ms;
+}
+
+async function loadFolders(actor: UserActor, sourceId: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<FolderRow>(
+      `select id, provider_folder_id, name, role, sync_state, sync_link, classified_at, last_synced_at, failures, retry_at
+       from crm.mail_folders where source_id = $1`,
+      [sourceId],
+    );
+    return result.rows;
+  });
+}
+
+async function remarkFolders(actor: UserActor, sourceId: string, folderIds: string[]) {
+  await withActor(actor, (db) =>
+    db.query("update crm.mail_folders set resync_pending = true where source_id = $1 and id = any($2::uuid[])", [sourceId, folderIds]),
+  ).catch((error) => console.error("Couldn't mark a failed mail folder", error instanceof Error ? error.message : error));
+}
+
+async function changePending(actor: UserActor, sourceId: string) {
+  const result = await withActor(actor, (db) => db.query<{ pending: boolean }>("select resync_pending as pending from crm.mail_sources where id = $1", [sourceId]));
+  return result.rows[0]?.pending === true;
+}
+
+async function releaseSource(
+  actor: UserActor,
+  sourceId: string,
+  lastError: string | null,
+  retryAt: Date | null,
+  { unfinished = false, redo = false, walkedAll = false }: { unfinished?: boolean; redo?: boolean; walkedAll?: boolean } = {},
+) {
   try {
     await withActor(actor, (db) =>
       db.query(
         `update crm.mail_sources set locked_until = null,
            last_synced_at = case when $2::text is null then now() else last_synced_at end,
            last_error = $2,
-           retry_at = $3
+           retry_at = $3,
+           resync_pending = resync_pending or $4,
+           resync_full = resync_full or $5,
+           last_full_synced_at = case when $2::text is null and $6 then now() else last_full_synced_at end
          where id = $1`,
-        [sourceId, lastError, retryAt],
+        [sourceId, lastError, retryAt, unfinished, unfinished || redo, walkedAll],
       ),
     );
   } catch (error) {
@@ -736,10 +874,127 @@ async function claimArrivals(actor: UserActor) {
   });
 }
 
-export async function syncMail(
+const LOOKUP_LIMIT = 20;
+export const ECHO_WINDOW_MS = 2 * 60_000;
+
+type Work = { full: boolean; lookups: string[]; folderIds: string[] };
+
+export type MailChange = { sourceId: string; full: boolean; folderIds: string[]; lookups: string[] };
+
+async function takeWork(actor: UserActor, sourceId: string): Promise<Work> {
+  return withActor(actor, async (db) => {
+    const source = await db.query<{ resync_full: boolean; resync_lookups: string[] }>(
+      `update crm.mail_sources s set resync_full = false, resync_lookups = '{}'
+       from (select id, resync_full, resync_lookups from crm.mail_sources where id = $1 for update) o
+       where s.id = o.id
+       returning o.resync_full, o.resync_lookups`,
+      [sourceId],
+    );
+    const folders = await db.query<{ id: string }>(
+      "update crm.mail_folders set resync_pending = false where source_id = $1 and resync_pending returning id",
+      [sourceId],
+    );
+    return {
+      full: source.rows[0]?.resync_full ?? false,
+      lookups: source.rows[0]?.resync_lookups ?? [],
+      folderIds: folders.rows.map((row) => row.id),
+    };
+  });
+}
+
+async function targetFolders(
   actor: UserActor,
-  options: { deadline?: number; budgetMs?: number; fetchImpl?: typeof fetch; backfill?: boolean; push?: PushSender; sourceIds?: string[]; ignoreFolderWaits?: boolean },
-): Promise<MailSyncReport> {
+  source: Source,
+  folders: FolderRow[],
+  work: Work,
+  token: string,
+  places: Places,
+  limit: { fetchImpl: typeof fetch; deadline: number },
+  report: MailSyncReport,
+): Promise<{ walk: FolderRow[]; all: boolean }> {
+  const live = folderOrder(folders).live;
+  if (work.full || work.lookups.length > LOOKUP_LIMIT) return { walk: live, all: true };
+  let known = folders;
+  const skipped = () => new Set(known.filter((folder) => folder.sync_state === "skipped").map((folder) => folder.provider_folder_id));
+  const wanted = new Set(work.folderIds);
+  for (const id of work.lookups) {
+    report.lookups += 1;
+    let parent: string | null;
+    try {
+      parent = await fetchMicrosoftMessageFolder(token, id, limit.fetchImpl, { deadline: limit.deadline, mailScope: places.mailScope });
+    } catch (error) {
+      if (error instanceof GraphOutOfTime || (await stopsSource(actor, source, error))) throw error;
+      return { walk: live, all: true };
+    }
+    if (!parent || skipped().has(parent)) continue;
+    if (!places.folders.has(parent) && !places.refreshed) {
+      places.refreshed = true;
+      try {
+        await refreshFolders(actor, source, token, limit.fetchImpl, limit.deadline);
+      } catch (error) {
+        if (error instanceof GraphOutOfTime || (await stopsSource(actor, source, error))) throw error;
+        return { walk: live, all: true };
+      }
+      known = await loadFolders(actor, source.id);
+      places.folders = new Map(known.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id]));
+    }
+    const folder = places.folders.get(parent);
+    if (folder) wanted.add(folder);
+  }
+  const ordered = [...folderOrder(known).live, ...known.filter((folder) => folder.sync_state === "pending" || folder.sync_state === "backfill")];
+  return { walk: ordered.filter((folder) => wanted.has(folder.id)), all: false };
+}
+
+export async function noteMailChanges(actor: UserActor, changes: MailChange[]) {
+  if (changes.length === 0) return;
+  await withActor(actor, async (db) => {
+    for (const change of changes) {
+      if (change.folderIds.length > 0) {
+        await db.query("update crm.mail_folders set resync_pending = true where source_id = $1 and user_id = $2 and id = any($3::uuid[])", [
+          change.sourceId,
+          actor.userId,
+          change.folderIds,
+        ]);
+      }
+      await db.query(
+        `update crm.mail_sources set
+           resync_pending = true,
+           resync_full = resync_full or $3 or cardinality(resync_lookups) + cardinality($4::text[]) > $5,
+           resync_lookups = case when cardinality(resync_lookups) + cardinality($4::text[]) > $5 then '{}'
+             else array(select distinct unnest(resync_lookups || $4::text[])) end
+         where id = $1 and user_id = $2`,
+        [change.sourceId, actor.userId, change.full, change.lookups, LOOKUP_LIMIT],
+      );
+    }
+  });
+}
+
+export async function recordMailEchoes(db: Db, actor: UserActor, sourceId: string, providerMessageIds: string[]) {
+  const ids = [...new Set(providerMessageIds.filter((id) => id && id.length <= 400))];
+  if (ids.length === 0) return;
+  await db.query("delete from crm.mail_echoes where user_id = $1 and changed_at < now() - interval '1 hour'", [actor.userId]);
+  await db.query(
+    `insert into crm.mail_echoes (source_id, user_id, provider_message_id)
+     select $1, $2, unnest($3::text[])
+     on conflict (source_id, provider_message_id) do update set changed_at = now()`,
+    [sourceId, actor.userId, ids],
+  );
+}
+
+export type MailSyncOptions = {
+  deadline?: number;
+  budgetMs?: number;
+  fetchImpl?: typeof fetch;
+  backfill?: boolean;
+  push?: PushSender;
+  sourceIds?: string[];
+  ignoreFolderWaits?: boolean;
+  skipRecentMs?: number;
+  announce?: boolean;
+  targeted?: boolean;
+};
+
+export async function syncMail(actor: UserActor, options: MailSyncOptions): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
   const report: MailSyncReport = {
@@ -758,6 +1013,9 @@ export async function syncMail(
     busy: [],
     synced: [],
     waiting: [],
+    recent: [],
+    passes: 0,
+    lookups: 0,
   };
   const sources = (await loadSources(actor)).filter((source) => !options.sourceIds || options.sourceIds.includes(source.id));
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
@@ -768,13 +1026,28 @@ export async function syncMail(
     );
     return report;
   }
-  for (const [index, source] of sources.entries()) {
+  const backfillWanted = options.backfill !== false;
+  const due = sources.filter((source) => {
+    if (!options.skipRecentMs || source.resync_pending || source.resync_full || (backfillWanted && source.backfilling)) return true;
+    if (!syncedWithin(source.last_full_synced_at, options.skipRecentMs)) return true;
+    report.recent.push(source.id);
+    return false;
+  });
+  let seenVersion = options.announce && due.length > 0 ? await readMailVersion(actor) : null;
+  const announce = async () => {
+    if (seenVersion === null) return;
+    const version = await readMailVersion(actor);
+    if (version === seenVersion) return;
+    seenVersion = version;
+    await signalSynced(actor.userId, "mail");
+  };
+  for (const [index, source] of due.entries()) {
     if (Date.now() >= deadline) break;
     if (waitingUntil(source.retry_at)) {
       report.waiting.push(source.id);
       continue;
     }
-    const share = Math.max(5_000, Math.floor((deadline - Date.now()) / (sources.length - index)));
+    const share = Math.max(5_000, Math.floor((deadline - Date.now()) / (due.length - index)));
     const sourceDeadline = Math.min(deadline, Date.now() + share);
     const claimed = await claim(actor, source.id, sourceDeadline).catch((error) => {
       console.error("Couldn't take the mail sync lock", source.email, problemText(error));
@@ -790,6 +1063,9 @@ export async function syncMail(
     report.synced.push(source.id);
     let lastError: string | null = null;
     let retryAt: Date | null = null;
+    let unfinished = false;
+    let walkedAll = false;
+    const failedFolders = new Set<string>();
     try {
       const token = await currentToken(source.tokens, fetchImpl);
       await withActor(actor, (db) => saveToken(db, source, token));
@@ -798,38 +1074,50 @@ export async function syncMail(
       );
       const stale = !source.folders_synced_at || Date.now() - new Date(source.folders_synced_at).getTime() > FOLDER_REFRESH_MS;
       const refreshed = stale ? await refreshFoldersSafely(actor, source, token.accessToken, fetchImpl, sourceDeadline, report) : false;
-      const folders = await withActor(actor, async (db) => {
-        const result = await db.query<FolderRow>(
-          `select id, provider_folder_id, name, role, sync_state, sync_link, classified_at, last_synced_at, failures, retry_at
-           from crm.mail_folders where source_id = $1`,
-          [source.id],
-        );
-        return result.rows;
-      });
-      const { live, backfill } = folderOrder(folders);
-      const places: Places = {
-        folders: new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id])),
-        refreshed,
-        mailScope: grantsMailWrite((await withActor(actor, (db) => readReconnectSource(db, actor, source.id)).catch(() => null))?.scopes),
-      };
+      const mailScope = grantsMailWrite((await withActor(actor, (db) => readReconnectSource(db, actor, source.id)).catch(() => null))?.scopes);
       const shares = await ownsShares(actor);
       const ready = (folder: FolderRow) => options.ignoreFolderWaits === true || !waitingUntil(folder.retry_at);
-      for (const folder of live.filter(ready)) {
-        if (Date.now() >= sourceDeadline) break;
-        await runFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false, places, shares }, report);
-      }
-      for (const folder of live.filter((item) => item.role === "inbox" && !item.classified_at)) {
-        if (Date.now() >= sourceDeadline) break;
-        await classifyFolderSafely(actor, source, folder, token.accessToken, sourceDeadline, fetchImpl);
-      }
-      if (options.backfill !== false) {
-        for (const folder of backfill.filter(ready)) {
-          if (Date.now() >= sourceDeadline || report.paused) break;
-          await runFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: true, places, shares }, report);
+      const places: Places = { folders: new Map(), refreshed, mailScope };
+      for (let pass = 1; ; pass += 1) {
+        report.passes += 1;
+        const folders = await loadFolders(actor, source.id);
+        const { live, backfill } = folderOrder(folders);
+        places.folders = new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id]));
+        const work = await takeWork(actor, source.id);
+        const plan = options.targeted
+          ? await targetFolders(actor, source, folders, work, token.accessToken, places, { fetchImpl, deadline: sourceDeadline }, report)
+          : { walk: live, all: true };
+        const cutBefore = report.backfilling;
+        let cut = false;
+        for (const folder of plan.walk.filter(ready)) {
+          if (Date.now() >= sourceDeadline) {
+            cut = true;
+            break;
+          }
+          const options = { deadline: sourceDeadline, fetchImpl, guard: folder.sync_state !== "live", places, shares };
+          if (!(await runFolder(actor, source, folder, token.accessToken, options, report))) failedFolders.add(folder.id);
         }
+        if (cut || report.backfilling > cutBefore) unfinished = true;
+        else if (plan.all) walkedAll = true;
+        if (pass === 1) {
+          for (const folder of live.filter((item) => item.role === "inbox" && !item.classified_at)) {
+            if (Date.now() >= sourceDeadline) break;
+            await classifyFolderSafely(actor, source, folder, token.accessToken, sourceDeadline, fetchImpl);
+          }
+          if (backfillWanted) {
+            const backfillDeadline = sourceDeadline - AGAIN_MIN_MS;
+            for (const folder of backfill.filter(ready)) {
+              if (Date.now() >= backfillDeadline || report.paused || (await changePending(actor, source.id))) break;
+              await runFolder(actor, source, folder, token.accessToken, { deadline: backfillDeadline, fetchImpl, guard: true, places, shares }, report);
+            }
+          }
+        }
+        if (pass >= MAX_PASSES || sourceDeadline - Date.now() < AGAIN_MIN_MS) break;
+        if (!(await changedAgain(actor, source.id, sourceDeadline))) break;
       }
     } catch (error) {
-      if (!(error instanceof GraphOutOfTime)) {
+      if (error instanceof GraphOutOfTime) unfinished = true;
+      else {
         const reconnect = await sourceProblem(actor, source, error);
         lastError = reconnect ?? problemText(error);
         report.errors.push(reconnect ?? `${source.email}: ${lastError}`);
@@ -837,9 +1125,11 @@ export async function syncMail(
         if (throttled(error)) retryAt = throttleUntil(error);
       }
     } finally {
-      await releaseSource(actor, source.id, lastError, retryAt);
+      if (failedFolders.size > 0) await remarkFolders(actor, source.id, [...failedFolders]);
+      await releaseSource(actor, source.id, lastError, retryAt, { unfinished, redo: lastError !== null, walkedAll: walkedAll && !unfinished });
     }
   }
+  await announce();
   report.arrived = await claimArrivals(actor);
   const routed = report.arrived.length
     ? await routeArrivedMail(actor, report.arrived, { fetchImpl, deadline }).catch((error) => {
@@ -865,43 +1155,72 @@ export async function syncMail(
       return 0;
     });
   }
+  await announce();
   return report;
 }
 
 const NOTIFIED_SYNC_MS = 15_000;
-const NOTIFIED_ATTEMPTS = 3;
-const NOTIFIED_RETRY_MS = 4_000;
+const NOTIFIED_POLL_MS = 1_000;
+const NOTIFIED_SYNC_LIMIT = 4;
 const SHORTEST_NOTIFIED_SYNC_MS = 3_000;
+
+type PendingSource = { id: string; held: boolean; throttled: boolean };
+
+async function pendingSources(actor: UserActor, sourceIds: string[]) {
+  const result = await withActor(actor, (db) =>
+    db.query<PendingSource>(
+      `select id, coalesce(locked_until > now(), false) as held, coalesce(retry_at > now(), false) as throttled
+       from crm.mail_sources where user_id = $1 and id = any($2::uuid[]) and resync_pending`,
+      [actor.userId, sourceIds],
+    ),
+  );
+  return result.rows;
+}
 
 export async function syncNotifiedMailboxes(
   actor: UserActor,
   sourceIds: string[],
-  options: { deadline: number; fetchImpl?: typeof fetch; retryMs?: number },
+  options: { deadline: number; fetchImpl?: typeof fetch; pollMs?: number; noted?: boolean },
 ) {
-  const retryMs = options.retryMs ?? NOTIFIED_RETRY_MS;
-  let pending = [...new Set(sourceIds)];
+  const pollMs = options.pollMs ?? NOTIFIED_POLL_MS;
+  let waiting = [...new Set(sourceIds)];
   let stored = 0;
   let workflowEvents = 0;
-  for (let attempt = 0; pending.length > 0 && attempt < NOTIFIED_ATTEMPTS; attempt += 1) {
-    if (attempt > 0) {
-      if (options.deadline - Date.now() < retryMs + SHORTEST_NOTIFIED_SYNC_MS) break;
-      await new Promise((resolve) => setTimeout(resolve, retryMs));
+  let syncs = 0;
+  if (!options.noted) await noteMailChanges(actor, waiting.map((sourceId) => ({ sourceId, full: true, folderIds: [], lookups: [] })));
+  while (waiting.length > 0) {
+    const pending = await pendingSources(actor, waiting);
+    waiting = pending.filter((source) => !source.throttled).map((source) => source.id);
+    if (waiting.length === 0) break;
+    const free = pending.filter((source) => !source.held && !source.throttled).map((source) => source.id);
+    const left = options.deadline - Date.now();
+    if (free.length > 0 && syncs < NOTIFIED_SYNC_LIMIT && left >= SHORTEST_NOTIFIED_SYNC_MS) {
+      syncs += 1;
+      const report = await syncMail(actor, {
+        deadline: Math.min(options.deadline, Date.now() + NOTIFIED_SYNC_MS),
+        backfill: false,
+        sourceIds: free,
+        ignoreFolderWaits: true,
+        fetchImpl: options.fetchImpl,
+        announce: true,
+        targeted: true,
+      });
+      stored += report.stored;
+      workflowEvents += report.workflowEvents;
+      const reached = new Set([...report.synced, ...report.busy, ...report.waiting]);
+      waiting = waiting.filter((id) => !free.includes(id) || reached.has(id));
+      continue;
     }
-    const report = await syncMail(actor, {
-      deadline: Math.min(options.deadline, Date.now() + NOTIFIED_SYNC_MS),
-      backfill: false,
-      sourceIds: pending,
-      ignoreFolderWaits: true,
-      fetchImpl: options.fetchImpl,
-    });
-    stored += report.stored;
-    workflowEvents += report.workflowEvents;
-    pending = pending.filter((id) => !report.synced.includes(id) && !report.waiting.includes(id));
+    if (left < pollMs + SHORTEST_NOTIFIED_SYNC_MS) break;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
-  return { stored, workflowEvents, unreached: pending };
+  return { stored, workflowEvents, unreached: waiting };
 }
 
-export function screenSyncOptions(body: unknown) {
+export const SCHEDULED_FLOOR_MS = 60_000;
+export const REFRESH_FLOOR_MS = 2 * 60_000;
+
+export function screenSyncOptions(body: unknown): MailSyncOptions {
   const manual = typeof body === "object" && body !== null && (body as { manual?: unknown }).manual === true;
-  return { budgetMs: 8_000, backfill: false, ignoreFolderWaits: manual };
+  return { budgetMs: 8_000, backfill: false, ignoreFolderWaits: manual, skipRecentMs: REFRESH_FLOOR_MS, announce: true };
 }

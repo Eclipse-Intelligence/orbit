@@ -145,7 +145,9 @@ describe("notifications", () => {
     assert.equal(quiet.sent.length, 0);
     const subscription = first.calls.find((call) => call.url === `${GRAPH}/subscriptions`);
     assert.equal(subscription?.body?.notificationUrl, "https://orbit.test/api/microsoft/mail-webhook");
-    assert.equal(subscription?.body?.resource, "me/mailFolders('inbox')/messages");
+    assert.equal(subscription?.body?.resource, "me/messages");
+    assert.equal(subscription?.body?.changeType, "created,updated,deleted");
+    assert.equal(subscription?.body?.lifecycleNotificationUrl, "https://orbit.test/api/microsoft/mail-webhook");
 
     state.inbox = [message("from-jane", "jane@acme.test"), message("newsletter", "news@brand.test")];
     const loud = pusher();

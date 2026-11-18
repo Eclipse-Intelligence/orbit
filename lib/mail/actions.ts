@@ -1,4 +1,5 @@
 import { chatBackground } from "@/lib/crm/chat";
+import { signalSynced } from "@/lib/sync-signals";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -7,7 +8,7 @@ import type { Db } from "@/lib/db/pool";
 import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, reconnectProblem, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
 import { sourceReconnect } from "@/lib/mail/accounts";
 import { announceSharedThreads, shareVisibleRole } from "@/lib/mail/share-live";
-import { mailSourceToken } from "@/lib/mail/sync";
+import { mailSourceToken, recordMailEchoes } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailView } from "@/lib/mail/view";
 import type { MailRole } from "@/lib/mail/types";
@@ -159,6 +160,10 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
   return [...touched];
 }
 
+function announceMailChange(actor: UserActor) {
+  chatBackground(() => signalSynced(actor.userId, "mail"));
+}
+
 function announceMoves(actor: UserActor, sourceId: string, threadKeys: string[]) {
   if (threadKeys.length === 0) return;
   chatBackground(() =>
@@ -223,20 +228,21 @@ export async function applyMailAction(
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
   const base = MOVES[input.action];
   const move = base && input.action === "snooze" ? { ...base, destination: await snoozeFolder(actor, sourceId, token, fetchImpl) } : base;
-  const done: { row: Row; folder: string | null }[] = [];
+  const done: { row: Row; folder: string | null; providerId: string }[] = [];
   const failures = await eachLimited(chosen, async (row) => {
     if (move) {
       const moved = await moveMicrosoftMessage(token, row.provider_message_id, move.destination, fetchImpl);
-      done.push({ row, folder: moved.folderId });
+      done.push({ row, folder: moved.folderId, providerId: moved.id });
       return;
     }
     const isRead = input.action === "read" ? true : input.action === "unread" ? false : undefined;
     const flagged = input.action === "flag" ? true : input.action === "unflag" ? false : undefined;
     await updateMicrosoftMessage(token, row.provider_message_id, { isRead, flagged }, fetchImpl);
-    done.push({ row, folder: null });
+    done.push({ row, folder: null, providerId: row.provider_message_id });
   });
   if (done.length > 0) {
     const touched = await withActor(actor, async (db) => {
+      await recordMailEchoes(db, actor, sourceId, done.flatMap((item) => [item.row.provider_message_id, item.providerId]));
       await settleReminders(db, actor, sourceId, key, input.action, until, subject);
       const ids = done.map((item) => item.row.id);
       if (input.action === "read" || input.action === "unread") {
@@ -248,6 +254,7 @@ export async function applyMailAction(
       }
       return [];
     });
+    announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
   if (failures.length > 0) {
@@ -282,19 +289,21 @@ export async function moveMessages(
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
   const destination = typeof target === "string" ? MOVES[target]!.destination : target.providerFolderId;
   const role = typeof target === "string" ? MOVES[target]!.role : target.role;
-  const done: { id: string; folder: string | null; threadKey: string }[] = [];
+  const done: { id: string; folder: string | null; threadKey: string; providerIds: string[] }[] = [];
   const failures = await eachLimited(messages, async (message) => {
     const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl);
-    done.push({ id: message.id, folder: moved.folderId, threadKey: message.threadKey });
+    done.push({ id: message.id, folder: moved.folderId, threadKey: message.threadKey, providerIds: [message.providerMessageId, moved.id] });
   });
   if (done.length > 0) {
     const touched = await withActor(actor, async (db) => {
+      await recordMailEchoes(db, actor, sourceId, done.flatMap((item) => item.providerIds));
       const keys = await recordMoves(db, sourceId, done, role, typeof target === "string" ? undefined : target.providerFolderId);
       if (typeof target === "string") {
         for (const key of new Set(done.map((item) => item.threadKey))) await settleReminders(db, actor, sourceId, key, target, null, null);
       }
       return keys;
     });
+    announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
   return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };

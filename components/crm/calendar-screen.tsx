@@ -15,6 +15,7 @@ import {
 import CalendarAgenda from "@/components/crm/calendar-agenda";
 import type { CalendarMeta } from "@/components/crm/calendar-event-details";
 import CalendarGrid from "@/components/crm/calendar-grid";
+import { useSyncSignal } from "@/components/crm/sync-signals";
 import { CalendarTaskList, SectionToggle, TaskDropZone, useCalendarSections } from "@/components/crm/calendar-tasks";
 import type { TaskBlockDrag, TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import TaskKindIcon from "@/components/crm/task-kind-icon";
@@ -320,6 +321,10 @@ export default function CalendarScreen({
       return calendar ? visible(item.calendarId, calendar.visible) : false;
     }),
   );
+
+  useSyncSignal("calendar", () => {
+    if (document.visibilityState === "visible") router.refresh();
+  });
 
   useEffect(() => {
     const refresh = () => {

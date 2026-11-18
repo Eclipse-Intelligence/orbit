@@ -286,6 +286,7 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
     assert.equal(screenSyncOptions({ manual: true }).ignoreFolderWaits, true);
     assert.equal(screenSyncOptions({}).ignoreFolderWaits, false);
     assert.equal(screenSyncOptions(null).ignoreFolderWaits, false);
+    await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '3 minutes'");
     const refresh = outlook();
     await syncMail(owner, { ...screenSyncOptions({ manual: true }), fetchImpl: refresh.fetchImpl });
     assert.equal(refresh.deltaCalls("f-inbox").length, 1);
@@ -298,13 +299,13 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
     assert.equal(await stored("webhook-1"), 1);
   });
 
-  it("tries a webhook's mailbox again while another sync holds it, and stops for one waiting out throttling", async () => {
+  it("waits for the sync holding a webhook's mailbox, then syncs it, and stops for one waiting out throttling", async () => {
     const admin = getAdminPool();
     const id = (await source()).id;
     await admin.query("update crm.mail_sources set locked_until = now() + interval '5 minutes'");
     const held = outlook();
     const release = setTimeout(() => void admin.query("update crm.mail_sources set locked_until = null"), 50);
-    const reached = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() + 30_000, fetchImpl: held.fetchImpl, retryMs: 300 });
+    const reached = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() + 30_000, fetchImpl: held.fetchImpl, pollMs: 300 });
     clearTimeout(release);
     assert.deepEqual(reached.unreached, []);
     assert.equal(held.deltaCalls("f-inbox").length, 1, "synced once the lock was free");
@@ -312,7 +313,7 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
     await admin.query("update crm.mail_sources set locked_until = null, retry_at = now() + interval '5 minutes'");
     const throttled = outlook();
     const started = Date.now();
-    const waiting = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() + 30_000, fetchImpl: throttled.fetchImpl, retryMs: 2_000 });
+    const waiting = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() + 30_000, fetchImpl: throttled.fetchImpl, pollMs: 2_000 });
     assert.deepEqual(waiting.unreached, []);
     assert.equal(throttled.calls.length, 0);
     assert.ok(Date.now() - started < 1_500, "no retry for a mailbox that is deliberately waiting");
@@ -322,7 +323,7 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
   it("keeps a mailbox it never reached pending instead of dropping it", async () => {
     const id = (await source()).id;
     const box = outlook();
-    const result = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() - 1, fetchImpl: box.fetchImpl, retryMs: 10 });
+    const result = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() - 1, fetchImpl: box.fetchImpl, pollMs: 10 });
     assert.deepEqual(result.unreached, [id]);
     assert.equal(box.calls.length, 0);
   });

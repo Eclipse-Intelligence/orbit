@@ -11,7 +11,6 @@ import {
 import { followUpCallsAcross } from "@/lib/crm/follow-ups";
 import { resolveGranolaActor, syncGranola } from "@/lib/crm/granola";
 import { syncMailbox } from "@/lib/crm/inbox";
-import { syncMail } from "@/lib/mail/sync";
 import { ensureTranscriptSubscription, syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import type { UserActor } from "@/lib/crm/types";
 import { granolaApiKey, granolaClient } from "@/lib/granola";
@@ -91,13 +90,6 @@ export const DEFAULT_STEPS: SyncStep[] = [
     minMs: 15_000,
     applies: microsoftStep,
     run: (target, context) => syncMailbox(target.actor, context.fetchImpl ?? fetch, { deadline: context.deadline }),
-  },
-  {
-    name: "mail_store",
-    minMs: 10_000,
-    applies: (target) => (target.mailbox || Boolean(target.calendarAccounts)) && microsoftConfigured(),
-    run: (target, context) =>
-      syncMail(target.actor, { deadline: Math.min(context.deadline, Date.now() + 15_000), fetchImpl: context.fetchImpl, backfill: false }),
   },
   {
     name: "calls",

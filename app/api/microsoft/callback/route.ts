@@ -3,11 +3,13 @@ import { after, NextResponse } from "next/server";
 import { sessionCookieOptions } from "@/lib/auth/config";
 import { getUserActor } from "@/lib/auth/user";
 import { syncCalendar } from "@/lib/crm/calendar";
+import { syncMail } from "@/lib/mail/sync";
 import { finishMicrosoftConnect } from "@/lib/microsoft/connect-flow";
 import { originFrom, readMicrosoftState } from "@/lib/microsoft/oauth";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 90;
 
 const STATE_COOKIE = "crm_ms_oauth";
 
@@ -55,6 +57,12 @@ export async function GET(request: Request) {
       if (result.error) console.error("Calendar sync failed", result.error);
     } catch (error) {
       console.error("Calendar sync failed", error);
+    }
+    try {
+      const report = await syncMail(user, { budgetMs: 20_000, backfill: false, announce: true });
+      if (report.errors.length) console.error("Mail sync failed", report.errors.join("; "));
+    } catch (error) {
+      console.error("Mail sync failed", error);
     }
   });
   return finish(outcome);

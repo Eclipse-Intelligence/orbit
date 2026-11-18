@@ -295,8 +295,15 @@ export async function forgetInviteSender(db: Db, actor: UserActor, address: stri
   await db.query("delete from crm.invite_sender_choices where user_id = $1 and address = $2", [actor.userId, canonical]);
 }
 
-export async function disconnectCalendarAccount(actor: UserActor, accountId: string, confirmed: { email?: string | null } = {}) {
+export async function disconnectCalendarAccount(
+  actor: UserActor,
+  accountId: string,
+  confirmed: { email?: string | null } = {},
+  fetchImpl?: typeof fetch,
+) {
   if (!isUuid(accountId)) throw notFound("calendar account");
+  const { releaseSubscriptions, subscriptionsOfInDb } = await import("@/lib/crm/microsoft-subscriptions");
+  let release: { ids: string[]; tokens: StoredTokens | null } = { ids: [], tokens: null };
   const removed = await withActor(actor, async (db) => {
     const found = await db.query<{ email: string | null; mail: boolean; addresses: string[] }>(
       `select a.email,
@@ -314,6 +321,21 @@ export async function disconnectCalendarAccount(actor: UserActor, accountId: str
     if (cascades && !confirmedThis) {
       throw new CrmError("conflict", `Confirm removing ${account.email ?? "this account"}. Its mail and sending addresses will be deleted from Orbit.`, 409);
     }
+    const tokens = await db.query<{ refresh_token: string | null; access_token: string | null; access_token_expires_at: Date | string | null }>(
+      "select refresh_token, access_token, access_token_expires_at from crm.calendar_accounts where id = $1 and user_id = $2",
+      [accountId, actor.userId],
+    );
+    const stored = tokens.rows[0];
+    release = {
+      ids: await subscriptionsOfInDb(db, actor, { accountId }),
+      tokens: stored
+        ? {
+            refreshTokenCipher: stored.refresh_token,
+            accessTokenCipher: stored.access_token,
+            accessTokenExpiresAt: stored.access_token_expires_at ? new Date(stored.access_token_expires_at).toISOString() : null,
+          }
+        : null,
+    };
     const result = await db.query<{ email: string | null }>(
       "delete from crm.calendar_accounts where id = $1 and user_id = $2 returning email",
       [accountId, actor.userId],
@@ -322,6 +344,7 @@ export async function disconnectCalendarAccount(actor: UserActor, accountId: str
     return result.rowCount ?? 0;
   });
   if (removed === 0) throw notFound("calendar account");
+  await releaseSubscriptions(release.ids, release.tokens, { fetchImpl });
 }
 
 export async function hasCalendarAccounts(db: Db, actor: UserActor) {
