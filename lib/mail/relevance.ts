@@ -131,21 +131,19 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
   const workspaceIds = [...new Set(items.map((item) => item.workspaceId))];
   const senders = [...new Set(items.flatMap((item) => [item.email, ruleTarget(item.email)]))];
   const keys = items.map((item) => splitKey(item.key));
-  const [stored, threads, facts] = await Promise.all([
-    db.query<StoredRow>(
-      `select workspace_id, sender, category, engine, confidence, reason, rule, decided_at from crm.mail_sender_relevance
-       where user_id = $1 and workspace_id = any($2::uuid[]) and sender = any($3::text[])`,
-      [actor.userId, workspaceIds, senders],
-    ),
-    db.query<ThreadRow>(
-      `select t.source_id, t.thread_key, t.workspace_id, t.sender, t.message_id, t.category, t.engine, t.confidence, t.reason, t.decided_at
-       from crm.mail_thread_relevance t
-       join unnest($2::uuid[], $3::text[]) as k(source_id, thread_key) on k.source_id = t.source_id and k.thread_key = t.thread_key
-       where t.user_id = $1`,
-      [actor.userId, keys.map((key) => key.sourceId), keys.map((key) => key.threadKey)],
-    ),
-    contactFacts(db, actor, items),
-  ]);
+  const stored = await db.query<StoredRow>(
+    `select workspace_id, sender, category, engine, confidence, reason, rule, decided_at from crm.mail_sender_relevance
+     where user_id = $1 and workspace_id = any($2::uuid[]) and sender = any($3::text[])`,
+    [actor.userId, workspaceIds, senders],
+  );
+  const threads = await db.query<ThreadRow>(
+    `select t.source_id, t.thread_key, t.workspace_id, t.sender, t.message_id, t.category, t.engine, t.confidence, t.reason, t.decided_at
+     from crm.mail_thread_relevance t
+     join unnest($2::uuid[], $3::text[]) as k(source_id, thread_key) on k.source_id = t.source_id and k.thread_key = t.thread_key
+     where t.user_id = $1`,
+    [actor.userId, keys.map((key) => key.sourceId), keys.map((key) => key.threadKey)],
+  );
+  const facts = await contactFacts(db, actor, items);
   const bySender = new Map(stored.rows.map((row) => [`${row.workspace_id}|${row.sender}`, row]));
   const byThread = new Map(threads.rows.map((row) => [`${row.source_id}|${row.thread_key}`, row]));
   const configured = classifierConfigured();

@@ -61,10 +61,8 @@ export async function getCompanyAnswers(actor: Actor, companyId: string) {
   return withActor(actor, async (db) => {
     const fields = await readFields(db, actor.workspaceId);
     if (fields.length === 0) return { fields, answers: [] as AiAnswer[] };
-    const [scopes, rows] = await Promise.all([
-      scopeMembership(db, actor.workspaceId, fields, [companyId]),
-      db.query<AnswerRow>(`${ANSWER_SQL} where a.workspace_id = $1 and a.company_id = $2`, [actor.workspaceId, companyId]),
-    ]);
+    const scopes = await scopeMembership(db, actor.workspaceId, fields, [companyId]);
+    const rows = await db.query<AnswerRow>(`${ANSWER_SQL} where a.workspace_id = $1 and a.company_id = $2`, [actor.workspaceId, companyId]);
     const byField = new Map(rows.rows.map((row) => [row.field_id, row]));
     return { fields, answers: fields.map((field) => answerFor(field, companyId, byField.get(field.id), scopes.get(field.id)?.has(companyId) ?? false)) };
   });
@@ -75,10 +73,8 @@ export async function getAnswer(actor: Actor, fieldId: string, companyId: string
   return withActor(actor, async (db) => {
     const field = await readField(db, actor.workspaceId, fieldId);
     if (!field) throw notFound("AI field");
-    const [scopes, rows] = await Promise.all([
-      scopeMembership(db, actor.workspaceId, [field], [companyId]),
-      db.query<AnswerRow>(`${ANSWER_SQL} where a.workspace_id = $1 and a.company_id = $2 and a.field_id = $3`, [actor.workspaceId, companyId, fieldId]),
-    ]);
+    const scopes = await scopeMembership(db, actor.workspaceId, [field], [companyId]);
+    const rows = await db.query<AnswerRow>(`${ANSWER_SQL} where a.workspace_id = $1 and a.company_id = $2 and a.field_id = $3`, [actor.workspaceId, companyId, fieldId]);
     return { field, answer: answerFor(field, companyId, rows.rows[0], scopes.get(fieldId)?.has(companyId) ?? false) };
   });
 }

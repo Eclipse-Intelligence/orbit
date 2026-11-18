@@ -140,7 +140,8 @@ async function ownAddresses(db: Db, actor: UserActor) {
 }
 
 async function draftContext(db: Db, actor: UserActor, sourceId: string, key: string) {
-  const [text, own] = await Promise.all([threadText(db, actor, sourceId, key), ownAddresses(db, actor)]);
+  const text = await threadText(db, actor, sourceId, key);
+  const own = await ownAddresses(db, actor);
   const addresses = [
     ...new Set(
       text.messages.flatMap((message) => [message.from, ...message.to, ...message.cc]).flatMap((item) => (item ? [item.address.toLowerCase()] : [])),
@@ -148,13 +149,11 @@ async function draftContext(db: Db, actor: UserActor, sourceId: string, key: str
   ]
     .filter((address) => !own.has(address))
     .slice(0, 10);
-  const [people, voice, edits, calls, writing] = await Promise.all([
-    recipientContext(db, actor, addresses),
-    voiceSamples(db, actor),
-    editExamples(db, actor),
-    callNotes(db, actor, addresses),
-    emailWritingNotes(db, actor),
-  ]);
+  const people = await recipientContext(db, actor, addresses);
+  const voice = await voiceSamples(db, actor);
+  const edits = await editExamples(db, actor);
+  const calls = await callNotes(db, actor, addresses);
+  const writing = await emailWritingNotes(db, actor);
   return { text, own, people, voice, edits, calls, writing };
 }
 
@@ -445,7 +444,9 @@ async function prepareReply(home: UserActor, target: ThreadWorkspace, candidate:
 }
 
 async function unreviewedContext(db: Db, actor: UserActor, sourceId: string, key: string): Promise<Awaited<ReturnType<typeof draftContext>>> {
-  const [text, own, voice] = await Promise.all([threadText(db, actor, sourceId, key), ownAddresses(db, actor), voiceSamples(db, actor)]);
+  const text = await threadText(db, actor, sourceId, key);
+  const own = await ownAddresses(db, actor);
+  const voice = await voiceSamples(db, actor);
   return { text, own, people: [], voice, edits: [], calls: [], writing: [] };
 }
 

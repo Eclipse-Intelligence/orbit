@@ -786,7 +786,8 @@ async function describeActionParts(db: Db, actor: Actor, eventId: string, proven
   const ids = one.event.entity_type === "task" ? await actionIds(db, actor, one.event.id) : [one.event.id];
   if (!ids.includes(one.event.id)) return pick && ids.length === 1 ? { ...(await describeById(db, actor, ids[0], provenance)), ids } : { ...one, ids: [one.event.id] };
   if (ids.length < 2) return { ...one, ids };
-  const parts = await Promise.all(ids.map((id) => describeById(db, actor, id, provenance)));
+  const parts: Awaited<ReturnType<typeof describeById>>[] = [];
+  for (const id of ids) parts.push(await describeById(db, actor, id, provenance));
   const series = parts.filter((part) => part.event.event_type.startsWith("task_series."));
   const refuse = (reason: string) => ({ event: one.event, ids, described: { ...one.described, summary: parts.map((part) => part.described.summary).join("; "), plan: { ok: false as const, reason } } });
   if (ids.length > 2 || series.length !== 1) return refuse(ONE_AT_A_TIME);
