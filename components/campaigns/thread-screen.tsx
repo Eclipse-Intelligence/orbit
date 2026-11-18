@@ -85,6 +85,7 @@ function MessageBody({ message }: { message: Pick<ThreadMessage, "body" | "chann
 
 function Bubble({
   author,
+  address,
   channel,
   at,
   inbound,
@@ -92,6 +93,7 @@ function Bubble({
   children,
 }: {
   author: string;
+  address?: string | null;
   channel: CampaignChannel;
   at: string;
   inbound: boolean;
@@ -103,7 +105,10 @@ function Bubble({
       <Monogram name={author} className="mt-0.5 size-7 rounded-full text-[11px]" />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className={cn("truncate text-[14px]", inbound ? "text-foreground" : "text-soft")}>{author}</span>
+          <span title={address && address !== author ? address : undefined} className={cn("truncate text-[14px]", inbound ? "text-foreground" : "text-soft")}>
+            {author}
+            {address && address !== author && <span className="sr-only">, {address}</span>}
+          </span>
           <span className="text-subtle ml-auto flex shrink-0 items-center gap-1.5 text-[12px] tabular-nums">
             <ChannelIcon channel={channel} className="size-3 self-center" />
             <When at={at} />
@@ -613,6 +618,7 @@ export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer:
                   <Bubble
                     key={item.id}
                     author={item.author}
+                    address={inbound ? null : item.address}
                     channel={item.channel}
                     at={item.at}
                     inbound={inbound}

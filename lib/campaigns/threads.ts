@@ -189,6 +189,7 @@ type MessageRow = {
   sent_by_user_id: string | null;
   sent_by: string | null;
   sender_name: string | null;
+  mailbox_owner: string | null;
   send_state: ThreadMessage["sendState"];
   send_error: string | null;
   client_key: string | null;
@@ -226,12 +227,21 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
     const byId = new Map(rows.map((row) => [row.id, row]));
     const messages = await db.query<MessageRow>(
       `select m.id, m.prospect_id, m.campaign_id, m.channel, m.direction, m.subject, m.body, m.sent_at, m.from_address, m.sent_by_user_id,
-              coalesce(nullif(btrim(pr.full_name), ''), pr.email) as sent_by, s.name as sender_name, m.send_state, m.send_error, m.client_key, m.automatic, m.created_at,
+              coalesce(nullif(btrim(pr.full_name), ''), pr.email) as sent_by, s.name as sender_name, mailbox.name as mailbox_owner, m.send_state, m.send_error, m.client_key, m.automatic, m.created_at,
               m.conversation_id, m.sender_id, m.stats_id, m.provider_message_id
        from crm.campaign_messages m
        left join crm.profiles pr on pr.id = m.sent_by_user_id
        left join crm.campaigns k on k.id = m.campaign_id
        left join crm.campaign_senders s on s.workspace_id = m.workspace_id and s.provider = k.provider and s.external_id = m.sender_id
+       left join lateral (
+         select coalesce(nullif(btrim(mp.full_name), ''), mp.email) as name
+         from crm.workspace_members wm
+         join crm.profiles mp on mp.id = wm.user_id
+         where m.channel = 'email' and m.direction = 'outbound' and m.from_address is not null and wm.workspace_id = m.workspace_id
+           and (lower(mp.email) = lower(m.from_address) or exists (select 1 from unnest(mp.other_emails) other where lower(other) = lower(m.from_address)))
+         order by mp.id
+         limit 1
+       ) mailbox on true
        where m.workspace_id = $1 and m.prospect_id = any($2::uuid[])
        order by m.sent_at desc, m.created_at desc
        limit $3`,
@@ -250,7 +260,7 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
         message.send_error = "May not have gone.";
       }
       const author =
-        message.direction === "inbound" ? prospect.name : (message.sent_by ?? (message.channel === "linkedin" ? (prospect.sender_name ?? message.sender_name) : null) ?? message.from_address ?? "Campaign");
+        message.direction === "inbound" ? prospect.name : (message.sent_by ?? (message.channel === "linkedin" ? (prospect.sender_name ?? message.sender_name) : null) ?? message.mailbox_owner ?? message.from_address ?? "Campaign");
       items.push({
         type: "message",
         id: message.id,

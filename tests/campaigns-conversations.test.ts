@@ -71,7 +71,7 @@ let counter = 0;
 async function message(
   actor: UserActor,
   prospectId: string,
-  input: { direction: "inbound" | "outbound"; body: string; at: string; channel?: "email" | "linkedin"; sender?: string | null; automatic?: boolean; sendState?: string | null },
+  input: { direction: "inbound" | "outbound"; body: string; at: string; channel?: "email" | "linkedin"; sender?: string | null; automatic?: boolean; sendState?: string | null; from?: string | null },
 ) {
   const owned = await sql<{ campaign_id: string; channel: "email" | "linkedin" }>(
     "select p.campaign_id, k.channel from crm.campaign_prospects p join crm.campaigns k on k.id = p.campaign_id where p.id = $1",
@@ -80,8 +80,8 @@ async function message(
   const channel = input.channel ?? owned[0].channel;
   counter += 1;
   await sql(
-    `insert into crm.campaign_messages (workspace_id, campaign_id, prospect_id, channel, direction, body, sent_at, external_id, conversation_id, sender_id, automatic, send_state, stats_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+    `insert into crm.campaign_messages (workspace_id, campaign_id, prospect_id, channel, direction, body, sent_at, external_id, conversation_id, sender_id, automatic, send_state, stats_id, from_address)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [
       actor.workspaceId,
       owned[0].campaign_id,
@@ -96,6 +96,7 @@ async function message(
       input.automatic ?? false,
       input.sendState ?? null,
       channel === "email" ? `stats-${prospectId}` : null,
+      input.from ?? null,
     ],
   );
 }
@@ -317,5 +318,27 @@ describe("campaign conversations", () => {
     assert.equal(previewText("Sounds good.\n\nOn Mon, 10 Nov 2026 at 09:00, Mark wrote:\n> Quick question", "email"), "Sounds good.");
     assert.equal(previewText("Line one\n\nline two", "linkedin"), "Line one line two");
     assert.equal(previewText("x".repeat(900), "linkedin").length, 500);
+  });
+
+  it("names the member behind a sending mailbox and keeps the address, falling back to the address", async () => {
+    await sql("update crm.profiles set other_emails = array['Mark@GetRidgeon.test'] where id = $1", [owner.userId]);
+    const gil = await prospect(owner, { campaignId: ids.clinics, lead: "gil", email: "gil@mailbox.test", name: ["Gil", "Mailbox"] });
+    await message(owner, gil, { direction: "outbound", body: "From Mark's mailbox.", at: "2026-11-09T09:00:00Z", from: "mark@getridgeon.test" });
+    await message(owner, gil, { direction: "outbound", body: "From the agency's mailbox.", at: "2026-11-09T10:00:00Z", from: "sends@agency-mailbox.test" });
+    await message(owner, gil, { direction: "outbound", body: "From the sign-in address.", at: "2026-11-09T11:00:00Z", from: "ann@conversations.test" });
+    for (const viewer of [owner, ann]) {
+      const thread = await getProspectThread(viewer, gil);
+      const authors = thread.items.flatMap((item) => (item.type === "message" ? [[item.author, item.address]] : []));
+      assert.deepEqual(authors, [
+        ["Mark Ridgeon", "mark@getridgeon.test"],
+        ["sends@agency-mailbox.test", "sends@agency-mailbox.test"],
+        ["Ann Lee", "ann@conversations.test"],
+      ]);
+    }
+    const theirs = await sql<{ id: string }>("select id from crm.campaigns where workspace_id = $1", [outsider.workspaceId]);
+    const stranger = await prospect(outsider, { campaignId: theirs[0].id, lead: "stranger", email: "stranger@elsewhere.test", name: ["Stranger", "Elsewhere"] });
+    await message(outsider, stranger, { direction: "outbound", body: "Sent from a mailbox Mark owns elsewhere.", at: "2026-11-09T09:00:00Z", from: "mark@getridgeon.test" });
+    const other = await getProspectThread(outsider, stranger);
+    assert.deepEqual(other.items.flatMap((item) => (item.type === "message" ? [item.author] : [])), ["mark@getridgeon.test"], "only members of this workspace are named");
   });
 });
