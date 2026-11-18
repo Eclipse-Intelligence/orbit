@@ -204,8 +204,10 @@ async function settle(row: BlockRow, ref: string | null | undefined, options: { 
   ]);
 }
 
-async function defer(row: BlockRow, refused = false) {
-  await query("select private.defer_task_block($1, $2, $3)", [row.task_id, row.pending_at, refused]).catch((error) => console.error("Deferring a task block failed", error));
+async function defer(row: BlockRow, refused = false, refusedKey: string | null = null) {
+  await query("select private.defer_task_block($1, $2, $3, $4)", [row.task_id, row.pending_at, refused, refusedKey]).catch((error) =>
+    console.error("Deferring a task block failed", error),
+  );
 }
 
 async function release(row: BlockRow) {
@@ -321,7 +323,8 @@ async function createBlock(outlook: Outlook, row: BlockRow, plan: Extract<BlockP
       await settle(row, null);
       return "orbit_only";
     }
-    await defer(row, failure === "refused");
+    const madeNothing = failure === "refused" || failure === "denied";
+    await defer(row, failure === "refused", madeNothing ? key : null);
     return failed(failure);
   }
   const id = created.id?.trim();
