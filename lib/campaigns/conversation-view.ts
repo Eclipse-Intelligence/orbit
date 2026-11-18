@@ -38,3 +38,7 @@ export function conversationsHref(view: ConversationView, prospectId: string | n
   const query = params.toString();
   return `/campaigns/conversations${prospectId ? `/${prospectId}` : ""}${query ? `?${query}` : ""}`;
 }
+
+export function adoptSearch(input: { value: string; sent: string; text: string }) {
+  return input.value !== input.sent && input.text.trim() === input.sent;
+}

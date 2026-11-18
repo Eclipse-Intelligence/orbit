@@ -16,10 +16,17 @@ const KEYS_SQL = `select p.id, p.contact_id, p.email, p.linkedin, c.normalized_e
   left join crm.contacts c on c.id = p.contact_id
   where p.workspace_id = $1`;
 
+const ROLE_MAILBOXES = new Set(["info", "hello", "sales", "contact", "office", "admin", "team", "enquiries", "support"]);
+
+export function roleMailbox(email: string) {
+  return ROLE_MAILBOXES.has(email.split("@")[0]?.trim().toLowerCase() ?? "");
+}
+
 function keysOf(row: PersonKeys) {
   const keys = [`p:${row.id}`];
   if (row.contact_id) keys.push(`c:${row.contact_id}`);
-  for (const email of [row.email, row.normalized_email]) if (email) keys.push(`e:${email}`);
+  const otherKey = Boolean(row.contact_id || row.linkedin || row.normalized_linkedin);
+  for (const email of [row.email, row.normalized_email]) if (email && !(otherKey && roleMailbox(email))) keys.push(`e:${email}`);
   for (const linkedin of [row.linkedin, row.normalized_linkedin]) if (linkedin) keys.push(`l:${linkedin}`);
   return keys;
 }
@@ -49,7 +56,9 @@ export function groupPeople<T extends PersonKeys>(rows: T[]): T[][] {
   const groups = new Map<string, T[]>();
   for (const row of rows) {
     const root = find(`p:${row.id}`);
-    groups.set(root, [...(groups.get(root) ?? []), row]);
+    const group = groups.get(root);
+    if (group) group.push(row);
+    else groups.set(root, [row]);
   }
   return [...groups.values()];
 }
@@ -58,9 +67,32 @@ export async function workspacePeople(db: Db, workspaceId: string) {
   return groupPeople((await db.query<PersonKeys>(KEYS_SQL, [workspaceId])).rows);
 }
 
-export async function personProspectIds(db: Db, workspaceId: string, prospectId: string) {
+export async function personKeys(db: Db, workspaceId: string, prospectId: string) {
   if (!isUuid(prospectId)) throw notFound("prospect");
   const person = (await workspacePeople(db, workspaceId)).find((group) => group.some((row) => row.id === prospectId));
   if (!person) throw notFound("prospect");
-  return person.map((row) => row.id);
+  return person;
+}
+
+export async function personProspectIds(db: Db, workspaceId: string, prospectId: string) {
+  return (await personKeys(db, workspaceId, prospectId)).map((row) => row.id);
+}
+
+export function present(values: (string | null | undefined)[]) {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+export function doNotContactKeys(group: PersonKeys[]) {
+  return {
+    contactIds: present(group.map((row) => row.contact_id)),
+    emails: present(group.flatMap((row) => [row.email, row.normalized_email])),
+    linkedins: present(group.flatMap((row) => [row.linkedin, row.normalized_linkedin])),
+  };
+}
+
+export type Suppressed = { contactIds: Set<string>; emails: Set<string>; linkedins: Set<string> };
+
+export function suppressedPerson(group: PersonKeys[], suppressed: Suppressed) {
+  const keys = doNotContactKeys(group);
+  return keys.contactIds.some((id) => suppressed.contactIds.has(id)) || keys.emails.some((email) => suppressed.emails.has(email)) || keys.linkedins.some((linkedin) => suppressed.linkedins.has(linkedin));
 }

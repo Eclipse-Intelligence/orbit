@@ -5,9 +5,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { runTool } from "@/lib/assistant/tools";
 import { readCampaigns } from "@/lib/campaigns/agent";
-import { conversationFilters, conversationsHref, readConversationView } from "@/lib/campaigns/conversation-view";
+import { adoptSearch, conversationFilters, conversationsHref, readConversationView } from "@/lib/campaigns/conversation-view";
 import { conversationsWaiting, listConversations, markConversationRead, needsReplyNow, previewText, type Conversation } from "@/lib/campaigns/conversations";
+import { groupPeople } from "@/lib/campaigns/people";
 import { onlySenderMessage, replyToProspect } from "@/lib/campaigns/replies";
+import { liftDoNotContact, setDoNotContact } from "@/lib/campaigns/suppression";
 import { getProspectThread } from "@/lib/campaigns/threads";
 import { createContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
@@ -390,5 +392,64 @@ describe("campaign conversations", () => {
     assert.equal(screen.needsReply, (await listConversations(owner, {})).needsReply);
     assert.ok(screen.needsReply > assistant.needsReply);
     assert.equal((await mcpRead(owner, { view: "conversations", channel: "linkedin" })).needsReply, assistant.needsReply);
+  });
+
+  it("sets and lifts Do not contact on every prospect the thread shows, including one linked only through the chain", async () => {
+    const one = await campaign(owner, "Stop one", "email", "em-stop-1");
+    const two = await campaign(owner, "Stop two", "email", "em-stop-2");
+    const s1 = await prospect(owner, { campaignId: one, lead: "stop-s1", email: "sam@stop.test", name: ["Sam", "Stop"] });
+    const s2 = await prospect(owner, { campaignId: two, lead: "stop-s2", email: "sam@stop.test", linkedin: "linkedin.com/in/samstop", name: ["Sam", "Stop"] });
+    const h = await prospect(owner, { campaignId: ids.longevity, lead: "stop-h", linkedin: "linkedin.com/in/samstop", sender: "acct-li-1", name: ["Sam", "Stop"] });
+    await message(owner, h, { direction: "inbound", body: "Tell me more.", at: "2026-11-08T09:00:00Z", sender: "acct-li-1" });
+    const shown = (await getProspectThread(owner, s1)).campaigns.map((item) => item.prospectId).sort();
+    assert.deepEqual(shown, [s1, s2, h].sort());
+    const stops = async () =>
+      (await sql<{ id: string; stop_reason: string | null; stopping: boolean }>("select id, stop_reason, stop_requested_at is not null as stopping from crm.campaign_prospects where id = any($1::uuid[]) order by id", [shown])).map((row) => [row.id, row.stopping, row.stop_reason]);
+    const flagged = async () => Promise.all(shown.map(async (id) => Boolean((await getProspectThread(owner, id)).doNotContact)));
+
+    for (const start of [s1, h]) {
+      await setDoNotContact(owner, { prospectId: start });
+      assert.deepEqual(await stops(), shown.map((id) => [id, true, "suppressed"]), `set from ${start === s1 ? "S1" : "H"}`);
+      assert.deepEqual(await flagged(), [true, true, true]);
+      const row = byName(await listConversations(owner, { needsReply: false }), "Sam Stop")!;
+      assert.equal(row.doNotContact, true);
+      assert.equal(row.needsReply, false);
+      const { actor: agent } = await createAgent(owner.workspaceId, ["crm:read", "campaigns:write"]);
+      await assert.rejects(liftDoNotContact(agent, { prospectId: s2 }), (error: unknown) => error instanceof CrmError && error.code === "forbidden");
+      await liftDoNotContact(owner, { prospectId: start === s1 ? h : s1 });
+      assert.deepEqual(await stops(), shown.map((id) => [id, false, null]), "lifting from the other end clears every stop");
+      assert.deepEqual(await flagged(), [false, false, false]);
+      assert.equal(byName(await listConversations(owner, { needsReply: false }), "Sam Stop")!.doNotContact, false);
+    }
+
+    await setDoNotContact(owner, { prospectId: s2 });
+    await sql("update crm.campaign_prospects set replied_at = '2026-11-08T09:00:00Z' where id = $1", [h]);
+    await liftDoNotContact(owner, { prospectId: s1 });
+    assert.deepEqual(await stops(), shown.map((id) => [id, true, "replied"]), "a person who replied stays stopped");
+  });
+
+  it("never links two people through a shared role mailbox", () => {
+    const row = (id: string, email: string | null, linkedin: string | null, contact: string | null = null) => ({ id, contact_id: contact, email, linkedin, normalized_email: null, normalized_linkedin: null });
+    const sizes = (rows: ReturnType<typeof row>[]) => groupPeople(rows).map((group) => group.map((item) => item.id).sort().join(",")).sort();
+    assert.deepEqual(sizes([row("a", "info@acme.test", "linkedin.com/in/ann"), row("b", "info@acme.test", "linkedin.com/in/bob")]), ["a", "b"]);
+    assert.deepEqual(sizes([row("a", "Sales@acme.test", null, "contact-1"), row("b", "sales@acme.test", null, "contact-2")]), ["a", "b"]);
+    assert.deepEqual(sizes([row("a", "info@acme.test", null), row("b", "info@acme.test", null)]), ["a,b"], "with nothing else to go on, the mailbox still links");
+    assert.deepEqual(sizes([row("a", "ann@acme.test", "linkedin.com/in/ann"), row("b", "ann@acme.test", "linkedin.com/in/ann2")]), ["a,b"], "a personal address still links");
+  });
+
+  it("groups a large workspace in linear time", () => {
+    const rows = Array.from({ length: 60_000 }, (_, index) => ({ id: `p${index}`, contact_id: null, email: "same@bulk.test", linkedin: null, normalized_email: null, normalized_linkedin: null }));
+    const started = Date.now();
+    const groups = groupPeople(rows);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].length, 60_000);
+    assert.ok(Date.now() - started < 3_000, `${Date.now() - started}ms`);
+  });
+
+  it("only takes an outside search while nothing typed is waiting to be sent", () => {
+    assert.equal(adoptSearch({ value: "priya", sent: "", text: "" }), true, "a link or back button changes it");
+    assert.equal(adoptSearch({ value: "pri", sent: "pri", text: "priya" }), false, "the echo of what was sent");
+    assert.equal(adoptSearch({ value: "", sent: "pri", text: "priya" }), false, "still typing, so the stale value is ignored");
+    assert.equal(adoptSearch({ value: "", sent: "pri", text: "pri " }), true);
   });
 });

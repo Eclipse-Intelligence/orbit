@@ -18,7 +18,7 @@ import { When } from "@/components/mail/thread-reader";
 import KeyboardList from "@/components/shortcuts/keyboard-list";
 import type { Conversation, ConversationList } from "@/lib/campaigns/conversations";
 import { categoryTone } from "@/lib/campaigns/format";
-import { conversationsHref, type ConversationShow, type ConversationView } from "@/lib/campaigns/conversation-view";
+import { adoptSearch, conversationsHref, type ConversationShow, type ConversationView } from "@/lib/campaigns/conversation-view";
 import type { ProspectThread } from "@/lib/campaigns/threads";
 import type { CampaignChannel } from "@/lib/campaigns/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
@@ -89,7 +89,7 @@ function SearchField({ value, onSearch }: { value: string; onSearch: (value: str
   });
   if (seen !== value) {
     setSeen(value);
-    if (value !== sent) {
+    if (adoptSearch({ value, sent, text })) {
       setSent(value);
       setText(value);
     }

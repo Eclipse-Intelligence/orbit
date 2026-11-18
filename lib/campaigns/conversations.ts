@@ -1,4 +1,4 @@
-import { personProspectIds, workspacePeople } from "@/lib/campaigns/people";
+import { personProspectIds, suppressedPerson, workspacePeople, type Suppressed } from "@/lib/campaigns/people";
 import { CAMPAIGN_CHANNELS, type CampaignChannel } from "@/lib/campaigns/types";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -62,7 +62,6 @@ type Row = {
   last_in: Date | null;
   last_out: Date | null;
   unread: boolean;
-  do_not_contact: boolean;
   last_direction: "inbound" | "outbound" | null;
   last_channel: CampaignChannel | null;
   last_body: string | null;
@@ -91,13 +90,6 @@ function rowsSql(withLast: boolean) {
          coalesce(co.name, nullif(p.lead->>'companyName', '')) as company_name,
          t.messages, t.channels, t.last_in, t.last_out,
          (t.last_in_stored is not null and t.last_in_stored > coalesce(p.conversation_read_at, '-infinity'::timestamptz)) as unread,
-         exists (
-           select 1 from crm.suppressions s
-           where s.workspace_id = p.workspace_id and s.reason <> 'bounced'
-             and ((p.contact_id is not null and s.contact_id = p.contact_id)
-               or (s.kind = 'email' and s.value in (p.email, c.normalized_email))
-               or (s.kind = 'linkedin' and s.value in (p.linkedin, c.normalized_linkedin)))
-         ) as do_not_contact,
          ${withLast ? "last.direction as last_direction, last.channel as last_channel, last.body as last_body, last.sent_at as last_at" : "null as last_direction, null as last_channel, null as last_body, null::timestamptz as last_at"}
   from talked t
   join crm.campaign_prospects p on p.id = t.prospect_id and p.workspace_id = $1
@@ -135,14 +127,13 @@ export function needsReplyNow(input: { lastIn: Date | null; lastOut: Date | null
 
 type Person = Conversation & { search: string; campaignIds: Set<string> };
 
-function personOf(rows: Row[]): Person {
+function personOf(rows: Row[], doNotContact: boolean): Person {
   const opened =
     [...rows].filter((row) => row.last_in).sort((a, b) => time(b.last_in) - time(a.last_in))[0] ??
     [...rows].sort((a, b) => time(b.last_at) - time(a.last_at))[0];
   const latest = [...rows].sort((a, b) => time(b.last_at) - time(a.last_at))[0];
   const lastIn = rows.reduce<Date | null>((top, row) => (row.last_in && time(row.last_in) > time(top) ? row.last_in : top), null);
   const lastOut = rows.reduce<Date | null>((top, row) => (row.last_out && time(row.last_out) > time(top) ? row.last_out : top), null);
-  const doNotContact = opened.do_not_contact;
   const channels = CAMPAIGN_CHANNELS.filter((channel) => rows.some((row) => row.channels.includes(channel)));
   const campaigns: ConversationCampaign[] = [];
   for (const row of [...rows].sort((a, b) => time(b.last_at) - time(a.last_at))) {
@@ -200,10 +191,19 @@ async function people(actor: Actor, withLast: boolean) {
   return withActor(actor, async (db) => {
     const rows = (await db.query<Row>(rowsSql(withLast), [actor.workspaceId])).rows;
     const byId = new Map(rows.map((row) => [row.id, row]));
-    return (await workspacePeople(db, actor.workspaceId))
-      .map((group) => group.flatMap((key) => (byId.has(key.id) ? [byId.get(key.id)!] : [])))
-      .filter((group) => group.length > 0)
-      .map(personOf);
+    const blocked = await db.query<{ contact_id: string | null; kind: string; value: string }>(
+      "select s.contact_id, s.kind, s.value from crm.suppressions s where s.workspace_id = $1 and s.reason <> 'bounced'",
+      [actor.workspaceId],
+    );
+    const suppressed: Suppressed = {
+      contactIds: new Set(blocked.rows.flatMap((row) => (row.contact_id ? [row.contact_id] : []))),
+      emails: new Set(blocked.rows.filter((row) => row.kind === "email").map((row) => row.value)),
+      linkedins: new Set(blocked.rows.filter((row) => row.kind === "linkedin").map((row) => row.value)),
+    };
+    return (await workspacePeople(db, actor.workspaceId)).flatMap((group) => {
+      const talked = group.flatMap((key) => (byId.has(key.id) ? [byId.get(key.id)!] : []));
+      return talked.length > 0 ? [personOf(talked, suppressedPerson(group, suppressed))] : [];
+    });
   });
 }
 
