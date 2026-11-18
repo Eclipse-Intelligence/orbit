@@ -1,4 +1,15 @@
-import { PROVIDER_NAMES, type CampaignEventKind, type CampaignProviderId, type CampaignStats, type CampaignStatus, type CampaignSummary, type ProspectRow } from "@/lib/campaigns/types";
+import {
+  PROVIDER_NAMES,
+  type AutoAdd,
+  type CampaignChannel,
+  type CampaignEventKind,
+  type CampaignProviderId,
+  type CampaignStats,
+  type CampaignStatus,
+  type CampaignSummary,
+  type ProspectRow,
+  type StatKey,
+} from "@/lib/campaigns/types";
 import { relativeWhen } from "@/lib/companies";
 
 export const STATUS_LABELS: Record<CampaignStatus, string> = {
@@ -9,6 +20,60 @@ export const STATUS_LABELS: Record<CampaignStatus, string> = {
   stopped: "Stopped",
   archived: "Archived",
 };
+
+export type StatLabel = { key: StatKey; label: string };
+
+export const PROVIDER_STATS: Record<CampaignProviderId, { leads: StatLabel[]; activity: StatLabel[] }> = {
+  heyreach: {
+    leads: [
+      { key: "leads", label: "Total leads" },
+      { key: "enrolled", label: "Enrolled in sequence" },
+      { key: "notEnrolled", label: "Not enrolled" },
+      { key: "finished", label: "Finished" },
+      { key: "pausedLeads", label: "Paused" },
+      { key: "failed", label: "Failed" },
+      { key: "excluded", label: "Excluded" },
+    ],
+    activity: [
+      { key: "contacted", label: "Contacted" },
+      { key: "accepted", label: "Accepted" },
+      { key: "replied", label: "Replied" },
+      { key: "interested", label: "Interested" },
+    ],
+  },
+  smartlead: {
+    leads: [
+      { key: "leads", label: "Total" },
+      { key: "notStarted", label: "Not started" },
+      { key: "inProgress", label: "In progress" },
+      { key: "finished", label: "Completed" },
+      { key: "blocked", label: "Blocked" },
+      { key: "pausedLeads", label: "Paused" },
+      { key: "stopped", label: "Stopped" },
+    ],
+    activity: [
+      { key: "contacted", label: "Sequence started" },
+      { key: "opened", label: "Opened" },
+      { key: "clicked", label: "Clicked" },
+      { key: "replied", label: "Replied" },
+      { key: "positive", label: "Positive reply" },
+      { key: "bounced", label: "Bounced" },
+      { key: "unsubscribed", label: "Unsubscribed" },
+    ],
+  },
+};
+
+export const AUTO_ADD_LABELS: Record<AutoAdd, string> = {
+  off: "Off",
+  accepted: "When they accept",
+  replied: "When they reply",
+};
+
+export function autoAddChoices(channel: CampaignChannel): AutoAdd[] {
+  return channel === "linkedin" ? ["off", "accepted", "replied"] : ["off", "replied"];
+}
+
+export const CHANNEL_TAGS: Record<CampaignChannel, string> = { linkedin: "LinkedIn", email: "Email" };
 
 export const CAMPAIGN_VIEWS = ["live", "paused", "archived"] as const;
 export type CampaignView = (typeof CAMPAIGN_VIEWS)[number];
@@ -31,7 +96,7 @@ export function contactedOf(stats: CampaignStats, prospects: number) {
 }
 
 export function campaignRates(campaign: Pick<CampaignSummary, "stats" | "prospects" | "channel">) {
-  const contacted = contactedOf(campaign.stats, campaign.prospects);
+  const contacted = campaign.channel === "linkedin" ? (campaign.stats.contacted ?? campaign.stats.invites ?? campaign.prospects) : contactedOf(campaign.stats, campaign.prospects);
   return {
     replied: percent(campaign.stats.replied, contacted),
     positive: percent(campaign.stats.positive, contacted),
@@ -64,15 +129,17 @@ export function campaignThreadPath(prospectId: string) {
   return `/campaigns/threads/${prospectId}`;
 }
 
-export function prospectTag(row: ProspectRow): { label: string; tone: TagTone } | null {
+export function prospectTag(row: ProspectRow, channel: CampaignChannel = "email"): { label: string; tone: TagTone } | null {
   if (row.stopRequestedAt && !row.stoppedAt) return { label: "Stopping", tone: "amber" };
   if (row.state === "skipped") return { label: "Skipped", tone: "neutral" };
   if (row.state === "failed") return { label: "Failed", tone: "red" };
   if (row.leadStatus === "bounced" || row.lastEvent?.kind === "bounced") return { label: "Bounced", tone: "red" };
   if (row.category) return { label: row.category, tone: categoryTone(row.category) };
   if (row.state === "queued" || row.state === "filling" || row.state === "pushing") return { label: "Queued", tone: "neutral" };
+  if (row.leadStatus === "completed" && !row.repliedAt) return { label: channel === "linkedin" ? "Finished" : "Completed", tone: "neutral" };
   if (row.stage === "accepted") return { label: "Accepted", tone: "neutral" };
   if (row.stage === "invited") return { label: "Invited", tone: "neutral" };
+  if (row.notEnrolled) return { label: "Not enrolled", tone: "neutral" };
   return null;
 }
 
@@ -86,6 +153,10 @@ const EVENT_WORDS: Partial<Record<CampaignEventKind, string>> = {
   invite_accepted: "invite accepted",
   message_sent: "message sent",
   inmail_sent: "InMail sent",
+  profile_viewed: "profile viewed",
+  post_liked: "post liked",
+  followed: "followed",
+  finished: "finished",
 };
 
 function when(iso: string, now: number) {

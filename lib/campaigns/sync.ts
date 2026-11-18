@@ -46,7 +46,11 @@ export type SyncState = {
   strayConversations?: number;
   strayIds?: string[];
   webhookId?: string | null;
+  webhooks?: string[];
   webhookFailedAt?: string | null;
+  listId?: string | null;
+  listOffset?: number | null;
+  listAt?: string;
   probedAt?: string | null;
 };
 
@@ -242,20 +246,33 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
   return true;
 }
 
+export function registeredWebhooks(provider: Pick<CampaignProvider, "webhookEvents">, state: SyncState) {
+  const done = new Set(state.webhooks ?? []);
+  if (state.webhookId && provider.webhookEvents[0]) done.add(provider.webhookEvents[0]);
+  return provider.webhookEvents.filter((event) => done.has(event));
+}
+
 async function registerWebhook(pass: Pass, row: CampaignRow) {
   const state = row.sync_state ?? {};
-  if (state.webhookId || (state.webhookFailedAt && !due(state.webhookFailedAt, WEBHOOK_RETRY_MS, Date.now()))) return;
+  const done = registeredWebhooks(pass.provider, state);
+  const missing = pass.provider.webhookEvents.filter((event) => !done.includes(event));
+  if (missing.length === 0 || (state.webhookFailedAt && !due(state.webhookFailedAt, WEBHOOK_RETRY_MS, Date.now()))) return;
   const secret = await ensureWebhookSecret(pass.workspaceId, pass.provider.id);
   const url = secret ? campaignWebhookUrl(pass.workspaceId, pass.provider.id, secret) : null;
   if (!url) return;
-  try {
-    const id = await pass.provider.registerWebhook(pass.context, row.external_id, url);
-    await saveCampaign(row.id, { syncState: { webhookId: id, webhookFailedAt: null } });
-  } catch (error) {
-    if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return;
-    const failure = pass.provider.failure(error);
-    if (!failure) console.error(`Couldn't add the ${pass.provider.name} reply webhook`, redactedError(error));
-    await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
+  for (const event of missing) {
+    if (!timeLeft(pass.options.deadline, STEP_RESERVE_MS)) return;
+    try {
+      const id = await pass.provider.registerWebhook(pass.context, row.external_id, url, event);
+      done.push(event);
+      await saveCampaign(row.id, { syncState: { webhooks: done, ...(event === pass.provider.webhookEvents[0] ? { webhookId: id } : {}), webhookFailedAt: null } });
+    } catch (error) {
+      if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return;
+      const failure = pass.provider.failure(error);
+      if (!failure) console.error(`Couldn't add the ${pass.provider.name} webhook`, redactedError(error));
+      await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
+      return;
+    }
   }
 }
 
@@ -348,11 +365,17 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   if (backfilling || live || due(state.statsAt, IDLE_EVERY_MS, now)) {
     if (!room()) return;
     const read = await provider.readStats(context, row.external_id);
-    await saveCampaign(row.id, { stats: read.stats, ...(read.days ? { dayStats: read.days } : {}), syncState: { statsAt: new Date().toISOString() } });
+    await saveCampaign(row.id, {
+      stats: read.stats,
+      ...(read.days ? { dayStats: read.days } : {}),
+      syncState: { statsAt: new Date().toISOString(), ...(read.listId !== undefined ? { listId: read.listId } : {}) },
+    });
+    if (read.listId !== undefined) state.listId = read.listId;
   }
 
   const leadsInProgress = typeof state.leadsOffset === "number";
   let leadsComplete = !leadsInProgress && Boolean(state.leadsAt);
+  let leadsReadNow = false;
   if (leadsInProgress || (backfilling && !leadsComplete) || due(state.leadsAt, live ? LEADS_EVERY_MS : IDLE_EVERY_MS, now)) {
     leadsComplete = false;
     let offset = state.leadsOffset ?? 0;
@@ -362,6 +385,7 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
       if (page.next === null) {
         await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: new Date().toISOString() } });
         leadsComplete = true;
+        leadsReadNow = true;
         await query("select private.campaign_link_contacts($1, null)", [row.id]).catch((error) =>
           console.error("Couldn't link campaign prospects to contacts", redactedError(error)),
         );
@@ -370,6 +394,27 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
       }
       offset = page.next;
       await saveCampaign(row.id, { syncState: { leadsOffset: offset } });
+    }
+  }
+
+  const listInProgress = typeof state.listOffset === "number";
+  let listComplete = !provider.readListLeads || !state.listId || (!listInProgress && Boolean(state.listAt));
+  if (provider.readListLeads && state.listId && (listInProgress || leadsReadNow || !state.listAt)) {
+    listComplete = false;
+    let offset = state.listOffset ?? 0;
+    while (room()) {
+      const page = await provider.readListLeads(context, state.listId, offset);
+      report.prospects += await saveProviderLeads(row.id, page.items, backfilling || !options.onEvents);
+      if (page.next === null) {
+        await saveCampaign(row.id, { syncState: { listOffset: null, listAt: new Date().toISOString() } });
+        listComplete = true;
+        await query("select private.campaign_link_contacts($1, null)", [row.id]).catch((error) =>
+          console.error("Couldn't link campaign prospects to contacts", redactedError(error)),
+        );
+        break;
+      }
+      offset = page.next;
+      await saveCampaign(row.id, { syncState: { listOffset: offset } });
     }
   }
 
@@ -390,6 +435,7 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
         await saveCampaign(row.id, { syncState: { eventsOffset: offset, eventsStartedAt: startedAt } });
         break;
       }
+      if (page.leads && page.leads.length > 0) await saveProviderLeads(row.id, page.leads, backfilling || !options.onEvents);
       const inserted = await saveProviderEvents(row.id, page.items, backfilling || !options.onEvents);
       report.events += inserted.length;
       if (!backfilling && inserted.length > 0) await handOverEvents(pass, campaign);
@@ -432,7 +478,12 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     if (!backfilling) await handOverEvents(pass, campaign);
   }
 
-  if (backfilling && leadsComplete && eventsComplete && repliesComplete) {
+  if (room()) {
+    const finished = await query<{ count: number }>("select private.campaign_mark_finished($1, $2) as count", [row.id, backfilling || !options.onEvents]);
+    if (!backfilling && (finished.rows[0]?.count ?? 0) > 0) await handOverEvents(pass, campaign);
+  }
+
+  if (backfilling && leadsComplete && listComplete && eventsComplete && repliesComplete) {
     await saveCampaign(row.id, { backfilled: true });
     report.backfilled += 1;
   }

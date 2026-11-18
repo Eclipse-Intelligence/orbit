@@ -11,12 +11,16 @@ import {
   EMAIL_KIND_LABELS,
   EMAIL_KINDS,
   FIELD_OPTIONS,
+  LINKEDIN_ACTION_LABELS,
+  LINKEDIN_ACTIONS,
   PROPOSAL_EVENT_LABELS,
+  STEP_MAX,
   PROPOSAL_EVENTS,
   TRIGGER_LABELS,
   TRIGGER_TYPES,
   type CampaignEvent,
   type EmailKind,
+  type LinkedinAction,
   type ProposalEvent,
   type Trigger,
   type TriggerType,
@@ -337,39 +341,7 @@ export default function TriggerEditor({
         </div>
       )}
 
-      {trigger.type === "campaign_event" && (
-        <div className="flex flex-col gap-1.5">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Labelled id="trigger-campaign-event" label="When">
-              <select
-                id="trigger-campaign-event"
-                value={trigger.event}
-                onChange={(event) => onChange({ ...trigger, event: event.target.value as CampaignEvent })}
-                className={recordSelectClass}
-              >
-                {CAMPAIGN_EVENTS.map((item) => (
-                  <option key={item} value={item}>
-                    {CAMPAIGN_EVENT_LABELS[item]}
-                  </option>
-                ))}
-              </select>
-            </Labelled>
-            <Labelled id="trigger-campaign-channel" label="Channel">
-              <select
-                id="trigger-campaign-channel"
-                value={trigger.channel ?? ""}
-                onChange={(event) => onChange({ ...trigger, channel: (event.target.value || null) as "email" | "linkedin" | null })}
-                className={recordSelectClass}
-              >
-                <option value="">Email and LinkedIn</option>
-                <option value="email">Email</option>
-                <option value="linkedin">LinkedIn</option>
-              </select>
-            </Labelled>
-          </div>
-          {CAMPAIGN_EVENT_HINTS[trigger.event] && <p className="caption-style text-subtle">{CAMPAIGN_EVENT_HINTS[trigger.event]}</p>}
-        </div>
-      )}
+      {trigger.type === "campaign_event" && <CampaignTrigger trigger={trigger} onChange={onChange} options={options} />}
 
       {trigger.type === "manual" && (
         <p className="caption-style text-subtle">Run it from a {trigger.object === "company" ? "company" : "contact"} page.</p>
@@ -381,6 +353,124 @@ export default function TriggerEditor({
           Only when it&apos;s mine
         </label>
       )}
+    </div>
+  );
+}
+
+type CampaignTriggerValue = Extract<Trigger, { type: "campaign_event" }>;
+
+function stepNumber(value: string) {
+  const number = Math.floor(Number(value));
+  return Number.isFinite(number) && number >= 1 ? Math.min(number, STEP_MAX) : null;
+}
+
+function CampaignTrigger({ trigger, onChange, options }: { trigger: CampaignTriggerValue; onChange: (trigger: Trigger) => void; options: BuilderOptions }) {
+  const campaigns = (options.campaigns ?? []).filter((item) => !trigger.channel || item.channel === trigger.channel);
+  const missing = trigger.campaignId && !campaigns.some((item) => item.id === trigger.campaignId);
+  const step = trigger.event === "step";
+  const counted = trigger.action === "message_sent" || trigger.action === "inmail_sent";
+  function setEvent(event: CampaignEvent) {
+    if (event !== "step") {
+      onChange({ type: trigger.type, event, channel: trigger.channel ?? null, campaignId: trigger.campaignId ?? null, campaignName: trigger.campaignName });
+      return;
+    }
+    const channel = trigger.channel ?? "email";
+    onChange({ ...trigger, event, channel, ...(channel === "email" ? { step: trigger.step ?? 1, action: null, nth: null } : { step: null, action: trigger.action ?? "invite_sent" }) });
+  }
+  function setChannel(value: string) {
+    const channel = (value || null) as "email" | "linkedin" | null;
+    const keepCampaign = channel === null || (options.campaigns ?? []).some((item) => item.id === trigger.campaignId && item.channel === channel);
+    const base = { ...trigger, channel, ...(keepCampaign ? {} : { campaignId: null, campaignName: "" }) };
+    if (!step) {
+      onChange(base);
+      return;
+    }
+    if (channel === "linkedin") onChange({ ...base, step: null, action: trigger.action ?? "invite_sent" });
+    else onChange({ ...base, channel: "email", step: trigger.step ?? 1, action: null, nth: null });
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Labelled id="trigger-campaign-event" label="When">
+          <select id="trigger-campaign-event" value={trigger.event} onChange={(event) => setEvent(event.target.value as CampaignEvent)} className={recordSelectClass}>
+            {CAMPAIGN_EVENTS.map((item) => (
+              <option key={item} value={item}>
+                {CAMPAIGN_EVENT_LABELS[item]}
+              </option>
+            ))}
+          </select>
+        </Labelled>
+        <Labelled id="trigger-campaign-channel" label="Channel">
+          <select id="trigger-campaign-channel" value={trigger.channel ?? ""} onChange={(event) => setChannel(event.target.value)} className={recordSelectClass}>
+            {!step && <option value="">Email and LinkedIn</option>}
+            <option value="email">Email</option>
+            <option value="linkedin">LinkedIn</option>
+          </select>
+        </Labelled>
+        <Labelled id="trigger-campaign-id" label="Campaign">
+          <select
+            id="trigger-campaign-id"
+            value={trigger.campaignId ?? ""}
+            onChange={(event) => {
+              const picked = (options.campaigns ?? []).find((item) => item.id === event.target.value);
+              onChange({ ...trigger, campaignId: picked?.id ?? null, campaignName: picked?.name ?? "" });
+            }}
+            className={recordSelectClass}
+          >
+            <option value="">Any campaign</option>
+            {missing && <option value={trigger.campaignId!}>{trigger.campaignName || "Campaign not found"}</option>}
+            {campaigns.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name || "Untitled campaign"}
+              </option>
+            ))}
+          </select>
+        </Labelled>
+        {step && trigger.channel === "email" && (
+          <Labelled id="trigger-campaign-step" label="Step">
+            <Input
+              id="trigger-campaign-step"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={STEP_MAX}
+              value={trigger.step ?? ""}
+              onChange={(event) => onChange({ ...trigger, step: stepNumber(event.target.value) })}
+            />
+          </Labelled>
+        )}
+        {step && trigger.channel === "linkedin" && (
+          <Labelled id="trigger-campaign-action" label="Action">
+            <select
+              id="trigger-campaign-action"
+              value={trigger.action ?? "invite_sent"}
+              onChange={(event) => onChange({ ...trigger, action: event.target.value as LinkedinAction, nth: null })}
+              className={recordSelectClass}
+            >
+              {LINKEDIN_ACTIONS.map((item) => (
+                <option key={item} value={item}>
+                  {LINKEDIN_ACTION_LABELS[item]}
+                </option>
+              ))}
+            </select>
+          </Labelled>
+        )}
+        {step && trigger.channel === "linkedin" && counted && (
+          <Labelled id="trigger-campaign-nth" label="Which one">
+            <Input
+              id="trigger-campaign-nth"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={STEP_MAX}
+              placeholder="1"
+              value={trigger.nth ?? ""}
+              onChange={(event) => onChange({ ...trigger, nth: stepNumber(event.target.value) })}
+            />
+          </Labelled>
+        )}
+      </div>
+      {CAMPAIGN_EVENT_HINTS[trigger.event] && <p className="caption-style text-subtle">{CAMPAIGN_EVENT_HINTS[trigger.event]}</p>}
     </div>
   );
 }

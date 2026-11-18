@@ -1,5 +1,5 @@
 import type { CampaignStats, CampaignStatus, LeadStatus, SequenceStep } from "@/lib/campaigns/types";
-import { logUpstream, unreachable, upstreamMessage, urlSecrets } from "@/lib/upstream";
+import { logRefusal, logUpstream, providerReason, refusedMessage, requestPath, unreachable, urlSecrets } from "@/lib/upstream";
 import { withService } from "@/lib/workflows/limits";
 
 export const HEYREACH_API = "https://api.heyreach.io/api/public";
@@ -68,11 +68,19 @@ function first<T>(...values: (T | null | undefined)[]): T | null {
   return null;
 }
 
+function campaignNumber(campaignId: string) {
+  return Number.isFinite(Number(campaignId)) ? Number(campaignId) : campaignId;
+}
+
 function itemsOf(body: unknown) {
   if (Array.isArray(body)) return body.map(record);
   const items = record(body).items;
   if (!Array.isArray(items)) throw new HeyReachError(HEYREACH_UNREADABLE, null);
   return items.map(record);
+}
+
+export function heyReachEndpoint(url: URL) {
+  return requestPath(url).replace(/^\/api\/public/, "").split("/").slice(0, 3).join("/");
 }
 
 async function call(
@@ -101,9 +109,16 @@ async function call(
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      logUpstream("HeyReach", response.status, body, [key, ...(options.secrets ?? [])]);
+      const reason = providerReason(body, [key, ...(options.secrets ?? [])]);
+      const endpoint = heyReachEndpoint(url);
+      logRefusal("HeyReach", response.status, endpoint, reason);
       const refused = (response.status === 401 || response.status === 403) && !keyCheck;
-      throw new HeyReachError(refused ? `HeyReach refused this request (${response.status}).` : upstreamMessage("HeyReach", response.status), response.status, response.headers.get("retry-after"), keyCheck);
+      throw new HeyReachError(
+        refused ? `HeyReach refused this request (${response.status}).` : refusedMessage("HeyReach", response.status, reason, endpoint.split("/").pop()),
+        response.status,
+        response.headers.get("retry-after"),
+        keyCheck,
+      );
     }
     const raw = await response.text().catch(() => "");
     if (!raw.trim()) return null;
@@ -146,7 +161,7 @@ export function campaignStatus(value: unknown): CampaignStatus {
 export function leadStatus(value: unknown): LeadStatus | null {
   const status = (text(value) ?? "").toUpperCase().replace(/[\s_-]/g, "");
   if (!status) return null;
-  if (status === "INSEQUENCE" || status === "INPROGRESS" || status === "ACTIVE") return "in_progress";
+  if (status === "INSEQUENCE" || status === "INPROGRESS" || status === "ACTIVE" || status === "STARTING") return "in_progress";
   if (status === "PENDING" || status === "NOTSTARTED" || status === "QUEUED") return "not_started";
   if (status === "PAUSED") return "paused";
   if (status === "FINISHED" || status === "COMPLETED") return "completed";
@@ -154,7 +169,33 @@ export function leadStatus(value: unknown): LeadStatus | null {
   return null;
 }
 
-export type HeyReachCampaign = { id: string; name: string; status: CampaignStatus; accountIds: string[] };
+export type HeyReachLeadCounts = {
+  total?: number;
+  enrolled?: number;
+  notEnrolled?: number;
+  finished?: number;
+  paused?: number;
+  failed?: number;
+  excluded?: number;
+};
+
+export type HeyReachCampaign = { id: string; name: string; status: CampaignStatus; accountIds: string[]; listId: string | null; leadCounts: HeyReachLeadCounts | null };
+
+function leadCountsOf(value: unknown): HeyReachLeadCounts | null {
+  const row = record(value);
+  if (Object.keys(row).length === 0) return null;
+  const counts: HeyReachLeadCounts = {
+    total: count(row.totalUsers),
+    enrolled: count(row.totalUsersInProgress),
+    notEnrolled: count(row.totalUsersPending),
+    finished: count(row.totalUsersFinished),
+    paused: first(count(row.totalUsersPaused), count(row.totalUsersManuallyStopped)) ?? undefined,
+    failed: count(row.totalUsersFailed),
+    excluded: count(row.totalUsersExcluded),
+  };
+  const kept = Object.fromEntries(Object.entries(counts).filter(([, item]) => item !== undefined)) as HeyReachLeadCounts;
+  return Object.keys(kept).length > 0 ? kept : null;
+}
 
 export async function listHeyReachCampaigns(key: string, options: HeyReachOptions = {}): Promise<HeyReachCampaign[]> {
   const rows = await allPages(key, "/campaign/GetAll", { ...options, keyCheck: true });
@@ -168,7 +209,14 @@ function heyReachCampaignOf(row: Json): HeyReachCampaign | null {
   const id = text(row.id);
   if (!id) return null;
   const accounts = list(row.campaignAccountIds ?? row.linkedInAccountIds).map(text).filter((item): item is string => Boolean(item));
-  return { id, name: text(row.name) ?? "", status: campaignStatus(row.status), accountIds: [...new Set(accounts)] };
+  return {
+    id,
+    name: text(row.name) ?? "",
+    status: campaignStatus(row.status),
+    accountIds: [...new Set(accounts)],
+    listId: text(row.linkedInUserListId),
+    leadCounts: leadCountsOf(row.progressStats),
+  };
 }
 
 export async function readHeyReachCampaign(key: string, campaignId: string, options: HeyReachOptions = {}): Promise<HeyReachCampaign | null> {
@@ -229,31 +277,48 @@ const STEP_KINDS: Record<string, string> = {
   SENDMESSAGE: "Message",
   INMAIL: "InMail",
   SENDINMAIL: "InMail",
+  VIEWPROFILE: "View profile",
+  FOLLOW: "Follow",
+  LIKEPOST: "Like post",
 };
+
+function stepKind(node: Json) {
+  return STEP_KINDS[(text(node.nodeType) ?? text(node.actionType) ?? text(node.type) ?? "").toUpperCase().replace(/[\s_-]/g, "")];
+}
 
 function sequenceNodes(row: Json): Json[] {
   const direct = list(row.sequence ?? row.steps ?? row.sequenceSteps).map(record);
   if (direct.length > 0) return direct;
   const nodes: Json[] = [];
-  let node = record(row.sequenceRootNode ?? record(row.sequence).rootNode);
+  let node = record(row.nodeType ? row : (row.sequenceRootNode ?? record(row.sequence).rootNode ?? row.sequence));
   for (let guard = 0; Object.keys(node).length > 0 && guard < 100; guard += 1) {
+    if ((text(node.nodeType) ?? "").toUpperCase() === "END") break;
     nodes.push(node);
-    node = record(node.nextNode ?? node.next ?? list(node.children)[0]);
+    node = record(node.conditionalNode ?? node.unconditionalNode ?? node.nextNode ?? node.next ?? list(node.children)[0]);
   }
   return nodes;
 }
 
-export async function readHeyReachSequence(key: string, campaignId: string, options: HeyReachOptions = {}): Promise<SequenceStep[]> {
-  const row = record(await call(key, "/campaign/GetById", { ...options, query: { campaignId } }));
+function delayDays(node: Json) {
+  const amount = count(node.actionDelay);
+  if (amount !== undefined) return (text(node.actionDelayUnit) ?? "DAY").toUpperCase() === "HOUR" ? Math.round(amount / 24) : amount;
+  return count(node.delayInDays) ?? count(node.delay) ?? (count(node.delayInHours) !== undefined ? Math.round(count(node.delayInHours)! / 24) : undefined);
+}
+
+export function heyReachSteps(body: unknown): SequenceStep[] {
   const steps: SequenceStep[] = [];
-  for (const node of sequenceNodes(row)) {
-    const kind = STEP_KINDS[(text(node.actionType) ?? text(node.type) ?? "").toUpperCase().replace(/[\s_-]/g, "")];
+  for (const node of sequenceNodes(record(body))) {
+    const kind = stepKind(node);
     if (!kind) continue;
-    const body = text(node.message) ?? text(node.messageText) ?? text(node.connectionNote) ?? text(node.body) ?? "";
-    const delay = count(node.delayInDays) ?? count(node.delay) ?? (count(node.delayInHours) !== undefined ? Math.round(count(node.delayInHours)! / 24) : undefined);
-    steps.push({ step: steps.length + 1, variant: null, subject: kind, body, delayDays: delay ?? null });
+    const payload = record(node.payload);
+    const message = text(list(payload.messages)[0]) ?? text(payload.message) ?? text(node.message) ?? text(node.messageText) ?? text(node.connectionNote) ?? text(node.body) ?? "";
+    steps.push({ step: steps.length + 1, variant: null, subject: kind, body: message, delayDays: delayDays(node) ?? null });
   }
   return steps;
+}
+
+export async function readHeyReachSequence(key: string, campaignId: string, options: HeyReachOptions = {}): Promise<SequenceStep[]> {
+  return heyReachSteps(await call(key, "/campaign/GetCampaignSequence", { ...options, query: { campaignId } }));
 }
 
 export type HeyReachDay = { day: string; invites: number; accepted: number; messages: number; replies: number };
@@ -261,11 +326,12 @@ export type HeyReachDay = { day: string; invites: number; accepted: number; mess
 function statTotals(row: Json): CampaignStats {
   const stats: CampaignStats = {
     invites: count(row.connectionsSent),
-    contacted: count(row.connectionsSent),
     accepted: count(row.connectionsAccepted),
     messages: first(count(row.messagesSent), count(row.totalMessageStarted)) ?? undefined,
     replied: first(count(row.totalMessageReplies), count(row.messageReplies)) ?? undefined,
   };
+  const inmailReplies = count(row.totalInmailReplies);
+  if (inmailReplies !== undefined && stats.replied !== undefined) stats.replied += inmailReplies;
   const inmails = count(row.inmailMessagesSent);
   if (inmails !== undefined) stats.messages = (stats.messages ?? 0) + inmails;
   return Object.fromEntries(Object.entries(stats).filter(([, value]) => value !== undefined));
@@ -275,11 +341,12 @@ export async function readHeyReachStats(
   key: string,
   campaignId: string,
   options: HeyReachOptions & { now?: Date } = {},
-): Promise<{ stats: CampaignStats; days: HeyReachDay[] }> {
+): Promise<{ stats: CampaignStats; days: HeyReachDay[]; listId: string | null; leadCounts: HeyReachLeadCounts | null }> {
+  const campaign = await readHeyReachCampaign(key, campaignId, options);
   const body = record(
     await call(key, "/stats/GetOverallStats", {
       ...options,
-      body: { accountIds: [], campaignIds: [Number.isFinite(Number(campaignId)) ? Number(campaignId) : campaignId], startDate: STATS_FROM, endDate: (options.now ?? new Date()).toISOString() },
+      body: { accountIds: [], campaignIds: [campaignNumber(campaignId)], startDate: STATS_FROM, endDate: (options.now ?? new Date()).toISOString() },
     }),
   );
   const stats = statTotals(record(body.overallStats));
@@ -291,7 +358,7 @@ export async function readHeyReachStats(
       return [{ day: parsed.slice(0, 10), invites: row.invites ?? 0, accepted: row.accepted ?? 0, messages: row.messages ?? 0, replies: row.replied ?? 0 }];
     })
     .sort((a, b) => a.day.localeCompare(b.day));
-  return { stats, days };
+  return { stats, days, listId: campaign?.listId ?? null, leadCounts: campaign?.leadCounts ?? null };
 }
 
 export type HeyReachLead = {
@@ -304,6 +371,7 @@ export type HeyReachLead = {
   email: string | null;
   accountId: string | null;
   status: LeadStatus | null;
+  rawStatus: string | null;
   addedAt: string | null;
   invitedAt: string | null;
   acceptedAt: string | null;
@@ -324,11 +392,13 @@ function messaged(value: unknown) {
   return status === "MESSAGESENT" || status === "SENT" || status === "MESSAGEREPLY" || status === "REPLIED" || status === "INMAILSENT";
 }
 
+export const HEYREACH_SINCE_FILTER = "LastActionTakenOrFailedTime";
+
 export async function listHeyReachLeads(
   key: string,
   campaignId: string,
   offset: number,
-  options: HeyReachOptions & { since?: string | null } = {},
+  options: HeyReachOptions & { since?: string | null; now?: Date } = {},
 ): Promise<{ leads: HeyReachLead[]; next: number | null }> {
   const body = record(
     await call(key, "/campaign/GetLeadsFromCampaign", {
@@ -337,7 +407,7 @@ export async function listHeyReachLeads(
         campaignId: Number.isFinite(Number(campaignId)) ? Number(campaignId) : campaignId,
         offset,
         limit: HEYREACH_PAGE_SIZE,
-        ...(options.since ? { timeFrom: options.since, timeFilter: "LastActionTime" } : {}),
+        ...(options.since ? { timeFrom: options.since, timeTo: (options.now ?? new Date()).toISOString(), timeFilter: HEYREACH_SINCE_FILTER } : {}),
       },
     }),
   );
@@ -356,8 +426,9 @@ export async function listHeyReachLeads(
       companyName: text(profile.companyName),
       title: text(profile.position) ?? text(profile.headline),
       email: text(profile.emailAddress) ?? text(profile.email),
-      accountId: text(row.linkedInAccountId) ?? text(row.accountId) ?? text(record(row.linkedInAccount).id),
+      accountId: text(row.linkedInSenderId) ?? text(row.linkedInAccountId) ?? text(row.accountId) ?? text(record(row.linkedInAccount).id),
       status: leadStatus(row.leadCampaignStatus ?? row.status),
+      rawStatus: text(row.leadCampaignStatus ?? row.status),
       addedAt: time(row.creationTime) ?? time(row.addedTime),
       invitedAt: connected ? (time(row.connectionSentTime) ?? lastAction) : null,
       acceptedAt: connected === "accepted" ? (time(row.connectionAcceptedTime) ?? lastAction) : null,
@@ -372,8 +443,34 @@ export async function listHeyReachLeads(
   return { leads, next: more ? seen : null };
 }
 
-function campaignNumber(campaignId: string) {
-  return Number.isFinite(Number(campaignId)) ? Number(campaignId) : campaignId;
+export const HEYREACH_LIST_PAGE = 500;
+
+export type HeyReachListLead = {
+  profileUrl: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  companyName: string | null;
+  title: string | null;
+  email: string | null;
+};
+
+export async function listHeyReachListLeads(key: string, listId: string, offset: number, options: HeyReachOptions = {}): Promise<{ leads: HeyReachListLead[]; next: number | null }> {
+  const body = record(await call(key, "/list/GetLeadsFromList", { ...options, body: { listId: campaignNumber(listId), offset, limit: HEYREACH_LIST_PAGE } }));
+  const rows = itemsOf(body);
+  const leads = rows.map(
+    (row): HeyReachListLead => ({
+      profileUrl: text(row.profileUrl),
+      firstName: text(row.firstName),
+      lastName: text(row.lastName),
+      companyName: text(row.companyName),
+      title: text(row.position) ?? text(row.headline),
+      email: text(row.emailAddress),
+    }),
+  );
+  const total = count(body.totalCount);
+  const seen = offset + rows.length;
+  const more = rows.length === HEYREACH_LIST_PAGE && (total === undefined || seen < total);
+  return { leads, next: more ? seen : null };
 }
 
 export type HeyReachMessage = {
@@ -552,15 +649,81 @@ export async function findHeyReachLead(key: string, campaignId: string, profileU
 
 export const HEYREACH_REPLY_EVENT = "EVERY_MESSAGE_REPLY_RECEIVED";
 
-export async function createHeyReachWebhook(key: string, campaignId: string, url: string, options: HeyReachOptions = {}) {
+export const HEYREACH_ACTION_EVENTS = {
+  CONNECTION_REQUEST_SENT: "invite_sent",
+  CONNECTION_REQUEST_ACCEPTED: "invite_accepted",
+  MESSAGE_SENT: "message_sent",
+  INMAIL_SENT: "inmail_sent",
+  FOLLOW_SENT: "followed",
+  LIKED_POST: "post_liked",
+  VIEWED_PROFILE: "profile_viewed",
+} as const;
+
+export type HeyReachActionEvent = keyof typeof HEYREACH_ACTION_EVENTS;
+
+export const HEYREACH_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS)];
+
+export async function createHeyReachWebhook(key: string, campaignId: string, url: string, options: HeyReachOptions & { eventType?: string } = {}) {
+  const eventType = options.eventType ?? HEYREACH_REPLY_EVENT;
+  const name = eventType === HEYREACH_REPLY_EVENT ? "Orbit replies" : `Orbit ${eventType.toLowerCase().replace(/_/g, " ")}`;
   const body = record(
     await call(key, "/webhooks/CreateWebhook", {
       ...options,
       secrets: urlSecrets(url),
-      body: { webhookName: "Orbit replies", webhookUrl: url, eventType: HEYREACH_REPLY_EVENT, campaignIds: [campaignNumber(campaignId)] },
+      body: { webhookName: name, webhookUrl: url, eventType, campaignIds: [campaignNumber(campaignId)] },
     }),
   );
   return text(body.id) ?? "registered";
+}
+
+export type HeyReachWebhookAction = {
+  campaignId: string | null;
+  kind: (typeof HEYREACH_ACTION_EVENTS)[HeyReachActionEvent];
+  profileUrl: string;
+  firstName: string | null;
+  lastName: string | null;
+  companyName: string | null;
+  title: string | null;
+  accountId: string | null;
+  at: string;
+};
+
+export function heyReachWebhookAction(payload: unknown, now = new Date()): HeyReachWebhookAction | null {
+  const row = record(payload);
+  const type = (text(row.event_type) ?? text(row.eventType) ?? "").toUpperCase() as HeyReachActionEvent;
+  const kind = HEYREACH_ACTION_EVENTS[type];
+  if (!kind) return null;
+  const lead = record(row.lead ?? row.correspondent ?? row.correspondentProfile);
+  const profileUrl = text(lead.profile_url) ?? text(lead.profileUrl) ?? text(lead.linkedin_url) ?? text(row.leadProfileUrl);
+  if (!profileUrl) return null;
+  const campaign = record(row.campaign);
+  const sender = record(row.sender ?? row.linkedInAccount ?? row.linkedin_account);
+  return {
+    campaignId: text(campaign.id) ?? text(row.campaignId) ?? text(row.campaign_id),
+    kind,
+    profileUrl,
+    firstName: text(lead.first_name) ?? text(lead.firstName),
+    lastName: text(lead.last_name) ?? text(lead.lastName),
+    companyName: text(lead.company_name) ?? text(lead.companyName),
+    title: text(lead.position) ?? text(lead.headline),
+    accountId: text(sender.id) ?? text(row.linkedInAccountId) ?? text(row.sender_id),
+    at: time(row.timestamp) ?? time(row.event_time) ?? time(row.eventTime) ?? time(row.creation_time) ?? now.toISOString(),
+  };
+}
+
+const SHAPE_VALUES = /reference|step|index|node|event_?type|campaign_?id/i;
+
+export function webhookShape(payload: unknown, prefix = "", depth = 0): string[] {
+  if (depth > 4) return [];
+  if (Array.isArray(payload)) return payload.length > 0 ? webhookShape(payload[0], `${prefix}[]`, depth + 1) : [`${prefix}[]`];
+  if (!payload || typeof payload !== "object") return [];
+  return Object.entries(payload as Json).flatMap(([name, value]) => {
+    const path = prefix ? `${prefix}.${name}` : name;
+    if (value && typeof value === "object") return webhookShape(value, path, depth + 1);
+    const plain = typeof value === "number" || typeof value === "boolean" || (typeof value === "string" && value.length <= 100);
+    const shown = SHAPE_VALUES.test(name) && plain ? `=${String(value)}` : `:${value === null ? "null" : typeof value}`;
+    return [`${path}${shown}`];
+  });
 }
 
 export function heyReachWebhookHint(payload: unknown) {

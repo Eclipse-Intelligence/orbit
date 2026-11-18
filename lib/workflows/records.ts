@@ -3,7 +3,7 @@ import { createContact, upsertContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
-import { canonicalDomain, canonicalEmail, likePattern, normalizeCompanyName, normalizeTag, normalizeTags } from "@/lib/crm/normalize";
+import { canonicalDomain, canonicalEmail, canonicalLinkedin, likePattern, normalizedLinkedin, normalizeCompanyName, normalizeTag, normalizeTags } from "@/lib/crm/normalize";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { FIND_LIMIT, FIND_LIMIT_PARALLEL } from "@/lib/workflows/definition";
 import { render, type Vars } from "@/lib/workflows/variables";
@@ -155,6 +155,7 @@ type UpsertInput = {
   lastName: string;
   jobTitle: string;
   companyId: string;
+  linkedinUrl?: string;
   create: boolean;
 };
 
@@ -181,6 +182,47 @@ async function findContact(actor: UserActor, email: string) {
     );
     return result.rows[0] ?? null;
   });
+}
+
+async function findContactByLinkedin(actor: UserActor, linkedin: string) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string | null }>(
+      `select id, nullif(trim(concat_ws(' ', first_name, last_name)), '') as name from crm.contacts
+       where workspace_id = $1 and archived_at is null and normalized_linkedin = $2 order by created_at, id limit 1`,
+      [actor.workspaceId, linkedin],
+    );
+    return result.rows[0] ?? null;
+  });
+}
+
+function linkedinOf(value: string | undefined) {
+  if (!value) return null;
+  const url = canonicalLinkedin(value);
+  if (!url) throw new CrmError("invalid_input", "Give the contact a valid LinkedIn profile.", 400);
+  return { url, normalized: normalizedLinkedin(url) };
+}
+
+async function contactWithLinkedin(actor: UserActor, input: UpsertInput, email: string | null, linkedin: { url: string; normalized: string }, provenance: Provenance) {
+  const existing = await findContactByLinkedin(actor, linkedin.normalized);
+  if (existing) return { id: existing.id, name: existing.name ?? email ?? linkedin.url, found: true, created: false };
+  if (!email && (input.firstName || input.lastName)) {
+    const named = await findContactByName(actor, input.firstName, input.lastName, isUuid(input.companyId) ? input.companyId : null);
+    if (named) return { id: named.id, name: named.name, found: true, created: false };
+  }
+  if (!input.create) return { id: null, name: null, found: false, created: false };
+  const outcome = await upsertContact(
+    actor,
+    {
+      ...(email ? { email } : {}),
+      linkedinUrl: linkedin.url,
+      firstName: input.firstName || null,
+      lastName: input.lastName || null,
+      jobTitle: input.jobTitle || null,
+      companyId: isUuid(input.companyId) ? input.companyId : null,
+    },
+    { provenance },
+  );
+  return { id: outcome.body.contact.id, name: outcome.body.contact.name, found: !outcome.body.created, created: outcome.body.created };
 }
 
 async function findContactByName(actor: UserActor, firstName: string, lastName: string, companyId: string | null) {
@@ -227,9 +269,11 @@ export async function upsertRecord(actor: UserActor, input: UpsertInput, provena
   }
   const email = canonicalEmail(input.email);
   if (!email && input.email) throw new CrmError("invalid_input", "Give the contact a valid email address.", 400);
-  if (!email) return contactWithoutEmail(actor, input, provenance);
-  const existing = await findContact(actor, email);
+  const linkedin = linkedinOf(input.linkedinUrl);
+  const existing = email ? await findContact(actor, email) : null;
   if (existing) return { id: existing.id, name: existing.name ?? email, found: true, created: false };
+  if (linkedin) return contactWithLinkedin(actor, input, email, linkedin, provenance);
+  if (!email) return contactWithoutEmail(actor, input, provenance);
   if (!input.create) return { id: null, name: null, found: false, created: false };
   const outcome = await upsertContact(
     actor,

@@ -39,6 +39,10 @@ export const EVENT_KINDS = [
   "invite_accepted",
   "message_sent",
   "inmail_sent",
+  "profile_viewed",
+  "post_liked",
+  "followed",
+  "finished",
 ] as const;
 export type CampaignEventKind = (typeof EVENT_KINDS)[number];
 
@@ -55,6 +59,18 @@ export const STAT_KEYS = [
   "invites",
   "accepted",
   "messages",
+  "leads",
+  "enrolled",
+  "notEnrolled",
+  "finished",
+  "pausedLeads",
+  "failed",
+  "excluded",
+  "notStarted",
+  "inProgress",
+  "blocked",
+  "stopped",
+  "interested",
 ] as const;
 export type StatKey = (typeof STAT_KEYS)[number];
 export type CampaignStats = Partial<Record<StatKey, number>>;
@@ -99,7 +115,11 @@ export type CampaignSummary = {
   backfilled: boolean;
 };
 
+export const AUTO_ADD = ["off", "accepted", "replied"] as const;
+export type AutoAdd = (typeof AUTO_ADD)[number];
+
 export type CampaignDetail = CampaignSummary & {
+  autoAdd: AutoAdd;
   sequence: SequenceStep[];
   variables: string[];
   standardVariables: string[];
@@ -142,6 +162,7 @@ export type ProspectRow = {
   sender: string | null;
   importError: string | null;
   stopError?: string | null;
+  notEnrolled?: boolean;
 };
 
 export type LinkedinStage = "invited" | "accepted";

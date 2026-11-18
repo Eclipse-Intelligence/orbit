@@ -104,7 +104,7 @@ export default function CampaignsScreen({
           {shown.map((campaign) => {
             const rates = campaignRates(campaign);
             const href = `/campaigns/${campaign.id}`;
-            const meta = [number(campaign.prospects), rates.replied ? `${rates.replied} replied` : null].filter(Boolean).join(" · ");
+            const meta = [number(campaign.stats.leads ?? campaign.prospects), rates.replied ? `${rates.replied} replied` : null].filter(Boolean).join(" · ");
             return (
               <li
                 key={campaign.id}
@@ -130,7 +130,7 @@ export default function CampaignsScreen({
                     </Tag>
                   )}
                 </span>
-                <Figure value={number(campaign.prospects)} />
+                <Figure value={number(campaign.stats.leads ?? campaign.prospects)} />
                 <Figure value={rates.replied} />
                 <Figure value={rates.positive} />
                 <Figure value={rates.bounced} />

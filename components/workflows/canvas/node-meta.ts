@@ -1,5 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
-import { AI_MODELS, CAMPAIGN_EVENT_LABELS, EMAIL_KIND_LABELS, loopAtOnce, PROPOSAL_EVENT_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
+import { AI_MODELS, CAMPAIGN_EVENT_LABELS, EMAIL_KIND_LABELS, LINKEDIN_ACTION_LABELS, loopAtOnce, PROPOSAL_EVENT_LABELS, STEP_LABELS, TRIGGER_LABELS, type StepType, type Trigger, type WorkflowNode } from "@/lib/workflows/definition";
 import type { Condition } from "@/lib/workflows/variables";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import GlobeIcon from "@/public/assets/images/assistant/globe.svg";
@@ -103,8 +103,13 @@ export function triggerSummary(trigger: Trigger) {
   }
   if (trigger.type === "email_received") return EMAIL_KIND_LABELS[trigger.kind];
   if (trigger.type === "campaign_event") {
-    const channel = trigger.channel === "email" ? " on email" : trigger.channel === "linkedin" ? " on LinkedIn" : "";
-    return `${CAMPAIGN_EVENT_LABELS[trigger.event]}${channel}`;
+    const where = trigger.campaignName ? ` in ${trigger.campaignName}` : trigger.channel === "email" ? " on email" : trigger.channel === "linkedin" ? " on LinkedIn" : "";
+    if (trigger.event === "step" && trigger.channel === "email") return `Step ${trigger.step ?? 1} sent${where}`;
+    if (trigger.event === "step" && trigger.action) {
+      const counted = (trigger.action === "message_sent" || trigger.action === "inmail_sent") && (trigger.nth ?? 1) > 1;
+      return `${LINKEDIN_ACTION_LABELS[trigger.action]}${counted ? ` (${trigger.nth})` : ""}${where}`;
+    }
+    return `${CAMPAIGN_EVENT_LABELS[trigger.event]}${where}`;
   }
   if (trigger.type === "proposal_event") return `${trigger.kind === "nda" ? "An NDA" : trigger.kind === "proposal" ? "A proposal" : "A proposal or NDA"} ${PROPOSAL_EVENT_LABELS[trigger.event].toLowerCase()}`;
   if (trigger.type === "manual" || trigger.type === "record_created") return trigger.object === "company" ? "Companies" : "Contacts";

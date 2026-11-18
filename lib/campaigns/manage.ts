@@ -3,10 +3,11 @@ import { connectedContext, providerError, type ProviderOptions } from "@/lib/cam
 import { fireCampaignEvents } from "@/lib/campaigns/events";
 import type { CampaignProvider, LeadRef, ProviderContext } from "@/lib/campaigns/providers";
 import { leadAtProvider, refusedByProvider, stopAtProvider } from "@/lib/campaigns/stops";
-import type { CampaignChannel, CampaignProviderId, CampaignStatus, ProspectState } from "@/lib/campaigns/types";
+import { autoAddChoices } from "@/lib/campaigns/format";
+import { AUTO_ADD, type AutoAdd, type CampaignChannel, type CampaignProviderId, type CampaignStatus, type ProspectState } from "@/lib/campaigns/types";
 import { scheduleWebhooks, withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
-import { isUuid } from "@/lib/crm/mutate";
+import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
@@ -20,6 +21,7 @@ export const CAMPAIGN_AUDIT_EVENTS = {
   prospectRemoved: "campaign.prospect_removed",
   categoryChanged: "campaign.category_changed",
   replySent: "campaign.reply_sent",
+  autoAddChanged: "campaign.auto_add_changed",
 } as const;
 
 const CATEGORY_MAX = 100;
@@ -243,4 +245,29 @@ export async function setProspectCategory(actor: Actor, prospectId: string, rawC
   const fired = await fireCampaignEvents([eventId]);
   await query("select private.campaign_events_handled($1, $2::uuid[])", [prospect.campaign_id, [eventId]]);
   return { category, fired: fired > 0 };
+}
+
+export async function setCampaignAutoAdd(actor: Actor, campaignId: string, value: unknown, options: { provenance?: Provenance } = {}): Promise<AutoAdd> {
+  assertScope(actor.scopes, "campaigns:write");
+  if (actor.type !== "user") throw new CrmError("forbidden", "Only people can change this.", 403);
+  if (typeof value !== "string" || !(AUTO_ADD as readonly string[]).includes(value)) throw new CrmError("invalid_input", "Choose Off, When they accept or When they reply.", 400);
+  const wanted = value as AutoAdd;
+  const provenance = options.provenance ?? { operation: "set_campaign_auto_add", source: "web" };
+  const saved = await withActor(actor, async (db) => {
+    const campaign = await readCampaignRef(db, actor, campaignId);
+    if (!autoAddChoices(campaign.channel).includes(wanted)) throw new CrmError("invalid_input", "Email campaigns can only add people when they reply.", 400);
+    const current = await db.query<{ auto_add: AutoAdd }>("select auto_add from crm.campaigns where id = $1 and workspace_id = $2 for update", [campaign.id, actor.workspaceId]);
+    const before = current.rows[0]?.auto_add ?? "off";
+    if (before === wanted) return false;
+    await db.query("update crm.campaigns set auto_add = $3 where id = $1 and workspace_id = $2", [campaign.id, actor.workspaceId, wanted]);
+    await recordAudit(db, actor, CAMPAIGN_AUDIT_EVENTS.autoAddChanged, "campaign", campaign.id, provenance, {
+      campaign: campaign.name,
+      channel: campaign.channel,
+      before: { autoAdd: before },
+      after: { autoAdd: wanted },
+    });
+    return true;
+  });
+  if (saved) scheduleWebhooks();
+  return wanted;
 }

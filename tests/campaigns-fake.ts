@@ -178,7 +178,23 @@ export type FakeHeyReachCampaign = {
   overall: Record<string, number>;
   byDay: Record<string, Record<string, number>>;
   conversations?: FakeConversation[];
+  listId?: number;
+  listLeads?: { profileUrl: string; firstName: string; lastName: string; companyName?: string; position?: string }[];
+  progress?: Record<string, number>;
 };
+
+const HEYREACH_TIME_FILTERS = ["CreationTime", "Everywhere", "LastActionTakenTime", "FailedTime", "LastActionTakenOrFailedTime"];
+
+function sequenceTree(sequence: unknown): Record<string, unknown> | null {
+  const steps = Array.isArray(sequence) ? (sequence as Record<string, unknown>[]) : [];
+  let node: Record<string, unknown> = { nodeType: "END" };
+  for (const step of [...steps].reverse()) {
+    const type = String(step.actionType ?? "").replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase();
+    const next = { nodeType: type, actionDelay: step.delayInDays ?? 0, actionDelayUnit: "DAY", payload: { messages: [step.message ?? ""] } };
+    node = type === "CONNECTION_REQUEST" ? { ...next, conditionalNode: node, unconditionalNode: { nodeType: "END" } } : { ...next, unconditionalNode: node };
+  }
+  return steps.length > 0 ? node : null;
+}
 
 export type FakeHeyReachAccount = {
   key: string;
@@ -240,7 +256,27 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
     if (path === "/li_account/GetAll") return json(page(account.accounts, body));
     if (path === "/campaign/GetById") {
       const campaign = account.campaigns.find((item) => String(item.id) === url.searchParams.get("campaignId"));
-      return campaign ? json({ id: campaign.id, name: campaign.name, status: campaign.status, sequence: campaign.sequence }) : json({ message: "Not found" }, 404);
+      return campaign
+        ? json({
+            id: campaign.id,
+            name: campaign.name,
+            status: campaign.status,
+            campaignAccountIds: campaign.accountIds,
+            linkedInUserListId: campaign.listId ?? null,
+            ...(campaign.progress ? { progressStats: campaign.progress } : {}),
+          })
+        : json({ message: "Not found" }, 404);
+    }
+    if (path === "/campaign/GetCampaignSequence") {
+      const campaign = account.campaigns.find((item) => String(item.id) === url.searchParams.get("campaignId"));
+      if (!campaign) return json({ errorMessage: "Campaign not found" }, 404);
+      const tree = sequenceTree(campaign.sequence);
+      return tree ? json(tree) : new Response(null, { status: 200 });
+    }
+    if (path === "/list/GetLeadsFromList") {
+      const campaign = account.campaigns.find((item) => item.listId !== undefined && String(item.listId) === String(body?.listId));
+      if (!campaign) return json({ errorMessage: "List not found" }, 404);
+      return json(page(campaign.listLeads ?? [], body));
     }
     if (path === "/stats/GetOverallStats") {
       const ids = ((body?.campaignIds as unknown[] | undefined) ?? []).map(String);
@@ -250,13 +286,16 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
     if (path === "/campaign/GetLeadsFromCampaign") {
       const campaign = account.campaigns.find((item) => String(item.id) === String(body?.campaignId));
       if (!campaign) return json({ message: "Not found" }, 404);
+      if (body?.timeFilter !== undefined && !HEYREACH_TIME_FILTERS.includes(String(body.timeFilter))) {
+        return json({ errorMessage: `The value '${String(body.timeFilter)}' is not valid for timeFilter.` }, 400);
+      }
       const since = typeof body?.timeFrom === "string" ? Date.parse(body.timeFrom) : null;
       const leads = campaign.leads.filter((lead) => since === null || Date.parse(lead.lastActionTime ?? lead.created ?? "2026-11-01T09:00:00.000Z") > since);
       return json(
         page(
           leads.map((lead) => ({
             id: lead.id,
-            linkedInAccountId: lead.accountId ?? null,
+            linkedInSenderId: lead.accountId ?? null,
             leadCampaignStatus: lead.status ?? "InSequence",
             leadConnectionStatus: lead.connection ?? "None",
             leadMessageStatus: (lead.messages ?? 0) > 0 ? "MessageSent" : "None",

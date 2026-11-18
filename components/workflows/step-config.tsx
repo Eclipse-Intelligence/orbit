@@ -757,6 +757,7 @@ export default function StepConfig({
           ) : (
             <>
               {field("email", "Email")}
+              {field("linkedinUrl", "LinkedIn (optional)", { placeholder: "{{campaign.prospect.linkedinUrl}}" })}
               <div className="grid gap-3 sm:grid-cols-2">
                 {field("firstName", "First name")}
                 {field("lastName", "Last name")}

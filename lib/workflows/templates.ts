@@ -295,34 +295,43 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     ),
   },
   {
-    key: "linkedin-then-email",
-    name: "LinkedIn, then email",
-    description: "No acceptance or reply in 7 days: add to an email campaign.",
+    key: "linkedin-finished-then-email",
+    name: "LinkedIn finished, then email",
+    description: "Finished a LinkedIn campaign without replying: add to an email campaign.",
     definition: graph(
-      { type: "campaign_event", event: "added", channel: "linkedin" },
-      [
-        { id: "delay_1", type: "delay", label: "A week", config: { amount: 7, unit: "days" } },
-        {
-          id: "if_1",
-          type: "if",
-          label: "No acceptance or reply?",
-          config: {
-            match: "all",
-            conditions: [
-              { left: "{{contact.outreach.linkedin}}", op: "is_not", right: "accepted" },
-              { left: "{{contact.outreach.replied}}", op: "is", right: "false" },
-            ],
-          },
-        },
-        { id: "find_email_1", type: "find_email", config: {} },
-        { id: "add_to_campaign_1", type: "add_to_campaign", label: "Email campaign", config: { campaignId: "", campaignName: "", channel: "" } },
-      ],
-      [
-        { source: "trigger", handle: "out", target: "delay_1" },
-        { source: "delay_1", handle: "out", target: "if_1" },
-        { source: "if_1", handle: "true", target: "find_email_1" },
-        { source: "find_email_1", handle: "out", target: "add_to_campaign_1" },
-      ],
+      { type: "campaign_event", event: "finished", channel: "linkedin" },
+      [notRepliedNode(), prospectContactNode(), { id: "find_email_1", type: "find_email", config: {} }, campaignNode("Email campaign")],
+      chain(["if_1:true", "upsert_record_1", "find_email_1", "add_to_campaign_1"]),
+    ),
+  },
+  {
+    key: "email-finished-then-linkedin",
+    name: "Email finished, then LinkedIn",
+    description: "Finished an email campaign without replying: add to a LinkedIn campaign.",
+    definition: graph(
+      { type: "campaign_event", event: "finished", channel: "email" },
+      [notRepliedNode(), prospectContactNode(), campaignNode("LinkedIn campaign")],
+      chain(["if_1:true", "upsert_record_1", "add_to_campaign_1"]),
+    ),
+  },
+  {
+    key: "linkedin-step-then-email",
+    name: "At a LinkedIn step, add to an email campaign",
+    description: "When a LinkedIn step goes out, add them to an email campaign too. Both keep running.",
+    definition: graph(
+      { type: "campaign_event", event: "step", channel: "linkedin", action: "message_sent", nth: 1 },
+      [prospectContactNode(), { id: "find_email_1", type: "find_email", config: {} }, campaignNode("Email campaign")],
+      chain(["upsert_record_1", "find_email_1", "add_to_campaign_1"]),
+    ),
+  },
+  {
+    key: "email-step-then-linkedin",
+    name: "At an email step, add to a LinkedIn campaign",
+    description: "When an email step goes out, add them to a LinkedIn campaign too. Both keep running.",
+    definition: graph(
+      { type: "campaign_event", event: "step", channel: "email", step: 1 },
+      [prospectContactNode(), campaignNode("LinkedIn campaign")],
+      chain(["upsert_record_1", "add_to_campaign_1"]),
     ),
   },
   {
@@ -364,6 +373,50 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     ),
   },
 ];
+
+function notRepliedNode(): Omit<WorkflowNode, "position"> {
+  return {
+    id: "if_1",
+    type: "if",
+    label: "Not replied?",
+    config: { match: "all", conditions: [{ left: "{{campaign.replied}}", op: "is", right: "false" }] },
+  };
+}
+
+function prospectContactNode(): Omit<WorkflowNode, "position"> {
+  return {
+    id: "upsert_record_1",
+    type: "upsert_record",
+    label: "Find or create contact",
+    config: {
+      object: "contact",
+      email: "{{campaign.prospect.email}}",
+      linkedinUrl: "{{campaign.prospect.linkedinUrl}}",
+      firstName: "{{campaign.prospect.firstName}}",
+      lastName: "{{campaign.prospect.lastName}}",
+      jobTitle: "{{campaign.prospect.jobTitle}}",
+      create: true,
+      useInRun: true,
+    },
+  };
+}
+
+function campaignNode(label: string): Omit<WorkflowNode, "position"> {
+  return { id: "add_to_campaign_1", type: "add_to_campaign", label, config: { campaignId: "", campaignName: "", channel: "" } };
+}
+
+function chain(order: string[]): WorkflowEdge[] {
+  const edges: WorkflowEdge[] = [];
+  let source = "trigger";
+  let handle = "out";
+  for (const item of order) {
+    const [target, next] = item.split(":");
+    edges.push({ source, handle, target });
+    source = target;
+    handle = next ?? "out";
+  }
+  return edges;
+}
 
 function moveCheckNodes(label: string): Omit<WorkflowNode, "position">[] {
   return [
