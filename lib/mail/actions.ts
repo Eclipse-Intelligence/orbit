@@ -134,7 +134,16 @@ async function snoozeFolder(actor: UserActor, sourceId: string, token: string, f
   return providerId;
 }
 
-async function settleReminders(db: Db, actor: UserActor, sourceId: string, key: string, action: MailAction, until: Date | null, subject: string | null) {
+async function settleReminders(
+  db: Db,
+  actor: UserActor,
+  sourceId: string,
+  key: string,
+  action: MailAction,
+  until: Date | null,
+  subject: string | null,
+  complete = true,
+) {
   if (action === "archive" || action === "trash") {
     await db.query(
       `update crm.mail_reminders set state = 'done'
@@ -142,7 +151,7 @@ async function settleReminders(db: Db, actor: UserActor, sourceId: string, key: 
       [actor.userId, sourceId, key],
     );
   }
-  if (action === "inbox" || action === "snooze") {
+  if ((action === "inbox" && complete) || action === "snooze") {
     await db.query(
       "update crm.mail_reminders set state = 'done' where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'snooze' and state <> 'done'",
       [actor.userId, sourceId, key],
@@ -278,7 +287,7 @@ export async function applyMailAction(
   if (done.length > 0) {
     const touched = await withActor(actor, async (db) => {
       await recordMailEchoes(db, actor, sourceId, done.flatMap((item) => [item.row.provider_message_id, item.providerId]));
-      await settleReminders(db, actor, sourceId, key, input.action, until, subject);
+      await settleReminders(db, actor, sourceId, key, input.action, until, subject, failures.length === 0);
       const ids = done.map((item) => item.row.id);
       if (input.action === "read" || input.action === "unread") {
         await db.query("update crm.mail_messages set is_read = $2 where id = any($1::uuid[])", [ids, input.action === "read"]);
@@ -333,6 +342,7 @@ export async function moveMessages(
   messages: { id: string; providerMessageId: string; threadKey: string }[],
   target: MessageMove,
   fetchImpl: typeof fetch = fetch,
+  options: { deadline?: number } = {},
 ): Promise<{ moved: string[]; error: string | null }> {
   if (messages.length === 0) return { moved: [], error: null };
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
@@ -341,7 +351,7 @@ export async function moveMessages(
   const done: { id: string; folder: string | null; threadKey: string; providerIds: string[] }[] = [];
   const landed = typeof target === "string" ? landsIn(actor, sourceId, role) : undefined;
   const failures = await eachLimited(messages, async (message) => {
-    const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl, {}, landed);
+    const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl, { deadline: options.deadline }, landed);
     done.push({ id: message.id, folder: moved.folderId, threadKey: message.threadKey, providerIds: [message.providerMessageId, moved.id] });
   });
   if (done.length > 0) {

@@ -280,7 +280,7 @@ async function notePitchFailures(actor: UserActor, candidates: ReplyCandidate[],
   });
 }
 
-async function handlePitch(actor: UserActor, candidate: ReplyCandidate, mode: ColdPitchMode, fetchImpl?: typeof fetch) {
+async function handlePitch(actor: UserActor, candidate: ReplyCandidate, mode: ColdPitchMode, deadline: number, fetchImpl?: typeof fetch) {
   if (mode !== "off" && candidate.from_email) {
     try {
       await markColdPitch(
@@ -288,6 +288,7 @@ async function handlePitch(actor: UserActor, candidate: ReplyCandidate, mode: Co
         { id: candidate.id, sourceId: candidate.source_id, providerMessageId: candidate.provider_message_id, threadKey: candidate.tk, from: candidate.from_email },
         mode,
         fetchImpl,
+        { deadline },
       );
     } catch (error) {
       await notePitchFailures(actor, [candidate], error);
@@ -331,7 +332,7 @@ async function checkPitches(actor: UserActor, workspaceIds: string[], mode: Cold
   let count = 0;
   for (const [index, candidate] of candidates.entries()) {
     if (pitched.has(index + 1)) {
-      if (await handlePitch(actor, candidate, mode, fetchImpl)) count += 1;
+      if (await handlePitch(actor, candidate, mode, deadline, fetchImpl)) count += 1;
     } else {
       await notePitch(actor, candidate, false);
     }
@@ -411,7 +412,7 @@ async function prepareReply(home: UserActor, target: ThreadWorkspace, candidate:
   let pitchFailed = false;
   if (askPitch) {
     if (!pitched) await notePitch(home, candidate, false);
-    else if (!(await handlePitch(home, candidate, pitchMode, fetchImpl))) pitchFailed = true;
+    else if (!(await handlePitch(home, candidate, pitchMode, deadline, fetchImpl))) pitchFailed = true;
   }
   const written = result.data.needsReply && result.data.body && !pitched ? clean(result.data.body).replace(/\r\n/g, "\n").slice(0, BODY_MAX) : "";
   const template = written.includes(TIMES_MARK) ? written : null;

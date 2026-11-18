@@ -6,7 +6,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { runCaptureAction } from "@/lib/crm/capture-actions";
 import { ACTION_BUDGET_MS, applyMailAction, moveMessages } from "@/lib/mail/actions";
-import { processDueMail } from "@/lib/mail/due";
+import { processDueMail, REMINDER_ATTEMPTS } from "@/lib/mail/due";
 import { MOVE_CONFIRM_MS, MOVE_UNCONFIRMED, retryWaitMs } from "@/lib/mail/microsoft";
 import { syncMail } from "@/lib/mail/sync";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
@@ -31,6 +31,8 @@ const CONVERSATIONS: Record<string, string[]> = {
   "conv-capture-archive": ["capture-archive-1", "capture-archive-2"],
   "conv-capture-snooze": ["capture-snooze-1", "capture-snooze-2"],
   "conv-snoozed": ["snoozed-1", "snoozed-2"],
+  "conv-snoozed-flag": ["flag-1", "flag-2"],
+  "conv-late": ["late-1"],
 };
 
 function message(id: string, conversationId: string, index: number) {
@@ -133,6 +135,20 @@ describe("mail action failures", () => {
       [conversation, kind],
     );
     return result.rows[0]?.state ?? null;
+  };
+
+  const makeDue = async (conversation: string) => {
+    await getAdminPool().query(
+      "update crm.mail_reminders set due_at = now() - interval '1 minute' where kind = 'snooze' and thread_key = $1 and state = 'waiting'",
+      [conversation],
+    );
+  };
+  const snoozeReminder = async (conversation: string) => {
+    const result = await getAdminPool().query<{ state: string; attempts: number }>(
+      "select state, attempts from crm.mail_reminders where thread_key = $1 and kind = 'snooze' and state <> 'done' order by created_at desc limit 1",
+      [conversation],
+    );
+    return result.rows[0] ?? null;
   };
 
   before(async () => {
@@ -266,12 +282,48 @@ describe("mail action failures", () => {
     assert.deepEqual([await roleOf("capture-snooze-1"), await roleOf("capture-snooze-2")], ["snoozed", "inbox"]);
 
     await applyMailAction(owner, { thread: thread("conv-snoozed"), action: "snooze", view: { role: "inbox" }, until }, outlook().fetchImpl);
-    await getAdminPool().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where kind = 'snooze' and thread_key = 'conv-snoozed' and state <> 'done'");
+    await makeDue("conv-snoozed");
     const report = await processDueMail(owner, { fetchImpl: failing("snoozed-2").fetchImpl, origin: null });
     assert.equal(report.returned, 0);
     assert.equal(report.reminderErrors, 1);
     assert.deepEqual([await roleOf("snoozed-1"), await roleOf("snoozed-2")], ["inbox", "snoozed"]);
-    assert.notEqual(await reminderState("conv-snoozed", "snooze"), "due", "the reminder isn't marked as returned");
+    assert.deepEqual(await snoozeReminder("conv-snoozed"), { state: "waiting", attempts: 1 }, "the reminder stays open to try again");
+
+    await makeDue("conv-snoozed");
+    const healthy = await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: null });
+    assert.equal(healthy.returned, 1);
+    assert.deepEqual([await roleOf("snoozed-1"), await roleOf("snoozed-2")], ["inbox", "inbox"]);
+    assert.equal((await snoozeReminder("conv-snoozed"))?.state, "due");
+  });
+
+  it("flags a returning snooze after five partly failed tries", async () => {
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    await applyMailAction(owner, { thread: thread("conv-snoozed-flag"), action: "snooze", view: { role: "inbox" }, until }, outlook().fetchImpl);
+    const failing = outlook((url, method) => (method === "POST" && url.endsWith("/flag-2/move") ? serverError(500) : undefined));
+    for (let attempt = 1; attempt <= REMINDER_ATTEMPTS; attempt += 1) {
+      await makeDue("conv-snoozed-flag");
+      const report = await processDueMail(owner, { fetchImpl: failing.fetchImpl, origin: null });
+      assert.equal(report.returned, 0);
+      const expected = attempt < REMINDER_ATTEMPTS ? "waiting" : "due";
+      assert.deepEqual(await snoozeReminder("conv-snoozed-flag"), { state: expected, attempts: attempt });
+    }
+    assert.deepEqual([await roleOf("flag-1"), await roleOf("flag-2")], ["inbox", "snoozed"]);
+    const alerts = await getAdminPool().query<{ count: number }>("select count(*)::int as count from crm.notifications where user_id = $1 and title like 'Still in Reminders:%'", [
+      owner.userId,
+    ]);
+    assert.equal(alerts.rows[0].count, 1, "it tells you once, after the fifth try");
+  });
+
+  it("stops moving emails at the caller's deadline", async () => {
+    const row = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'late-1'")).rows[0];
+    const box = outlook();
+    const result = await moveMessages(owner, sourceId, [{ id: row.id, providerMessageId: "late-1", threadKey: "conv-late" }], "archive", box.fetchImpl, {
+      deadline: Date.now() + 500,
+    });
+    assert.deepEqual(result.moved, []);
+    assert.equal(result.error, "Ran out of time waiting for Microsoft.");
+    assert.equal(box.moves("late-1"), 0, "no move is started after the deadline");
+    assert.equal(await roleOf("late-1"), "inbox");
   });
 
   it("keeps what moved when one email in the conversation fails, and logs Microsoft's answer without the email's details", async () => {

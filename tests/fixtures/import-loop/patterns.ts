@@ -29,3 +29,15 @@ export function localCheck(address: string): boolean {
 export function laterCheck(address: string): boolean {
   return automated(address);
 }
+
+export function passedCheck(address: string): boolean {
+  return automated(address);
+}
+
+export function classCheck(address: string): boolean {
+  return automated(address);
+}
+
+export function methodCheck(address: string): boolean {
+  return automated(address);
+}

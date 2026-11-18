@@ -471,6 +471,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
           chunk.map((row) => ({ id: row.id, providerMessageId: row.provider_message_id, threadKey: row.tk })),
           target,
           fetchImpl,
+          { deadline },
         );
         movedIds.push(...result.moved);
         error = error ?? result.error;
@@ -875,11 +876,12 @@ export async function markColdPitch(
   message: { id: string; sourceId: string; providerMessageId: string; threadKey: string; from: string },
   mode: "other" | "archive",
   fetchImpl: typeof fetch = fetch,
+  options: { deadline?: number } = {},
 ) {
   const key = senderKey(message.from);
   if (!key) return;
   if (mode === "archive") {
-    const moved = await moveMessages(actor, message.sourceId, [{ id: message.id, providerMessageId: message.providerMessageId, threadKey: message.threadKey }], "archive", fetchImpl);
+    const moved = await moveMessages(actor, message.sourceId, [{ id: message.id, providerMessageId: message.providerMessageId, threadKey: message.threadKey }], "archive", fetchImpl, options);
     if (moved.moved.length === 0) throw new Error(moved.error ?? "Outlook didn't archive the cold pitch.");
   }
   await withActor(actor, async (db) => {

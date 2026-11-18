@@ -39,18 +39,42 @@ function unwrapped(node: ts.Node) {
   return child;
 }
 
+function passedToCall(node: ts.Node) {
+  const child = unwrapped(node);
+  const parent = child.parent;
+  return (ts.isCallExpression(parent) || ts.isNewExpression(parent)) && Boolean(parent.arguments?.includes(child as ts.Expression));
+}
+
+function holderName(container: ts.Node) {
+  if ((ts.isClassDeclaration(container) || ts.isClassExpression(container)) && container.name) return container.name.text;
+  const holder = unwrapped(container).parent;
+  return ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name) ? holder.name.text : null;
+}
+
+function memberOfLoadedHolder(node: ts.Node, calledAtLoad: Set<string>) {
+  const member = ts.isPropertyAssignment(node.parent) || ts.isPropertyDeclaration(node.parent) ? node.parent : node;
+  const container = member.parent;
+  if (!container || !(ts.isClassLike(container) || ts.isObjectLiteralExpression(container))) return false;
+  const name = holderName(container);
+  return name !== null && calledAtLoad.has(name);
+}
+
 function runsWhileLoading(fn: ts.SignatureDeclaration, calledAtLoad: Set<string>) {
   const child = unwrapped(fn);
   const parent = child.parent;
-  if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && (parent.expression === child || parent.arguments?.includes(child as ts.Expression))) return true;
+  if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && parent.expression === child) return true;
+  if (passedToCall(fn)) return true;
   if (ts.isFunctionDeclaration(fn) && fn.name && calledAtLoad.has(fn.name.text)) return true;
+  if (memberOfLoadedHolder(fn, calledAtLoad)) return true;
   return ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name) && calledAtLoad.has(parent.name.text);
 }
 
 function insideDeferredCode(node: ts.Node, calledAtLoad: Set<string>) {
   for (let parent = node.parent; parent; parent = parent.parent) {
     if (ts.isFunctionLike(parent) && !ts.isClassStaticBlockDeclaration(parent) && !runsWhileLoading(parent, calledAtLoad)) return true;
-    if (ts.isPropertyDeclaration(parent) && !parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)) return true;
+    if (ts.isPropertyDeclaration(parent) && !parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) && !memberOfLoadedHolder(parent.name, calledAtLoad)) {
+      return true;
+    }
     if (ts.isTypeNode(parent) || ts.isInterfaceDeclaration(parent) || ts.isTypeAliasDeclaration(parent)) return true;
     if (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent) || ts.isExportSpecifier(parent)) return true;
   }
@@ -84,7 +108,7 @@ function loadTimeUses(source: ts.SourceFile, locals: Set<string>) {
     const localCalls = new Set<string>();
     const visit = (node: ts.Node) => {
       if (ts.isIdentifier(node) && locals.has(node.text) && isValueReference(node) && !insideDeferredCode(node, calledAtLoad)) reads.add(node.text);
-      const callee = calleeName(node);
+      const callee = calleeName(node) ?? (ts.isIdentifier(node) && passedToCall(node) ? node.text : null);
       if (callee && !insideDeferredCode(node, calledAtLoad)) (locals.has(callee) ? calls : localCalls).add(callee);
       ts.forEachChild(node, visit);
     };
@@ -203,13 +227,16 @@ describe("import loops", () => {
     assert.deepEqual(loadTimeReadsInsideLoops(SCANNED), []);
   });
 
-  it("catches constants read and functions called while loading from a module in the same loop, directly, in an IIFE, in a callback or through a local function", () => {
+  it("catches constants read and functions called while loading from a module in the same loop: directly, in an IIFE, in a callback, passed by reference, through a local function, a local class or an object method", () => {
     const fixture = "tests/fixtures/import-loop";
     assert.deepEqual(loadTimeReadsInsideLoops([fixture]), [
       `${fixture}/senders.ts calls callbackCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
+      `${fixture}/senders.ts calls classCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
       `${fixture}/senders.ts calls directCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
       `${fixture}/senders.ts calls iifeCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
       `${fixture}/senders.ts calls localCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
+      `${fixture}/senders.ts calls methodCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
+      `${fixture}/senders.ts calls passedCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
       `${fixture}/senders.ts reads AUTOMATED from ${fixture}/patterns.ts while loading, inside an import loop`,
     ]);
   });
