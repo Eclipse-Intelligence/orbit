@@ -448,20 +448,52 @@ export async function listCampaignActivity(actor: Actor, input: ActivityQuery = 
   });
 }
 
-export async function contactProspectId(actor: Actor, contactId: string, options: { channel?: CampaignChannel | null; campaignId?: string | null } = {}): Promise<string> {
+export const SEVERAL_CAMPAIGNS = "This person is in several campaigns. Pass campaignId.";
+
+export async function campaignOfProspect(actor: Actor, prospectId: string): Promise<{ id: string; name: string; channel: CampaignChannel }> {
+  assertScope(actor.scopes, "crm:read");
+  if (!isUuid(prospectId)) throw notFound("prospect");
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string; channel: CampaignChannel }>(
+      "select k.id, k.name, k.channel from crm.campaign_prospects p join crm.campaigns k on k.id = p.campaign_id where p.id = $1 and p.workspace_id = $2",
+      [prospectId, actor.workspaceId],
+    );
+    if (!result.rows[0]) throw notFound("prospect");
+    return result.rows[0];
+  });
+}
+
+export async function campaignSummaryOf(actor: Actor, campaignId: string): Promise<{ id: string; name: string; channel: CampaignChannel }> {
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, async (db) => {
+    const row = await readCampaign(db, actor, campaignId);
+    return { id: row.id, name: row.name, channel: row.channel };
+  });
+}
+
+export async function contactProspectId(
+  actor: Actor,
+  contactId: string,
+  options: { channel?: CampaignChannel | null; campaignId?: string | null; single?: boolean } = {},
+): Promise<string> {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(contactId)) throw notFound("contact");
   if (options.campaignId && !isUuid(options.campaignId)) throw notFound("campaign");
   const channel = campaignChannel(options.channel);
   return withActor(actor, async (db) => {
-    const result = await db.query<{ id: string }>(
-      `select p.id from crm.campaign_prospects p
+    const result = await db.query<{ id: string; live: boolean }>(
+      `select p.id, (p.state in ('queued', 'filling', 'pushing', 'pushed') and p.stopped_at is null) as live
+       from crm.campaign_prospects p
        join crm.campaigns k on k.id = p.campaign_id
        where p.workspace_id = $1 and p.contact_id = $2 and ($3::text is null or k.channel = $3) and ($4::uuid is null or k.id = $4)
-       order by (p.state = 'pushed') desc, coalesce(p.last_event_at, p.created_at) desc, p.id
-       limit 1`,
+       order by (p.state = 'pushed') desc, coalesce(p.last_event_at, p.created_at) desc, p.id`,
       [actor.workspaceId, contactId, channel, options.campaignId ?? null],
     );
+    if (options.single && !options.campaignId) {
+      const live = result.rows.filter((row) => row.live);
+      if (live.length > 1 || (live.length === 0 && result.rows.length > 1)) throw new CrmError("conflict", SEVERAL_CAMPAIGNS, 409, { field: "campaignId" });
+      if (live[0]) return live[0].id;
+    }
     const id = result.rows[0]?.id;
     if (id) return id;
     if (options.campaignId) throw new CrmError("not_found", "This person isn't in that campaign.", 404);
@@ -469,7 +501,7 @@ export async function contactProspectId(actor: Actor, contactId: string, options
   });
 }
 
-export type MailboxHealth ={ mailboxes: Mailbox[]; error: string | null } | null;
+export type MailboxHealth = { mailboxes: Mailbox[]; error: string | null } | null;
 
 export async function campaignMailboxes(actor: Actor, campaignId: string, options: { fetchImpl?: typeof fetch } = {}): Promise<MailboxHealth> {
   assertScope(actor.scopes, "crm:read");

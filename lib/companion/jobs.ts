@@ -381,6 +381,7 @@ export async function runCompanionTool(auth: AuthenticatedCompanion, jobId: stri
     multiWorkspace: switches.multiWorkspace === true,
     eclipse: switches.eclipse === true,
     linear: switches.linear === true,
+    agent: true,
   })) as Record<string, unknown> | null;
   await noteRead(auth, jobId, tool.name, toolJson(output));
   await addEvent(auth, jobId, { type: "tool", id, name: tool.name, label: tool.label, status: "done" });

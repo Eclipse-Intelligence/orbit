@@ -5,7 +5,7 @@ import { addCompanyContacts, addProspects, type AddResult } from "@/lib/campaign
 import { replyToProspect } from "@/lib/campaigns/replies";
 import { getProspectThread } from "@/lib/campaigns/threads";
 import { PROSPECT_FILTERS, type CampaignChannel, type ProspectFilter } from "@/lib/campaigns/types";
-import { campaignChannel, contactProspectId, getCampaign, listCampaignActivity, listCampaignProspects, listCampaigns } from "@/lib/crm/campaigns";
+import { campaignChannel, campaignOfProspect, campaignSummaryOf, contactProspectId, getCampaign, listCampaignActivity, listCampaignProspects, listCampaigns } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid, replayOrRunOutside, requestHash } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
@@ -65,10 +65,10 @@ function filterOf(value: string | null | undefined): ProspectFilter | undefined 
   throw new CrmError("invalid_input", `filter is ${PROSPECT_FILTERS.join(", ")}.`, 400, { field: "filter" });
 }
 
-export async function resolveProspect(actor: Actor, target: ProspectTarget) {
+export async function resolveProspect(actor: Actor, target: ProspectTarget, options: { single?: boolean } = {}) {
   if (target.prospectId) return target.prospectId;
   const contactId = needed(target.contactId, "prospectId", "Say who: prospectId, or contactId.");
-  return contactProspectId(actor, contactId, { channel: campaignChannel(target.channel), campaignId: target.campaignId ?? null });
+  return contactProspectId(actor, contactId, { channel: campaignChannel(target.channel), campaignId: target.campaignId ?? null, single: options.single });
 }
 
 export async function readCampaigns(actor: Actor, input: CampaignReadInput) {
@@ -126,7 +126,7 @@ export async function replyTarget(actor: Actor, target: ProspectTarget): Promise
 export async function replyInCampaign(actor: Actor, input: ProspectTarget & { text?: string | null; clientKey?: string | null }, options: ProviderOptions & { provenance: Provenance }) {
   const target = await replyTarget(actor, input);
   const result = await replyToProspect(actor, target.prospectId, { text: input.text ?? "", clientKey: input.clientKey ?? null }, options);
-  return { ...result, prospectId: target.prospectId, channel: target.channel, campaign: target.campaignName, to: target.person };
+  return { ...result, prospectId: target.prospectId, channel: target.channel, campaign: await campaignOfProspect(actor, target.prospectId), to: target.person };
 }
 
 export async function runCampaignAction(actor: Actor, input: CampaignActionInput, options: ActionOptions) {
@@ -145,14 +145,24 @@ export async function runCampaignAction(actor: Actor, input: CampaignActionInput
     case "pause":
     case "resume": {
       const paused = action === "pause";
-      if (input.campaignId && !input.prospectId && !input.contactId) return setCampaignPaused(actor, input.campaignId, paused, { ...provider, provenance });
-      return setProspectPaused(actor, await resolveProspect(actor, input), paused, { ...provider, provenance });
+      if (input.campaignId && !input.prospectId && !input.contactId) {
+        const result = await setCampaignPaused(actor, input.campaignId, paused, { ...provider, provenance });
+        return { ...result, campaign: await campaignSummaryOf(actor, input.campaignId) };
+      }
+      const prospectId = await resolveProspect(actor, input, { single: true });
+      const result = await setProspectPaused(actor, prospectId, paused, { ...provider, provenance });
+      return { ...result, prospectId, campaign: await campaignOfProspect(actor, prospectId) };
     }
-    case "remove":
-      return removeProspect(actor, await resolveProspect(actor, input), { ...provider, provenance });
+    case "remove": {
+      const prospectId = await resolveProspect(actor, input, { single: true });
+      const result = await removeProspect(actor, prospectId, { ...provider, provenance });
+      return { ...result, prospectId, campaign: await campaignOfProspect(actor, prospectId) };
+    }
     case "set_category": {
       if (input.category === undefined) throw new CrmError("invalid_input", "Pass category, or null to clear it.", 400, { field: "category" });
-      return setProspectCategory(actor, await resolveProspect(actor, input), input.category, { ...provider, provenance });
+      const prospectId = await resolveProspect(actor, input, { single: true });
+      const result = await setProspectCategory(actor, prospectId, input.category, { ...provider, provenance });
+      return { ...result, prospectId, campaign: await campaignOfProspect(actor, prospectId) };
     }
     case "reply":
       if (!allowReply) throw new CrmError("forbidden", "Reply with campaign_reply.", 403, { field: "action" });
@@ -197,7 +207,7 @@ export async function campaignActionNames(actor: Actor, input: CampaignActionInp
     return names;
   }
   if (action !== "remove" && action !== "set_category" && input.campaignId && !input.prospectId && !input.contactId) return names;
-  const prospectId = await resolveProspect(actor, input).catch(() => null);
+  const prospectId = await resolveProspect(actor, input, { single: true }).catch(() => null);
   if (!prospectId) return names;
   const thread = await getProspectThread(actor, prospectId).catch(() => null);
   const row = thread?.campaigns.find((item) => item.prospectId === prospectId);

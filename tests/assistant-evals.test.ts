@@ -297,17 +297,17 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(failed(wrong), ["proposes adding all 30 to Agency founders", "doesn't use the email campaign"]);
   });
 
-  it("answers who accepted this week from campaign activity", async () => {
+  it("answers who accepted in the last 7 days from campaign activity", async () => {
     let seen = "";
     const result = await runOnce(
-      byId("campaign-who-accepted-this-week"),
+      byId("campaign-who-accepted-last-7-days"),
       settings(
         scripted([
           () => ({ calls: [{ name: "find_tools", args: { domains: ["campaigns"] } }] }),
-          () => ({ calls: [{ name: "campaigns", args: { view: "activity", channel: "linkedin", kinds: ["invite_accepted"], since: londonDay({ days: -2 }) } }] }),
+          () => ({ calls: [{ name: "campaigns", args: { view: "activity", channel: "linkedin", kinds: ["invite_accepted"], since: londonDay({ days: -7 }) } }] }),
           (call) => {
             seen = JSON.stringify(call.body.messages);
-            return { content: "Tobias Garrow and Leona Fitch accepted this week." };
+            return { content: "Tobias Garrow and Leona Fitch accepted in the last 7 days." };
           },
         ]),
       ),
@@ -316,8 +316,42 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.match(seen, /Tobias Garrow/);
     assert.match(seen, /Leona Fitch/);
     assert.doesNotMatch(seen, /Morwenna|Caspian/);
-    const wrong = await runOnce(byId("campaign-who-accepted-this-week"), settings(scripted([() => ({ content: "Tobias, Leona and Morwenna accepted." })])));
+    const wrong = await runOnce(byId("campaign-who-accepted-last-7-days"), settings(scripted([() => ({ content: "Tobias, Leona and Morwenna accepted." })])));
     assert.deepEqual(failed(wrong), ["calls campaigns", "answer leaves out Morwenna, Caspian"]);
+  });
+
+  it("puts a first email into the Smartlead campaign when the guide says so, and fails send_email", async () => {
+    let guide = "";
+    const result = await runOnce(
+      byId("campaign-first-email-goes-to-campaign"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "guide", args: { topic: "cold_email" } }] }),
+          (call) => {
+            guide = JSON.stringify((call.body.messages as unknown[]).at(-1));
+            return { calls: [{ name: "find_tools", args: { domains: ["campaigns"] } }] };
+          },
+          ({ world }) => ({
+            content: "I'll add Corin to Agency outreach.",
+            calls: [{ name: "campaign_action", args: { action: "add", campaignId: world.id("campaign:Agency outreach"), contactIds: [world.id("contact:Corin Vale")] } }],
+          }),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(guide, /Campaigns first/);
+    assert.match(guide, /never send_email/);
+    assert.ok(guide.indexOf("Campaigns first") < guide.indexOf("Follow the playbook below"));
+    const wrong = await runOnce(
+      byId("campaign-first-email-goes-to-campaign"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "guide", args: { topic: "cold_email" } }] }),
+          ({ world }) => ({ calls: [{ name: "send_email", args: { contactId: world.id("contact:Corin Vale"), to: ["corin@valeworks.test"], subject: "Content audits", body: "Hi Corin, a quick idea about content audits." } }] }),
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(wrong), ["proposes adding Corin to the email campaign", "doesn't propose send_email or save_email_draft"]);
   });
 
   it("replies to Sarah on LinkedIn through a card that names the sender, never by email", async () => {

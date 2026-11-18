@@ -7,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GET as listCampaignsRoute } from "@/app/api/v1/campaigns/route";
 import { GET as listProspectsRoute, POST as addProspectsRoute } from "@/app/api/v1/campaigns/[id]/prospects/route";
-import { companionTools } from "@/lib/assistant/chat";
+import { ALL_TOOLS_LOADED, companionTools } from "@/lib/assistant/chat";
 import { coldEmailGuide } from "@/lib/assistant/guides";
 import {
   ORBIT_TOOL_LIMIT,
@@ -15,20 +15,26 @@ import {
   TOOL_DOMAIN_NAMES,
   assistantTools,
   describeAction,
+  domainTools,
   fittingDomains,
+  toolDomainNames,
+  type ToolDomain,
   recordNames,
   runTool,
   toolDefinitions,
 } from "@/lib/assistant/tools";
 import { NO_LIFT, replyInCampaign, runCampaignAction } from "@/lib/campaigns/agent";
 import { saveCampaignConnection } from "@/lib/campaigns/connections";
+import { KEY_ELSEWHERE, KEY_REUSED, replyToProspect } from "@/lib/campaigns/replies";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { setDoNotContact } from "@/lib/campaigns/suppression";
 import { syncCampaigns } from "@/lib/campaigns/sync";
+import { SEVERAL_CAMPAIGNS } from "@/lib/crm/campaigns";
 import { createContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { Actor, UserActor } from "@/lib/crm/types";
+import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { registerCampaignTools } from "@/server/mcp/campaigns";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -242,7 +248,7 @@ describe("campaigns for the assistant, MCP and the API", () => {
     await sql("delete from private.rate_limit_buckets where bucket_key like 'workflow-service:%'");
   });
 
-  useServerlessPool();
+  const pool = useServerlessPool();
 
   it("starts from synced campaigns with the LinkedIn accounts linked to their members", async () => {
     const senders = await sql<{ external_id: string; user_id: string | null }>("select external_id, user_id from crm.campaign_senders where workspace_id = $1 order by external_id", [owner.workspaceId]);
@@ -434,6 +440,142 @@ describe("campaigns for the assistant, MCP and the API", () => {
     });
   });
 
+  describe("idempotency claims", () => {
+    it("runs its migration twice", async () => {
+      await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270212100000_idempotency_claims.sql", "utf8"));
+      await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270212100000_idempotency_claims.sql", "utf8"));
+    });
+
+    it("runs two concurrent identical requests once, and every replay gets the first run's answer", async () => {
+      const send = () =>
+        addProspectsRoute(
+          api(agentToken, `/campaigns/${email}/prospects`, { method: "POST", body: JSON.stringify({ contactIds: [people.rae] }), headers: { "idempotency-key": "together" } }),
+          params(email),
+        );
+      pool.allowNestedConnections();
+      const [first, second] = await Promise.all([send(), send()]);
+      const answers = [
+        { status: first.status, body: (await first.json()) as Record<string, unknown> },
+        { status: second.status, body: (await second.json()) as Record<string, unknown> },
+      ];
+      const done = answers.filter((answer) => answer.status === 200);
+      assert.ok(done.length >= 1);
+      assert.equal(done[0].body.added, 1);
+      for (const answer of answers) {
+        if (answer.status === 409) assert.equal((answer.body.error as { code: string }).code, "idempotency_in_progress");
+        else assert.deepEqual(answer.body, done[0].body);
+      }
+      const later = await send();
+      assert.equal(later.status, 200);
+      assert.deepEqual(await later.json(), done[0].body);
+      const audits = await sql("select 1 from crm.audit_events where event_type = 'campaign.prospect_added' and changes->>'campaignId' = $1 and changes->>'contactId' = $2", [email, people.rae]);
+      assert.equal(audits.length, 1);
+    });
+  });
+
+  describe("acting on a contact in several campaigns", () => {
+    it("refuses pause, resume, remove and set_category by contactId alone, and names the campaign it acted on", async () => {
+      const live = await sql<{ campaign_id: string }>("select campaign_id from crm.campaign_prospects where contact_id = $1 and stopped_at is null and state not in ('skipped', 'failed')", [people.tom]);
+      assert.ok(live.length >= 2, "Tom is in both campaigns");
+      const client = await campaignMcp(owner, { fetchImpl });
+      try {
+        for (const action of ["pause", "resume", "remove", "set_category"]) {
+          const args = { action, contactId: people.tom, ...(action === "set_category" ? { category: "Interested" } : {}) };
+          assert.equal(toolError(await runTool(owner, "campaign_action", args)), SEVERAL_CAMPAIGNS, action);
+          const viaMcp = await client.call("campaign_action", { action, contact_id: people.tom, ...(action === "set_category" ? { category: "Interested" } : {}) });
+          assert.equal(viaMcp.text, `conflict: ${SEVERAL_CAMPAIGNS}`, action);
+        }
+      } finally {
+        await client.close();
+      }
+      const act = (input: Record<string, unknown>) => runCampaignAction(owner, input, { provenance: { operation: "test" }, allowReply: false, fetchImpl }) as Promise<{ campaign: { id: string; name: string } }>;
+      const chosen = await act({ action: "set_category", contactId: people.tom, campaignId: linkedin, category: "Interested" });
+      assert.deepEqual(chosen.campaign, { id: linkedin, name: "Agency founders", channel: "linkedin" });
+      const removed = await act({ action: "remove", contactId: people.tom, campaignId: email });
+      assert.deepEqual([removed.campaign.id, removed.campaign.name], [email, "Agency outreach"]);
+      const paused = await act({ action: "pause", campaignId: email });
+      assert.deepEqual([paused.campaign.id, paused.campaign.name], [email, "Agency outreach"]);
+      const resumed = await act({ action: "resume", campaignId: email });
+      assert.equal(resumed.campaign.id, email);
+      const thread = (await runTool(owner, "campaigns", { view: "thread", contactId: people.tom })) as { thread: { prospectId: string } };
+      assert.ok(thread.thread.prospectId);
+    });
+  });
+
+  describe("rules every route keeps", () => {
+    it("refuses every change without campaigns:write", async () => {
+      const reader = (await createAgent(owner.workspaceId, ["crm:read"], "Read only")).actor;
+      const client = await campaignMcp(reader, { fetchImpl });
+      try {
+        for (const action of ["pause", "resume", "remove", "set_category"]) {
+          const args = { action, prospectId: nina, ...(action === "set_category" ? { category: "Interested" } : {}) };
+          await assert.rejects(runCampaignAction(reader, args, { provenance: { operation: "test" }, allowReply: false, fetchImpl }), refused("forbidden", /campaigns:write/), action);
+          const viaMcp = await client.call("campaign_action", { action, prospect_id: nina, ...(action === "set_category" ? { category: "Interested" } : {}) });
+          assert.match(viaMcp.text, /^forbidden: .*campaigns:write/, action);
+        }
+        const paused = await client.call("campaign_action", { action: "pause", campaign_id: email });
+        assert.match(paused.text, /^forbidden: .*campaigns:write/);
+      } finally {
+        await client.close();
+      }
+      assert.equal((await sql("select 1 from crm.audit_events where actor_agent_id = $1", [reader.agentId])).length, 0);
+    });
+
+    it("never calls a provider to reply for a token without Can send messages", async () => {
+      const sends = () => heyreach.calls.filter((call) => call.path === "/inbox/SendMessage").length + alpha.calls.filter((call) => /reply/i.test(call.pathname)).length;
+      const before = sends();
+      const client = await mcpClient(createCrmMcpServer(jess, { personal: { tokenId: "00000000-0000-4000-8000-000000000004", canSend: false } }));
+      try {
+        assert.ok(!(await client.tools()).includes("campaign_reply"));
+        const direct = await client.call("campaign_reply", { prospect_id: dan, text: "Hello" });
+        assert.ok(direct.error, direct.text);
+        const viaAction = await client.call("campaign_action", { action: "reply", prospect_id: dan, text: "Hello" });
+        assert.ok(viaAction.error, viaAction.text);
+      } finally {
+        await client.close();
+      }
+      assert.equal(sends(), before);
+    });
+
+    it("refuses more than 1,000 people on every route, by contact and by company", async () => {
+      const many = Array.from({ length: 1001 }, () => crypto.randomUUID());
+      assert.match(toolError(await runTool(owner, "campaign_action", { action: "add", campaignId: email, contactIds: many })) ?? "", /Add up to 1,000 people at a time/);
+      const rest = await addProspectsRoute(api(agentToken, `/campaigns/${email}/prospects`, { method: "POST", body: JSON.stringify({ contactIds: many }) }), params(email));
+      assert.equal(rest.status, 400);
+      const client = await campaignMcp(owner, { fetchImpl });
+      try {
+        const viaMcp = await client.call("campaign_action", { action: "add", campaign_id: email, contact_ids: many });
+        assert.ok(viaMcp.error);
+        const company = (await sql<{ id: string }>("insert into crm.companies (workspace_id, name, normalized_name) values ($1, 'Crowded Ltd', 'crowded ltd') returning id", [owner.workspaceId]))[0].id;
+        await sql(
+          `insert into crm.contacts (workspace_id, company_id, first_name, last_name, email)
+           select $1, $2, 'Person', 'Number ' || n, 'person' || n || '@crowded.test' from generate_series(1, 1001) n`,
+          [owner.workspaceId, company],
+        );
+        assert.match(toolError(await runTool(owner, "campaign_action", { action: "add", campaignId: email, companyIds: [company] })) ?? "", /Add up to 1,000 people at a time/);
+        const byCompany = await client.call("campaign_action", { action: "add", campaign_id: email, company_ids: [company] });
+        assert.equal(byCompany.text, "invalid_input: Add up to 1,000 people at a time.");
+        const restCompany = await addProspectsRoute(api(agentToken, `/campaigns/${email}/prospects`, { method: "POST", body: JSON.stringify({ companyIds: [company] }) }), params(email));
+        assert.equal(restCompany.status, 400);
+        assert.equal((await sql("select 1 from crm.campaign_prospects p join crm.contacts c on c.id = p.contact_id where c.company_id = $1", [company])).length, 0);
+      } finally {
+        await client.close();
+      }
+    });
+
+    it("shows a card for every change", async () => {
+      const card = async (args: Record<string, unknown>) => describeAction("campaign_action", args, await recordNames(owner, [args], ["campaign_action"]));
+      assert.deepEqual(await card({ action: "pause", campaignId: email }), { title: "Pause Agency outreach", lines: [] });
+      assert.deepEqual(await card({ action: "resume", campaignId: linkedin }), { title: "Resume Agency founders", lines: [] });
+      assert.deepEqual(await card({ action: "pause", prospectId: nina }), { title: "Pause Nina Shah in Agency outreach", lines: [] });
+      assert.deepEqual(await card({ action: "resume", contactId: people.nina, campaignId: email }), { title: "Resume Nina Shah in Agency outreach", lines: [] });
+      assert.deepEqual(await card({ action: "remove", prospectId: dan }), { title: "Remove Dan Ellis from Agency founders", lines: [] });
+      assert.deepEqual(await card({ action: "set_category", prospectId: nina, category: "Meeting booked" }), { title: "Set Nina Shah to Meeting booked", lines: ["In Agency outreach"] });
+      assert.deepEqual(await card({ action: "set_category", prospectId: nina, category: null }), { title: "Clear Nina Shah's category", lines: ["In Agency outreach"] });
+      assert.deepEqual(await card({ action: "reply", contactId: people.nina, channel: "email", text: "Thanks, Nina." }), { title: "Reply to Nina Shah", lines: ["In Agency outreach", "Thanks, Nina."] });
+    });
+  });
+
   describe("a workspace agent token never replies", () => {
     it("is never offered a reply tool, and the shared action and reply refuse it", async () => {
       const agent = await createAgent(owner.workspaceId, ["crm:read", "campaigns:write", "admin"], "Replier");
@@ -514,6 +656,29 @@ describe("campaigns for the assistant, MCP and the API", () => {
       const audit = await sql<{ actor_user_id: string; operation: string }>("select actor_user_id, operation from crm.audit_events where event_type = 'campaign.reply_sent' and entity_id = $1", [dan]);
       assert.deepEqual(audit, [{ actor_user_id: jess.userId, operation: "campaign_reply" }]);
     });
+
+    it("refuses a reused client_key with other text or on another thread, and never sends a keyless retry twice", async () => {
+      const sent = () => heyreach.calls.filter((call) => call.path === "/inbox/SendMessage").length;
+      const before = sent();
+      const client = await campaignMcp(jess, { canReply: true, fetchImpl });
+      try {
+        const changed = await client.call("campaign_reply", { contact_id: people.dan, channel: "linkedin", text: "Wednesday instead.", client_key: "mcp-jess-1" });
+        assert.equal(changed.text, `conflict: ${KEY_REUSED}`);
+        const elsewhere = await client.call("campaign_reply", { prospect_id: nina, text: "Tuesday at 2pm works.", client_key: "mcp-jess-1" });
+        assert.equal(elsewhere.text, `conflict: ${KEY_ELSEWHERE}`);
+        assert.equal(sent(), before);
+        const first = await client.call("campaign_reply", { prospect_id: dan, text: "See you then." });
+        const retry = await client.call("campaign_reply", { prospect_id: dan, text: "See you then." });
+        assert.equal(first.json!.repeated, false, first.text);
+        assert.equal(retry.json!.repeated, true, retry.text);
+        assert.equal(retry.json!.messageId, first.json!.messageId);
+        assert.deepEqual(first.json!.campaign, { id: linkedin, name: "Agency founders", channel: "linkedin" });
+        assert.equal(sent(), before + 1);
+      } finally {
+        await client.close();
+      }
+      await assert.rejects(replyToProspect(jess, dan, { text: "Another reply.", clientKey: "mcp-jess-1" }, { fetchImpl }), refused("conflict", /different reply/));
+    });
   });
 
   describe("no route but the web app lifts Do not contact", () => {
@@ -568,8 +733,10 @@ describe("campaigns for the assistant, MCP and the API", () => {
           assert.ok(sent.length + 2 <= REQUEST_TOOL_LIMIT);
           assert.equal(new Set(sent.map((tool) => tool.function.name)).size, sent.length);
         }
-        const agentTools = assistantTools({ ...options, domains: [...TOOL_DOMAIN_NAMES] }).filter((tool) => tool.name !== "find_tools").length + 1;
-        assert.ok(agentTools + 1 <= REQUEST_TOOL_LIMIT, `Orbit Agent sends ${agentTools} and WebSearch`);
+        for (const webSearch of [true, false]) {
+          const agent = companionTools(options, [], webSearch).tools;
+          assert.ok(agent.length + (webSearch ? 1 : 0) <= REQUEST_TOOL_LIMIT, `Orbit Agent sends ${agent.length} and WebSearch`);
+        }
       }
       assert.ok(toolDefinitions().length + 2 <= REQUEST_TOOL_LIMIT, "the probe adds its own tool and web_search");
     });
@@ -578,17 +745,51 @@ describe("campaigns for the assistant, MCP and the API", () => {
       { tool_calls: domains.map((domain, index) => ({ id: `load-${index}`, type: "function" as const, function: { name: "find_tools", arguments: JSON.stringify({ domains: [domain] }) } })) },
     ];
 
-    it("keeps check_web and social_lookup when everything is loaded, in a chat and on Orbit Agent", () => {
+    it("sends or lets the model load every area offered, on every path", () => {
+      const histories = [[], TOOL_DOMAIN_NAMES, [...TOOL_DOMAIN_NAMES].reverse(), ["chat"], ["workspace", "chat"]] as (readonly ToolDomain[])[];
+      for (const options of switches) {
+        const offered = toolDomainNames(options);
+        const loadable = (names: string[], enumOf: string[]) => (domain: ToolDomain) =>
+          domainTools(domain, options).every((name) => names.includes(name)) || (names.includes("find_tools") && enumOf.includes(domain));
+        const findEnum = (tools: { name: string; parameters: unknown }[]) =>
+          ((tools.find((tool) => tool.name === "find_tools")?.parameters as { properties?: { domains?: { items?: { enum?: string[] } } } } | undefined)?.properties?.domains?.items?.enum ?? []);
+        for (const history of histories) {
+          const chat = assistantTools({ ...options, domains: history, used: history });
+          const chatNames = chat.map((tool) => tool.name);
+          for (const domain of offered) assert.ok(loadable(chatNames, findEnum(chat))(domain), `chat ${JSON.stringify(options)} ${domain}`);
+          for (const webSearch of [true, false]) {
+            const agent = companionTools(options, loadCalls(history) as never, webSearch);
+            const names = agent.tools.map((tool) => tool.name);
+            assert.ok(names.length + (webSearch ? 1 : 0) <= REQUEST_TOOL_LIMIT, `${names.length} tools`);
+            for (const domain of offered) {
+              const sent = domainTools(domain, options).every((name) => names.includes(name));
+              assert.ok(sent || (names.includes("find_tools") && findEnum(agent.tools as never).includes(domain) && agent.line.includes(domain)), `Orbit Agent ${JSON.stringify(options)} web ${webSearch}: ${domain}`);
+            }
+            if (agent.left.length === 0) {
+              assert.ok(!names.includes("find_tools"));
+              assert.equal(agent.line, ALL_TOOLS_LOADED);
+            } else assert.match(agent.line, /call find_tools with it/);
+          }
+        }
+      }
+      const full = { multiWorkspace: true, eclipse: true, linear: true };
+      assert.deepEqual(companionTools(full, [], false).left, []);
+      assert.deepEqual(companionTools(full, [], true).left, ["chat", "workspace"]);
+    });
+
+    it("keeps check_web, social_lookup and remember when everything is loaded, in a chat and on Orbit Agent", () => {
       for (const options of switches) {
         for (const order of [TOOL_DOMAIN_NAMES, [...TOOL_DOMAIN_NAMES].reverse()]) {
           const chat = toolDefinitions({ ...options, domains: order, used: order }).map((tool) => tool.function.name);
-          const agent = companionTools(options, loadCalls(order) as never).map((tool) => tool.name);
-          const untouched = companionTools(options, []).map((tool) => tool.name);
-          for (const names of [chat, agent, untouched]) {
-            assert.ok(names.includes("check_web") && names.includes("social_lookup"), JSON.stringify(options));
-            assert.ok(names.includes("remember"), `remember: ${JSON.stringify(options)}`);
-            assert.ok(names.length <= ORBIT_TOOL_LIMIT);
+          for (const webSearch of [true, false]) {
+            const agent = companionTools(options, loadCalls(order) as never, webSearch).tools.map((tool) => tool.name);
+            const untouched = companionTools(options, [], webSearch).tools.map((tool) => tool.name);
+            for (const names of [chat, agent, untouched]) {
+              assert.ok(names.includes("check_web") && names.includes("social_lookup"), JSON.stringify(options));
+              assert.ok(names.includes("remember"), `remember: ${JSON.stringify(options)}`);
+            }
           }
+          assert.ok(chat.length <= ORBIT_TOOL_LIMIT);
         }
         const plain = toolDefinitions(options).map((tool) => tool.function.name);
         assert.ok(plain.includes("check_web") && plain.includes("remember"));
@@ -605,7 +806,7 @@ describe("campaigns for the assistant, MCP and the API", () => {
       const usedSettings = fittingDomains(TOOL_DOMAIN_NAMES, full, ["settings"]);
       assert.ok(usedSettings.includes("settings") && usedSettings.includes("web"));
       assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !usedSettings.includes(domain)), ["chat", "workspace"]);
-      const agentNames = companionTools(full, loadCalls(["settings"]) as never).map((tool) => tool.name);
+      const agentNames = companionTools(full, loadCalls(["settings"]) as never).tools.map((tool) => tool.name);
       assert.ok(agentNames.includes("remember") && agentNames.includes("check_web"));
 
       const webFirst = ["web", ...TOOL_DOMAIN_NAMES.filter((domain) => domain !== "web")] as typeof TOOL_DOMAIN_NAMES;
@@ -636,11 +837,11 @@ describe("campaigns for the assistant, MCP and the API", () => {
   describe("the cold_email guide", () => {
     it("routes a first email to a campaign only when Smartlead is connected, and offers LinkedIn without an email", async () => {
       assert.doesNotMatch(coldEmailGuide("Eclipse"), /campaign_action/);
-      assert.match(coldEmailGuide("Eclipse", { email: true, linkedin: false }), /goes into an email campaign, not send_email/);
+      assert.match(coldEmailGuide("Eclipse", { email: true, linkedin: false }), /goes into an email campaign, never send_email/);
       assert.doesNotMatch(coldEmailGuide("Eclipse", { email: true, linkedin: false }), /LinkedIn campaign/);
       assert.match(coldEmailGuide("Eclipse", { email: false, linkedin: true }), /no email address, offer a LinkedIn campaign/);
       const live = (await runTool(owner, "guide", { topic: "cold_email" })) as { guide: string };
-      assert.match(live.guide, /goes into an email campaign, not send_email/);
+      assert.match(live.guide, /goes into an email campaign, never send_email/);
       assert.match(live.guide, /offer a LinkedIn campaign/);
       const none = (await runTool(jess, "guide", { topic: "cold_email" })) as { guide: string };
       assert.match(none.guide, /goes into an email campaign/);

@@ -219,7 +219,7 @@ type Names = (id: unknown) => string;
 
 type Defer = (work: () => Promise<unknown>) => void;
 
-type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval; multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean; loaded?: readonly ToolDomain[] };
+type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval; multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean; loaded?: readonly ToolDomain[]; agent?: boolean };
 
 function undoRefusal(reason: string) {
   return /^Can't undo:|can't be undone/i.test(reason) ? reason : `Can't be undone: ${reason}`;
@@ -1828,32 +1828,45 @@ export const REQUEST_TOOL_LIMIT = 128;
 export const PROVIDER_ADDED_TOOLS = 2;
 export const ORBIT_TOOL_LIMIT = REQUEST_TOOL_LIMIT - PROVIDER_ADDED_TOOLS;
 export const TOO_MANY_TOOLS = "This chat has too many tools loaded to add these. Start a new chat for them.";
+export const AGENT_LOADED_NOTE =
+  "On Orbit Agent these tools load from the user's next message. Say which area you need and ask them to say \"carry on\".";
 export const UNLOADED_AREAS = "This chat had too many tools, so these areas, used least recently, are no longer loaded. Load one again with find_tools when you need it.";
 
 export const NEVER_DROPPED: readonly ToolDomain[] = ["web", "settings"];
 
-export function fittingDomains(domains: readonly ToolDomain[], options: ToolSwitches = {}, used: readonly ToolDomain[] = []) {
+export function fittingDomains(domains: readonly ToolDomain[], options: ToolSwitches = {}, used: readonly ToolDomain[] = [], limit = ORBIT_TOOL_LIMIT) {
   const allowed = toolDomainNames(options);
   const wanted = [...new Set(domains)].filter((domain) => allowed.includes(domain));
   const size = (domain: ToolDomain) => domainTools(domain, options).length;
   const core = CORE_TOOLS.filter((name) => !hiddenTool(name, options)).length;
   let count = core + wanted.reduce((sum, domain) => sum + size(domain), 0);
-  if (count <= ORBIT_TOOL_LIMIT) return wanted;
+  if (count <= limit) return wanted;
   const recent = [...new Set(used)].filter((domain) => wanted.includes(domain));
   const unused = wanted.filter((domain) => !recent.includes(domain)).sort((a, b) => TOOL_DOMAIN_NAMES.indexOf(b) - TOOL_DOMAIN_NAMES.indexOf(a));
   const dropOrder = [...unused, ...recent].filter((domain) => !NEVER_DROPPED.includes(domain));
   const dropped: ToolDomain[] = [];
   for (const domain of dropOrder) {
-    if (count <= ORBIT_TOOL_LIMIT) break;
+    if (count <= limit) break;
     dropped.push(domain);
     count -= size(domain);
   }
   for (const domain of [...dropped].reverse()) {
-    if (count + size(domain) > ORBIT_TOOL_LIMIT) continue;
+    if (count + size(domain) > limit) continue;
     dropped.splice(dropped.indexOf(domain), 1);
     count += size(domain);
   }
   return wanted.filter((domain) => !dropped.includes(domain));
+}
+
+export type AgentToolPlan = { domains: ToolDomain[]; left: ToolDomain[]; findTools: boolean; limit: number };
+
+export function agentToolPlan(options: ToolSwitches, used: readonly ToolDomain[], webSearch: boolean): AgentToolPlan {
+  const budget = REQUEST_TOOL_LIMIT - 1 - (webSearch ? 1 : 0);
+  const offered = toolDomainNames(options);
+  const everything = fittingDomains(offered, options, used, budget + 1);
+  if (everything.length === offered.length) return { domains: everything, left: [], findTools: false, limit: budget + 1 };
+  const kept = fittingDomains(offered, options, used, budget);
+  return { domains: kept, left: offered.filter((domain) => !kept.includes(domain)), findTools: true, limit: budget };
 }
 
 export function usedDomains(calls: { name: string; arguments: string }[]) {
@@ -3799,7 +3812,7 @@ const TOOL_LIST: AssistantTool[] = [
         })),
         ...(left.length > 0 ? { notLoaded: left, notLoadedReason: TOO_MANY_TOOLS } : {}),
         ...(unloaded.length > 0 ? { unloaded, unloadedReason: UNLOADED_AREAS } : {}),
-        note: "These tools are now loaded, with their full inputs, from your next step for the rest of this conversation.",
+        note: context.agent ? AGENT_LOADED_NOTE : "These tools are now loaded, with their full inputs, from your next step for the rest of this conversation.",
       };
     },
   },
@@ -6698,7 +6711,7 @@ export function toolLabel(name: string) {
   return findTool(name)?.label ?? (Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].label : name);
 }
 
-export type ToolOptions = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean; domains?: readonly ToolDomain[]; used?: readonly ToolDomain[] };
+export type ToolOptions = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean; domains?: readonly ToolDomain[]; used?: readonly ToolDomain[]; limit?: number };
 
 export function toolDomain(name: string) {
   const tool = findTool(name);
@@ -6727,7 +6740,7 @@ export function assistantTools(options: ToolOptions = {}) {
     .map((tool) => (options.multiWorkspace === true ? tool : withoutWorkspaceParam(tool)))
     .map((tool) => (tool.name === "find_tools" ? { ...tool, ...findToolsSchema(options) } : tool.name === "guide" ? { ...tool, ...guideSchema(options) } : tool));
   if (!options.domains) return offered;
-  const order = [...CORE_TOOLS, ...fittingDomains(options.domains, options, options.used ?? []).flatMap((domain) => domainTools(domain, options))];
+  const order = [...CORE_TOOLS, ...fittingDomains(options.domains, options, options.used ?? [], options.limit).flatMap((domain) => domainTools(domain, options))];
   const byName = new Map(offered.map((tool) => [tool.name, tool]));
   return [...new Set(order)].flatMap((name) => byName.get(name) ?? []);
 }
@@ -7043,6 +7056,7 @@ export async function runTool(
     eclipse?: boolean;
     linear?: boolean;
     loaded?: readonly ToolDomain[];
+    agent?: boolean;
   } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
@@ -7092,6 +7106,7 @@ export async function runTool(
           eclipse: options.eclipse,
           linear: options.linear,
           loaded: options.loaded,
+          agent: options.agent === true,
         };
         return scope ? runAcross(tool, actor, scope, cleaned, context) : tool.run(actor, cleaned, context);
       }),

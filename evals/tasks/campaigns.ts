@@ -1,6 +1,6 @@
-import { EMAIL_TOOLS, answerExcludes, answerIncludes, arg, called, card, custom, noCard, noWrites } from "../checks";
+import { EMAIL_TOOLS, answerExcludes, answerIncludes, arg, called, calledBefore, card, custom, noCard, noWrites } from "../checks";
 import type { EvalTask } from "../types";
-import { idsInclude, task } from "./shared";
+import { PLAYBOOK_TOOL, idsInclude, playbookTopic, task } from "./shared";
 
 const RUN_NAMES = [
   "Ada", "Bea", "Cal", "Dov", "Eli", "Fen", "Gus", "Hal", "Isa", "Jem",
@@ -44,10 +44,10 @@ export const CAMPAIGN_TASKS: EvalTask[] = [
     ],
   }),
   task({
-    id: "campaign-who-accepted-this-week",
+    id: "campaign-who-accepted-last-7-days",
     suite: "core",
     category: "find",
-    origin: "Campaigns plan, phase 7: who accepted a LinkedIn invite this week.",
+    origin: "Campaigns plan, phase 7: who accepted a LinkedIn invite recently (asked as the last 7 days so the task passes on any weekday).",
     fixture: {
       eclipse: {
         contacts: [
@@ -71,12 +71,30 @@ export const CAMPAIGN_TASKS: EvalTask[] = [
         ],
       },
     },
-    message: "Who accepted this week?",
+    message: "Who accepted in the last 7 days?",
     checks: [
       called("campaigns"),
       answerIncludes("Tobias", "Leona"),
       answerExcludes("Morwenna", "Caspian"),
       noWrites(),
+    ],
+  }),
+  task({
+    id: "campaign-first-email-goes-to-campaign",
+    suite: "core",
+    category: "cold_email",
+    origin: "Campaigns plan, phase 7: with Smartlead connected, a first email to someone the workspace doesn't know goes into a campaign, not send_email.",
+    fixture: {
+      eclipse: {
+        contacts: [{ first: "Corin", last: "Vale", email: "corin@valeworks.test", title: "Head of Marketing" }],
+        campaigns: [{ name: "Agency outreach", channel: "email" }],
+      },
+    },
+    message: "Send Corin Vale a first email about our content audits.",
+    checks: [
+      calledBefore(PLAYBOOK_TOOL, "campaign_action", "reads the cold_email guide first", playbookTopic),
+      card("campaign_action", arg.all(arg.equals("action", "add"), arg.is("campaignId", "campaign:Agency outreach"), idsInclude("contactIds", "contact:Corin Vale")), "proposes adding Corin to the email campaign"),
+      noCard(EMAIL_TOOLS),
     ],
   }),
   task({
