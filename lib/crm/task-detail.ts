@@ -73,7 +73,8 @@ export async function taskDetailInDb(db: Db, home: Actor, task: Task, viewer: Ac
 }
 
 export async function taskDetailWithBasisInDb(db: Db, home: Actor, task: Task, viewer: Actor = home): Promise<{ detail: TaskDetail; current: CurrentBasis | null }> {
-  const [shared, sources] = await Promise.all([sharedTaskContextInDb(db, home.workspaceId, task), leadSources(db, task)]);
+  const shared = await sharedTaskContextInDb(db, home.workspaceId, task);
+  const sources = await leadSources(db, task);
   const viewed = home.type === "user" ? await viewerMail(db, home, task) : null;
   const mail = viewed?.mail ?? null;
   const readOnly = home.workspaceId !== viewer.workspaceId;

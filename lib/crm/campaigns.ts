@@ -157,51 +157,49 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
   return withActor(actor, async (db) => {
     const row = await readCampaign(db, actor, id);
     const linkedin = row.channel === "linkedin";
-    const [steps, days, unlinked, kinds, capacity, briefs, today] = await Promise.all([
-      db.query<{ step: number; variant: string | null; sent: number; opened: number; replied: number }>(
-        `select e.step, e.variant,
-                count(*) filter (where e.kind = 'sent')::int as sent,
-                count(distinct e.prospect_id) filter (where e.kind = 'opened')::int as opened,
-                count(distinct e.prospect_id) filter (where e.kind = 'replied')::int as replied
-         from crm.campaign_events e
-         where e.campaign_id = $1 and e.workspace_id = $2 and e.step is not null
-         group by e.step, e.variant
-         order by e.step, e.variant nulls first`,
-        [row.id, actor.workspaceId],
-      ),
-      db.query<{ day: string; sent: number; replied: number; invites: number; accepted: number }>(
-        `select to_char(e.occurred_at at time zone 'Europe/London', 'YYYY-MM-DD') as day,
-                count(*) filter (where e.kind in ('sent', 'message_sent', 'invite_sent', 'inmail_sent'))::int as sent,
-                count(*) filter (where e.kind = 'replied')::int as replied,
-                count(*) filter (where e.kind = 'invite_sent')::int as invites,
-                count(*) filter (where e.kind = 'invite_accepted')::int as accepted
-         from crm.campaign_events e
-         where e.campaign_id = $1 and e.workspace_id = $2 and e.occurred_at >= now() - make_interval(days => $3)
-         group by 1
-         order by 1`,
-        [row.id, actor.workspaceId, CHART_DAYS + 1],
-      ),
-      db.query<{ count: number }>(
-        `select count(*)::int as count from crm.campaign_prospects p where p.campaign_id = $1 and p.workspace_id = $2 and ${IMPORTABLE_SQL}`,
-        [row.id, actor.workspaceId],
-      ),
-      linkedin
-        ? db.query<{ kind: string; step: number | null; count: number }>(
-            `select e.kind, e.step, count(*)::int as count from crm.campaign_events e
-             where e.campaign_id = $1 and e.workspace_id = $2 and e.kind in ('invite_sent', 'invite_accepted', 'message_sent')
-             group by e.kind, e.step`,
-            [row.id, actor.workspaceId],
-          )
-        : null,
-      linkedin ? senderCapacity(db, actor.workspaceId, row.sender_ids ?? []) : null,
-      readCampaignVariables(db, { id: row.id, provider: row.provider, variables: row.variables ?? [] }),
-      db.query<{ count: number }>(
-        `select count(*)::int as count from crm.campaign_prospects p
-         where p.campaign_id = $1 and p.workspace_id = $2 and p.added_by_run_id is not null and p.state not in ('skipped', 'failed')
-           and (p.created_at at time zone 'Europe/London')::date = (now() at time zone 'Europe/London')::date`,
-        [row.id, actor.workspaceId],
-      ),
-    ]);
+    const steps = await db.query<{ step: number; variant: string | null; sent: number; opened: number; replied: number }>(
+      `select e.step, e.variant,
+              count(*) filter (where e.kind = 'sent')::int as sent,
+              count(distinct e.prospect_id) filter (where e.kind = 'opened')::int as opened,
+              count(distinct e.prospect_id) filter (where e.kind = 'replied')::int as replied
+       from crm.campaign_events e
+       where e.campaign_id = $1 and e.workspace_id = $2 and e.step is not null
+       group by e.step, e.variant
+       order by e.step, e.variant nulls first`,
+      [row.id, actor.workspaceId],
+    );
+    const days = await db.query<{ day: string; sent: number; replied: number; invites: number; accepted: number }>(
+      `select to_char(e.occurred_at at time zone 'Europe/London', 'YYYY-MM-DD') as day,
+              count(*) filter (where e.kind in ('sent', 'message_sent', 'invite_sent', 'inmail_sent'))::int as sent,
+              count(*) filter (where e.kind = 'replied')::int as replied,
+              count(*) filter (where e.kind = 'invite_sent')::int as invites,
+              count(*) filter (where e.kind = 'invite_accepted')::int as accepted
+       from crm.campaign_events e
+       where e.campaign_id = $1 and e.workspace_id = $2 and e.occurred_at >= now() - make_interval(days => $3)
+       group by 1
+       order by 1`,
+      [row.id, actor.workspaceId, CHART_DAYS + 1],
+    );
+    const unlinked = await db.query<{ count: number }>(
+      `select count(*)::int as count from crm.campaign_prospects p where p.campaign_id = $1 and p.workspace_id = $2 and ${IMPORTABLE_SQL}`,
+      [row.id, actor.workspaceId],
+    );
+    const kinds = linkedin
+      ? await db.query<{ kind: string; step: number | null; count: number }>(
+          `select e.kind, e.step, count(*)::int as count from crm.campaign_events e
+           where e.campaign_id = $1 and e.workspace_id = $2 and e.kind in ('invite_sent', 'invite_accepted', 'message_sent')
+           group by e.kind, e.step`,
+          [row.id, actor.workspaceId],
+        )
+      : null;
+    const capacity = linkedin ? await senderCapacity(db, actor.workspaceId, row.sender_ids ?? []) : null;
+    const briefs = await readCampaignVariables(db, { id: row.id, provider: row.provider, variables: row.variables ?? [] });
+    const today = await db.query<{ count: number }>(
+      `select count(*)::int as count from crm.campaign_prospects p
+       where p.campaign_id = $1 and p.workspace_id = $2 and p.added_by_run_id is not null and p.state not in ('skipped', 'failed')
+         and (p.created_at at time zone 'Europe/London')::date = (now() at time zone 'Europe/London')::date`,
+      [row.id, actor.workspaceId],
+    );
     const provider = campaignProvider(row.provider);
     const sequence = row.sequence ?? [];
     const eventDays: DayStats[] = days.rows.map((day) =>

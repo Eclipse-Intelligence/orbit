@@ -255,17 +255,15 @@ async function threadMaterial(db: Db, actor: UserActor, task: Task, detail: Task
 
 async function gatherInDb(db: Db, actor: UserActor, task: Task, kind: PreparationKind, detail: TaskDetail, current: CurrentBasis): Promise<Material> {
   const address = detail.contact?.email ?? null;
-  const [records, activities, people] = await Promise.all([
-    recordLines(db, actor.workspaceId, detail),
-    activityLines(db, actor.workspaceId, task),
-    address ? recipientContext(db, actor, [address.toLowerCase()]) : Promise.resolve([] as string[]),
-  ]);
+  const records = await recordLines(db, actor.workspaceId, detail);
+  const activities = await activityLines(db, actor.workspaceId, task);
+  const people = address ? await recipientContext(db, actor, [address.toLowerCase()]) : ([] as string[]);
   const emails = await emailLines(db, actor, address);
   const thread = await threadMaterial(db, actor, task, detail);
   const drafting = kind === "draft";
-  const [voice, edits, writing] = drafting
-    ? await Promise.all([voiceSamples(db, actor), editExamples(db, actor), emailWritingNotes(db, actor)])
-    : [[], [], []];
+  const voice = drafting ? await voiceSamples(db, actor) : [];
+  const edits = drafting ? await editExamples(db, actor) : [];
+  const writing = drafting ? await emailWritingNotes(db, actor) : [];
   return { task, kind, detail, current, records, activities, emails, thread, people, voice, edits, writing };
 }
 
