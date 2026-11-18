@@ -23,6 +23,8 @@ import {
   campaignStatus,
   createHeyReachWebhook,
   HEYREACH_WEBHOOK_EVENTS,
+  HEYREACH_WEBHOOK_NAME_LIMIT,
+  heyReachWebhookName,
   HeyReachError,
   heyReachSteps,
   listHeyReachAccounts,
@@ -345,8 +347,8 @@ describe("campaigns through HeyReach", () => {
     });
 
     it("sends CreateWebhook for all campaigns exactly as documented and logs HeyReach's validation errors", async () => {
-      const autoTag = (event: string) => event.startsWith("LEAD_AUTO_TAGGED_");
-      assert.ok(HEYREACH_WEBHOOK_EVENTS.filter((event) => !autoTag(event)).every((event) => HEYREACH_WEBHOOK_TYPES.includes(event)), "every event Orbit registers is a documented eventType");
+      assert.ok(HEYREACH_WEBHOOK_EVENTS.every((event) => HEYREACH_WEBHOOK_TYPES.includes(event)), "every event Orbit registers is a documented eventType");
+      assert.ok(HEYREACH_WEBHOOK_EVENTS.every((event) => heyReachWebhookName(event).length <= HEYREACH_WEBHOOK_NAME_LIMIT), "every webhook name fits HeyReach's 25 character limit");
       const { calls, impl } = recorder((_path, body) => {
         const row = body as Record<string, unknown>;
         if (row.eventType === "VIEWED_PROFILE") {
@@ -360,7 +362,7 @@ describe("campaigns through HeyReach", () => {
         method: "POST",
         path: "/api/public/webhooks/CreateWebhook",
         query: "",
-        body: { webhookName: "Orbit connection request sent, all campaigns", webhookUrl: url, eventType: "CONNECTION_REQUEST_SENT", campaignIds: [] },
+        body: { webhookName: "Orbit invite sent", webhookUrl: url, eventType: "CONNECTION_REQUEST_SENT", campaignIds: [] },
       });
       const logged: unknown[][] = [];
       const original = console.error;
@@ -401,7 +403,7 @@ describe("campaigns through HeyReach", () => {
       const url = "https://orbit.test/api/webhooks/heyreach?w=workspace&secret=s3cret-value";
       const listed = { totalCount: 7, items: [
         { id: 123, webhookName: "Other tool", webhookUrl: "https://elsewhere.test/hook", eventType: "MESSAGE_SENT", campaignIds: [], isActive: true },
-        { id: 124, webhookName: "Orbit message sent, all campaigns", webhookUrl: url, eventType: "MESSAGE_SENT", campaignIds: [], isActive: true },
+        { id: 124, webhookName: "Orbit message sent", webhookUrl: url, eventType: "MESSAGE_SENT", campaignIds: [], isActive: true },
         { id: 125, webhookName: "Orbit replies 744784", webhookUrl: url, eventType: "EVERY_MESSAGE_REPLY_RECEIVED", campaignIds: [744784], isActive: true },
         { id: 201, webhookUrl: url, eventType: "FOLLOW_SENT", isActive: true },
         { id: 202, webhookUrl: url, eventType: "LIKED_POST", campaignIds: null, isActive: true },
@@ -415,7 +417,7 @@ describe("campaigns through HeyReach", () => {
       calls.length = 0;
       assert.equal(await provider.createConnectionWebhook!(context, url, "MESSAGE_SENT"), "124");
       assert.deepEqual(calls.map((call) => [call.method, call.path, call.body]), [
-        ["POST", "/api/public/webhooks/CreateWebhook", { webhookName: "Orbit message sent, all campaigns", webhookUrl: url, eventType: "MESSAGE_SENT", campaignIds: [] }],
+        ["POST", "/api/public/webhooks/CreateWebhook", { webhookName: "Orbit message sent", webhookUrl: url, eventType: "MESSAGE_SENT", campaignIds: [] }],
         ["POST", "/api/public/webhooks/GetAllWebhooks", { offset: 0, limit: 100, includeCustomHeaders: false }],
       ]);
       assert.equal(await provider.createConnectionWebhook!(context, url, "FOLLOW_SENT"), null);

@@ -762,11 +762,25 @@ export const HEYREACH_POSITIVE_TAG_EVENT = "LEAD_AUTO_TAGGED_POSITIVE";
 
 export const HEYREACH_CORE_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS)];
 
-export const HEYREACH_WEBHOOK_EVENTS: string[] = [...HEYREACH_CORE_WEBHOOK_EVENTS, HEYREACH_TAG_EVENT, ...Object.keys(HEYREACH_AUTO_TAG_EVENTS)];
+export const HEYREACH_WEBHOOK_EVENTS: string[] = [...HEYREACH_CORE_WEBHOOK_EVENTS, HEYREACH_TAG_EVENT];
+
+export const HEYREACH_WEBHOOK_NAME_LIMIT = 25;
+
+const WEBHOOK_NAMES: Record<string, string> = {
+  [HEYREACH_REPLY_EVENT]: "replies",
+  [HEYREACH_TAG_EVENT]: "tags",
+  CONNECTION_REQUEST_SENT: "invite sent",
+  CONNECTION_REQUEST_ACCEPTED: "invite accepted",
+  MESSAGE_SENT: "message sent",
+  INMAIL_SENT: "InMail sent",
+  FOLLOW_SENT: "followed",
+  LIKED_POST: "liked post",
+  VIEWED_PROFILE: "viewed profile",
+};
 
 export function heyReachWebhookName(eventType: string) {
-  const what = eventType === HEYREACH_REPLY_EVENT ? "replies" : eventType.toLowerCase().replace(/_/g, " ");
-  return `Orbit ${what}, all campaigns`;
+  const what = WEBHOOK_NAMES[eventType] ?? eventType.toLowerCase().replace(/_/g, " ");
+  return `Orbit ${what}`.slice(0, HEYREACH_WEBHOOK_NAME_LIMIT).trim();
 }
 
 export type HeyReachWebhook = { id: string; eventType: string; url: string; campaignIds: string[] | null; active: boolean };
