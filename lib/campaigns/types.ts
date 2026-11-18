@@ -118,7 +118,7 @@ export type CampaignSummary = {
 export const AUTO_ADD = ["off", "accepted", "replied"] as const;
 export type AutoAdd = (typeof AUTO_ADD)[number];
 
-export type LeadFunnel = { contacted: number; accepted: number; replied: number };
+export type LeadFunnel = { contacted: number; accepted: number; replied: number; interested?: number };
 
 export type CampaignDetail = CampaignSummary & {
   autoAdd: AutoAdd;

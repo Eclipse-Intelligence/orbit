@@ -18,7 +18,6 @@ import {
   findHeyReachLead,
   HEYREACH_APP,
   HEYREACH_PUSH_BATCH,
-  HEYREACH_REPLY_EVENT,
   HEYREACH_WEBHOOK_EVENTS,
   HeyReachError,
   heyReachWebhookAction,
@@ -34,7 +33,8 @@ import {
   readHeyReachStats,
   sendHeyReachMessage,
   listHeyReachWebhooks,
-  matchingHeyReachWebhook,
+  allCampaignsWebhook,
+  heyReachWebhookTag,
   setHeyReachCampaignStatus,
   startHeyReachCampaign,
   stopHeyReachLead,
@@ -146,7 +146,9 @@ export type ProviderEvent = {
 
 export type ProviderPage<T> = { items: T[]; next: number | null; leads?: ProviderLead[] };
 
-export type WebhookActions = { campaignExternalId: string; events: ProviderEvent[] };
+export type WebhookTags = { linkedin: string; patch: Record<string, unknown>; positive: boolean };
+
+export type WebhookActions = { campaignExternalId: string | null; events: ProviderEvent[]; tags?: WebhookTags };
 
 export type ConnectionCheck = { details: Record<string, unknown>; campaigns: number; senders?: ProviderSender[] };
 
@@ -241,8 +243,10 @@ export type CampaignProvider = {
   blockAddresses?(context: ProviderContext, addresses: string[]): Promise<void>;
   categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
   webhookEvents: string[];
-  registerWebhook(context: ProviderContext, campaignExternalId: string, url: string, event: string): Promise<string | null>;
-  findWebhooks?(context: ProviderContext, campaignExternalId: string, url: string, events: string[]): Promise<Record<string, string>>;
+  registerWebhook?(context: ProviderContext, campaignExternalId: string, url: string, event: string): Promise<string | null>;
+  connectionWebhookEvents?: string[];
+  findConnectionWebhooks?(context: ProviderContext, url: string): Promise<Record<string, string>>;
+  createConnectionWebhook?(context: ProviderContext, url: string, event: string): Promise<string | null>;
   webhookHint(payload: unknown, headers: Headers): WebhookHint | null;
   webhookActions?(payload: unknown): WebhookActions | null;
   pushBatch: number;
@@ -701,30 +705,58 @@ export const heyReachProvider: CampaignProvider = {
     return "stopped";
   },
   categoryKey: (campaignExternalId, lead, category) => heyReachCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.linkedin ?? "", category),
-  webhookEvents: HEYREACH_WEBHOOK_EVENTS,
-  async registerWebhook(context, campaignExternalId, url, event) {
-    const eventType = event || HEYREACH_REPLY_EVENT;
-    const id = await createHeyReachWebhook(context.key, campaignExternalId, url, { ...context, eventType });
-    if (id) return id;
-    try {
-      return matchingHeyReachWebhook(await listHeyReachWebhooks(context.key, url, context), campaignExternalId, url, eventType);
-    } catch {
-      return null;
-    }
-  },
-  async findWebhooks(context, campaignExternalId, url, events) {
+  webhookEvents: [],
+  connectionWebhookEvents: HEYREACH_WEBHOOK_EVENTS,
+  async findConnectionWebhooks(context, url) {
     const hooks = await listHeyReachWebhooks(context.key, url, context);
     const found: Record<string, string> = {};
-    for (const event of events) {
-      const id = matchingHeyReachWebhook(hooks, campaignExternalId, url, event);
+    for (const event of HEYREACH_WEBHOOK_EVENTS) {
+      const id = allCampaignsWebhook(hooks, url, event);
       if (id) found[event] = id;
     }
     return found;
   },
+  async createConnectionWebhook(context, url, event) {
+    const id = await createHeyReachWebhook(context.key, url, { ...context, eventType: event });
+    if (id) return id;
+    try {
+      return allCampaignsWebhook(await listHeyReachWebhooks(context.key, url, context), url, event);
+    } catch {
+      return null;
+    }
+  },
   webhookActions(payload) {
+    const tag = heyReachWebhookTag(payload);
+    if (tag) {
+      const linkedin = prospectLinkedin(tag.profileUrl);
+      if (!linkedin) return null;
+      const category = tag.autoTag === "positive" ? "Interested" : tag.autoTag === "negative" ? "Not interested" : null;
+      const patch: Record<string, unknown> = { ...(tag.tags ? { tags: tag.tags } : {}), ...(tag.autoTag ? { autoTag: tag.autoTag, autoTagAt: tag.at } : {}) };
+      return {
+        campaignExternalId: tag.campaignId,
+        tags: { linkedin, patch, positive: tag.autoTag === "positive" },
+        events: category
+          ? [
+              {
+                externalLeadId: null,
+                email: null,
+                linkedin,
+                lead: { linkedinUrl: tag.profileUrl },
+                kind: "category" as const,
+                step: null,
+                variant: null,
+                occurredAt: tag.at,
+                dedupeKey: `heyreach:${tag.campaignId}:${linkedin}:auto_tag:${tag.autoTag}`,
+                category,
+                payload: { autoTag: tag.autoTag, fromWebhook: true },
+              },
+            ]
+          : [],
+      };
+    }
     const action = heyReachWebhookAction(payload);
     const linkedin = action ? prospectLinkedin(action.profileUrl) : null;
-    if (!action || !action.campaignId || !linkedin) return null;
+    if (!action || !linkedin) return null;
     const counted = action.kind === "message_sent" || action.kind === "inmail_sent";
     return {
       campaignExternalId: action.campaignId,

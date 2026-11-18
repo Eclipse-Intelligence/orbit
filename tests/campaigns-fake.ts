@@ -198,6 +198,9 @@ export const HEYREACH_WEBHOOK_TYPES = [
   "VIEWED_PROFILE",
   "CAMPAIGN_COMPLETED",
   "LEAD_TAG_UPDATED",
+  "LEAD_AUTO_TAGGED_POSITIVE",
+  "LEAD_AUTO_TAGGED_NEGATIVE",
+  "LEAD_AUTO_TAGGED_GENERIC",
 ];
 
 function webhookErrors(body: Record<string, unknown> | null) {

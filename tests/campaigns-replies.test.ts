@@ -712,7 +712,12 @@ describe("campaign events and replies", () => {
         "select external_id, sync_state ? 'webhookFailedAt' as failed, sync_state ? 'webhookId' as hooked from crm.campaigns where workspace_id = $1 order by external_id",
         [owner.workspaceId],
       );
-      assert.deepEqual(state.map((row) => [row.external_id, row.failed, row.hooked]), [["801", true, false], ["901", false, true]]);
+      assert.deepEqual(state.map((row) => [row.external_id, row.failed, row.hooked]), [["801", true, false], ["901", false, false]]);
+      const linkedinHooks = await sql<{ events: number }>(
+        "select (select count(*)::int from jsonb_object_keys(details #> '{webhooks,events}')) as events from crm.campaign_connections where workspace_id = $1 and provider = 'heyreach'",
+        [owner.workspaceId],
+      );
+      assert.ok(linkedinHooks[0].events > 0, "HeyReach webhooks are kept on the connection, not the campaign");
       process.env.SITE_URL = ORIGIN;
       try {
         const views = await campaignConnectionViews(owner);

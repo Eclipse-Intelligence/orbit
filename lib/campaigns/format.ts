@@ -66,8 +66,7 @@ export const PROVIDER_STATS: Record<CampaignProviderId, { funnel: FunnelLabel[];
 };
 
 export function providerFigure(campaign: Pick<CampaignDetail, "provider" | "stats" | "leadFunnel">, key: StatKey): number | undefined {
-  if (campaign.provider === "heyreach" && (key === "contacted" || key === "accepted" || key === "replied")) return campaign.leadFunnel?.[key];
-  if (campaign.provider === "heyreach" && key === "interested") return undefined;
+  if (campaign.provider === "heyreach" && (key === "contacted" || key === "accepted" || key === "replied" || key === "interested")) return (campaign.leadFunnel as Partial<Record<StatKey, number>> | null)?.[key];
   return campaign.stats[key];
 }
 

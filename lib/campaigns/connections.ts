@@ -131,7 +131,8 @@ export async function campaignConnectionViews(actor: Actor): Promise<ConnectionV
     const result = await db.query<{ provider: CampaignProviderId; details: Record<string, unknown>; last_synced_at: Date | null; last_error: string | null; campaigns: number; webhook_failed: boolean }>(
       `select c.provider, c.details, c.last_synced_at, c.last_error,
               (select count(*)::int from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider) as campaigns,
-              exists (select 1 from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider and k.sync_state ? 'webhookFailedAt') as webhook_failed
+              (c.details #>> '{webhooks,failedAt}' is not null
+                or exists (select 1 from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider and k.sync_state ? 'webhookFailedAt')) as webhook_failed
        from crm.campaign_connections c
        where c.workspace_id = $1`,
       [actor.workspaceId],

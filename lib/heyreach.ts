@@ -748,11 +748,23 @@ export const HEYREACH_ACTION_EVENTS = {
 
 export type HeyReachActionEvent = keyof typeof HEYREACH_ACTION_EVENTS;
 
-export const HEYREACH_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS)];
+export const HEYREACH_TAG_EVENT = "LEAD_TAG_UPDATED";
 
-export function heyReachWebhookName(campaignId: string, eventType: string) {
+export type HeyReachAutoTag = "positive" | "negative" | "generic";
+
+export const HEYREACH_AUTO_TAG_EVENTS: Record<string, HeyReachAutoTag> = {
+  LEAD_AUTO_TAGGED_POSITIVE: "positive",
+  LEAD_AUTO_TAGGED_NEGATIVE: "negative",
+  LEAD_AUTO_TAGGED_GENERIC: "generic",
+};
+
+export const HEYREACH_POSITIVE_TAG_EVENT = "LEAD_AUTO_TAGGED_POSITIVE";
+
+export const HEYREACH_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS), HEYREACH_TAG_EVENT, ...Object.keys(HEYREACH_AUTO_TAG_EVENTS)];
+
+export function heyReachWebhookName(eventType: string) {
   const what = eventType === HEYREACH_REPLY_EVENT ? "replies" : eventType.toLowerCase().replace(/_/g, " ");
-  return `Orbit ${what} ${campaignId}`;
+  return `Orbit ${what}, all campaigns`;
 }
 
 export type HeyReachWebhook = { id: string; eventType: string; url: string; campaignIds: string[] | null; active: boolean };
@@ -774,20 +786,48 @@ export async function listHeyReachWebhooks(key: string, url: string, options: He
   });
 }
 
-export function matchingHeyReachWebhook(hooks: HeyReachWebhook[], campaignId: string, url: string, eventType: string) {
-  return hooks.find((hook) => hook.active && hook.url === url && hook.eventType === eventType && hook.campaignIds !== null && (hook.campaignIds.length === 0 || hook.campaignIds.includes(campaignId)))?.id ?? null;
+export function allCampaignsWebhook(hooks: HeyReachWebhook[], url: string, eventType: string) {
+  return hooks.find((hook) => hook.active && hook.url === url && hook.eventType === eventType && hook.campaignIds !== null && hook.campaignIds.length === 0)?.id ?? null;
 }
 
-export async function createHeyReachWebhook(key: string, campaignId: string, url: string, options: HeyReachOptions & { eventType?: string } = {}) {
+export async function createHeyReachWebhook(key: string, url: string, options: HeyReachOptions & { eventType?: string } = {}) {
   const eventType = options.eventType ?? HEYREACH_REPLY_EVENT;
   const body = record(
     await call(key, "/webhooks/CreateWebhook", {
       ...options,
       secrets: urlSecrets(url),
-      body: { webhookName: heyReachWebhookName(campaignId, eventType), webhookUrl: url, eventType, campaignIds: [campaignNumber(campaignId)] },
+      body: { webhookName: heyReachWebhookName(eventType), webhookUrl: url, eventType, campaignIds: [] },
     }),
   );
   return text(body.id) ?? text(record(body.data).id) ?? null;
+}
+
+function eventTypeOf(row: Json) {
+  return (text(row.event_type) ?? text(row.eventType) ?? text(row.type) ?? "").toUpperCase().replace(/[\s-]/g, "_");
+}
+
+function leadOf(row: Json) {
+  return record(row.lead ?? row.correspondent ?? row.correspondentProfile ?? row.leadProfile ?? row.lead_profile ?? row.profile);
+}
+
+function profileUrlOf(row: Json, lead: Json) {
+  return (
+    text(lead.profile_url) ??
+    text(lead.profileUrl) ??
+    text(lead.linkedin_url) ??
+    text(lead.linkedinUrl) ??
+    text(lead.linkedInUrl) ??
+    text(row.leadProfileUrl) ??
+    text(row.lead_profile_url) ??
+    text(row.profileUrl) ??
+    text(row.profile_url)
+  );
+}
+
+export function webhookCampaignId(payload: unknown) {
+  const row = record(payload);
+  const campaign = record(row.campaign);
+  return text(campaign.id) ?? text(campaign.campaignId) ?? text(row.campaignId) ?? text(row.campaign_id);
 }
 
 export type HeyReachWebhookAction = {
@@ -802,18 +842,20 @@ export type HeyReachWebhookAction = {
   at: string;
 };
 
+function eventTime(row: Json, now: Date) {
+  return time(row.timestamp) ?? time(row.event_time) ?? time(row.eventTime) ?? time(row.creation_time) ?? time(row.createdAt) ?? now.toISOString();
+}
+
 export function heyReachWebhookAction(payload: unknown, now = new Date()): HeyReachWebhookAction | null {
   const row = record(payload);
-  const type = (text(row.event_type) ?? text(row.eventType) ?? "").toUpperCase() as HeyReachActionEvent;
-  const kind = HEYREACH_ACTION_EVENTS[type];
+  const kind = HEYREACH_ACTION_EVENTS[eventTypeOf(row) as HeyReachActionEvent];
   if (!kind) return null;
-  const lead = record(row.lead ?? row.correspondent ?? row.correspondentProfile);
-  const profileUrl = text(lead.profile_url) ?? text(lead.profileUrl) ?? text(lead.linkedin_url) ?? text(row.leadProfileUrl);
+  const lead = leadOf(row);
+  const profileUrl = profileUrlOf(row, lead);
   if (!profileUrl) return null;
-  const campaign = record(row.campaign);
   const sender = record(row.sender ?? row.linkedInAccount ?? row.linkedin_account);
   return {
-    campaignId: text(campaign.id) ?? text(row.campaignId) ?? text(row.campaign_id),
+    campaignId: webhookCampaignId(row),
     kind,
     profileUrl,
     firstName: text(lead.first_name) ?? text(lead.firstName),
@@ -821,7 +863,41 @@ export function heyReachWebhookAction(payload: unknown, now = new Date()): HeyRe
     companyName: text(lead.company_name) ?? text(lead.companyName),
     title: text(lead.position) ?? text(lead.headline),
     accountId: text(sender.id) ?? text(row.linkedInAccountId) ?? text(row.sender_id),
-    at: time(row.timestamp) ?? time(row.event_time) ?? time(row.eventTime) ?? time(row.creation_time) ?? now.toISOString(),
+    at: eventTime(row, now),
+  };
+}
+
+export type HeyReachWebhookTag = {
+  campaignId: string | null;
+  profileUrl: string;
+  autoTag: HeyReachAutoTag | null;
+  tags: string[] | null;
+  at: string;
+};
+
+function tagNames(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  return value
+    .map((item) => (typeof item === "string" ? item.trim() : text(record(item).name) ?? text(record(item).tag) ?? text(record(item).displayName)))
+    .filter((item): item is string => Boolean(item))
+    .map((item) => item.slice(0, 100))
+    .slice(0, 50);
+}
+
+export function heyReachWebhookTag(payload: unknown, now = new Date()): HeyReachWebhookTag | null {
+  const row = record(payload);
+  const type = eventTypeOf(row);
+  const autoTag = HEYREACH_AUTO_TAG_EVENTS[type] ?? null;
+  if (!autoTag && type !== HEYREACH_TAG_EVENT) return null;
+  const lead = leadOf(row);
+  const profileUrl = profileUrlOf(row, lead);
+  if (!profileUrl) return null;
+  return {
+    campaignId: webhookCampaignId(row),
+    profileUrl,
+    autoTag,
+    tags: tagNames(row.tags) ?? tagNames(lead.tags) ?? tagNames(row.lead_tags) ?? tagNames(row.leadTags) ?? (text(row.tag) ? [text(row.tag)!] : null),
+    at: eventTime(row, now),
   };
 }
 
@@ -842,11 +918,10 @@ export function webhookShape(payload: unknown, prefix = "", depth = 0): string[]
 
 export function heyReachWebhookHint(payload: unknown) {
   const row = record(payload);
-  const lead = record(row.lead ?? row.correspondent ?? row.correspondentProfile);
-  const campaign = record(row.campaign);
-  const campaignId = text(campaign.id) ?? text(row.campaignId) ?? text(row.campaign_id);
+  const lead = leadOf(row);
+  const campaignId = webhookCampaignId(row);
   const leadId = text(lead.id) ?? text(row.leadId) ?? text(row.lead_id);
-  const profileUrl = text(lead.profile_url) ?? text(lead.profileUrl) ?? text(lead.linkedin_url) ?? text(row.leadProfileUrl);
+  const profileUrl = profileUrlOf(row, lead);
   if (!leadId && !profileUrl) return null;
   const messages = list(row.recent_messages ?? row.messages).map(record);
   const last = messages[messages.length - 1] ?? {};
