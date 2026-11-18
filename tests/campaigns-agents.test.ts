@@ -10,6 +10,7 @@ import { GET as listProspectsRoute, POST as addProspectsRoute } from "@/app/api/
 import { ALL_TOOLS_LOADED, companionTools } from "@/lib/assistant/chat";
 import { coldEmailGuide } from "@/lib/assistant/guides";
 import {
+  ASSISTANT_TOOLS,
   ORBIT_TOOL_LIMIT,
   REQUEST_TOOL_LIMIT,
   TOOL_DOMAIN_NAMES,
@@ -781,7 +782,7 @@ describe("campaigns for the assistant, MCP and the API", () => {
   describe("no request sends more than 128 tools", () => {
     const switches = [true, false].flatMap((multiWorkspace) => [true, false].flatMap((eclipse) => [true, false].map((linear) => ({ multiWorkspace, eclipse, linear }))));
 
-    it("keeps every request within the limit, whatever a chat loads and in whatever order", () => {
+    it("keeps every gateway and ChatGPT request within the limit, whatever a chat loads and in whatever order", () => {
       for (const options of switches) {
         const forward = toolDefinitions({ ...options, domains: TOOL_DOMAIN_NAMES });
         const backward = toolDefinitions({ ...options, domains: [...TOOL_DOMAIN_NAMES].reverse() });
@@ -790,62 +791,46 @@ describe("campaigns for the assistant, MCP and the API", () => {
           assert.ok(sent.length + 2 <= REQUEST_TOOL_LIMIT);
           assert.equal(new Set(sent.map((tool) => tool.function.name)).size, sent.length);
         }
-        for (const webSearch of [true, false]) {
-          const agent = companionTools(options, [], webSearch).tools;
-          assert.ok(agent.length + (webSearch ? 1 : 0) <= REQUEST_TOOL_LIMIT, `Orbit Agent sends ${agent.length} and WebSearch`);
-        }
       }
       assert.ok(toolDefinitions().length + 2 <= REQUEST_TOOL_LIMIT, "the probe adds its own tool and web_search");
     });
 
-    const loadCalls = (domains: readonly string[]) => [
-      { tool_calls: domains.map((domain, index) => ({ id: `load-${index}`, type: "function" as const, function: { name: "find_tools", arguments: JSON.stringify({ domains: [domain] }) } })) },
-    ];
+    it("sends Orbit Agent every tool the switches allow, with no find_tools, on every job", () => {
+      for (const options of switches) {
+        const names = companionTools(options).map((tool) => tool.name);
+        const allowed = assistantTools(options).map((tool) => tool.name).filter((name) => name !== "find_tools");
+        assert.deepEqual([...names].sort(), [...allowed, "continue_result"].sort(), JSON.stringify(options));
+        assert.ok(!names.includes("find_tools"));
+        for (const domain of toolDomainNames(options)) for (const name of domainTools(domain, options)) assert.ok(names.includes(name), `${name} ${JSON.stringify(options)}`);
+        for (const name of ["team_chat", "remember", "check_web", "social_lookup", "campaigns", "campaign_action"]) assert.ok(names.includes(name), name);
+        assert.equal(names.includes("move_records_to_workspace"), options.multiWorkspace);
+      }
+      const full = companionTools({ multiWorkspace: true, eclipse: true, linear: true }).map((tool) => tool.name);
+      assert.equal(full.length, ASSISTANT_TOOLS.length);
+      assert.match(ALL_TOOLS_LOADED, /every tool is already loaded/);
+    });
 
-    it("sends or lets the model load every area offered, on every path", () => {
+    it("sends or lets the model load every area offered in a gateway chat, whatever its history", () => {
       const histories = [[], TOOL_DOMAIN_NAMES, [...TOOL_DOMAIN_NAMES].reverse(), ["chat"], ["workspace", "chat"]] as (readonly ToolDomain[])[];
       for (const options of switches) {
-        const offered = toolDomainNames(options);
-        const loadable = (names: string[], enumOf: string[]) => (domain: ToolDomain) =>
-          domainTools(domain, options).every((name) => names.includes(name)) || (names.includes("find_tools") && enumOf.includes(domain));
         const findEnum = (tools: { name: string; parameters: unknown }[]) =>
           ((tools.find((tool) => tool.name === "find_tools")?.parameters as { properties?: { domains?: { items?: { enum?: string[] } } } } | undefined)?.properties?.domains?.items?.enum ?? []);
         for (const history of histories) {
           const chat = assistantTools({ ...options, domains: history, used: history });
-          const chatNames = chat.map((tool) => tool.name);
-          for (const domain of offered) assert.ok(loadable(chatNames, findEnum(chat))(domain), `chat ${JSON.stringify(options)} ${domain}`);
-          for (const webSearch of [true, false]) {
-            const agent = companionTools(options, loadCalls(history) as never, webSearch);
-            const names = agent.tools.map((tool) => tool.name);
-            assert.ok(names.length + (webSearch ? 1 : 0) <= REQUEST_TOOL_LIMIT, `${names.length} tools`);
-            for (const domain of offered) {
-              const sent = domainTools(domain, options).every((name) => names.includes(name));
-              assert.ok(sent || (names.includes("find_tools") && findEnum(agent.tools as never).includes(domain) && agent.line.includes(domain)), `Orbit Agent ${JSON.stringify(options)} web ${webSearch}: ${domain}`);
-            }
-            if (agent.left.length === 0) {
-              assert.ok(!names.includes("find_tools"));
-              assert.equal(agent.line, ALL_TOOLS_LOADED);
-            } else assert.match(agent.line, /call find_tools with it/);
+          const names = chat.map((tool) => tool.name);
+          for (const domain of toolDomainNames(options)) {
+            const sent = domainTools(domain, options).every((name) => names.includes(name));
+            assert.ok(sent || (names.includes("find_tools") && findEnum(chat).includes(domain)), `chat ${JSON.stringify(options)} ${domain}`);
           }
         }
       }
-      const full = { multiWorkspace: true, eclipse: true, linear: true };
-      assert.deepEqual(companionTools(full, [], false).left, []);
-      assert.deepEqual(companionTools(full, [], true).left, ["chat", "workspace"]);
     });
 
-    it("keeps check_web, social_lookup and remember when everything is loaded, in a chat and on Orbit Agent", () => {
+    it("keeps check_web, social_lookup and remember when a gateway chat has loaded everything", () => {
       for (const options of switches) {
         for (const order of [TOOL_DOMAIN_NAMES, [...TOOL_DOMAIN_NAMES].reverse()]) {
           const chat = toolDefinitions({ ...options, domains: order, used: order }).map((tool) => tool.function.name);
-          for (const webSearch of [true, false]) {
-            const agent = companionTools(options, loadCalls(order) as never, webSearch).tools.map((tool) => tool.name);
-            const untouched = companionTools(options, [], webSearch).tools.map((tool) => tool.name);
-            for (const names of [chat, agent, untouched]) {
-              assert.ok(names.includes("check_web") && names.includes("social_lookup"), JSON.stringify(options));
-              assert.ok(names.includes("remember"), `remember: ${JSON.stringify(options)}`);
-            }
-          }
+          for (const name of ["check_web", "social_lookup", "remember"]) assert.ok(chat.includes(name), `${name}: ${JSON.stringify(options)}`);
           assert.ok(chat.length <= ORBIT_TOOL_LIMIT);
         }
         const plain = toolDefinitions(options).map((tool) => tool.function.name);
@@ -853,7 +838,7 @@ describe("campaigns for the assistant, MCP and the API", () => {
       }
     });
 
-    it("drops the least recently used area in a chat, and the last unused one on Orbit Agent, never web or an area in use", async () => {
+    it("drops the least recently used area in a gateway chat, and the last unused one, never web, settings or an area in use", async () => {
       const full = { multiWorkspace: true, eclipse: true, linear: true };
       assert.deepEqual(TOOL_DOMAIN_NAMES.slice(-3), ["web", "settings", "workspace"]);
       const untouched = fittingDomains(TOOL_DOMAIN_NAMES, full, []);
@@ -863,8 +848,6 @@ describe("campaigns for the assistant, MCP and the API", () => {
       const usedSettings = fittingDomains(TOOL_DOMAIN_NAMES, full, ["settings"]);
       assert.ok(usedSettings.includes("settings") && usedSettings.includes("web"));
       assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !usedSettings.includes(domain)), ["chat", "workspace"]);
-      const agentNames = companionTools(full, loadCalls(["settings"]) as never).tools.map((tool) => tool.name);
-      assert.ok(agentNames.includes("remember") && agentNames.includes("check_web"));
 
       const webFirst = ["web", ...TOOL_DOMAIN_NAMES.filter((domain) => domain !== "web")] as typeof TOOL_DOMAIN_NAMES;
       const allUsed = fittingDomains(webFirst, full, webFirst);

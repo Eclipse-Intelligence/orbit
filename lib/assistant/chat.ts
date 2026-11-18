@@ -29,7 +29,6 @@ import {
   toolDescription,
   toolJson,
   toolLabel,
-  agentToolPlan,
   WORKSPACE_READ_TOOLS,
   hiddenToolRefusal,
   type ToolOptions,
@@ -104,10 +103,6 @@ export type AssistantAction = {
 };
 
 export const ALL_TOOLS_LOADED = "On Orbit Agent every tool is already loaded, so call any tool directly and never call find_tools.";
-
-export function someToolsLeftOut(areas: readonly string[]) {
-  return `On Orbit Agent every tool is loaded except the ${areas.join(" and ")} ${areas.length === 1 ? "area" : "areas"}, left out to stay within the tool limit. Call any other tool directly. If you need one of those, call find_tools with it: it loads from the user's next message, so ask them to say "carry on".`;
-}
 
 export type ConversationSummary = {
   id: string;
@@ -715,21 +710,16 @@ async function runTurns(actor: UserActor, conversation: ConversationRow, emit: E
   }
 }
 
-export function companionTools(options: ToolOptions, rows: Pick<MessageRow, "tool_calls">[], webSearch = true) {
-  const used = historyUse(rows);
-  const plan = agentToolPlan(options, used, webSearch);
-  const tools = [
-    ...assistantTools({ ...options, domains: plan.domains, used, limit: plan.limit })
-      .filter((tool) => plan.findTools || tool.name !== "find_tools")
-      .map((tool) => ({
-        name: tool.name,
-        description: toolDescription(tool),
-        parameters: tool.parameters,
-        write: Boolean(tool.write) && !tool.reads,
-      })),
+export function companionTools(options: ToolOptions) {
+  return [
+    ...assistantTools(options).filter((tool) => tool.name !== "find_tools").map((tool) => ({
+      name: tool.name,
+      description: toolDescription(tool),
+      parameters: tool.parameters,
+      write: Boolean(tool.write) && !tool.reads,
+    })),
     CONTINUE_RESULT_TOOL,
   ];
-  return { tools, left: plan.left, line: plan.left.length > 0 ? someToolsLeftOut(plan.left) : ALL_TOOLS_LOADED };
 }
 
 type Refusal = { error: string; field: string | null };
@@ -1049,14 +1039,13 @@ async function runCompanionTurn(
   const folded = new Set(rows.filter((row) => row.steering === "folded").map((row) => row.id));
   const prompt = await promptFor(actor, conversation, { headless: Boolean(headless), fetchImpl });
   const transcript = buildPrompt(history(rows, HISTORY_BUDGET, await savedContext(actor, conversation, rows, prompt)), trailingSteers(rows));
-  const agentTools = companionTools(prompt.tools, rows, conversation.web_search);
   const jobId = await enqueueCompanionJob(actor, conversation.id, {
     model: apiModel,
     effort: conversation.reasoning as Effort,
     webSearch: conversation.web_search,
-    system: `${prompt.system}\n\n${agentTools.line}`,
+    system: `${prompt.system}\n\n${ALL_TOOLS_LOADED}`,
     prompt: transcript,
-    tools: agentTools.tools,
+    tools: companionTools(prompt.tools),
   }, { agentMailId: headless?.agentMailId ?? null, switches: { multiWorkspace: prompt.tools.multiWorkspace === true, eclipse: prompt.tools.eclipse === true, linear: prompt.tools.linear === true } });
   if (headless) {
     headless.queued?.({ jobId, online });
