@@ -687,7 +687,7 @@ begin
           else interval '6 hours'
         end
       end,
-      claimed_by = case when p.fill_attempts + 1 >= p_most then null else p.claimed_by end
+      claimed_by = null
   where p.id = p_prospect and p.workspace_id = p_workspace and p.claimed_by = p_holder
     and p.state in ('queued', 'filling', 'pushing')
   returning p.state into v_state;

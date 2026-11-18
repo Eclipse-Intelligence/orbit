@@ -748,6 +748,26 @@ describe("adding prospects", () => {
     assert.equal((await row(kai.prospectId)).state, "pushed");
   });
 
+  it("keeps a counted row's backoff when the same job later releases everything", async () => {
+    await contact(owner, "max", { firstName: "Max", lastName: "Hart", email: "max@hart.test" });
+    const max = (await addProspects(owner, emailCampaign, [people.max.id], { operation: "test" })).prospects[0];
+    const holder = "fill:backoff-test";
+    await sql("update crm.campaign_prospects set state = 'filling', claimed_at = now(), claimed_by = $2 where id = $1", [max.prospectId, holder]);
+    await sql("select private.campaign_fill_retry($1, $2, $3, 'Down', 5)", [owner.workspaceId, max.prospectId, holder]);
+    const before = await sql<{ claimed_at: Date; claimed_by: string | null }>("select claimed_at, claimed_by from crm.campaign_prospects where id = $1", [max.prospectId]);
+    assert.equal(before[0].claimed_by, null, "a counted row belongs to no job while it waits");
+    await sql("select private.campaign_fill_end($1, $2, $3, null, null)", [owner.workspaceId, max.prospectId, holder]);
+    await sql("select private.campaign_push_undo($1, $2::uuid[], $3)", [owner.workspaceId, [max.prospectId], holder]);
+    const after = await sql<{ claimed_at: Date; fill_attempts: number }>("select claimed_at, fill_attempts from crm.campaign_prospects where id = $1", [max.prospectId]);
+    assert.equal(after[0].claimed_at.getTime(), before[0].claimed_at.getTime(), "the blanket release leaves the backoff alone");
+    assert.equal(after[0].fill_attempts, 1);
+    const claimable = await sql<{ ok: boolean }>("select private.campaign_fill_claimable(p) as ok from crm.campaign_prospects p where p.id = $1", [max.prospectId]);
+    assert.equal(claimable[0].ok, false, "nobody takes it before the backoff ends");
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [max.prospectId]);
+    await drainFills();
+    assert.equal((await row(max.prospectId)).state, "pushed");
+  });
+
   it("gives up after five failed attempts, and a re-add starts the count again", async () => {
     await contact(owner, "ivo", { firstName: "Ivo", lastName: "Kent", email: "ivo@kent.test" });
     const ivo = (await addProspects(owner, emailCampaign, [people.ivo.id], { operation: "test" })).prospects[0];

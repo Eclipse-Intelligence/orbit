@@ -578,8 +578,13 @@ async function runGroup(rows: BatchRow[], holder: string, options: { fetchImpl?:
       return [];
     }
     if (!lasting) {
-      for (const id of ids) await countedRelease(first.workspace_id, holder, id, failureText(error));
-      throw error;
+      console.error("Couldn't start a campaign fill", redactedError(error));
+      const outcomes: ProspectOutcome[] = [];
+      for (const id of ids) {
+        const state = await countedRelease(first.workspace_id, holder, id, failureText(error));
+        outcomes.push({ prospectId: id, state: state === "failed" ? "failed" : "filling", reason: state === "failed" ? failureText(error) : null });
+      }
+      return outcomes;
     }
     for (const id of ids) await finish(first.workspace_id, holder, id, "failed", lasting);
     return ids.map((id): ProspectOutcome => ({ prospectId: id, state: "failed", reason: lasting }));
