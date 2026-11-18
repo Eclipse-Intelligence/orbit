@@ -198,14 +198,15 @@ export const HEYREACH_WEBHOOK_TYPES = [
   "VIEWED_PROFILE",
   "CAMPAIGN_COMPLETED",
   "LEAD_TAG_UPDATED",
-  "LEAD_AUTO_TAGGED_POSITIVE",
-  "LEAD_AUTO_TAGGED_NEGATIVE",
+  "LEAD_AUTO_TAGGED_INTERESTED",
+  "LEAD_AUTO_TAGGED_NOT_INTERESTED",
   "LEAD_AUTO_TAGGED_GENERIC",
 ];
 
 function webhookErrors(body: Record<string, unknown> | null) {
   const errors: Record<string, string[]> = {};
   if (typeof body?.webhookName !== "string" || !body.webhookName) errors.webhookName = ["The webhookName field is required."];
+  else if (body.webhookName.length > 25) errors.WebhookName = ["The field WebhookName must be a string or array type with a maximum length of '25'."];
   if (typeof body?.webhookUrl !== "string" || !body.webhookUrl) errors.webhookUrl = ["The webhookUrl field is required."];
   if (!HEYREACH_WEBHOOK_TYPES.includes(String(body?.eventType))) errors["$.eventType"] = ["The JSON value could not be converted to WebhookEventType."];
   if (!Array.isArray(body?.campaignIds) || !(body.campaignIds as unknown[]).every((id) => typeof id === "number")) errors["$.campaignIds"] = ["The JSON value could not be converted to System.Int64[]."];
@@ -296,7 +297,7 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
       const hooks = (account.webhooks ??= []);
       const hook = { id: 55 + hooks.length, webhookName: String(body!.webhookName), webhookUrl: String(body!.webhookUrl), eventType: String(body!.eventType), campaignIds: body!.campaignIds as number[], isActive: true };
       hooks.push(hook);
-      return json(hook);
+      return json({ webhookId: hook.id });
     }
     if (path === "/webhooks/GetAllWebhooks") {
       return json(page(account.webhooks ?? [], body));

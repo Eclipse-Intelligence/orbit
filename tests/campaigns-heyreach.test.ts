@@ -427,11 +427,11 @@ describe("campaigns through HeyReach", () => {
     it("reads auto-tags and tag changes into categories and tags", () => {
       const provider = campaignProvider("heyreach")!;
       const lead = { profile_url: "https://www.linkedin.com/in/jane-doe" };
-      const positive = provider.webhookActions!({ event_type: "LEAD_AUTO_TAGGED_POSITIVE", campaign: { id: 9001 }, lead, timestamp: "2026-11-18T10:00:00Z" })!;
+      const positive = provider.webhookActions!({ event_type: "LEAD_AUTO_TAGGED_INTERESTED", campaign: { id: 9001 }, lead, timestamp: "2026-11-18T10:00:00Z" })!;
       assert.equal(positive.campaignExternalId, "9001");
       assert.deepEqual(positive.events.map((event) => [event.kind, event.category, event.dedupeKey]), [["category", "Interested", "heyreach:9001:linkedin.com/in/jane-doe:auto_tag:positive"]]);
       assert.deepEqual(positive.tags, { linkedin: "linkedin.com/in/jane-doe", patch: { autoTag: "positive", autoTagAt: "2026-11-18T10:00:00.000Z" }, positive: true });
-      const negative = provider.webhookActions!({ eventType: "LEAD_AUTO_TAGGED_NEGATIVE", campaignId: 9001, correspondentProfile: { profileUrl: "https://www.linkedin.com/in/jane-doe" } })!;
+      const negative = provider.webhookActions!({ eventType: "LEAD_AUTO_TAGGED_NOT_INTERESTED", campaignId: 9001, correspondentProfile: { profileUrl: "https://www.linkedin.com/in/jane-doe" } })!;
       assert.deepEqual(negative.events.map((event) => event.category), ["Not interested"]);
       const generic = provider.webhookActions!({ event_type: "LEAD_AUTO_TAGGED_GENERIC", campaign_id: 9001, lead, tags: ["Question"] })!;
       assert.deepEqual([generic.events, generic.tags?.patch.tags, generic.tags?.positive], [[], ["Question"], false]);
