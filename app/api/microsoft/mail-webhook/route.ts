@@ -5,7 +5,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { classifyCapture } from "@/lib/mail/capture-filter";
 import { prepareMail } from "@/lib/mail/prepare";
-import { syncMail } from "@/lib/mail/sync";
+import { syncNotifiedMailboxes } from "@/lib/mail/sync";
 import { runWorkflowTick } from "@/lib/workflows/engine";
 
 export const dynamic = "force-dynamic";
@@ -16,10 +16,7 @@ type Notice = { subscriptionId?: unknown; clientState?: unknown };
 type Target = { actor: UserActor; sourceIds: string[] };
 
 const BUDGET_MS = 55_000;
-const SYNC_MS = 15_000;
 const SHORTEST_SYNC_MS = 3_000;
-const RETRIES = 3;
-const RETRY_MS = 4_000;
 
 function left(deadline: number) {
   return deadline - Date.now();
@@ -44,19 +41,8 @@ async function targetsFor(pairs: [string, string][]) {
 }
 
 async function syncTarget({ actor, sourceIds }: Target, deadline: number) {
-  let pending = sourceIds;
-  let stored = 0;
-  let workflowEvents = 0;
-  for (let attempt = 0; pending.length > 0 && attempt < RETRIES; attempt += 1) {
-    if (attempt > 0) {
-      if (left(deadline) < RETRY_MS + SHORTEST_SYNC_MS) break;
-      await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
-    }
-    const report = await syncMail(actor, { deadline: Math.min(deadline, Date.now() + SYNC_MS), backfill: false, sourceIds: pending });
-    stored += report.stored;
-    workflowEvents += report.workflowEvents;
-    pending = pending.filter((id) => report.busy.includes(id));
-  }
+  const { stored, workflowEvents, unreached } = await syncNotifiedMailboxes(actor, sourceIds, { deadline });
+  if (unreached.length > 0) console.error("Mail webhook couldn't reach every mailbox", unreached.length);
   if (workflowEvents > 0 && left(deadline) > SHORTEST_SYNC_MS) {
     await runWorkflowTick({ budgetMs: Math.min(15_000, left(deadline)) }).catch((error) => console.error("Workflow tick failed", error));
   }

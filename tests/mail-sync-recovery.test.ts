@@ -3,8 +3,8 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { fetchMicrosoftDelta, GraphMailError, GraphOutOfTime, retryWaitMs, updateMicrosoftMessage } from "@/lib/mail/microsoft";
-import { folderRetryAt, syncMail } from "@/lib/mail/sync";
+import { fetchMicrosoftDelta, GraphMailError, GraphOutOfTime, lookupPurged, retryWaitMs, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import { folderRetryAt, screenSyncOptions, syncMail, syncNotifiedMailboxes } from "@/lib/mail/sync";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -195,12 +195,156 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
     assert.deepEqual(await folder("f-archive"), { sync_link: delta("f-archive", "quiet"), failures: 0, retry_at: null, last_error: null });
   });
 
-  it("waits longer after each failure, up to half an hour", () => {
+  it("waits longer after each failure, up to half an hour, and never more than two minutes for the inbox, sent, drafts or Snoozed", () => {
     const now = 1_000_000;
-    assert.equal(folderRetryAt(1, now), null);
-    assert.equal(folderRetryAt(2, now)?.getTime(), now + 60_000);
-    assert.equal(folderRetryAt(3, now)?.getTime(), now + 120_000);
-    assert.equal(folderRetryAt(20, now)?.getTime(), now + 30 * 60_000);
+    assert.equal(folderRetryAt(1, "archive", now), null);
+    assert.equal(folderRetryAt(2, "archive", now)?.getTime(), now + 60_000);
+    assert.equal(folderRetryAt(3, "archive", now)?.getTime(), now + 120_000);
+    assert.equal(folderRetryAt(20, "other", now)?.getTime(), now + 30 * 60_000);
+    for (const role of ["inbox", "sent", "drafts", "snoozed"] as const) {
+      assert.equal(folderRetryAt(1, role, now), null, role);
+      assert.equal(folderRetryAt(2, role, now)?.getTime(), now + 60_000, role);
+      assert.equal(folderRetryAt(20, role, now)?.getTime(), now + 2 * 60_000, role);
+    }
+  });
+
+  it("counts a refused lookup as purged only for a 404, or ErrorAccessDenied while the mailbox has mail access", () => {
+    const graphError = (status: number, code: string) => new GraphMailError("x", status, code);
+    const cases: [string, unknown, boolean | null, boolean][] = [
+      ["404", graphError(404, "ErrorItemNotFound"), null, true],
+      ["404 without mail access", graphError(404, "ErrorItemNotFound"), false, true],
+      ["ErrorAccessDenied with mail access", graphError(403, "ErrorAccessDenied Access is denied."), true, true],
+      ["ErrorAccessDenied with unknown scopes", graphError(403, "ErrorAccessDenied Access is denied."), null, true],
+      ["ErrorAccessDenied without mail access", graphError(403, "ErrorAccessDenied Access is denied."), false, false],
+      ["another 403 code", graphError(403, "ErrorQuotaExceeded"), true, false],
+      ["a 403 with no code", graphError(403, ""), true, false],
+      ["an auth 403", graphError(403, "Authorization_RequestDenied Insufficient privileges."), true, false],
+      ["a consent 403", graphError(403, "consent_required"), true, false],
+      ["401", graphError(401, "InvalidAuthenticationToken"), true, false],
+      ["429", new GraphMailError("x", 429, "TooManyRequests", 1_000), true, false],
+      ["500", graphError(500, "ErrorInternalServerError"), true, false],
+      ["502", graphError(502, ""), true, false],
+      ["503", graphError(503, "ServiceUnavailable"), true, false],
+      ["504", graphError(504, ""), true, false],
+      ["a network error", new TypeError("fetch failed"), true, false],
+    ];
+    for (const [name, error, mailScope, purged] of cases) assert.equal(lookupPurged(error, mailScope), purged, name);
+  });
+
+  it("keeps the email and the folder's place when the lookup is refused because the mailbox lacks mail access", async () => {
+    const admin = getAdminPool();
+    const mailbox = (await admin.query<{ connection_id: string; workspace_id: string; user_id: string }>("select connection_id, workspace_id, user_id from crm.mail_sources")).rows[0];
+    const scoped = await admin.query("update crm.integration_state set granted_scopes = 'Mail.Read offline_access' where connection_id = $1 and source = 'calendar'", [mailbox.connection_id]);
+    if (!scoped.rowCount) {
+      await admin.query(
+        "insert into crm.integration_state (workspace_id, source, connection_id, user_id, granted_scopes) values ($1, 'calendar', $2, $3, 'Mail.Read offline_access')",
+        [mailbox.workspace_id, mailbox.connection_id, mailbox.user_id],
+      );
+    }
+    try {
+      await admin.query("update crm.mail_folders set sync_link = $1 where provider_folder_id = 'f-junk'", [delta("f-junk", "s1")]);
+      await admin.query("insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id) select workspace_id, user_id, source_id, id, 's-1' from crm.mail_folders where provider_folder_id = 'f-junk'");
+      const box = outlook((url) => {
+        if (url === delta("f-junk", "s1")) return Response.json({ value: [{ id: "s-1", "@removed": { reason: "deleted" } }], "@odata.deltaLink": delta("f-junk", "s2") });
+        if (url.includes("/me/messages/s-1?")) return denied();
+        return undefined;
+      });
+      const report = await syncMail(owner, { budgetMs: 30_000, backfill: false, fetchImpl: box.fetchImpl });
+      assert.deepEqual(report.reconnect, ["Reconnect mark@eclipse.test in Settings › Email and allow every permission."]);
+      assert.equal(await stored("s-1"), 1);
+      assert.equal((await folder("f-junk")).sync_link, delta("f-junk", "s1"));
+    } finally {
+      await admin.query("update crm.integration_state set granted_scopes = null where connection_id = $1", [mailbox.connection_id]);
+    }
+  });
+
+  it("keeps the email and the folder's place when a lookup fails for any other reason, and backs the folder off", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.mail_folders set sync_link = $1 where provider_folder_id = 'f-junk'", [delta("f-junk", "u1")]);
+    await admin.query("insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id) select workspace_id, user_id, source_id, id, 'u-1' from crm.mail_folders where provider_folder_id = 'f-junk'");
+    const box = outlook((url) => {
+      if (url === delta("f-junk", "u1")) return Response.json({ value: [{ id: "u-1", "@removed": { reason: "deleted" } }], "@odata.deltaLink": delta("f-junk", "u2") });
+      if (url.includes("/me/messages/u-1?")) return Response.json({ error: { code: "ErrorQuotaExceeded", message: "Over quota." } }, { status: 403 });
+      return undefined;
+    });
+    const report = await syncMail(owner, { budgetMs: 30_000, backfill: false, fetchImpl: box.fetchImpl });
+    assert.deepEqual(report.reconnect, []);
+    assert.equal(report.errors.length, 1);
+    assert.equal(await stored("u-1"), 1);
+    const junk = await folder("f-junk");
+    assert.equal(junk.sync_link, delta("f-junk", "u1"));
+    assert.equal(junk.failures, 1);
+  });
+
+  it("syncs a backed-off inbox for a webhook or a manual Refresh, and not for anything else", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.mail_folders set failures = 5, retry_at = now() + interval '2 minutes' where provider_folder_id = 'f-inbox'");
+    const regular = outlook();
+    await syncMail(owner, { budgetMs: 30_000, backfill: false, fetchImpl: regular.fetchImpl });
+    assert.equal(regular.deltaCalls("f-inbox").length, 0);
+
+    assert.equal(screenSyncOptions({ manual: true }).ignoreFolderWaits, true);
+    assert.equal(screenSyncOptions({}).ignoreFolderWaits, false);
+    assert.equal(screenSyncOptions(null).ignoreFolderWaits, false);
+    const refresh = outlook();
+    await syncMail(owner, { ...screenSyncOptions({ manual: true }), fetchImpl: refresh.fetchImpl });
+    assert.equal(refresh.deltaCalls("f-inbox").length, 1);
+
+    await admin.query("update crm.mail_folders set failures = 5, retry_at = now() + interval '2 minutes' where provider_folder_id = 'f-inbox'");
+    const notified = outlook((url) => (url === delta("f-inbox", "quiet") ? Response.json({ value: [message("webhook-1")], "@odata.deltaLink": delta("f-inbox", "quiet") }) : undefined));
+    const result = await syncNotifiedMailboxes(owner, [(await source()).id], { deadline: Date.now() + 30_000, fetchImpl: notified.fetchImpl });
+    assert.equal(notified.deltaCalls("f-inbox").length, 1);
+    assert.equal(result.stored, 1);
+    assert.equal(await stored("webhook-1"), 1);
+  });
+
+  it("tries a webhook's mailbox again while another sync holds it, and stops for one waiting out throttling", async () => {
+    const admin = getAdminPool();
+    const id = (await source()).id;
+    await admin.query("update crm.mail_sources set locked_until = now() + interval '5 minutes'");
+    const held = outlook();
+    const release = setTimeout(() => void admin.query("update crm.mail_sources set locked_until = null"), 50);
+    const reached = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() + 30_000, fetchImpl: held.fetchImpl, retryMs: 300 });
+    clearTimeout(release);
+    assert.deepEqual(reached.unreached, []);
+    assert.equal(held.deltaCalls("f-inbox").length, 1, "synced once the lock was free");
+
+    await admin.query("update crm.mail_sources set locked_until = null, retry_at = now() + interval '5 minutes'");
+    const throttled = outlook();
+    const started = Date.now();
+    const waiting = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() + 30_000, fetchImpl: throttled.fetchImpl, retryMs: 2_000 });
+    assert.deepEqual(waiting.unreached, []);
+    assert.equal(throttled.calls.length, 0);
+    assert.ok(Date.now() - started < 1_500, "no retry for a mailbox that is deliberately waiting");
+    await admin.query("update crm.mail_sources set retry_at = null");
+  });
+
+  it("keeps a mailbox it never reached pending instead of dropping it", async () => {
+    const id = (await source()).id;
+    const box = outlook();
+    const result = await syncNotifiedMailboxes(owner, [id], { deadline: Date.now() - 1, fetchImpl: box.fetchImpl, retryMs: 10 });
+    assert.deepEqual(result.unreached, [id]);
+    assert.equal(box.calls.length, 0);
+  });
+
+  it("never retries a read that timed out, but retries a quick network failure", async () => {
+    let timeouts = 0;
+    const hanging: typeof fetch = async () => {
+      timeouts += 1;
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    };
+    await assert.rejects(fetchMicrosoftDelta(delta("f-inbox", "x"), "access", hanging), (error) => error instanceof Error && error.name === "TimeoutError");
+    assert.equal(timeouts, 1);
+
+    let drops = 0;
+    const flaky: typeof fetch = async () => {
+      drops += 1;
+      if (drops === 1) throw new TypeError("fetch failed");
+      return Response.json({ value: [], "@odata.deltaLink": delta("f-inbox", "y") });
+    };
+    const page = await fetchMicrosoftDelta(delta("f-inbox", "x"), "access", flaky);
+    assert.equal(drops, 2);
+    assert.equal(page.deltaLink, delta("f-inbox", "y"));
   });
 
   it("stops the mailbox, not just the folder, when the connection is rejected", async () => {
@@ -314,6 +458,8 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
     assert.equal(box.calls.length, 0);
     const one = await syncMail(owner, { budgetMs: 30_000, backfill: false, fetchImpl: box.fetchImpl, sourceIds: [(await source()).id] });
     assert.equal(one.sources, 1);
+    assert.deepEqual(one.synced, [(await source()).id]);
+    assert.deepEqual(none.synced, []);
   });
 
   it("gets to the folders it reached least recently first, after the inbox, sent and drafts", async () => {

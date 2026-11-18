@@ -37,6 +37,7 @@ const FOLDER_REFRESH_MS = 6 * 60 * 60 * 1000;
 const FOLDER_LIST_RETRY_MS = 15 * 60 * 1000;
 const FOLDER_RETRY_FIRST_MS = 60 * 1000;
 const FOLDER_RETRY_MAX_MS = 30 * 60 * 1000;
+const PRIORITY_RETRY_MAX_MS = 2 * 60 * 1000;
 const THROTTLE_MIN_MS = 30 * 1000;
 const THROTTLE_DEFAULT_MS = 60 * 1000;
 const THROTTLE_MAX_MS = 15 * 60 * 1000;
@@ -74,7 +75,7 @@ type FolderRow = {
 
 type Source = SourceRow & { tokens: StoredTokens };
 
-type Places = { folders: Map<string, string>; refreshed: boolean };
+type Places = { folders: Map<string, string>; refreshed: boolean; mailScope: boolean | null };
 
 type Removals = { deleted: string[]; moved: { id: string; folder_id: string }[] };
 
@@ -93,6 +94,7 @@ export type MailSyncReport = {
   workflowEvents: number;
   busy: string[];
   waiting: string[];
+  synced: string[];
 };
 
 function mailStorageLimitBytes() {
@@ -460,7 +462,7 @@ async function placeRemoved(
   for (let index = 0; index < held.length; index += LOOKUP_BATCH) {
     if (Date.now() >= deadline) return null;
     const batch = held.slice(index, index + LOOKUP_BATCH);
-    const found = await Promise.all(batch.map((id) => fetchMicrosoftMessageFolder(token, id, fetchImpl, { deadline })));
+    const found = await Promise.all(batch.map((id) => fetchMicrosoftMessageFolder(token, id, fetchImpl, { deadline, mailScope: places.mailScope })));
     batch.forEach((id, position) => parents.set(id, found[position]));
   }
   const unknown = [...parents.values()].some((parent) => parent && !places.folders.has(parent));
@@ -640,9 +642,10 @@ async function stopsSource(actor: UserActor, source: Source, error: unknown) {
   return (await sourceProblem(actor, source, error)) !== null;
 }
 
-export function folderRetryAt(failures: number, now = Date.now()) {
+export function folderRetryAt(failures: number, role: MailRole, now = Date.now()) {
   if (failures < 2) return null;
-  return new Date(now + Math.min(FOLDER_RETRY_MAX_MS, FOLDER_RETRY_FIRST_MS * 2 ** (failures - 2)));
+  const longest = PRIORITY_ROLES.includes(role) ? PRIORITY_RETRY_MAX_MS : FOLDER_RETRY_MAX_MS;
+  return new Date(now + Math.min(longest, FOLDER_RETRY_FIRST_MS * 2 ** (failures - 2)));
 }
 
 async function folderFailed(actor: UserActor, source: Source, folder: FolderRow, error: unknown, report: MailSyncReport) {
@@ -658,7 +661,7 @@ async function folderFailed(actor: UserActor, source: Source, folder: FolderRow,
   );
   report.errors.push(`${source.email}: ${message}`);
   await withActor(actor, (db) =>
-    db.query("update crm.mail_folders set failures = $2, retry_at = $3, last_error = $4 where id = $1", [folder.id, failures, folderRetryAt(failures), message]),
+    db.query("update crm.mail_folders set failures = $2, retry_at = $3, last_error = $4 where id = $1", [folder.id, failures, folderRetryAt(failures, folder.role), message]),
   ).catch((failure) => console.error("Couldn't record a mail folder failure", failure instanceof Error ? failure.message : failure));
 }
 
@@ -735,7 +738,7 @@ async function claimArrivals(actor: UserActor) {
 
 export async function syncMail(
   actor: UserActor,
-  options: { deadline?: number; budgetMs?: number; fetchImpl?: typeof fetch; backfill?: boolean; push?: PushSender; sourceIds?: string[] },
+  options: { deadline?: number; budgetMs?: number; fetchImpl?: typeof fetch; backfill?: boolean; push?: PushSender; sourceIds?: string[]; ignoreFolderWaits?: boolean },
 ): Promise<MailSyncReport> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
@@ -753,6 +756,7 @@ export async function syncMail(
     workflowEvents: 0,
     filed: 0,
     busy: [],
+    synced: [],
     waiting: [],
   };
   const sources = (await loadSources(actor)).filter((source) => !options.sourceIds || options.sourceIds.includes(source.id));
@@ -783,6 +787,7 @@ export async function syncMail(
       continue;
     }
     report.sources += 1;
+    report.synced.push(source.id);
     let lastError: string | null = null;
     let retryAt: Date | null = null;
     try {
@@ -805,9 +810,10 @@ export async function syncMail(
       const places: Places = {
         folders: new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id])),
         refreshed,
+        mailScope: grantsMailWrite((await withActor(actor, (db) => readReconnectSource(db, actor, source.id)).catch(() => null))?.scopes),
       };
       const shares = await ownsShares(actor);
-      const ready = (folder: FolderRow) => !waitingUntil(folder.retry_at);
+      const ready = (folder: FolderRow) => options.ignoreFolderWaits === true || !waitingUntil(folder.retry_at);
       for (const folder of live.filter(ready)) {
         if (Date.now() >= sourceDeadline) break;
         await runFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false, places, shares }, report);
@@ -860,4 +866,42 @@ export async function syncMail(
     });
   }
   return report;
+}
+
+const NOTIFIED_SYNC_MS = 15_000;
+const NOTIFIED_ATTEMPTS = 3;
+const NOTIFIED_RETRY_MS = 4_000;
+const SHORTEST_NOTIFIED_SYNC_MS = 3_000;
+
+export async function syncNotifiedMailboxes(
+  actor: UserActor,
+  sourceIds: string[],
+  options: { deadline: number; fetchImpl?: typeof fetch; retryMs?: number },
+) {
+  const retryMs = options.retryMs ?? NOTIFIED_RETRY_MS;
+  let pending = [...new Set(sourceIds)];
+  let stored = 0;
+  let workflowEvents = 0;
+  for (let attempt = 0; pending.length > 0 && attempt < NOTIFIED_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      if (options.deadline - Date.now() < retryMs + SHORTEST_NOTIFIED_SYNC_MS) break;
+      await new Promise((resolve) => setTimeout(resolve, retryMs));
+    }
+    const report = await syncMail(actor, {
+      deadline: Math.min(options.deadline, Date.now() + NOTIFIED_SYNC_MS),
+      backfill: false,
+      sourceIds: pending,
+      ignoreFolderWaits: true,
+      fetchImpl: options.fetchImpl,
+    });
+    stored += report.stored;
+    workflowEvents += report.workflowEvents;
+    pending = pending.filter((id) => !report.synced.includes(id) && !report.waiting.includes(id));
+  }
+  return { stored, workflowEvents, unreached: pending };
+}
+
+export function screenSyncOptions(body: unknown) {
+  const manual = typeof body === "object" && body !== null && (body as { manual?: unknown }).manual === true;
+  return { budgetMs: 8_000, backfill: false, ignoreFolderWaits: manual };
 }

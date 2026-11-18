@@ -200,9 +200,10 @@ async function graphJson<T>(
         signal: AbortSignal.timeout(timeout),
       });
     } catch (error) {
-      if (error instanceof Error && error.name === "TimeoutError" && timeout < CALL_TIMEOUT_MS) throw new GraphOutOfTime();
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      if (timedOut && timeout < CALL_TIMEOUT_MS) throw new GraphOutOfTime();
       const wait = 1000 * 2 ** attempt;
-      if (write || attempt >= GRAPH_RETRIES || !fitsBefore(limit.deadline, wait)) throw error;
+      if (timedOut || write || attempt >= GRAPH_RETRIES || !fitsBefore(limit.deadline, wait)) throw error;
       await new Promise((resolve) => setTimeout(resolve, wait));
       continue;
     }
@@ -380,13 +381,18 @@ export async function fetchMicrosoftDelta(url: string, token: string, fetchImpl:
   };
 }
 
-export function outOfReach(error: unknown) {
+export function lookupPurged(error: unknown, mailScope: boolean | null) {
   if (!(error instanceof GraphMailError)) return false;
   if (error.status === 404) return true;
-  return error.status === 403 && !ADMIN_CONSENT.test(error.code) && !AUTH_DENIED.test(error.code);
+  return error.status === 403 && /^ErrorAccessDenied\b/.test(error.code) && mailScope !== false;
 }
 
-export async function fetchMicrosoftMessageFolder(token: string, messageId: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}) {
+export async function fetchMicrosoftMessageFolder(
+  token: string,
+  messageId: string,
+  fetchImpl: typeof fetch = fetch,
+  limit: GraphLimit & { mailScope?: boolean | null } = {},
+) {
   try {
     const found = await graphJson<{ parentFolderId?: string | null }>(
       `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=id,parentFolderId`,
@@ -398,7 +404,7 @@ export async function fetchMicrosoftMessageFolder(token: string, messageId: stri
     );
     return typeof found.parentFolderId === "string" && found.parentFolderId ? found.parentFolderId : null;
   } catch (error) {
-    if (outOfReach(error)) return null;
+    if (lookupPurged(error, limit.mailScope ?? null)) return null;
     throw error;
   }
 }

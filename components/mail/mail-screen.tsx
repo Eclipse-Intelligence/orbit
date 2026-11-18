@@ -466,7 +466,7 @@ export default function MailScreen({
       });
   }
 
-  function refresh(sync: boolean, poll = false) {
+  function refresh(sync: boolean, poll = false, manual = false) {
     const target = latest.current.query;
     const token = request.current;
     loadShared();
@@ -474,7 +474,7 @@ export default function MailScreen({
       setSyncing(true);
       let failures: string[] = [];
       return (sync
-        ? syncNow().then(
+        ? syncNow(manual).then(
             (result) => {
               failures = flagSyncProblems(result.problems ?? [], navAccounts.current);
             },
@@ -494,7 +494,7 @@ export default function MailScreen({
     setSyncing(true);
     let problems: string[] = [];
     return (sync
-      ? syncNow().then(
+      ? syncNow(manual).then(
           (result) => {
             problems = flagSyncProblems(result.problems ?? [], navAccounts.current);
             return result;
@@ -898,7 +898,7 @@ export default function MailScreen({
   const listScroller = useRef<HTMLDivElement>(null);
   const listBody = useRef<HTMLDivElement>(null);
   const pullMark = useRef<HTMLSpanElement>(null);
-  const pullRefresh = useCallback(() => refreshRef.current(true), []);
+  const pullRefresh = useCallback(() => refreshRef.current(true, false, true), []);
   usePullToRefresh(listScroller, listBody, pullMark, pullRefresh);
 
   useEffect(() => {
@@ -1203,7 +1203,7 @@ export default function MailScreen({
     if (!cursor) return false;
     snooze([cursor]);
   });
-  useShortcut("mail-refresh", () => void refresh(true));
+  useShortcut("mail-refresh", () => void refresh(true, false, true));
   function visibleSearch() {
     return window.matchMedia("(min-width: 64rem)").matches ? searchInput.current : searchInputList.current;
   }
@@ -1397,7 +1397,7 @@ export default function MailScreen({
               size="icon"
               aria-label="Check for new mail"
               title="Check for new mail (Shift R)"
-              onClick={() => refresh(true)}
+              onClick={() => refresh(true, false, true)}
               disabled={syncing}
             >
               <RefreshIcon aria-hidden className={cn("size-3.5", syncing && "animate-spin [animation-direction:reverse]")} />
