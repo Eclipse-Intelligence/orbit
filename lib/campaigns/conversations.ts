@@ -1,4 +1,4 @@
-import { personProspectIds } from "@/lib/campaigns/threads";
+import { personProspectIds, workspacePeople } from "@/lib/campaigns/people";
 import { CAMPAIGN_CHANNELS, type CampaignChannel } from "@/lib/campaigns/types";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
@@ -69,7 +69,8 @@ type Row = {
   last_at: Date | null;
 };
 
-const ROWS_SQL = `with talked as (
+function rowsSql(withLast: boolean) {
+  return `with talked as (
     select m.prospect_id,
            count(*)::int as messages,
            array_agg(distinct m.channel) as channels,
@@ -97,56 +98,21 @@ const ROWS_SQL = `with talked as (
                or (s.kind = 'email' and s.value in (p.email, c.normalized_email))
                or (s.kind = 'linkedin' and s.value in (p.linkedin, c.normalized_linkedin)))
          ) as do_not_contact,
-         last.direction as last_direction, last.channel as last_channel, last.body as last_body, last.sent_at as last_at
+         ${withLast ? "last.direction as last_direction, last.channel as last_channel, last.body as last_body, last.sent_at as last_at" : "null as last_direction, null as last_channel, null as last_body, null::timestamptz as last_at"}
   from talked t
   join crm.campaign_prospects p on p.id = t.prospect_id and p.workspace_id = $1
   join crm.campaigns k on k.id = p.campaign_id
   left join crm.contacts c on c.id = p.contact_id
   left join crm.companies co on co.id = coalesce(p.company_id, c.company_id)
-  left join lateral (
+  ${withLast
+    ? `left join lateral (
     select m.direction, m.channel, left(m.body, 4000) as body, m.sent_at
     from crm.campaign_messages m
     where m.prospect_id = p.id and (m.direction = 'inbound' or coalesce(m.send_state, 'sent') <> 'failed')
     order by m.sent_at desc, m.created_at desc
     limit 1
-  ) last on true`;
-
-function keysOf(row: Row) {
-  const keys = [`p:${row.id}`];
-  if (row.contact_id) keys.push(`c:${row.contact_id}`);
-  for (const email of [row.email, row.normalized_email]) if (email) keys.push(`e:${email}`);
-  for (const linkedin of [row.linkedin, row.normalized_linkedin]) if (linkedin) keys.push(`l:${linkedin}`);
-  return keys;
-}
-
-function groupPeople(rows: Row[]) {
-  const parent = new Map<string, string>();
-  const find = (key: string): string => {
-    let root = key;
-    while (parent.get(root) !== root) root = parent.get(root)!;
-    let node = key;
-    while (node !== root) {
-      const next = parent.get(node)!;
-      parent.set(node, root);
-      node = next;
-    }
-    return root;
-  };
-  for (const row of rows) {
-    const keys = keysOf(row);
-    for (const key of keys) if (!parent.has(key)) parent.set(key, key);
-    for (const key of keys.slice(1)) {
-      const a = find(keys[0]);
-      const b = find(key);
-      if (a !== b) parent.set(b, a);
-    }
-  }
-  const groups = new Map<string, Row[]>();
-  for (const row of rows) {
-    const root = find(`p:${row.id}`);
-    groups.set(root, [...(groups.get(root) ?? []), row]);
-  }
-  return [...groups.values()];
+  ) last on true`
+    : ""}`;
 }
 
 function time(value: Date | null) {
@@ -176,7 +142,7 @@ function personOf(rows: Row[]): Person {
   const latest = [...rows].sort((a, b) => time(b.last_at) - time(a.last_at))[0];
   const lastIn = rows.reduce<Date | null>((top, row) => (row.last_in && time(row.last_in) > time(top) ? row.last_in : top), null);
   const lastOut = rows.reduce<Date | null>((top, row) => (row.last_out && time(row.last_out) > time(top) ? row.last_out : top), null);
-  const doNotContact = rows.some((row) => row.do_not_contact);
+  const doNotContact = opened.do_not_contact;
   const channels = CAMPAIGN_CHANNELS.filter((channel) => rows.some((row) => row.channels.includes(channel)));
   const campaigns: ConversationCampaign[] = [];
   for (const row of [...rows].sort((a, b) => time(b.last_at) - time(a.last_at))) {
@@ -230,37 +196,51 @@ function limitOf(value: number | null | undefined, fallback: number) {
   return Math.min(Math.max(1, Math.floor(value)), CONVERSATION_LIMIT);
 }
 
-export async function listConversations(actor: Actor, filters: ConversationFilters = {}, fallbackLimit = CONVERSATION_LIMIT): Promise<ConversationList> {
+async function people(actor: Actor, withLast: boolean) {
+  return withActor(actor, async (db) => {
+    const rows = (await db.query<Row>(rowsSql(withLast), [actor.workspaceId])).rows;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return (await workspacePeople(db, actor.workspaceId))
+      .map((group) => group.flatMap((key) => (byId.has(key.id) ? [byId.get(key.id)!] : [])))
+      .filter((group) => group.length > 0)
+      .map(personOf);
+  });
+}
+
+export async function listConversations(
+  actor: Actor,
+  filters: ConversationFilters = {},
+  options: { fallbackLimit?: number; countInChannel?: boolean } = {},
+): Promise<ConversationList> {
   assertScope(actor.scopes, "crm:read");
   const campaignId = filters.campaignId?.trim() || null;
   if (campaignId && !isUuid(campaignId)) throw new CrmError("invalid_input", "Pass campaignId from campaigns view list.", 400, { field: "campaignId" });
   const channel = filters.channel ?? null;
   if (channel && !(CAMPAIGN_CHANNELS as readonly string[]).includes(channel)) throw new CrmError("invalid_input", "channel is email or linkedin.", 400, { field: "channel" });
   const words = (filters.search ?? "").trim().toLowerCase().slice(0, 200).split(/\s+/).filter(Boolean);
-  const limit = limitOf(filters.limit, fallbackLimit);
-  const rows = await withActor(actor, async (db) => (await db.query<Row>(ROWS_SQL, [actor.workspaceId])).rows);
-  const scoped = groupPeople(rows)
-    .map(personOf)
-    .filter((person) => (!campaignId || person.campaignIds.has(campaignId)) && words.every((word) => person.search.includes(word)));
-  const shown = scoped
-    .filter((person) => (!channel || person.channels.includes(channel)) && (filters.needsReply === false || filters.needsReply === null || person.needsReply))
+  const limit = limitOf(filters.limit, options.fallbackLimit ?? CONVERSATION_LIMIT);
+  const scoped = (await people(actor, true)).filter((person) => (!campaignId || person.campaignIds.has(campaignId)) && words.every((word) => person.search.includes(word)));
+  const inChannel = scoped.filter((person) => !channel || person.channels.includes(channel));
+  const shown = inChannel
+    .filter((person) => filters.needsReply === false || filters.needsReply === null || person.needsReply)
     .sort((a, b) => (b.lastMessage?.at ?? "").localeCompare(a.lastMessage?.at ?? "") || a.name.localeCompare(b.name));
   return {
     conversations: shown.slice(0, limit).map(publicConversation),
-    needsReply: scoped.filter((person) => person.needsReply).length,
+    needsReply: (options.countInChannel ? inChannel : scoped).filter((person) => person.needsReply).length,
     total: shown.length,
     more: shown.length > limit,
   };
 }
 
 export async function conversationsWaiting(actor: Actor) {
-  return (await listConversations(actor, { needsReply: true, limit: 1 })).needsReply;
+  assertScope(actor.scopes, "crm:read");
+  return (await people(actor, false)).filter((person) => person.needsReply).length;
 }
 
 export async function markConversationRead(actor: Actor, prospectId: string) {
   assertScope(actor.scopes, "crm:read");
   if (actor.type !== "user") return { read: 0 };
-  const ids = await withActor(actor, (db) => personProspectIds(db, actor, prospectId));
+  const ids = await withActor(actor, (db) => personProspectIds(db, actor.workspaceId, prospectId));
   const result = await query<{ count: number }>("select private.campaign_conversation_read($1, $2, $3::uuid[]) as count", [actor.workspaceId, actor.userId, ids]);
   const read = result.rows[0]?.count ?? 0;
   if (read > 0) await signalCampaigns(actor.workspaceId);

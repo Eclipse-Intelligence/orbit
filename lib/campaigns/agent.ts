@@ -113,7 +113,7 @@ export async function readCampaigns(actor: Actor, input: CampaignReadInput) {
           search: input.search ?? null,
           limit: input.limit ?? null,
         },
-        AGENT_CONVERSATION_LIMIT,
+        { fallbackLimit: AGENT_CONVERSATION_LIMIT, countInChannel: true },
       );
     default:
       throw new CrmError("invalid_input", `view is ${CAMPAIGN_READS.join(", ")}.`, 400, { field: "view" });

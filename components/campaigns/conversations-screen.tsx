@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import FilterMenu from "@/components/_common/filter-menu";
@@ -81,16 +81,28 @@ function Row({ conversation, href, selected }: { conversation: Conversation; hre
 
 function SearchField({ value, onSearch }: { value: string; onSearch: (value: string) => void }) {
   const [text, setText] = useState(value);
+  const [sent, setSent] = useState(value);
   const [seen, setSeen] = useState(value);
+  const latest = useRef(onSearch);
+  useEffect(() => {
+    latest.current = onSearch;
+  });
   if (seen !== value) {
     setSeen(value);
-    setText(value);
+    if (value !== sent) {
+      setSent(value);
+      setText(value);
+    }
   }
   useEffect(() => {
-    if (text.trim() === value) return;
-    const timer = window.setTimeout(() => onSearch(text.trim()), SEARCH_SETTLE_MS);
+    const next = text.trim();
+    if (next === sent) return;
+    const timer = window.setTimeout(() => {
+      setSent(next);
+      latest.current(next);
+    }, SEARCH_SETTLE_MS);
     return () => window.clearTimeout(timer);
-  }, [text, value, onSearch]);
+  }, [text, sent]);
   return (
     <Input
       type="search"

@@ -25,7 +25,7 @@ import DetailSection from "@/components/companies/detail/detail-section";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { When } from "@/components/mail/thread-reader";
-import { useSyncSignal } from "@/components/crm/sync-signals";
+import { useSyncSignal, useSyncSignalsLive } from "@/components/crm/sync-signals";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import {
   markConversationReadAction,
@@ -402,6 +402,8 @@ export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer:
   const opened = thread.campaigns.find((campaign) => campaign.prospectId === thread.prospectId) ?? null;
   const shownCategory = category ? category.value : thread.category;
   const items = withPending(thread.items, pending);
+  const signalsLive = useSyncSignalsLive();
+  const signalsLiveNow = useRef(signalsLive);
   const latestInbound = thread.items.findLast((item) => item.type === "message" && item.direction === "inbound")?.id ?? null;
 
   useEffect(() => {
@@ -413,15 +415,27 @@ export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer:
   });
 
   useEffect(() => {
+    signalsLiveNow.current = signalsLive;
+  });
+
+  useEffect(() => {
     if (!latestInbound) return;
     let live = true;
-    void markConversationReadAction(thread.prospectId)
-      .then((outcome) => {
-        if (live && outcome.read) router.refresh();
-      })
-      .catch(() => null);
+    let marked = false;
+    const mark = () => {
+      if (marked || document.visibilityState !== "visible") return;
+      marked = true;
+      void markConversationReadAction(thread.prospectId)
+        .then((outcome) => {
+          if (live && outcome.read && !signalsLiveNow.current) router.refresh();
+        })
+        .catch(() => null);
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
     return () => {
       live = false;
+      document.removeEventListener("visibilitychange", mark);
     };
   }, [thread.prospectId, latestInbound, router]);
 

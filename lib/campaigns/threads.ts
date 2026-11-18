@@ -1,7 +1,9 @@
 import { connectedContext, providerError, type ProviderOptions } from "@/lib/campaigns/context";
 import { leadRef, readProspectRef } from "@/lib/campaigns/manage";
 import { saveThread, threadFetched } from "@/lib/campaigns/messages";
+import { personProspectIds } from "@/lib/campaigns/people";
 import { linkedinReplyPermission } from "@/lib/campaigns/replies";
+import { mailboxParts } from "@/lib/campaigns/thread-view";
 import { doNotContactIn, type DoNotContact } from "@/lib/campaigns/suppression";
 import type { CampaignChannel, CampaignEventKind, CampaignProviderId, ProspectState, StopReason } from "@/lib/campaigns/types";
 import { withActor } from "@/lib/crm/context";
@@ -119,13 +121,7 @@ type PersonRow = {
   created_at: Date;
 };
 
-const PERSON_SQL = `with source as (
-    select p.id, p.contact_id, p.email, p.linkedin, c.normalized_email, c.normalized_linkedin
-    from crm.campaign_prospects p
-    left join crm.contacts c on c.id = p.contact_id
-    where p.id = $1 and p.workspace_id = $2
-  )
-  select p.id, p.campaign_id, k.name as campaign_name, k.channel, k.provider, k.status as campaign_status, p.state, p.skip_reason, p.lead_status,
+const PERSON_SQL = `select p.id, p.campaign_id, k.name as campaign_name, k.channel, k.provider, k.status as campaign_status, p.state, p.skip_reason, p.lead_status,
          p.category, p.replied_at, p.stop_requested_at, p.stopped_at, p.stop_reason, p.contact_id, coalesce(c.email, p.email) as email,
          coalesce(c.normalized_linkedin, p.linkedin) as linkedin, p."values", p.sources, p.thread_fetched_at, p.created_at,
          coalesce(nullif(btrim(pr.full_name), ''), nullif(s.name, '')) as sender_name,
@@ -135,20 +131,13 @@ const PERSON_SQL = `with source as (
            c.email, p.email, p.linkedin, 'Unnamed'
          ) as name,
          coalesce(co.name, nullif(p.lead->>'companyName', '')) as company_name
-  from source src
-  join crm.campaign_prospects p on p.workspace_id = $2 and (
-    p.id = src.id
-    or (src.contact_id is not null and p.contact_id = src.contact_id)
-    or (src.email is not null and p.email = src.email)
-    or (src.linkedin is not null and p.linkedin = src.linkedin)
-    or (src.normalized_email is not null and p.email = src.normalized_email)
-    or (src.normalized_linkedin is not null and p.linkedin = src.normalized_linkedin)
-  )
+  from crm.campaign_prospects p
   join crm.campaigns k on k.id = p.campaign_id
   left join crm.contacts c on c.id = p.contact_id
   left join crm.companies co on co.id = coalesce(p.company_id, c.company_id)
   left join crm.campaign_senders s on s.workspace_id = p.workspace_id and s.provider = k.provider and s.external_id = p.sender_id
   left join crm.profiles pr on pr.id = s.user_id
+  where p.id = any($1::uuid[]) and p.workspace_id = $2
   order by p.created_at, p.id`;
 
 const FINISHED = new Set(["completed", "stopped", "blocked", "unsubscribed", "bounced"]);
@@ -166,14 +155,10 @@ function campaignState(row: PersonRow): ThreadCampaignState {
 }
 
 async function personRows(db: Db, actor: Actor, prospectId: string) {
-  if (!isUuid(prospectId)) throw notFound("prospect");
-  const rows = await db.query<PersonRow>(PERSON_SQL, [prospectId, actor.workspaceId]);
+  const ids = await personProspectIds(db, actor.workspaceId, prospectId);
+  const rows = await db.query<PersonRow>(PERSON_SQL, [ids, actor.workspaceId]);
   if (!rows.rows.some((row) => row.id === prospectId)) throw notFound("prospect");
   return rows.rows;
-}
-
-export async function personProspectIds(db: Db, actor: Actor, prospectId: string) {
-  return (await personRows(db, actor, prospectId)).map((row) => row.id);
 }
 
 type MessageRow = {
@@ -238,7 +223,8 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
          from crm.workspace_members wm
          join crm.profiles mp on mp.id = wm.user_id
          where m.channel = 'email' and m.direction = 'outbound' and m.from_address is not null and wm.workspace_id = m.workspace_id
-           and (lower(mp.email) = lower(m.from_address) or exists (select 1 from unnest(mp.other_emails) other where lower(other) = lower(m.from_address)))
+           and (lower(mp.email) = lower(btrim(coalesce(substring(m.from_address from '<([^<>]+)>'), m.from_address)))
+             or exists (select 1 from unnest(mp.other_emails) other where lower(other) = lower(btrim(coalesce(substring(m.from_address from '<([^<>]+)>'), m.from_address)))))
          order by mp.id
          limit 1
        ) mailbox on true
@@ -255,12 +241,13 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
     const items: ThreadItem[] = [];
     for (const message of messages.rows) {
       const prospect = byId.get(message.prospect_id)!;
+      const mailbox = message.channel === "email" ? mailboxParts(message.from_address) : null;
       if (message.send_state === "sending" && Date.now() - message.created_at.getTime() > SENDING_STALE_MS) {
         message.send_state = "unknown";
         message.send_error = "May not have gone.";
       }
       const author =
-        message.direction === "inbound" ? prospect.name : (message.sent_by ?? (message.channel === "linkedin" ? (prospect.sender_name ?? message.sender_name) : null) ?? message.mailbox_owner ?? message.from_address ?? "Campaign");
+        message.direction === "inbound" ? prospect.name : (message.sent_by ?? (message.channel === "linkedin" ? (prospect.sender_name ?? message.sender_name) : null) ?? message.mailbox_owner ?? mailbox?.name ?? mailbox?.address ?? "Campaign");
       items.push({
         type: "message",
         id: message.id,
@@ -273,7 +260,7 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
         body: message.body,
         at: message.sent_at.toISOString(),
         author: author ?? "Campaign",
-        address: message.channel === "email" ? message.from_address : null,
+        address: mailbox?.address ?? null,
         sentByUserId: message.sent_by_user_id,
         sendState: message.send_state,
         sendError: message.send_state === "failed" || message.send_state === "unknown" ? message.send_error : null,

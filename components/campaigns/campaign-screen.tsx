@@ -456,7 +456,7 @@ function LinkedinProspects({ prospects, campaignId, canImport }: { prospects: Pr
             <span className="caption-style text-subtle hidden truncate md:block" suppressHydrationWarning>
               {action ?? ""}
             </span>
-            <span className="flex items-center justify-end gap-2">
+            <span className="flex items-center justify-end gap-2 pointer-coarse:gap-4">
               {tag && (
                 <Tag tone={tag.tone} size="sm" className="caption-style md:hidden">
                   {tag.label}

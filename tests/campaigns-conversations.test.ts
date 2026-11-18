@@ -326,6 +326,8 @@ describe("campaign conversations", () => {
     await message(owner, gil, { direction: "outbound", body: "From Mark's mailbox.", at: "2026-11-09T09:00:00Z", from: "mark@getridgeon.test" });
     await message(owner, gil, { direction: "outbound", body: "From the agency's mailbox.", at: "2026-11-09T10:00:00Z", from: "sends@agency-mailbox.test" });
     await message(owner, gil, { direction: "outbound", body: "From the sign-in address.", at: "2026-11-09T11:00:00Z", from: "ann@conversations.test" });
+    await message(owner, gil, { direction: "outbound", body: "From a lookalike mailbox with a name.", at: "2026-11-09T12:00:00Z", from: "Mark at Ridgeon <mark@ridgeon-mail.test>" });
+    await message(owner, gil, { direction: "outbound", body: "From Mark's mailbox with a name.", at: "2026-11-09T13:00:00Z", from: "Someone Else <MARK@getridgeon.test>" });
     for (const viewer of [owner, ann]) {
       const thread = await getProspectThread(viewer, gil);
       const authors = thread.items.flatMap((item) => (item.type === "message" ? [[item.author, item.address]] : []));
@@ -333,6 +335,8 @@ describe("campaign conversations", () => {
         ["Mark Ridgeon", "mark@getridgeon.test"],
         ["sends@agency-mailbox.test", "sends@agency-mailbox.test"],
         ["Ann Lee", "ann@conversations.test"],
+        ["Mark at Ridgeon", "mark@ridgeon-mail.test"],
+        ["Mark Ridgeon", "MARK@getridgeon.test"],
       ]);
     }
     const theirs = await sql<{ id: string }>("select id from crm.campaigns where workspace_id = $1", [outsider.workspaceId]);
@@ -340,5 +344,51 @@ describe("campaign conversations", () => {
     await message(outsider, stranger, { direction: "outbound", body: "Sent from a mailbox Mark owns elsewhere.", at: "2026-11-09T09:00:00Z", from: "mark@getridgeon.test" });
     const other = await getProspectThread(outsider, stranger);
     assert.deepEqual(other.items.flatMap((item) => (item.type === "message" ? [item.author] : [])), ["mark@getridgeon.test"], "only members of this workspace are named");
+  });
+
+  it("counts a row's messages, unread and Needs reply exactly as the thread it opens", async () => {
+    const shared = await campaign(owner, "Chain email", "email", "em-chain");
+    const bridge = await campaign(owner, "Chain bridge", "email", "em-bridge");
+    const a = await prospect(owner, { campaignId: shared, lead: "chain-a", email: "kit@chain.test", name: ["Kit", "Chain"] });
+    const b = await prospect(owner, { campaignId: bridge, lead: "chain-b", email: "kit@chain.test", linkedin: "linkedin.com/in/kitchain", name: ["Kit", "Chain"] });
+    const c = await prospect(owner, { campaignId: ids.longevity, lead: "chain-c", linkedin: "linkedin.com/in/kitchain", sender: "acct-li-1", name: ["Kit", "Chain"] });
+    await message(owner, a, { direction: "outbound", body: "Hello Kit.", at: "2026-11-10T09:00:00Z" });
+    await message(owner, c, { direction: "inbound", body: "Hi, saw your email too.", at: "2026-11-11T09:00:00Z", sender: "acct-li-1" });
+    const all = await listConversations(owner, { needsReply: false });
+    assert.equal(all.conversations.filter((item) => item.name === "Kit Chain").length, 1, "A, B and C are one person through B");
+    const kit = byName(all, "Kit Chain")!;
+    assert.equal(kit.prospectId, c);
+    assert.deepEqual(new Set((await getProspectThread(owner, a)).campaigns.map((item) => item.prospectId)), new Set([a, b, c]));
+    for (const row of all.conversations) {
+      const thread = await getProspectThread(owner, row.prospectId);
+      const messages = thread.items.flatMap((item) => (item.type === "message" ? [item] : []));
+      const lastIn = messages.filter((item) => item.direction === "inbound" && !item.automatic).at(-1)?.at ?? null;
+      const lastOut = messages.filter((item) => item.direction === "outbound" && item.sendState !== "failed").at(-1)?.at ?? null;
+      const ids = thread.campaigns.map((item) => item.prospectId);
+      const unread = await sql<{ unread: boolean }>(
+        `select exists (select 1 from crm.campaign_messages m join crm.campaign_prospects p on p.id = m.prospect_id
+           where p.id = any($1::uuid[]) and m.direction = 'inbound' and not m.automatic and m.created_at > coalesce(p.conversation_read_at, '-infinity'::timestamptz)) as unread`,
+        [ids],
+      );
+      assert.equal(row.messages, messages.length, `${row.name} messages`);
+      assert.equal(row.unread, unread[0].unread, `${row.name} unread`);
+      assert.equal(
+        row.needsReply,
+        needsReplyNow({ lastIn: lastIn ? new Date(lastIn) : null, lastOut: lastOut ? new Date(lastOut) : null, category: thread.category, doNotContact: Boolean(thread.doNotContact) }),
+        `${row.name} needs reply`,
+      );
+    }
+    assert.deepEqual(await markConversationRead(owner, a), { read: 1 }, "opening through A clears C");
+    assert.equal(byName(await listConversations(owner, { needsReply: false }), "Kit Chain")!.unread, false);
+    assert.equal(await conversationsWaiting(owner), (await listConversations(owner, {})).needsReply);
+  });
+
+  it("counts the assistant's waiting people within its channel, and the screen's across channels", async () => {
+    const screen = await listConversations(owner, { needsReply: true, channel: "linkedin" });
+    const assistant = (await runTool(owner, "campaigns", { view: "conversations", channel: "linkedin" })) as { needsReply: number; conversations: Conversation[] };
+    assert.equal(assistant.needsReply, assistant.conversations.length);
+    assert.equal(screen.needsReply, (await listConversations(owner, {})).needsReply);
+    assert.ok(screen.needsReply > assistant.needsReply);
+    assert.equal((await mcpRead(owner, { view: "conversations", channel: "linkedin" })).needsReply, assistant.needsReply);
   });
 });
