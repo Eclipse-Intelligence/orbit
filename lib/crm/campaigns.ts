@@ -1,3 +1,4 @@
+import { positiveCategory } from "@/lib/campaigns/format";
 import { campaignProvider } from "@/lib/campaigns/providers";
 import { addRefusal, readCampaignVariables } from "@/lib/campaigns/prospects";
 import {
@@ -21,13 +22,14 @@ import {
   type SenderCapacity,
   type SequenceStep,
   type StepStats,
+  type AutoAdd,
 } from "@/lib/campaigns/types";
-import { upsertContactInDb } from "@/lib/crm/contacts";
+import { editContactTagsInDb, upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import { timeLeft } from "@/lib/crm/conversations";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { isUuid, lockNamespace } from "@/lib/crm/mutate";
-import { canonicalDomain } from "@/lib/crm/normalize";
+import { canonicalDomain, normalizeTag } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
@@ -100,8 +102,13 @@ export async function listCampaigns(actor: Actor, options: { channel?: CampaignC
 
 async function readCampaign(db: Db, actor: Actor, id: string) {
   if (!isUuid(id)) throw notFound("campaign");
-  const result = await db.query<CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[]; sync_error: string | null; stray: number | null }>(
-    SUMMARY_SQL.replace("select k.id,", "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.sync_error, (k.sync_state->>'strayConversations')::int as stray, k.id,") + " where k.id = $1 and k.workspace_id = $2",
+  const result = await db.query<
+    CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[]; sync_error: string | null; stray: number | null; auto_add: AutoAdd }
+  >(
+    SUMMARY_SQL.replace(
+      "select k.id,",
+      "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.sync_error, k.auto_add, (k.sync_state->>'strayConversations')::int as stray, k.id,",
+    ) + " where k.id = $1 and k.workspace_id = $2",
     [id, actor.workspaceId],
   );
   const row = result.rows[0];
@@ -152,6 +159,45 @@ async function senderCapacity(db: Db, workspaceId: string, senderIds: string[]):
   return row && row.senders > 0 ? { senders: row.senders, invites: row.invites, messages: row.messages } : null;
 }
 
+async function countedLinkedinStats(db: Db, workspaceId: string, campaignId: string): Promise<CampaignStats> {
+  const result = await db.query<{
+    leads: number;
+    enrolled: number;
+    not_enrolled: number;
+    finished: number;
+    paused: number;
+    failed: number;
+    contacted: number;
+    categories: string[] | null;
+  }>(
+    `select count(*) filter (where p.state = 'pushed')::int as leads,
+            count(*) filter (where p.state = 'pushed' and p.lead_status = 'in_progress')::int as enrolled,
+            count(*) filter (where p.state = 'pushed' and (p.lead_status is null or p.lead_status = 'not_started'))::int as not_enrolled,
+            count(*) filter (where p.state = 'pushed' and p.lead_status = 'completed')::int as finished,
+            count(*) filter (where p.state = 'pushed' and p.lead_status = 'paused')::int as paused,
+            count(*) filter (where p.state = 'pushed' and p.lead_status = 'stopped')::int as failed,
+            count(*) filter (where exists (
+              select 1 from crm.campaign_events e where e.prospect_id = p.id and e.kind in ('invite_sent', 'message_sent', 'inmail_sent')
+            ))::int as contacted,
+            array_agg(p.category) filter (where p.category is not null) as categories
+     from crm.campaign_prospects p
+     where p.campaign_id = $1 and p.workspace_id = $2`,
+    [campaignId, workspaceId],
+  );
+  const row = result.rows[0];
+  if (!row) return {};
+  return {
+    leads: row.leads,
+    enrolled: row.enrolled,
+    notEnrolled: row.not_enrolled,
+    finished: row.finished,
+    pausedLeads: row.paused,
+    failed: row.failed,
+    contacted: row.contacted,
+    interested: (row.categories ?? []).filter((category) => positiveCategory(category)).length,
+  };
+}
+
 export async function getCampaign(actor: Actor, id: string): Promise<CampaignDetail> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
@@ -200,6 +246,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
          and (p.created_at at time zone 'Europe/London')::date = (now() at time zone 'Europe/London')::date`,
       [row.id, actor.workspaceId],
     );
+    const counted = linkedin ? await countedLinkedinStats(db, actor.workspaceId, row.id) : null;
     const provider = campaignProvider(row.provider);
     const sequence = row.sequence ?? [];
     const eventDays: DayStats[] = days.rows.map((day) =>
@@ -208,6 +255,8 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
     const storedDays = linkedin && Array.isArray(row.day_stats) && row.day_stats.length > 0 ? providerDays(row.day_stats) : null;
     return {
       ...summary(row),
+      stats: counted ? { ...counted, ...(row.stats ?? {}) } : (row.stats ?? {}),
+      autoAdd: row.auto_add ?? "off",
       sequence,
       variables: row.variables ?? [],
       standardVariables: [...(provider?.standardVariables ?? [])],
@@ -224,7 +273,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
   });
 }
 
-export async function campaignOptions(actor: Actor): Promise<CampaignOption[]> {
+export async function campaignOptions(actor: Actor, options: { all?: boolean } = {}): Promise<CampaignOption[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const result = await db.query<{ id: string; name: string; channel: CampaignOption["channel"]; status: CampaignStatus; provider: CampaignProviderId }>(
@@ -234,7 +283,7 @@ export async function campaignOptions(actor: Actor): Promise<CampaignOption[]> {
        order by k.channel, lower(k.name), k.id`,
       [actor.workspaceId],
     );
-    return result.rows.filter((row) => !addRefusal(row)).map((row) => ({ id: row.id, name: row.name, channel: row.channel }));
+    return result.rows.filter((row) => options.all || !addRefusal(row)).map((row) => ({ id: row.id, name: row.name, channel: row.channel }));
   });
 }
 
@@ -259,6 +308,8 @@ type ProspectSqlRow = {
   sender: string | null;
   import_error: string | null;
   stop_error: string | null;
+  not_enrolled: boolean;
+  importable: boolean;
 };
 
 const FILTER_SQL: Record<ProspectFilter, string> = {
@@ -301,7 +352,9 @@ export async function listCampaignProspects(
                   when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_accepted') then 'accepted'
                   when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_sent') then 'invited'
                 end as stage,
-                sender.name as sender
+                sender.name as sender,
+                ($6 and p.state = 'pushed' and p.lead_status is null and p.external_lead_id is null) as not_enrolled,
+                (p.contact_id is null and p.state = 'pushed' and (p.email is not null or p.linkedin is not null)) as importable
          ${from}
          left join lateral (
            select coalesce(nullif(btrim(pr.full_name), ''), pr.email, nullif(s.name, '')) as name
@@ -342,6 +395,8 @@ export async function listCampaignProspects(
         sender: row.sender,
         importError: row.contact_id ? null : row.import_error,
         stopError: row.stop_requested_at && !row.stopped_at ? row.stop_error : null,
+        notEnrolled: row.not_enrolled,
+        importable: row.importable,
       })),
       total: total.rows[0]?.count ?? 0,
       page,
@@ -570,6 +625,116 @@ async function linkProspect(db: Db, workspaceId: string, prospectId: string, con
   return (linked.rowCount ?? 0) > 0;
 }
 
+export const IMPORT_TAG_LIMIT = 20;
+const IMPORT_TAG_MAX = 40;
+
+export function importTags(current: string[], wanted: string[]) {
+  const next = [...current];
+  for (const raw of wanted) {
+    const tag = normalizeTag(raw.replace(/;/g, " ")).slice(0, IMPORT_TAG_MAX).trim();
+    if (!tag || next.some((item) => item.toLowerCase() === tag.toLowerCase())) continue;
+    if (next.length >= IMPORT_TAG_LIMIT) break;
+    next.push(tag);
+  }
+  return next;
+}
+
+type ImportOutcome = { contactId: string; created: boolean; linked: boolean };
+
+async function importRow(db: Db, actor: Actor, row: ImportRow, provenance: Provenance, tags: string[]): Promise<ImportOutcome> {
+  await lockNamespace(db, actor.workspaceId, "contacts");
+  const existing = await db.query<{ id: string; company_id: string | null }>(
+    `select c.id, c.company_id from crm.contacts c
+     where c.workspace_id = $1 and c.archived_at is null
+       and (($2::text is not null and c.normalized_email = $2) or ($3::text is not null and c.normalized_linkedin = $3))
+     order by (c.normalized_email is not distinct from $2) desc, c.created_at, c.id
+     limit 1`,
+    [actor.workspaceId, row.email, row.linkedin],
+  );
+  const match = existing.rows[0];
+  let outcome: ImportOutcome;
+  if (match) {
+    outcome = { contactId: match.id, created: false, linked: await linkProspect(db, actor.workspaceId, row.id, match.id, match.company_id) };
+  } else {
+    const companyId = await companyFor(db, actor.workspaceId, row.lead ?? {});
+    const saved = await upsertContactInDb(
+      db,
+      actor,
+      {
+        firstName: clean(row.lead?.firstName, NAME_MAX),
+        lastName: clean(row.lead?.lastName, NAME_MAX),
+        email: row.email ?? undefined,
+        linkedinUrl: row.linkedin ? `https://www.${row.linkedin}` : undefined,
+        jobTitle: clean(row.lead?.title, TITLE_MAX),
+        ...(companyId ? { companyId } : {}),
+      },
+      provenance,
+      { nameMatch: false },
+    );
+    outcome = { contactId: saved.contact.id, created: saved.created, linked: await linkProspect(db, actor.workspaceId, row.id, saved.contact.id, saved.contact.companyId ?? null) };
+  }
+  if (tags.length > 0) await tagImported(db, actor, outcome.contactId, tags, provenance);
+  return outcome;
+}
+
+async function tagImported(db: Db, actor: Actor, contactId: string, tags: string[], provenance: Provenance) {
+  await lockNamespace(db, actor.workspaceId, "contacts");
+  const current = await db.query<{ tags: string[] | null }>("select tags from crm.contacts where id = $1 and workspace_id = $2 and archived_at is null", [contactId, actor.workspaceId]);
+  if (!current.rows[0]) return;
+  const before = current.rows[0].tags ?? [];
+  if (importTags(before, tags).length !== before.length) await editContactTagsInDb(db, actor, contactId, (now) => importTags(now, tags), provenance);
+}
+
+async function importFailure(actor: Actor, prospectId: string, error: unknown) {
+  if (!(error instanceof CrmError) && !isPgError(error)) throw error;
+  const lasting = lastingImportFailure(error);
+  const reason = error instanceof CrmError ? error.message : lasting ? "Couldn't add this person." : "Couldn't add this person. Try again.";
+  if (lasting) await query("select private.campaign_prospect_import_failed($1, $2, $3)", [actor.workspaceId, prospectId, reason]);
+  return reason;
+}
+
+export type ImportOneResult = { contactId: string; created: boolean; linked: boolean };
+
+export async function importCampaignProspect(
+  actor: Actor,
+  prospectId: string,
+  options: { provenance?: Provenance; tags?: string[] } = {},
+): Promise<ImportOneResult> {
+  assertScope(actor.scopes, "campaigns:write");
+  assertScope(actor.scopes, "contacts:write");
+  if (!isUuid(prospectId)) throw notFound("prospect");
+  const provenance: Provenance = { ...(options.provenance ?? { operation: "import_campaign_prospect", source: "web" }), catchUp: true };
+  const row = await withActor(actor, async (db) => {
+    const found = await db.query<ImportRow & { contact_id: string | null }>(
+      "select p.id, p.email, p.linkedin, p.lead, p.contact_id from crm.campaign_prospects p where p.id = $1 and p.workspace_id = $2",
+      [prospectId, actor.workspaceId],
+    );
+    return found.rows[0] ?? null;
+  });
+  if (!row) throw notFound("prospect");
+  if (row.contact_id) {
+    const contactId = row.contact_id;
+    if (options.tags?.length) await withActor(actor, (db) => tagImported(db, actor, contactId, options.tags!, provenance));
+    return { contactId, created: false, linked: false };
+  }
+  if (!row.email && !row.linkedin) throw new CrmError("invalid_input", "This prospect has no email or LinkedIn profile to match.", 400);
+  try {
+    const outcome = await withActor(actor, (db) => importRow(db, actor, row, provenance, options.tags ?? []));
+    if (!outcome.linked) {
+      const linked = await withActor(actor, async (db) => {
+        const current = await db.query<{ contact_id: string | null }>("select contact_id from crm.campaign_prospects where id = $1 and workspace_id = $2", [row.id, actor.workspaceId]);
+        return current.rows[0]?.contact_id ?? null;
+      });
+      if (!linked) throw new CrmError("conflict", "Someone else in this campaign is already this contact.", 409);
+    }
+    return outcome;
+  } catch (error) {
+    const reason = await importFailure(actor, row.id, error);
+    if (error instanceof CrmError) throw error;
+    throw new CrmError("invalid_input", reason, lastingImportFailure(error) ? 400 : 503);
+  }
+}
+
 export async function importCampaignProspects(
   actor: Actor,
   campaignId: string,
@@ -598,42 +763,11 @@ export async function importCampaignProspects(
       tried.add(row.id);
       if (!timeLeft(options.deadline, 1_000)) break;
       try {
-        const outcome = await withActor(actor, async (db) => {
-          await lockNamespace(db, actor.workspaceId, "contacts");
-          const existing = await db.query<{ id: string; company_id: string | null }>(
-            `select c.id, c.company_id from crm.contacts c
-             where c.workspace_id = $1 and c.archived_at is null
-               and (($2::text is not null and c.normalized_email = $2) or ($3::text is not null and c.normalized_linkedin = $3))
-             order by (c.normalized_email is not distinct from $2) desc, c.created_at, c.id
-             limit 1`,
-            [actor.workspaceId, row.email, row.linkedin],
-          );
-          const match = existing.rows[0];
-          if (match) return { created: false, linked: await linkProspect(db, actor.workspaceId, row.id, match.id, match.company_id) };
-          const companyId = await companyFor(db, actor.workspaceId, row.lead ?? {});
-          const saved = await upsertContactInDb(
-            db,
-            actor,
-            {
-              firstName: clean(row.lead?.firstName, NAME_MAX),
-              lastName: clean(row.lead?.lastName, NAME_MAX),
-              email: row.email ?? undefined,
-              linkedinUrl: row.linkedin ? `https://www.${row.linkedin}` : undefined,
-              jobTitle: clean(row.lead?.title, TITLE_MAX),
-              ...(companyId ? { companyId } : {}),
-            },
-            provenance,
-            { nameMatch: false },
-          );
-          return { created: saved.created, linked: await linkProspect(db, actor.workspaceId, row.id, saved.contact.id, saved.contact.companyId ?? null) };
-        });
+        const outcome = await withActor(actor, (db) => importRow(db, actor, row, provenance, []));
         if (outcome.created) result.imported += 1;
         if (outcome.linked) result.linked += 1;
       } catch (error) {
-        if (!(error instanceof CrmError) && !isPgError(error)) throw error;
-        const lasting = lastingImportFailure(error);
-        const reason = error instanceof CrmError ? error.message : lasting ? "Couldn't add this person." : "Couldn't add this person. Try again.";
-        if (lasting) await query("select private.campaign_prospect_import_failed($1, $2, $3)", [actor.workspaceId, row.id, reason]);
+        const reason = await importFailure(actor, row.id, error);
         result.failed += 1;
         if (!result.reasons.includes(reason)) result.reasons.push(reason);
       }

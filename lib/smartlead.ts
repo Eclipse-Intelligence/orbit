@@ -1,6 +1,6 @@
 import type { CampaignStats, CampaignStatus, LeadStatus, Mailbox, SequenceStep } from "@/lib/campaigns/types";
 import { htmlToText } from "@/lib/mail/text";
-import { logUpstream, unreachable, upstreamMessage, urlSecrets } from "@/lib/upstream";
+import { logRefusal, logUpstream, providerReason, refusedMessage, requestPath, unreachable, urlSecrets } from "@/lib/upstream";
 import { withService, type Service } from "@/lib/workflows/limits";
 
 export const SMARTLEAD_API = "https://server.smartlead.ai/api/v1";
@@ -79,6 +79,15 @@ function yes(value: unknown) {
   return value === true || value === "true" || value === 1 || value === "1";
 }
 
+export function smartleadEndpoint(url: URL) {
+  return requestPath(url)
+    .replace(/^\/api\/v1/, "")
+    .split("/")
+    .map((part) => (/\d/.test(part) && !/^[a-z-]+$/i.test(part) ? ":id" : part))
+    .join("/")
+    .replace(/\/$/, "");
+}
+
 async function call(
   key: string,
   path: string,
@@ -109,9 +118,16 @@ async function call(
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      logUpstream("Smartlead", response.status, body, [key, ...(options.secrets ?? [])]);
+      const reason = providerReason(body, [key, ...(options.secrets ?? [])]);
+      const endpoint = smartleadEndpoint(url);
+      logRefusal("Smartlead", response.status, endpoint, reason);
       const refused = (response.status === 401 || response.status === 403) && !keyCheck;
-      throw new SmartleadError(refused ? refusal(response.status) : upstreamMessage("Smartlead", response.status), response.status, response.headers.get("retry-after"), keyCheck);
+      throw new SmartleadError(
+        refused ? refusal(response.status) : refusedMessage("Smartlead", response.status, reason, endpoint),
+        response.status,
+        response.headers.get("retry-after"),
+        keyCheck,
+      );
     }
     const raw = await response.text().catch(() => "");
     if (!raw.trim()) return null;
@@ -239,6 +255,13 @@ export async function readSmartleadStats(key: string, campaignId: string, option
   const leads = record(row.campaign_lead_stats);
   const stats: CampaignStats = {
     prospects: count(leads.total) ?? count(row.total_count),
+    leads: count(leads.total) ?? count(row.total_count),
+    notStarted: count(leads.notStarted) ?? count(leads.not_started),
+    inProgress: count(leads.inprogress) ?? count(leads.in_progress),
+    finished: count(leads.completed),
+    blocked: count(leads.blocked),
+    pausedLeads: count(leads.paused),
+    stopped: count(leads.stopped),
     contacted: count(row.unique_sent_count),
     sent: count(row.sent_count),
     opened: count(row.unique_open_count) ?? count(row.open_count),
@@ -246,7 +269,7 @@ export async function readSmartleadStats(key: string, campaignId: string, option
     replied: count(row.reply_count),
     positive: count(leads.interested),
     bounced: count(row.bounce_count),
-    unsubscribed: count(row.unsubscribed_count),
+    unsubscribed: count(row.unsubscribed_count) ?? count(leads.unsubscribed_count),
   };
   return Object.fromEntries(Object.entries(stats).filter(([, value]) => value !== undefined));
 }

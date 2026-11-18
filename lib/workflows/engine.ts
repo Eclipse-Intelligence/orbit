@@ -243,6 +243,72 @@ function londonToday() {
   return new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: appTimeZone() }).format(new Date());
 }
 
+export function campaignTriggerMatches(trigger: Extract<Trigger, { type: "campaign_event" }>, data: Record<string, unknown>) {
+  const kind = typeof data.kind === "string" ? data.kind : null;
+  const category = typeof data.category === "string" ? data.category : null;
+  const step = typeof data.step === "number" ? data.step : null;
+  if (trigger.channel && data.channel !== trigger.channel) return false;
+  if (trigger.campaignId && data.campaignId !== trigger.campaignId) return false;
+  if (trigger.event === "positive") return kind === "category" && positiveCategory(category);
+  if (trigger.event !== "step") return kind === trigger.event;
+  if (data.channel === "email") return trigger.channel === "email" && kind === "sent" && step !== null && step === trigger.step;
+  if (data.channel !== "linkedin" || trigger.channel !== "linkedin" || !trigger.action || kind !== trigger.action) return false;
+  if (kind === "message_sent" || kind === "inmail_sent") return (step ?? 1) === (trigger.nth ?? 1);
+  return true;
+}
+
+type ProspectPerson = {
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  linkedin: string | null;
+  company_name: string | null;
+  title: string | null;
+  website: string | null;
+  replied: boolean;
+};
+
+async function prospectVars(actor: UserActor, prospectId: string) {
+  const row = await withActor(actor, async (db) => {
+    const result = await db.query<ProspectPerson>(
+      `select coalesce(nullif(c.first_name, ''), nullif(p.lead->>'firstName', '')) as first_name,
+              coalesce(nullif(c.last_name, ''), nullif(p.lead->>'lastName', '')) as last_name,
+              coalesce(c.email, p.email) as email,
+              coalesce(c.normalized_linkedin, p.linkedin) as linkedin,
+              coalesce(co.name, nullif(p.lead->>'companyName', '')) as company_name,
+              coalesce(nullif(c.job_title, ''), nullif(p.lead->>'title', '')) as title,
+              coalesce(co.website, nullif(p.lead->>'website', '')) as website,
+              exists (
+                select 1 from crm.campaign_prospects o
+                where o.workspace_id = p.workspace_id and o.replied_at is not null
+                  and (o.id = p.id or (p.contact_id is not null and o.contact_id = p.contact_id)
+                    or (coalesce(c.normalized_email, p.email) is not null and o.email = coalesce(c.normalized_email, p.email))
+                    or (coalesce(c.normalized_linkedin, p.linkedin) is not null and o.linkedin = coalesce(c.normalized_linkedin, p.linkedin)))
+              ) as replied
+       from crm.campaign_prospects p
+       left join crm.contacts c on c.id = p.contact_id
+       left join crm.companies co on co.id = coalesce(p.company_id, c.company_id)
+       where p.id = $1 and p.workspace_id = $2`,
+      [prospectId, actor.workspaceId],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!row) return null;
+  return {
+    replied: row.replied,
+    prospect: {
+      name: [row.first_name, row.last_name].filter(Boolean).join(" ") || null,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      email: row.email,
+      linkedinUrl: row.linkedin ? `https://www.${row.linkedin}` : null,
+      companyName: row.company_name,
+      jobTitle: row.title,
+      website: row.website,
+    },
+  };
+}
+
 async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent): Promise<{ vars: Vars; matches: boolean }> {
   const data = event.data ?? {};
   const links = await userLinks(actor).catch(() => null);
@@ -362,22 +428,22 @@ async function buildContext(actor: UserActor, trigger: Trigger, event: RunEvent)
     companyId = document.companyId;
     contactId = document.contactId;
   } else if (trigger.type === "campaign_event") {
-    const kind = typeof data.kind === "string" ? data.kind : null;
     const category = typeof data.category === "string" ? data.category : null;
-    const wanted =
-      trigger.event === "positive" ? kind === "category" && positiveCategory(category) : kind === trigger.event;
-    if (event.type !== "campaign.event" || !wanted) return { vars, matches: false };
-    if (trigger.channel && data.channel !== trigger.channel) return { vars, matches: false };
+    if (event.type !== "campaign.event" || !campaignTriggerMatches(trigger, data)) return { vars, matches: false };
     const campaignId = typeof data.campaignId === "string" ? data.campaignId : null;
     const prospectId = typeof data.prospectId === "string" ? data.prospectId : null;
+    const person = prospectId ? await prospectVars(actor, prospectId) : null;
     vars.campaign = {
       id: campaignId,
       name: typeof data.campaignName === "string" ? data.campaignName : null,
       channel: typeof data.channel === "string" ? data.channel : null,
       event: trigger.event,
+      action: typeof data.kind === "string" ? data.kind : null,
       category,
       step: typeof data.step === "number" ? data.step : null,
       prospectId,
+      prospect: person?.prospect ?? null,
+      replied: person?.replied ?? false,
       url: campaignId ? link(`/campaigns/${campaignId}`) : null,
       threadUrl: prospectId ? link(campaignThreadPath(prospectId)) : null,
     };
@@ -1508,6 +1574,7 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
           lastName: render(config.lastName, ctx.vars).trim(),
           jobTitle: render(config.jobTitle, ctx.vars).trim(),
           companyId: render(config.companyId, ctx.vars).trim(),
+          linkedinUrl: render(config.linkedinUrl, ctx.vars).trim(),
           create: config.create !== false,
         },
         provenance(ctx, step),

@@ -1,12 +1,14 @@
 import { alertMembers } from "@/lib/alerts";
-import { campaignThreadPath } from "@/lib/campaigns/format";
+import { CHANNEL_TAGS, campaignThreadPath } from "@/lib/campaigns/format";
 import { addedProvenance, FILABLE_SQL, fileAddedActivity, fileMessageActivity, saveThread, threadFetched, type FilableMessage } from "@/lib/campaigns/messages";
 import { campaignProvider, type CampaignProvider, type ProviderContext } from "@/lib/campaigns/providers";
 import { refusedByProvider } from "@/lib/campaigns/stops";
 import { SUPPRESSION_AUDIT_EVENTS } from "@/lib/campaigns/suppression";
 import type { SyncedCampaign, SyncedEvent } from "@/lib/campaigns/sync";
-import type { CampaignChannel } from "@/lib/campaigns/types";
+import type { AutoAdd, CampaignChannel } from "@/lib/campaigns/types";
+import { importCampaignProspect } from "@/lib/crm/campaigns";
 import { withActor } from "@/lib/crm/context";
+import { CrmError } from "@/lib/crm/errors";
 import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -37,6 +39,7 @@ type EventDetail = {
   campaign_name: string;
   campaign_external_id: string;
   channel: CampaignChannel;
+  auto_add: AutoAdd;
   person: string;
   sender_user_id: string | null;
   handle_attempts: number;
@@ -46,7 +49,7 @@ async function eventDetails(actor: UserActor, ids: string[]) {
   return withActor(actor, async (db) => {
     const result = await db.query<EventDetail>(
       `select e.id, e.kind, e.occurred_at, e.payload, e.prospect_id, p.contact_id, p.category, p.added_by_user_id, p.sender_id,
-              p.external_lead_id, p.email, p.linkedin, k.id as campaign_id, k.name as campaign_name, k.external_id as campaign_external_id, k.channel,
+              p.external_lead_id, p.email, p.linkedin, k.id as campaign_id, k.name as campaign_name, k.external_id as campaign_external_id, k.channel, k.auto_add,
               coalesce(
                 nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), ''),
                 nullif(btrim(concat_ws(' ', p.lead->>'firstName', p.lead->>'lastName')), ''),
@@ -163,7 +166,7 @@ async function handleReply(actor: UserActor, provider: CampaignProvider, context
   const reply = messages[0] ?? null;
   if (reply ? reply.automatic : automaticReply(event.category)) {
     const uncounted = await query<{ done: boolean }>("select private.campaign_reply_uncount($1) as done", [event.id]);
-    if (uncounted.rows[0]?.done) return note;
+    if (uncounted.rows[0]?.done) return { note, counted: false };
   }
   await query("select private.campaign_reply_counted($1)", [event.id]);
   await query("select * from private.campaign_stop_person($1, $2)", [actor.workspaceId, event.prospect_id]);
@@ -174,7 +177,34 @@ async function handleReply(actor: UserActor, provider: CampaignProvider, context
     });
   }
   await notifyReply(actor, event, reply?.body ?? null);
-  return note;
+  return { note, counted: true };
+}
+
+const AUTO_ADD_PROVENANCE: Provenance = { operation: "campaign_auto_add", source: "campaign" };
+
+export function autoAddWanted(setting: AutoAdd, channel: CampaignChannel, kind: string) {
+  if (setting === "replied") return kind === "replied";
+  if (setting === "accepted") return channel === "linkedin" && kind === "invite_accepted";
+  return false;
+}
+
+export const AUTO_ADD_TRIES = 3;
+
+export function lastingAutoAddFailure(error: unknown) {
+  return error instanceof CrmError && error.status < 500 && error.status !== 429;
+}
+
+async function autoAdd(actor: UserActor, event: EventDetail): Promise<"done" | "retry"> {
+  if (!autoAddWanted(event.auto_add, event.channel, event.kind)) return "done";
+  try {
+    await importCampaignProspect(actor, event.prospect_id, { provenance: AUTO_ADD_PROVENANCE, tags: [CHANNEL_TAGS[event.channel], event.campaign_name] });
+    return "done";
+  } catch (error) {
+    console.error("Couldn't add a campaign prospect to Orbit", redactedError(error));
+    if (lastingAutoAddFailure(error) || event.handle_attempts + 1 >= AUTO_ADD_TRIES) return "done";
+    await query("select private.campaign_events_attempted($1, $2::uuid[])", [event.campaign_id, [event.id]]).catch(() => undefined);
+    return "retry";
+  }
 }
 
 async function auditSuppression(actor: UserActor, event: EventDetail) {
@@ -234,13 +264,19 @@ export async function handleCampaignEvents(campaign: SyncedCampaign, events: Syn
       await auditSuppression(actor, event).catch((error) => console.error("Couldn't record a campaign opt-out", redactedError(error)));
       continue;
     }
+    if (event.kind === "invite_accepted") {
+      if ((await autoAdd(actor, event)) === "retry") retry.push(event.id);
+      continue;
+    }
     if (event.kind !== "replied") continue;
     if (busy) {
       retry.push(event.id);
       continue;
     }
     try {
-      syncError = (await handleReply(actor, provider, context, event)) ?? syncError;
+      const handled = await handleReply(actor, provider, context, event);
+      syncError = handled.note ?? syncError;
+      if (handled.counted && (await autoAdd(actor, event)) === "retry") retry.push(event.id);
     } catch (error) {
       if (error instanceof ServiceBusy) busy = `${provider.name}: ${error.message}`;
       else {

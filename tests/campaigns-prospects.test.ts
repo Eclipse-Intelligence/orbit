@@ -942,7 +942,15 @@ describe("adding prospects", () => {
   });
 
   it("ships templates that save", () => {
-    for (const key of ["daily-prospecting", "linkedin-then-email", "email-then-linkedin", "positive-reply"]) {
+    for (const key of [
+      "daily-prospecting",
+      "linkedin-finished-then-email",
+      "email-finished-then-linkedin",
+      "linkedin-step-then-email",
+      "email-step-then-linkedin",
+      "email-then-linkedin",
+      "positive-reply",
+    ]) {
       const template = STARTER_TEMPLATES.find((item) => item.key === key);
       assert.ok(template, key);
       const parsed = definitionFromInput(template.definition);

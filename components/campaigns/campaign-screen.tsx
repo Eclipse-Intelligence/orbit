@@ -6,16 +6,29 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Monogram } from "@/components/beautifui/record-marks";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import { NativeSelect } from "@/components/_ui/native-select";
 import Tag from "@/components/_ui/tag";
 import ChannelIcon from "@/components/campaigns/channel-icon";
 import VariableBriefs from "@/components/campaigns/variable-briefs";
 import { QuietTabs } from "@/components/crm/contact-activities";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
-import { importCampaignProspectsAction, setCampaignPausedAction } from "@/app/(crm)/campaigns/actions";
-import { campaignRates, campaignThreadPath, linkedinCapacityLine, number, prospectLine, prospectTag, STATUS_LABELS } from "@/lib/campaigns/format";
+import { importCampaignProspectAction, importCampaignProspectsAction, setCampaignAutoAddAction, setCampaignPausedAction } from "@/app/(crm)/campaigns/actions";
+import {
+  AUTO_ADD_LABELS,
+  autoAddChoices,
+  campaignThreadPath,
+  linkedinCapacityLine,
+  number,
+  PROVIDER_STATS,
+  prospectLine,
+  prospectTag,
+  STATUS_LABELS,
+  type StatLabel,
+} from "@/lib/campaigns/format";
 import {
   PROVIDER_NAMES,
+  type AutoAdd,
   type CampaignChannel,
   type CampaignDetail,
   type DayStats,
@@ -45,15 +58,6 @@ function Section({ title, action, children, className }: { title?: string; actio
       )}
       {children}
     </section>
-  );
-}
-
-function Stat({ value, label, className }: { value: string | null; label: string; className?: string }) {
-  return (
-    <div className={cn("flex flex-col gap-1", className)}>
-      <span className="text-[18px] leading-6 font-medium tabular-nums">{value ?? "·"}</span>
-      <span className="caption-style text-subtle">{label}</span>
-    </div>
   );
 }
 
@@ -212,7 +216,97 @@ function Steps({ campaign }: { campaign: CampaignDetail }) {
   );
 }
 
-function ProspectsList({ prospects, linkedin }: { prospects: ProspectPage; linkedin: boolean }) {
+function StatRow({ items, campaign, label }: { items: StatLabel[]; campaign: CampaignDetail; label: string }) {
+  const shown = items.filter((item) => campaign.stats[item.key] !== undefined);
+  if (shown.length === 0) return null;
+  return (
+    <dl aria-label={label} className="grid grid-cols-2 gap-x-6 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-8">
+      {shown.map((item) => (
+        <div key={item.key} className="flex flex-col-reverse gap-1">
+          <dt className="caption-style text-subtle">{item.label}</dt>
+          <dd className="text-[18px] leading-6 font-medium tabular-nums">{number(campaign.stats[item.key]) ?? "·"}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ImportOne({ campaignId, prospectId, name }: { campaignId: string; prospectId: string; name: string }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run() {
+    setPending(true);
+    setError(null);
+    const outcome = await importCampaignProspectAction(campaignId, prospectId).catch(() => ({ error: "Couldn't import. Try again." }));
+    setPending(false);
+    if (outcome.error) {
+      setError(outcome.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <span className="relative z-10 flex min-w-0 flex-col items-end gap-0.5">
+      <Button variant="secondary" size="sm" disabled={pending} onClick={() => void run()} aria-label={`Import ${name}`} className="hit">
+        {pending ? "Importing…" : "Import"}
+      </Button>
+      {error && (
+        <span role="alert" className="caption-style text-danger max-w-[16em] text-right">
+          {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function AutoAddSetting({ campaignId, channel, value }: { campaignId: string; channel: CampaignChannel; value: AutoAdd }) {
+  const router = useRouter();
+  const [current, setCurrent] = useState(value);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function change(next: AutoAdd) {
+    const before = current;
+    setCurrent(next);
+    setPending(true);
+    setError(null);
+    const outcome = await setCampaignAutoAddAction(campaignId, next).catch(() => ({ error: "Couldn't save. Try again." }));
+    setPending(false);
+    if (outcome.error) {
+      setCurrent(before);
+      setError(outcome.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <label htmlFor="campaign-auto-add" className="ui-style text-soft">
+          Add to Orbit
+        </label>
+        <NativeSelect id="campaign-auto-add" value={current} disabled={pending} onChange={(event) => void change(event.target.value as AutoAdd)} className="h-8 w-auto min-w-[11em]">
+          {autoAddChoices(channel).map((item) => (
+            <option key={item} value={item}>
+              {AUTO_ADD_LABELS[item]}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
+      {error && (
+        <p role="alert" className="caption-style text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ProspectsList({ prospects, linkedin, campaignId, canImport }: { prospects: ProspectPage; linkedin: boolean; campaignId: string; canImport: boolean }) {
   if (prospects.rows.length === 0) return <p className="ui-style text-subtle">No prospects</p>;
   return (
     <ul className="-mx-4 flex flex-col sm:-mx-5">
@@ -225,7 +319,8 @@ function ProspectsList({ prospects, linkedin }: { prospects: ProspectPage; linke
         </li>
       )}
       {prospects.rows.map((row) => {
-        const tag = prospectTag(row);
+        const tag = prospectTag(row, linkedin ? "linkedin" : "email");
+        const importable = canImport && row.importable === true;
         const line = linkedin && row.sender ? `${row.sender} · ${lowerFirst(prospectLine(row))}` : prospectLine(row);
         return (
           <li
@@ -245,7 +340,8 @@ function ProspectsList({ prospects, linkedin }: { prospects: ProspectPage; linke
                 {row.companyName && <span className="caption-style text-subtle hidden truncate md:block">{row.companyName}</span>}
               </span>
             </span>
-            <span className="flex justify-end md:justify-start">
+            <span className="flex items-center justify-end gap-2 md:justify-start">
+              {importable && <ImportOne campaignId={campaignId} prospectId={row.id} name={row.name} />}
               {tag ? (
                 <Tag tone={tag.tone} size="sm" className="caption-style">
                   {tag.label}
@@ -367,7 +463,6 @@ export default function CampaignScreen({
   const [draft, setDraft] = useState(search);
   const [pauseError, setPauseError] = useState<string | null>(null);
   const pausable = canAct && (campaign.status === "active" || campaign.status === "paused");
-  const rates = campaignRates(campaign);
   const linkedin = campaign.channel === "linkedin";
   const pages = Math.ceil(prospects.total / prospects.pageSize);
 
@@ -386,10 +481,7 @@ export default function CampaignScreen({
     go({ q: draft.trim() || null, page: null });
   }
 
-  const extras = [
-    rates.opened ? `${rates.opened} opened` : null,
-    campaign.stats.unsubscribed ? `${number(campaign.stats.unsubscribed)} unsubscribed` : null,
-  ].filter(Boolean);
+  const labels = PROVIDER_STATS[campaign.provider];
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -440,23 +532,8 @@ export default function CampaignScreen({
                 {pauseError}
               </p>
             )}
-            {linkedin ? (
-              <div className="flex flex-wrap gap-x-8 gap-y-3">
-                <Stat value={number(campaign.prospects)} label="Prospects" className="max-sm:hidden" />
-                <Stat value={number(campaign.stats.invites)} label="Invites" />
-                <Stat value={rates.accepted} label="Accepted" />
-                <Stat value={rates.replied} label="Replied" />
-                <Stat value={rates.positive} label="Positive" className="max-sm:hidden" />
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-x-8 gap-y-3">
-                <Stat value={number(campaign.prospects)} label="Prospects" />
-                <Stat value={number(campaign.stats.sent)} label="Sent" className="max-sm:hidden" />
-                <Stat value={rates.replied} label="Replied" />
-                <Stat value={rates.positive} label="Positive" />
-                <Stat value={rates.bounced} label="Bounced" />
-              </div>
-            )}
+            <StatRow items={labels.leads} campaign={campaign} label="Leads" />
+            <StatRow items={labels.activity} campaign={campaign} label="Activity" />
             <Chart days={campaign.days} channel={campaign.channel} />
             <div className="caption-style text-subtle flex flex-wrap items-center gap-x-3 gap-y-1">
               <span className="flex items-center gap-1.5">
@@ -467,7 +544,6 @@ export default function CampaignScreen({
                 <span aria-hidden className="bg-primary size-2 rounded-[2px]" />
                 {CHART_WORDS[campaign.channel].overlay}
               </span>
-              {extras.length > 0 && <span>{extras.join(" · ")}</span>}
             </div>
             <p className="caption-style text-subtle">{syncLine}</p>
             {campaign.strayConversations > 0 && <p className="caption-style text-subtle">{strayLine(campaign.strayConversations)}</p>}
@@ -501,8 +577,9 @@ export default function CampaignScreen({
               </div>
             }
           >
+            {canImport && <AutoAddSetting key={campaign.autoAdd} campaignId={campaign.id} channel={campaign.channel} value={campaign.autoAdd} />}
             {canImport && <ImportLine campaignId={campaign.id} unlinked={campaign.unlinked} />}
-            <ProspectsList prospects={prospects} linkedin={linkedin} />
+            <ProspectsList prospects={prospects} linkedin={linkedin} campaignId={campaign.id} canImport={canImport} />
             {pages > 1 && (
               <div className="flex items-center justify-between gap-2">
                 <span className="caption-style text-subtle">

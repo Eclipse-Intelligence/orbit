@@ -9,13 +9,13 @@ import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { addedLine, campaignThreadPath } from "@/lib/campaigns/format";
 import { addCompanyContacts, addProspects, saveCampaignVariables } from "@/lib/campaigns/prospects";
 import type { VariableBrief } from "@/lib/campaigns/types";
-import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused, type RemoveResult } from "@/lib/campaigns/manage";
+import { removeProspect, setCampaignAutoAdd, setCampaignPaused, setProspectCategory, setProspectPaused, type RemoveResult } from "@/lib/campaigns/manage";
 import { replyToProspect, type ReplyResult } from "@/lib/campaigns/replies";
 import { linkCampaignSender } from "@/lib/campaigns/senders";
 import { liftDoNotContact, setDoNotContact, type DoNotContactTarget } from "@/lib/campaigns/suppression";
 import { syncCampaigns } from "@/lib/campaigns/sync";
 import { refreshProspectThread } from "@/lib/campaigns/threads";
-import { importCampaignProspects, type ImportResult } from "@/lib/crm/campaigns";
+import { importCampaignProspect, importCampaignProspects, type ImportResult } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
 import { contactHref } from "@/lib/crm/hrefs";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
@@ -76,6 +76,28 @@ export async function importCampaignProspectsAction(campaignId: string): Promise
     return { result };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't import. Try again." };
+  }
+}
+
+export async function importCampaignProspectAction(campaignId: string, prospectId: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await importCampaignProspect(user, prospectId);
+    revalidatePath(`/campaigns/${campaignId}`);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't import. Try again." };
+  }
+}
+
+export async function setCampaignAutoAddAction(campaignId: string, value: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await setCampaignAutoAdd(user, campaignId, value);
+    revalidatePath(`/campaigns/${campaignId}`);
+    return {};
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't save. Try again." };
   }
 }
 

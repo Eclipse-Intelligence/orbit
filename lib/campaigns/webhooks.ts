@@ -2,12 +2,13 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { after } from "next/server";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { prospectEmail } from "@/lib/campaigns/normalize";
-import { campaignProvider } from "@/lib/campaigns/providers";
-import { syncCampaigns } from "@/lib/campaigns/sync";
+import { campaignProvider, type WebhookActions } from "@/lib/campaigns/providers";
+import { saveProviderEvents, syncCampaigns } from "@/lib/campaigns/sync";
 import type { CampaignProviderId } from "@/lib/campaigns/types";
 import { storedWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { isUuid } from "@/lib/crm/mutate";
 import { query } from "@/lib/db/pool";
+import { webhookShape } from "@/lib/heyreach";
 import { redactedError } from "@/lib/upstream";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -38,6 +39,22 @@ function syncSoon(workspaceId: string, provider: CampaignProviderId, options: We
   } catch {}
 }
 
+async function saveWebhookActions(workspaceId: string, providerId: CampaignProviderId, actions: WebhookActions, receiptKey: string, options: WebhookOptions) {
+  const found = await query<{ campaign_id: string; backfilled: boolean }>("select * from private.campaign_webhook_campaign($1, $2, $3)", [
+    workspaceId,
+    providerId,
+    actions.campaignExternalId,
+  ]);
+  const campaign = found.rows[0];
+  if (!campaign) return json({ ignored: true });
+  const saved = await saveProviderEvents(campaign.campaign_id, actions.events, !campaign.backfilled);
+  const key = createHash("sha256").update(receiptKey).digest("hex");
+  const receipt = await query<{ fresh: boolean }>("select private.campaign_webhook_receipt($1, $2, $3) as fresh", [workspaceId, providerId, key]);
+  if (saved.length > 0 && campaign.backfilled) syncSoon(workspaceId, providerId, options);
+  if (saved.length === 0 && !receipt.rows[0]?.fresh) return json({ duplicate: true });
+  return json({ saved: saved.length });
+}
+
 export async function handleCampaignWebhook(request: Request, providerId: CampaignProviderId, options: WebhookOptions = {}): Promise<Response> {
   const provider = campaignProvider(providerId);
   if (!provider) return json({ error: "Not found." }, 404);
@@ -55,7 +72,10 @@ export async function handleCampaignWebhook(request: Request, providerId: Campai
   } catch {
     return json({ ignored: true });
   }
+  if (provider.id === "heyreach") console.info("HeyReach webhook fields", webhookShape(payload).join(" ").slice(0, 2000));
   const hint = provider.webhookHint(payload, request.headers);
+  const actions = provider.webhookActions?.(payload) ?? null;
+  if (actions) return saveWebhookActions(workspaceId, provider.id, actions, `${provider.id}-action|${raw}`, options);
   if (!hint) return json({ ignored: true });
   const flagged = await query<{ count: number }>("select private.campaign_request_sync($1, $2, $3, $4, $5, $6) as count", [
     workspaceId,

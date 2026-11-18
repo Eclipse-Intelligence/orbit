@@ -77,7 +77,7 @@ export const PROPOSAL_EVENT_LABELS: Record<ProposalEvent, string> = {
   declined: "Is declined",
 };
 
-export const CAMPAIGN_EVENTS = ["added", "replied", "positive", "engaged", "bounced", "unsubscribed", "invite_accepted"] as const;
+export const CAMPAIGN_EVENTS = ["added", "step", "replied", "positive", "engaged", "bounced", "unsubscribed", "invite_accepted", "finished"] as const;
 export type CampaignEvent = (typeof CAMPAIGN_EVENTS)[number];
 
 export const CAMPAIGN_EVENT_LABELS: Record<CampaignEvent, string> = {
@@ -88,12 +88,30 @@ export const CAMPAIGN_EVENT_LABELS: Record<CampaignEvent, string> = {
   bounced: "Bounced",
   unsubscribed: "Unsubscribed",
   invite_accepted: "Invite accepted",
+  step: "Reached a step",
+  finished: "Finished",
 };
+
+export const LINKEDIN_ACTIONS = ["profile_viewed", "post_liked", "followed", "invite_sent", "invite_accepted", "message_sent", "inmail_sent"] as const;
+export type LinkedinAction = (typeof LINKEDIN_ACTIONS)[number];
+
+export const LINKEDIN_ACTION_LABELS: Record<LinkedinAction, string> = {
+  profile_viewed: "Viewed profile",
+  post_liked: "Liked post",
+  followed: "Followed",
+  invite_sent: "Connection request sent",
+  invite_accepted: "Accepted",
+  message_sent: "Message sent",
+  inmail_sent: "InMail sent",
+};
+
+export const STEP_MAX = 50;
 
 export const CAMPAIGN_EVENT_HINTS: Partial<Record<CampaignEvent, string>> = {
   engaged: "Opened twice, or clicked more than a minute after sending.",
   positive: "Interested, a meeting, or another positive category.",
   invite_accepted: "LinkedIn only.",
+  finished: "Finished the sequence without replying.",
 };
 
 export const AI_OUTPUT_TYPES = ["text", "number", "boolean", "list", "choice"] as const;
@@ -176,6 +194,11 @@ const triggerSchema = z.discriminatedUnion("type", [
     type: z.literal("campaign_event"),
     event: z.enum(CAMPAIGN_EVENTS),
     channel: z.enum(["email", "linkedin"]).nullable().optional(),
+    campaignId: z.uuid().nullable().optional(),
+    campaignName: z.string().max(500).optional(),
+    step: z.number().int().min(1).max(STEP_MAX).nullable().optional(),
+    action: z.enum(LINKEDIN_ACTIONS).nullable().optional(),
+    nth: z.number().int().min(1).max(STEP_MAX).nullable().optional(),
   }),
 ]);
 export type Trigger = z.infer<typeof triggerSchema>;
@@ -292,7 +315,17 @@ function parallelProblem(definition: WorkflowDefinition): string | null {
   return null;
 }
 
+export function triggerProblem(trigger: Trigger): string | null {
+  if (trigger.type !== "campaign_event" || trigger.event !== "step") return null;
+  if (trigger.channel === "email" && !trigger.step) return "Reached a step needs a step number.";
+  if (trigger.channel === "linkedin" && !trigger.action) return "Reached a step needs a LinkedIn action.";
+  if (!trigger.channel) return "Reached a step needs a channel: Email or LinkedIn.";
+  return null;
+}
+
 export function graphProblem(definition: WorkflowDefinition): string | null {
+  const triggerIssue = triggerProblem(definition.trigger);
+  if (triggerIssue) return triggerIssue;
   const ids = new Set(definition.nodes.map((node) => node.id));
   if (ids.size !== definition.nodes.length) return "Two steps share the same id.";
   if (ids.has(TRIGGER_NODE)) return "A step can't be called trigger.";

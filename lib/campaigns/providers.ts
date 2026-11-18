@@ -18,12 +18,16 @@ import {
   findHeyReachLead,
   HEYREACH_APP,
   HEYREACH_PUSH_BATCH,
+  HEYREACH_REPLY_EVENT,
+  HEYREACH_WEBHOOK_EVENTS,
   HeyReachError,
+  heyReachWebhookAction,
   heyReachWebhookHint,
   listHeyReachAccounts,
   listHeyReachCampaigns,
   listHeyReachConversations,
   listHeyReachLeads,
+  listHeyReachListLeads,
   readHeyReachCampaign,
   readHeyReachChatroom,
   readHeyReachSequence,
@@ -34,6 +38,7 @@ import {
   variablesIn as heyReachVariables,
   type HeyReachConversation,
   type HeyReachLead,
+  type HeyReachLeadCounts,
 } from "@/lib/heyreach";
 import {
   addSmartleadLeads,
@@ -61,6 +66,7 @@ import {
   SMARTLEAD_PUSH_BATCH,
   SmartleadError,
   smartleadClients,
+  SMARTLEAD_WEBHOOK_EVENTS,
   smartleadWebhookHint,
   unblockSmartleadAddress,
   type SmartleadStatRow,
@@ -90,7 +96,7 @@ export type ProviderSender = {
   messageLimit: number | null;
 };
 
-export type StatsRead = { stats: CampaignStats; days?: ProviderDay[] };
+export type StatsRead = { stats: CampaignStats; days?: ProviderDay[]; listId?: string | null };
 
 export type LeadProfile = {
   firstName?: string | null;
@@ -126,7 +132,9 @@ export type ProviderEvent = {
   payload?: Record<string, unknown>;
 };
 
-export type ProviderPage<T> = { items: T[]; next: number | null };
+export type ProviderPage<T> = { items: T[]; next: number | null; leads?: ProviderLead[] };
+
+export type WebhookActions = { campaignExternalId: string; events: ProviderEvent[] };
 
 export type ConnectionCheck = { details: Record<string, unknown>; campaigns: number; senders?: ProviderSender[] };
 
@@ -202,6 +210,7 @@ export type CampaignProvider = {
   readStats(context: ProviderContext, externalId: string): Promise<StatsRead>;
   readLeads(context: ProviderContext, externalId: string, offset: number): Promise<ProviderPage<ProviderLead>>;
   readEvents(context: ProviderContext, externalId: string, since: string | null, offset: number): Promise<ProviderPage<ProviderEvent>>;
+  readListLeads?(context: ProviderContext, listId: string, offset: number): Promise<ProviderPage<ProviderLead>>;
   readMailboxes?(context: ProviderContext, externalId: string): Promise<Mailbox[]>;
   listSenders?(context: ProviderContext): Promise<ProviderSender[]>;
   campaignUrl(externalId: string): string | null;
@@ -218,8 +227,10 @@ export type CampaignProvider = {
   unblockAddress?(context: ProviderContext, address: string): Promise<number>;
   blockAddresses?(context: ProviderContext, addresses: string[]): Promise<void>;
   categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
-  registerWebhook(context: ProviderContext, campaignExternalId: string, url: string): Promise<string>;
+  webhookEvents: string[];
+  registerWebhook(context: ProviderContext, campaignExternalId: string, url: string, event: string): Promise<string>;
   webhookHint(payload: unknown, headers: Headers): WebhookHint | null;
+  webhookActions?(payload: unknown): WebhookActions | null;
   pushBatch: number;
   valueLimit: number;
   variableToken(name: string): string;
@@ -436,6 +447,7 @@ export const smartleadProvider: CampaignProvider = {
   unblockAddress: (context, address) => unblockSmartleadAddress(context.key, address, context),
   categoryKey: (campaignExternalId, lead, category) => smartleadCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.email ?? "", category),
   blockAddresses: (context, addresses) => blockSmartleadAddresses(context.key, addresses, context),
+  webhookEvents: [SMARTLEAD_WEBHOOK_EVENTS.join(",")],
   registerWebhook: (context, campaignExternalId, url) => createSmartleadWebhook(context.key, campaignExternalId, url, context),
   webhookHint: (payload, headers) => smartleadWebhookHint(payload, headers.get("x-request-id")),
   pushBatch: SMARTLEAD_PUSH_BATCH,
@@ -535,12 +547,45 @@ export function heyReachEvents(campaignId: string, leads: HeyReachLead[]): Provi
   return events;
 }
 
+function heyReachProviderLeads(leads: HeyReachLead[]): ProviderLead[] {
+  return leads.flatMap((lead): ProviderLead[] => {
+    const linkedin = prospectLinkedin(lead.profileUrl);
+    if (!lead.id && !linkedin) return [];
+    return [
+      {
+        externalId: lead.id,
+        email: null,
+        linkedin,
+        lead: heyReachProfile(lead),
+        leadStatus: lead.status,
+        category: null,
+        addedAt: lead.addedAt,
+        senderId: lead.accountId,
+      },
+    ];
+  });
+}
+
+export function heyReachLeadStats(counts: HeyReachLeadCounts | null): CampaignStats {
+  if (!counts) return {};
+  const stats: CampaignStats = {
+    leads: counts.total,
+    enrolled: counts.enrolled,
+    notEnrolled: counts.notEnrolled,
+    finished: counts.finished,
+    pausedLeads: counts.paused,
+    failed: counts.failed,
+    excluded: counts.excluded,
+  };
+  return Object.fromEntries(Object.entries(stats).filter(([, value]) => value !== undefined));
+}
+
 export const heyReachProvider: CampaignProvider = {
   id: "heyreach",
   channel: "linkedin",
   name: "HeyReach",
   needsLeadId: false,
-  standardVariables: ["first_name", "last_name", "company_name", "position", "location"],
+  standardVariables: ["first_name", "last_name", "company_name", "position", "location", "FIRST_NAME", "LAST_NAME", "COMPANY", "COMPANY_NAME", "POSITION", "LOCATION"],
   failure: (error) => (error instanceof HeyReachError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404, status: error.status } : null),
   async checkKey(context) {
     await checkHeyReachKey(context.key, context);
@@ -560,32 +605,39 @@ export const heyReachProvider: CampaignProvider = {
   },
   readSequence: (context, externalId) => readHeyReachSequence(context.key, externalId, context),
   variables: heyReachVariables,
-  readStats: (context, externalId) => readHeyReachStats(context.key, externalId, context),
+  async readStats(context, externalId) {
+    const read = await readHeyReachStats(context.key, externalId, context);
+    return { stats: { ...read.stats, ...heyReachLeadStats(read.leadCounts) }, days: read.days, listId: read.listId };
+  },
   async readLeads(context, externalId, offset) {
     const page = await listHeyReachLeads(context.key, externalId, offset, context);
+    return { items: heyReachProviderLeads(page.leads), next: page.next };
+  },
+  async readEvents(context, externalId, since, offset) {
+    const page = await listHeyReachLeads(context.key, externalId, offset, { ...context, since });
+    return { items: heyReachEvents(externalId, page.leads), next: page.next, leads: heyReachProviderLeads(page.leads) };
+  },
+  async readListLeads(context, listId, offset) {
+    const page = await listHeyReachListLeads(context.key, listId, offset, context);
     return {
       items: page.leads.flatMap((lead): ProviderLead[] => {
         const linkedin = prospectLinkedin(lead.profileUrl);
-        if (!lead.id && !linkedin) return [];
+        if (!linkedin) return [];
         return [
           {
-            externalId: lead.id,
+            externalId: null,
             email: null,
             linkedin,
-            lead: heyReachProfile(lead),
-            leadStatus: lead.status,
+            lead: { firstName: lead.firstName, lastName: lead.lastName, companyName: lead.companyName, title: lead.title, linkedinUrl: lead.profileUrl },
+            leadStatus: null,
             category: null,
-            addedAt: lead.addedAt,
-            senderId: lead.accountId,
+            addedAt: null,
+            senderId: null,
           },
         ];
       }),
       next: page.next,
     };
-  },
-  async readEvents(context, externalId, since, offset) {
-    const page = await listHeyReachLeads(context.key, externalId, offset, { ...context, since });
-    return { items: heyReachEvents(externalId, page.leads), next: page.next };
   },
   async listSenders(context) {
     return (await listHeyReachAccounts(context.key, context)).map((account) => ({
@@ -632,7 +684,32 @@ export const heyReachProvider: CampaignProvider = {
     return "stopped";
   },
   categoryKey: (campaignExternalId, lead, category) => heyReachCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.linkedin ?? "", category),
-  registerWebhook: (context, campaignExternalId, url) => createHeyReachWebhook(context.key, campaignExternalId, url, context),
+  webhookEvents: HEYREACH_WEBHOOK_EVENTS,
+  registerWebhook: (context, campaignExternalId, url, event) => createHeyReachWebhook(context.key, campaignExternalId, url, { ...context, eventType: event || HEYREACH_REPLY_EVENT }),
+  webhookActions(payload) {
+    const action = heyReachWebhookAction(payload);
+    const linkedin = action ? prospectLinkedin(action.profileUrl) : null;
+    if (!action || !action.campaignId || !linkedin) return null;
+    const counted = action.kind === "message_sent" || action.kind === "inmail_sent";
+    return {
+      campaignExternalId: action.campaignId,
+      events: [
+        {
+          externalLeadId: null,
+          email: null,
+          linkedin,
+          lead: { firstName: action.firstName, lastName: action.lastName, companyName: action.companyName, title: action.title, linkedinUrl: action.profileUrl },
+          kind: action.kind,
+          step: null,
+          variant: null,
+          occurredAt: action.at,
+          dedupeKey: `heyreach:${action.campaignId}:${linkedin}:${action.kind}`,
+          category: null,
+          payload: { ...(action.accountId ? { senderId: action.accountId } : {}), fromWebhook: true, ...(counted ? { countSent: true } : {}) },
+        },
+      ],
+    };
+  },
   webhookHint(payload) {
     const hint = heyReachWebhookHint(payload);
     return hint ? { campaignId: hint.campaignId, leadId: hint.leadId, email: null, linkedin: prospectLinkedin(hint.profileUrl), receiptKey: hint.receiptKey } : null;
