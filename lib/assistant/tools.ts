@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { dueDayOfInput, repeatAnchorDay, type RepeatAnchorTask } from "@/lib/assistant/repeat-anchor";
 import { after } from "next/server";
-import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
+import { applyMailAction, partialProblem, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
 import { everywhereAllowed, forgetMemory, lessTrusted, listMemories, OUTSIDE_ORIGINS, recall, rememberNote, type NoteOrigin } from "@/lib/learning/memories";
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
@@ -3119,7 +3119,8 @@ const TOOL_LIST: AssistantTool[] = [
           if (action === "remind_if_no_reply") await addFollowUp(actor, { thread, dueAt: until!, subject });
           else {
             const result = await applyMailAction(actor, { thread, action, until: until?.toISOString() ?? null });
-            if (result.failed > 0) failed.push({ emailId: id, error: `Couldn't change ${result.failed} ${result.failed === 1 ? "email" : "emails"} in this conversation. ${result.problem ?? ""}`.trim() });
+            const problem = partialProblem(result);
+            if (problem) failed.push({ emailId: id, error: problem });
           }
           done.push(subject || "(no subject)");
         } catch (error) {

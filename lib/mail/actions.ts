@@ -104,6 +104,17 @@ function logFailures(action: string, sourceId: string, failures: unknown[]) {
   for (const failure of failures) console.error("Mail action failed in Microsoft", { action, mailbox: sourceId, ...graphFailure(failure) });
 }
 
+function landsIn(actor: UserActor, sourceId: string, role: MailRole) {
+  let roles: Promise<Map<string, MailRole>> | null = null;
+  return async (providerFolderId: string) => {
+    roles ??= withActor(actor, async (db) => {
+      const result = await db.query<{ provider_folder_id: string; role: MailRole }>("select provider_folder_id, role from crm.mail_folders where source_id = $1", [sourceId]);
+      return new Map(result.rows.map((row) => [row.provider_folder_id, row.role]));
+    });
+    return (await roles).get(providerFolderId) === role;
+  };
+}
+
 async function snoozeFolder(actor: UserActor, sourceId: string, token: string, fetchImpl: typeof fetch) {
   const stored = await withActor(actor, async (db) => {
     const result = await db.query<{ snooze_folder_id: string | null }>("select snooze_folder_id from crm.mail_sources where id = $1", [sourceId]);
@@ -252,9 +263,10 @@ export async function applyMailAction(
   const base = MOVES[input.action];
   const move = base && input.action === "snooze" ? { ...base, destination: await snoozeFolder(actor, sourceId, token, fetchImpl) } : base;
   const done: { row: Row; folder: string | null; providerId: string }[] = [];
+  const landed = move ? landsIn(actor, sourceId, move.role) : undefined;
   const failures = await eachLimited(chosen, async (row) => {
     if (move) {
-      const moved = await moveMicrosoftMessage(token, row.provider_message_id, move.destination, fetchImpl, limit);
+      const moved = await moveMicrosoftMessage(token, row.provider_message_id, move.destination, fetchImpl, limit, landed);
       done.push({ row, folder: moved.folderId, providerId: moved.id });
       return;
     }
@@ -288,6 +300,18 @@ export async function applyMailAction(
   return { changed: done.length, failed: failures.length, problem: await failureMessage(actor, sourceId, failures[0]) };
 }
 
+export function partialProblem(result: MailActionResult) {
+  if (result.failed === 0) return null;
+  return `Couldn't change ${result.failed} ${result.failed === 1 ? "email" : "emails"} in this conversation. ${result.problem ?? "Try again."}`;
+}
+
+export async function everyEmailChanged(pending: Promise<MailActionResult>) {
+  const result = await pending;
+  const problem = partialProblem(result);
+  if (problem) throw new CrmError("mail_action_failed", problem, 502);
+  return result;
+}
+
 export async function threadForEmail(actor: UserActor, emailId: string) {
   if (!isUuid(emailId)) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   return withActor(actor, async (db) => {
@@ -315,8 +339,9 @@ export async function moveMessages(
   const destination = typeof target === "string" ? MOVES[target]!.destination : target.providerFolderId;
   const role = typeof target === "string" ? MOVES[target]!.role : target.role;
   const done: { id: string; folder: string | null; threadKey: string; providerIds: string[] }[] = [];
+  const landed = typeof target === "string" ? landsIn(actor, sourceId, role) : undefined;
   const failures = await eachLimited(messages, async (message) => {
-    const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl);
+    const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl, {}, landed);
     done.push({ id: message.id, folder: moved.folderId, threadKey: message.threadKey, providerIds: [message.providerMessageId, moved.id] });
   });
   if (done.length > 0) {

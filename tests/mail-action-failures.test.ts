@@ -4,8 +4,10 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { runCaptureAction } from "@/lib/crm/capture-actions";
 import { ACTION_BUDGET_MS, applyMailAction, moveMessages } from "@/lib/mail/actions";
-import { MOVE_UNCONFIRMED, retryWaitMs } from "@/lib/mail/microsoft";
+import { processDueMail } from "@/lib/mail/due";
+import { MOVE_CONFIRM_MS, MOVE_UNCONFIRMED, retryWaitMs } from "@/lib/mail/microsoft";
 import { syncMail } from "@/lib/mail/sync";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -21,6 +23,14 @@ const CONVERSATIONS: Record<string, string[]> = {
   "conv-deadline": ["deadline-1"],
   "conv-read": ["read-1", "read-2"],
   "conv-many": ["many-1", "many-2"],
+  "conv-still": ["still-1"],
+  "conv-elsewhere": ["elsewhere-1"],
+  "conv-timeout": ["timeout-1"],
+  "conv-dropped": ["dropped-1"],
+  "conv-trash-timeout": ["trash-timeout-1"],
+  "conv-capture-archive": ["capture-archive-1", "capture-archive-2"],
+  "conv-capture-snooze": ["capture-snooze-1", "capture-snooze-2"],
+  "conv-snoozed": ["snoozed-1", "snoozed-2"],
 };
 
 function message(id: string, conversationId: string, index: number) {
@@ -47,17 +57,22 @@ function message(id: string, conversationId: string, index: number) {
   };
 }
 
-type Handler = (url: string, method: string, attempt: number) => Response | undefined;
+type Handler = (url: string, method: string, attempt: number, moveTo: (id: string, folder: string) => void) => Response | Error | undefined;
 
 function outlook(handler: Handler = () => undefined) {
   const calls: string[] = [];
   const where = new Map<string, string>();
+  const moveTo = (id: string, folder: string) => {
+    where.set(id, folder);
+  };
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     const method = init?.method ?? "GET";
     calls.push(`${method} ${url}`);
-    const custom = handler(url, method, calls.filter((call) => call === `${method} ${url}`).length);
+    const custom = handler(url, method, calls.filter((call) => call === `${method} ${url}`).length, moveTo);
+    if (custom instanceof Error) throw custom;
     if (custom) return custom;
+    if (method === "POST" && url === `${GRAPH}/me/mailFolders`) return Response.json({ id: "f-snoozed", displayName: "Snoozed" }, { status: 201 });
     const id = decodeURIComponent(url.match(/\/me\/messages\/([^/?]+)/)?.[1] ?? "");
     if (method === "POST" && url.endsWith("/move")) {
       const destination = String((JSON.parse(String(init?.body)) as { destinationId: string }).destinationId);
@@ -105,6 +120,21 @@ describe("mail action failures", () => {
     return result.rows[0]?.role ?? null;
   };
 
+  const addReminder = async (conversation: string) => {
+    await getAdminPool().query(
+      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject, state)
+       values ($1, $2, $3, $4, 'follow_up', now() - interval '1 hour', 'Follow up', 'due')`,
+      [owner.workspaceId, owner.userId, sourceId, conversation],
+    );
+  };
+  const reminderState = async (conversation: string, kind = "follow_up") => {
+    const result = await getAdminPool().query<{ state: string }>(
+      "select state from crm.mail_reminders where thread_key = $1 and kind = $2 order by created_at desc limit 1",
+      [conversation, kind],
+    );
+    return result.rows[0]?.state ?? null;
+  };
+
   before(async () => {
     await resetDatabase();
     owner = await createUser("mail-failures@orbit.test", "Mark Ridgeon");
@@ -139,17 +169,38 @@ describe("mail action failures", () => {
     assert.equal(await roleOf("lost-1"), "archive");
   });
 
-  it("checks where the email is when the repeated move can't find it, instead of saying it's gone", async () => {
-    const box = outlook((url, method, attempt) => {
+  it("checks where the email is when the repeated move can't find it, and counts it moved only when it is in the destination", async () => {
+    const box = outlook((url, method, attempt, moveTo) => {
       if (method !== "POST" || !url.endsWith("/gone-1/move")) return undefined;
-      return attempt === 1 ? serverError(502) : notFound();
+      if (attempt > 1) return notFound();
+      moveTo("gone-1", "f-archive");
+      return serverError(502);
     });
-    const base = box.fetchImpl;
-    const archived: typeof fetch = async (input, init) =>
-      /\/gone-1\?\$select=id,parentFolderId$/.test(String(input)) ? Response.json({ id: "gone-1", parentFolderId: "f-archive" }) : base(input, init);
-    const result = await applyMailAction(owner, { thread: thread("conv-gone"), action: "archive", view: { role: "inbox" } }, archived);
+    const result = await applyMailAction(owner, { thread: thread("conv-gone"), action: "archive", view: { role: "inbox" } }, box.fetchImpl);
     assert.deepEqual(result, { changed: 1, failed: 0, problem: null });
+    assert.equal(box.moves("gone-1"), 2);
     assert.equal(await roleOf("gone-1"), "archive");
+
+    await addReminder("conv-still");
+    const still = outlook((url, method, attempt) => (method === "POST" && url.endsWith("/still-1/move") ? (attempt === 1 ? serverError(503) : notFound()) : undefined));
+    await assert.rejects(
+      () => applyMailAction(owner, { thread: thread("conv-still"), action: "archive", view: { role: "inbox" } }, still.fetchImpl),
+      (error: Error) => error.message === MOVE_UNCONFIRMED,
+    );
+    assert.equal(await roleOf("still-1"), "inbox", "an email still in the inbox is not counted as archived");
+    assert.equal(await reminderState("conv-still"), "due", "no reminder is settled");
+
+    const elsewhere = outlook((url, method, attempt, moveTo) => {
+      if (method !== "POST" || !url.endsWith("/elsewhere-1/move")) return undefined;
+      if (attempt > 1) return notFound();
+      moveTo("elsewhere-1", "f-trash");
+      return serverError(500);
+    });
+    await assert.rejects(
+      () => applyMailAction(owner, { thread: thread("conv-elsewhere"), action: "archive", view: { role: "inbox" } }, elsewhere.fetchImpl),
+      (error: Error) => error.message === MOVE_UNCONFIRMED,
+    );
+    assert.equal(await roleOf("elsewhere-1"), "inbox", "a folder other than the destination is not recorded");
 
     const lost = outlook((url, method, attempt) => {
       if (method === "POST" && url.endsWith("/unconfirmed-1/move")) return attempt === 1 ? serverError(504) : notFound();
@@ -168,6 +219,59 @@ describe("mail action failures", () => {
       /That email is no longer in Outlook\./,
     );
     assert.equal(deleted.moves("deleted-1"), 1, "a plain 404 is not repeated");
+  });
+
+  it("confirms a move whose answer timed out or never arrived, and records it only when it landed", async () => {
+    const timedOut = outlook((url, method, _attempt, moveTo) => {
+      if (method !== "POST" || !url.endsWith("/timeout-1/move")) return undefined;
+      moveTo("timeout-1", "f-archive");
+      return new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    });
+    const result = await applyMailAction(owner, { thread: thread("conv-timeout"), action: "archive", view: { role: "inbox" } }, timedOut.fetchImpl);
+    assert.deepEqual(result, { changed: 1, failed: 0, problem: null });
+    assert.equal(timedOut.moves("timeout-1"), 1, "a move without an answer is checked, not repeated");
+    assert.equal(await roleOf("timeout-1"), "archive");
+
+    const dropped = outlook((url, method) => (method === "POST" && url.endsWith("/dropped-1/move") ? new TypeError("fetch failed") : undefined));
+    await assert.rejects(
+      () => applyMailAction(owner, { thread: thread("conv-dropped"), action: "archive", view: { role: "inbox" } }, dropped.fetchImpl),
+      (error: Error) => error.message === MOVE_UNCONFIRMED,
+    );
+    assert.equal(await roleOf("dropped-1"), "inbox");
+
+    const row = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where provider_message_id = 'trash-timeout-1'")).rows[0];
+    const binned = outlook((url, method, _attempt, moveTo) => {
+      if (method !== "POST" || !url.endsWith("/trash-timeout-1/move")) return undefined;
+      moveTo("trash-timeout-1", "f-trash");
+      return new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    });
+    const moved = await moveMessages(owner, sourceId, [{ id: row.id, providerMessageId: "trash-timeout-1", threadKey: "conv-trash-timeout" }], "trash", binned.fetchImpl);
+    assert.deepEqual(moved, { moved: [row.id], error: null });
+    assert.equal(await roleOf("trash-timeout-1"), "trash");
+  });
+
+  it("never lets Capture or a returning snooze treat a partly failed change as done", async () => {
+    const failing = (id: string) => outlook((url, method) => (method === "POST" && url.endsWith(`/${id}/move`) ? serverError(500) : undefined));
+    await assert.rejects(
+      () => runCaptureAction(owner, { kind: "reply-done", thread: thread("conv-capture-archive") }, { fetchImpl: failing("capture-archive-2").fetchImpl }),
+      /Couldn't change 1 email in this conversation\. Try again later\./,
+    );
+    assert.deepEqual([await roleOf("capture-archive-1"), await roleOf("capture-archive-2")], ["archive", "inbox"]);
+
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    await assert.rejects(
+      () => runCaptureAction(owner, { kind: "reply-snooze", thread: thread("conv-capture-snooze"), until }, { fetchImpl: failing("capture-snooze-2").fetchImpl }),
+      /Couldn't change 1 email in this conversation\./,
+    );
+    assert.deepEqual([await roleOf("capture-snooze-1"), await roleOf("capture-snooze-2")], ["snoozed", "inbox"]);
+
+    await applyMailAction(owner, { thread: thread("conv-snoozed"), action: "snooze", view: { role: "inbox" }, until }, outlook().fetchImpl);
+    await getAdminPool().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where kind = 'snooze' and thread_key = 'conv-snoozed' and state <> 'done'");
+    const report = await processDueMail(owner, { fetchImpl: failing("snoozed-2").fetchImpl, origin: null });
+    assert.equal(report.returned, 0);
+    assert.equal(report.reminderErrors, 1);
+    assert.deepEqual([await roleOf("snoozed-1"), await roleOf("snoozed-2")], ["inbox", "snoozed"]);
+    assert.notEqual(await reminderState("conv-snoozed", "snooze"), "due", "the reminder isn't marked as returned");
   });
 
   it("keeps what moved when one email in the conversation fails, and logs Microsoft's answer without the email's details", async () => {
@@ -196,7 +300,7 @@ describe("mail action failures", () => {
     assert.equal(retryWaitMs({ headers: new Headers({ "retry-after": "6" }) }, 0), null, "never waits more than five seconds");
     const route = readFileSync("app/api/mail/actions/route.ts", "utf8");
     const limit = Number(route.match(/export const maxDuration = (\d+);/)?.[1]);
-    assert.ok(ACTION_BUDGET_MS + 15_000 <= limit * 1000, "the action budget leaves time to save before the route's limit");
+    assert.ok(ACTION_BUDGET_MS + MOVE_CONFIRM_MS + 5_000 <= limit * 1000, "the action budget and a last move check leave time to save before the route's limit");
 
     const slow = outlook((url, method) =>
       method === "POST" && url.endsWith("/deadline-1/move")

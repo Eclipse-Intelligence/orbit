@@ -87,7 +87,7 @@ export class GraphMailError extends Error {
 }
 
 export class GraphOutOfTime extends Error {
-  constructor() {
+  constructor(readonly sent = false) {
     super("Ran out of time waiting for Microsoft.");
   }
 }
@@ -204,7 +204,7 @@ async function graphJson<T>(
       });
     } catch (error) {
       const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-      if (timedOut && timeout < CALL_TIMEOUT_MS) throw new GraphOutOfTime();
+      if (timedOut && timeout < CALL_TIMEOUT_MS) throw new GraphOutOfTime(true);
       const wait = 1000 * 2 ** attempt;
       if (timedOut || write || attempt >= GRAPH_RETRIES || !fitsBefore(limit.deadline, wait)) throw error;
       await new Promise((resolve) => setTimeout(resolve, wait));
@@ -438,8 +438,22 @@ export async function updateMicrosoftMessage(
 }
 
 export const MOVE_UNCONFIRMED = "Couldn't confirm the move in Outlook. Try again.";
+export const MOVE_CONFIRM_MS = 10_000;
 
-export async function moveMicrosoftMessage(token: string, messageId: string, destination: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}) {
+function answerLost(error: unknown) {
+  if (error instanceof GraphMailError) return error.status === 404 && error.afterServerError;
+  if (error instanceof GraphOutOfTime) return error.sent;
+  return !(error instanceof MailSyncReset);
+}
+
+export async function moveMicrosoftMessage(
+  token: string,
+  messageId: string,
+  destination: string,
+  fetchImpl: typeof fetch = fetch,
+  limit: GraphLimit = {},
+  landedIn: (folderId: string) => boolean | Promise<boolean> = () => false,
+) {
   try {
     const moved = await graphJson<{ id?: string; parentFolderId?: string }>(
       `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/move`,
@@ -451,9 +465,10 @@ export async function moveMicrosoftMessage(token: string, messageId: string, des
     );
     return { id: moved.id ?? messageId, folderId: moved.parentFolderId ?? null };
   } catch (error) {
-    if (!(error instanceof GraphMailError && error.status === 404 && error.afterServerError)) throw error;
-    const folderId = await fetchMicrosoftMessageFolder(token, messageId, fetchImpl, limit).catch(() => null);
-    if (!folderId) throw new GraphMailError(MOVE_UNCONFIRMED, 502, error.code);
+    if (!answerLost(error)) throw error;
+    const code = error instanceof GraphMailError ? error.code : "";
+    const folderId = await fetchMicrosoftMessageFolder(token, messageId, fetchImpl, { deadline: Date.now() + MOVE_CONFIRM_MS }).catch(() => null);
+    if (!folderId || !(folderId === destination || (await landedIn(folderId)))) throw new GraphMailError(MOVE_UNCONFIRMED, 502, code);
     return { id: messageId, folderId };
   }
 }

@@ -9,7 +9,7 @@ const SCANNED = ["app", "components", "hooks", "lib", "server", "stores"];
 const EXTENSIONS = [".ts", ".tsx", "/index.ts", "/index.tsx"];
 
 type Binding = { local: string; imported: string; from: string };
-type Module = { file: string; imports: Binding[]; edges: Set<string>; hoisted: Set<string>; loadReads: Set<string> };
+type Module = { file: string; imports: Binding[]; edges: Set<string>; hoisted: Set<string>; loadReads: Set<string>; loadCalls: Set<string> };
 
 function sourceFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
@@ -33,9 +33,23 @@ function typeOnly(node: ts.ImportDeclaration | ts.ExportDeclaration) {
   return node.isTypeOnly;
 }
 
-function insideDeferredCode(node: ts.Node) {
+function unwrapped(node: ts.Node) {
+  let child = node;
+  while (ts.isParenthesizedExpression(child.parent)) child = child.parent;
+  return child;
+}
+
+function runsWhileLoading(fn: ts.SignatureDeclaration, calledAtLoad: Set<string>) {
+  const child = unwrapped(fn);
+  const parent = child.parent;
+  if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && (parent.expression === child || parent.arguments?.includes(child as ts.Expression))) return true;
+  if (ts.isFunctionDeclaration(fn) && fn.name && calledAtLoad.has(fn.name.text)) return true;
+  return ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name) && calledAtLoad.has(parent.name.text);
+}
+
+function insideDeferredCode(node: ts.Node, calledAtLoad: Set<string>) {
   for (let parent = node.parent; parent; parent = parent.parent) {
-    if (ts.isFunctionLike(parent) && !ts.isClassStaticBlockDeclaration(parent)) return true;
+    if (ts.isFunctionLike(parent) && !ts.isClassStaticBlockDeclaration(parent) && !runsWhileLoading(parent, calledAtLoad)) return true;
     if (ts.isPropertyDeclaration(parent) && !parent.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)) return true;
     if (ts.isTypeNode(parent) || ts.isInterfaceDeclaration(parent) || ts.isTypeAliasDeclaration(parent)) return true;
     if (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent) || ts.isExportSpecifier(parent)) return true;
@@ -50,6 +64,35 @@ function isValueReference(node: ts.Identifier) {
   if (ts.isQualifiedName(parent)) return false;
   if (ts.isJsxAttribute(parent)) return false;
   return true;
+}
+
+function calleeName(node: ts.Node) {
+  let callee: ts.Expression | null = null;
+  if (ts.isCallExpression(node) || ts.isNewExpression(node)) callee = node.expression;
+  if (ts.isTaggedTemplateExpression(node)) callee = node.tag;
+  while (callee && (ts.isParenthesizedExpression(callee) || ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee) || ts.isNonNullExpression(callee))) {
+    callee = callee.expression;
+  }
+  return callee && ts.isIdentifier(callee) ? callee.text : null;
+}
+
+function loadTimeUses(source: ts.SourceFile, locals: Set<string>) {
+  const calledAtLoad = new Set<string>();
+  for (;;) {
+    const reads = new Set<string>();
+    const calls = new Set<string>();
+    const localCalls = new Set<string>();
+    const visit = (node: ts.Node) => {
+      if (ts.isIdentifier(node) && locals.has(node.text) && isValueReference(node) && !insideDeferredCode(node, calledAtLoad)) reads.add(node.text);
+      const callee = calleeName(node);
+      if (callee && !insideDeferredCode(node, calledAtLoad)) (locals.has(callee) ? calls : localCalls).add(callee);
+      ts.forEachChild(node, visit);
+    };
+    for (const statement of source.statements) if (!ts.isImportDeclaration(statement)) visit(statement);
+    const known = calledAtLoad.size;
+    for (const name of localCalls) calledAtLoad.add(name);
+    if (calledAtLoad.size === known) return { reads, calls };
+  }
 }
 
 function parse(file: string): Module {
@@ -77,10 +120,7 @@ function parse(file: string): Module {
       }
     }
   }
-  const locals = new Set(imports.map((binding) => binding.local));
-  const loadReads = new Set<string>();
   const visit = (node: ts.Node) => {
-    if (ts.isIdentifier(node) && locals.has(node.text) && isValueReference(node) && !insideDeferredCode(node)) loadReads.add(node.text);
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0] && ts.isStringLiteral(node.arguments[0])) {
       const target = resolveSpecifier(file, node.arguments[0].text);
       if (target) edges.add(target);
@@ -91,7 +131,8 @@ function parse(file: string): Module {
     if (ts.isImportDeclaration(statement)) continue;
     visit(statement);
   }
-  return { file, imports, edges, hoisted, loadReads };
+  const { reads, calls } = loadTimeUses(source, new Set(imports.map((binding) => binding.local)));
+  return { file, imports, edges, hoisted, loadReads: reads, loadCalls: calls };
 }
 
 function loops(modules: Map<string, Module>) {
@@ -147,10 +188,11 @@ function loadTimeReadsInsideLoops(dirs: string[]) {
   const findings: string[] = [];
   for (const entry of modules.values()) {
     for (const binding of entry.imports) {
-      if (!entry.loadReads.has(binding.local)) continue;
+      const called = entry.loadCalls.has(binding.local);
+      if (!called && !entry.loadReads.has(binding.local)) continue;
       if (component.get(binding.from) !== component.get(entry.file)) continue;
-      if (modules.get(binding.from)?.hoisted.has(binding.imported)) continue;
-      findings.push(`${relative(ROOT, entry.file)} reads ${binding.imported} from ${relative(ROOT, binding.from)} while loading, inside an import loop`);
+      if (!called && modules.get(binding.from)?.hoisted.has(binding.imported)) continue;
+      findings.push(`${relative(ROOT, entry.file)} ${called ? "calls" : "reads"} ${binding.imported} from ${relative(ROOT, binding.from)} while loading, inside an import loop`);
     }
   }
   return findings.sort();
@@ -161,9 +203,14 @@ describe("import loops", () => {
     assert.deepEqual(loadTimeReadsInsideLoops(SCANNED), []);
   });
 
-  it("catches a constant read while loading from a module in the same loop, and lets hoisted functions and later reads through", () => {
-    assert.deepEqual(loadTimeReadsInsideLoops(["tests/fixtures/import-loop"]), [
-      "tests/fixtures/import-loop/senders.ts reads AUTOMATED from tests/fixtures/import-loop/patterns.ts while loading, inside an import loop",
+  it("catches constants read and functions called while loading from a module in the same loop, directly, in an IIFE, in a callback or through a local function", () => {
+    const fixture = "tests/fixtures/import-loop";
+    assert.deepEqual(loadTimeReadsInsideLoops([fixture]), [
+      `${fixture}/senders.ts calls callbackCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
+      `${fixture}/senders.ts calls directCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
+      `${fixture}/senders.ts calls iifeCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
+      `${fixture}/senders.ts calls localCheck from ${fixture}/patterns.ts while loading, inside an import loop`,
+      `${fixture}/senders.ts reads AUTOMATED from ${fixture}/patterns.ts while loading, inside an import loop`,
     ]);
   });
 
