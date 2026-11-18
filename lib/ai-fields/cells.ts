@@ -104,10 +104,8 @@ export async function readAiCells(db: Db, workspaceId: string, companyIds: strin
   if (companyIds.length === 0) return cells;
   const fields = await readFields(db, workspaceId);
   if (fields.length === 0) return cells;
-  const [scopes, answers] = await Promise.all([
-    scopeMembership(db, workspaceId, fields, companyIds),
-    db.query<AnswerRow>(`${ANSWER_SQL} where a.workspace_id = $1 and a.company_id = any($2::uuid[])`, [workspaceId, companyIds]),
-  ]);
+  const scopes = await scopeMembership(db, workspaceId, fields, companyIds);
+  const answers = await db.query<AnswerRow>(`${ANSWER_SQL} where a.workspace_id = $1 and a.company_id = any($2::uuid[])`, [workspaceId, companyIds]);
   const byKey = new Map(answers.rows.map((row) => [`${row.field_id}:${row.company_id}`, row]));
   for (const companyId of companyIds) {
     cells[companyId] = {};

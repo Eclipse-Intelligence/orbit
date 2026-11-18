@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { after, afterEach, before, beforeEach } from "node:test";
 import { applyMigrationSql } from "@/lib/db/migration-sql";
-import type { Pool } from "pg";
+import { Client, type Pool } from "pg";
 import { getAdminPool, getPool, takeNestedConnections } from "@/lib/db/pool";
 import { scopesForRole, type Scope } from "@/lib/crm/scopes";
 import { generateAgentToken } from "@/lib/crm/tokens";
@@ -40,6 +40,47 @@ export async function resetDatabase() {
     [password],
   );
   await admin.query(statement.rows[0].sql);
+}
+
+type QueuedClient = Client & { _activeQuery?: unknown; _queryQueue?: unknown[] };
+type GuardedPrototype = Client & { orbitOverlapGuard?: boolean };
+
+const overlappingQueries: string[] = [];
+
+function busy(client: QueuedClient) {
+  if (!("_activeQuery" in client) || !Array.isArray(client._queryQueue)) {
+    throw new Error("The overlapping query guard no longer understands pg's Client internals. Update tests/helpers.ts.");
+  }
+  return Boolean(client._activeQuery) || client._queryQueue.length > 0;
+}
+
+function guardOverlappingQueries() {
+  const prototype = Client.prototype as GuardedPrototype;
+  if (prototype.orbitOverlapGuard) return;
+  prototype.orbitOverlapGuard = true;
+  const original = prototype.query as (...args: unknown[]) => unknown;
+  (prototype as unknown as { query: (...args: unknown[]) => unknown }).query = function (this: QueuedClient, ...args: unknown[]) {
+    if (busy(this) && overlappingQueries.length < 50) {
+      const error = new Error("Overlapping query: this client.query() started while the same client was still running another query.");
+      overlappingQueries.push(error.stack ?? error.message);
+    }
+    return original.apply(this, args);
+  };
+}
+
+export function takeOverlappingQueries() {
+  return overlappingQueries.splice(0);
+}
+
+function assertNoOverlappingQueries() {
+  assert.deepEqual(takeOverlappingQueries(), [], "A query started on a pool client that was still running another query.");
+}
+
+guardOverlappingQueries();
+
+if (process.env.NODE_TEST_CONTEXT || /\.test\.[cm]?[jt]sx?$/.test(process.argv[1] ?? "")) {
+  afterEach(assertNoOverlappingQueries);
+  after(assertNoOverlappingQueries);
 }
 
 function restoreEnv(name: string, value: string | undefined) {
