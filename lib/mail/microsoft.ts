@@ -139,7 +139,7 @@ export function sendOutcomeUnknown(error: unknown) {
 const GRAPH_RETRIES = 2;
 const RETRY_WAIT_MAX_MS = 5_000;
 const CALL_TIMEOUT_MS = 30_000;
-const SHORTEST_CALL_MS = 1_000;
+export const SHORTEST_CALL_MS = 1_000;
 const RETRIED_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 export type GraphLimit = { deadline?: number };

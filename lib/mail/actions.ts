@@ -8,6 +8,7 @@ import type { Db } from "@/lib/db/pool";
 import {
   ensureMicrosoftFolder,
   GraphMailError,
+  GraphOutOfTime,
   moveMicrosoftMessage,
   reconnectProblem,
   SNOOZE_FOLDER,
@@ -343,8 +344,8 @@ export async function moveMessages(
   target: MessageMove,
   fetchImpl: typeof fetch = fetch,
   options: { deadline?: number } = {},
-): Promise<{ moved: string[]; error: string | null }> {
-  if (messages.length === 0) return { moved: [], error: null };
+): Promise<{ moved: string[]; error: string | null; late: number }> {
+  if (messages.length === 0) return { moved: [], error: null, late: 0 };
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
   const destination = typeof target === "string" ? MOVES[target]!.destination : target.providerFolderId;
   const role = typeof target === "string" ? MOVES[target]!.role : target.role;
@@ -366,7 +367,10 @@ export async function moveMessages(
     announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
-  if (failures.length === 0) return { moved: done.map((item) => item.id), error: null };
+  const moved = done.map((item) => item.id);
+  if (failures.length === 0) return { moved, error: null, late: 0 };
   logFailures(typeof target === "string" ? target : "move", sourceId, failures);
-  return { moved: done.map((item) => item.id), error: await failureMessage(actor, sourceId, failures[0]) };
+  const refused = failures.filter((failure) => !(failure instanceof GraphOutOfTime && !failure.sent));
+  const late = failures.length - refused.length;
+  return { moved, error: refused.length ? await failureMessage(actor, sourceId, refused[0]) : null, late };
 }

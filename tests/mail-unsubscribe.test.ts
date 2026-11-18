@@ -681,4 +681,38 @@ describe("unsubscribing in Mail", () => {
       delete process.env.LLM_API_KEY;
     }
   });
+
+  it("leaves emails the deadline cut off inside the last batch to the deferred clear, which moves them", async () => {
+    const sender = "flood@bulk.test";
+    const ids = Array.from({ length: 80 }, (_, index) => `flood-${index}`);
+    state.inbox.push(...ids.map((id, index) => message(id, sender, { receivedDateTime: ago(0.01 * (index + 1)) })));
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: graph.fetchImpl });
+    let paced = true;
+    const pacedFetch: typeof fetch = async (input, init) => {
+      if (paced && /\/move$/.test(String(input))) await new Promise((resolve) => setTimeout(resolve, 200));
+      return graph.fetchImpl(input, init);
+    };
+    const deferred: (() => Promise<unknown>)[] = [];
+    const result = await setSubscription(
+      owner,
+      { sender, action: "block", existing: "archive" },
+      {
+        ...options,
+        fetchImpl: pacedFetch,
+        deadline: Date.now() + 4_500,
+        defer: (work) => {
+          deferred.push(work);
+        },
+      },
+    );
+    assert.ok(result.moved > 40 && result.moved < 80, `the deadline lands inside the last batch (moved ${result.moved})`);
+    assert.equal(result.remaining, 80 - result.moved, "emails time cut off are left for later, not dropped");
+    assert.equal(result.error, null, "running out of time isn't reported as Outlook refusing");
+    assert.equal(deferred.length, 1, "the clear is deferred");
+
+    paced = false;
+    await deferred[0]();
+    const roles = await Promise.all(ids.map(async (id) => (await folderOf(id))?.role));
+    assert.deepEqual(new Set(roles), new Set(["archive"]));
+  });
 });

@@ -7,7 +7,7 @@ import type { Db } from "@/lib/db/pool";
 import { moveMessages, type MessageMove } from "@/lib/mail/actions";
 import { sendMailDraft } from "@/lib/mail/compose";
 import { stripQuoted } from "@/lib/mail/format";
-import { ensureMicrosoftFolder, fetchMicrosoftHeaders, GraphMailError } from "@/lib/mail/microsoft";
+import { ensureMicrosoftFolder, fetchMicrosoftHeaders, GraphMailError, SHORTEST_CALL_MS } from "@/lib/mail/microsoft";
 import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, CALENDAR_SENDER, CALENDAR_SUBJECT, UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
 import { senderKey, splitJoin } from "@/lib/mail/split";
 import { addressHomesInDb, captureWorkspaceSql, homesJson } from "@/lib/mail/routing";
@@ -450,6 +450,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
   for (const row of rows) bySource.set(row.source_id, [...(bySource.get(row.source_id) ?? []), row]);
   const movedIds: string[] = [];
   let attempted = 0;
+  let late = 0;
   let error: string | null = null;
   for (const [sourceId, list] of bySource) {
     let target: MessageMove;
@@ -461,7 +462,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
       continue;
     }
     for (let index = 0; index < list.length; index += MOVE_CHUNK) {
-      if (Date.now() >= deadline) return { moved: movedIds.length, movedIds, remaining: rows.length - attempted, error };
+      if (deadline - Date.now() < SHORTEST_CALL_MS) return { moved: movedIds.length, movedIds, remaining: rows.length - attempted + late, error };
       const chunk = list.slice(index, index + MOVE_CHUNK);
       attempted += chunk.length;
       try {
@@ -474,6 +475,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
           { deadline },
         );
         movedIds.push(...result.moved);
+        late += result.late;
         error = error ?? result.error;
       } catch (problem) {
         error = problem instanceof Error ? problem.message : "Outlook didn't move the emails.";
@@ -482,7 +484,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
       }
     }
   }
-  return { moved: movedIds.length, movedIds, remaining: 0, error };
+  return { moved: movedIds.length, movedIds, remaining: late, error };
 }
 
 async function clearSenderMail(

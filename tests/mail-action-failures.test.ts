@@ -262,7 +262,7 @@ describe("mail action failures", () => {
       return new DOMException("The operation was aborted due to timeout", "TimeoutError");
     });
     const moved = await moveMessages(owner, sourceId, [{ id: row.id, providerMessageId: "trash-timeout-1", threadKey: "conv-trash-timeout" }], "trash", binned.fetchImpl);
-    assert.deepEqual(moved, { moved: [row.id], error: null });
+    assert.deepEqual(moved, { moved: [row.id], error: null, late: 0 });
     assert.equal(await roleOf("trash-timeout-1"), "trash");
   });
 
@@ -320,8 +320,7 @@ describe("mail action failures", () => {
     const result = await moveMessages(owner, sourceId, [{ id: row.id, providerMessageId: "late-1", threadKey: "conv-late" }], "archive", box.fetchImpl, {
       deadline: Date.now() + 500,
     });
-    assert.deepEqual(result.moved, []);
-    assert.equal(result.error, "Ran out of time waiting for Microsoft.");
+    assert.deepEqual(result, { moved: [], error: null, late: 1 }, "an email time cut off is counted as late, not as Outlook refusing it");
     assert.equal(box.moves("late-1"), 0, "no move is started after the deadline");
     assert.equal(await roleOf("late-1"), "inbox");
   });
