@@ -301,8 +301,12 @@ export function fetchScheduled() {
   return getJson<{ drafts: MailDraft[] }>("/api/mail/scheduled").then((body) => body.drafts);
 }
 
-export function syncNow() {
-  return getJson<{ stored: number; removed: number; version?: string | null; problems?: string[] }>("/api/mail/sync", { method: "POST" });
+export function syncNow(manual = false) {
+  return getJson<{ stored: number; removed: number; version?: string | null; problems?: string[] }>("/api/mail/sync", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ manual }),
+  });
 }
 
 export function loadSummary(key: string, latestId: string) {
