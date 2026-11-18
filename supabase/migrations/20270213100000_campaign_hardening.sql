@@ -421,6 +421,7 @@ begin
   set stopped_at = coalesce(p.stopped_at, now()),
       stop_error = null,
       stop_tried_at = null,
+      thread_error = null,
       lead_status = coalesce(left(nullif(p_lead_status, ''), 100), p.lead_status)
   where p.id = p_prospect and p.workspace_id = p_workspace and p.stop_requested_at is not null;
 end;
@@ -493,7 +494,9 @@ begin
   end if;
   return (
     select p.thread_error from crm.campaign_prospects p
+    join crm.campaigns k on k.id = p.campaign_id
     where p.campaign_id = p_campaign and p.thread_error is not null
+      and p.stopped_at is null and p.stop_reason is distinct from 'removed' and k.status <> 'archived'
     order by p.updated_at desc, p.id
     limit 1
   );
@@ -572,6 +575,9 @@ begin
       backfilled_at = case when coalesce((p_patch ->> 'backfilled')::boolean, false) then coalesce(k.backfilled_at, now()) else k.backfilled_at end,
       synced_at = now()
   where k.id = p_campaign;
+  if (p_patch ->> 'status') = 'archived' then
+    update crm.campaign_prospects p set thread_error = null where p.campaign_id = p_campaign and p.thread_error is not null;
+  end if;
 end;
 $$;
 
@@ -975,7 +981,8 @@ begin
       skip_reason = case when p.state in ('queued', 'filling') then 'Removed' else p.skip_reason end,
       claimed_at = case when p.state in ('queued', 'filling') then null else p.claimed_at end,
       stop_requested_at = case when p.state in ('pushing', 'pushed') and p.stopped_at is null then coalesce(p.stop_requested_at, now()) else p.stop_requested_at end,
-      stop_reason = case when p.state in ('pushing', 'pushed') and p.stopped_at is null then 'removed' else p.stop_reason end
+      stop_reason = case when p.state in ('pushing', 'pushed') and p.stopped_at is null then 'removed' else p.stop_reason end,
+      thread_error = null
   where p.id = p_prospect;
   if p_audit is not null then
     perform private.suppression_audit(p_workspace, p_audit, jsonb_build_object('state', v_state));

@@ -867,6 +867,34 @@ describe("adding prospects", () => {
     assert.equal(pushesFor("wren@wait.test").length, pushesBefore, "and never pushes them");
   });
 
+  it("keeps a workflow add waiting when a service is busy late in its backoff, past the six hour busy bound", async () => {
+    await contact(owner, "oak", { firstName: "Oak", lastName: "Late", email: "oak@late.test" });
+    const id = await workflow(stepFlow());
+    state.smartleadFails = 503;
+    const run = await startRun(owner, id, { test: false, record: { type: "contact", id: people.oak.id }, fetchImpl });
+    await runWorkflowTick({ fetchImpl, budgetMs: 230_000, long: true, limit: 5 });
+    state.smartleadFails = null;
+    const before = (await sql<{ state: Record<string, unknown> }>("select state from crm.workflow_runs where id = $1", [run.runId]))[0].state;
+    assert.ok(before.adding, "the run remembers the prospect it added");
+    await sql("update crm.workflow_runs set resume_at = now() - interval '1 second', state = $2::jsonb where id = $1", [
+      run.runId,
+      JSON.stringify({ ...before, busy: { step: "add_to_campaign_1", count: 4, since: Date.now() - 8.5 * 60 * 60_000 } }),
+    ]);
+    await sql("update crm.campaign_prospects set fill_attempts = 4 where contact_id = $1", [people.oak.id]);
+    const savedLimit = process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR;
+    process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR = "1";
+    try {
+      await withService("smartlead_push", async () => undefined, { scope: owner.workspaceId }).catch(() => undefined);
+      await runWorkflowTick({ fetchImpl, budgetMs: 230_000, long: true, limit: 5 });
+    } finally {
+      if (savedLimit === undefined) delete process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR;
+      else process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR = savedLimit;
+    }
+    const after = await sql<{ status: string; error: string | null }>("select status, error from crm.workflow_runs where id = $1", [run.runId]);
+    assert.deepEqual(after, [{ status: "waiting", error: null }], "a busy service on the fifth try, at eight and a half hours, waits instead of failing the item");
+    await sql("update crm.workflow_runs set status = 'cancelled' where id = $1", [run.runId]);
+  });
+
   it("keeps a share of the Smartlead budget for sync when pushes use theirs up", async () => {
     const savedLimit = process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR;
     process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR = "1";

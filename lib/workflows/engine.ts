@@ -2062,7 +2062,8 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
         const same = state.busy?.step === step.id;
         const waits = same ? state.busy!.count + 1 : 1;
         const since = same && typeof state.busy?.since === "number" ? state.busy.since : Date.now();
-        if (Date.now() - since < (keepsTrying(error) ? ADD_WAIT_MS : BUSY_WAIT_MS)) {
+        const adding = keepsTrying(error) || (step.type === "add_to_campaign" && state.adding?.step === step.id);
+        if (Date.now() - since < (adding ? ADD_WAIT_MS : BUSY_WAIT_MS)) {
           const until = error instanceof ServiceBusy ? error.until : await addRetryAt(ctx);
           const retrying = error instanceof Error ? error.message : "Trying again.";
           state.busy = { step: step.id, count: waits, since };

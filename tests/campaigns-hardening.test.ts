@@ -282,14 +282,18 @@ describe("campaign hardening", () => {
     assert.ok((await row(ann)).stopped_at);
 
     const down = await prospect({ campaign: linkedinCampaign, linkedin: "linkedin.com/in/hr-down" });
-    const gone = await prospect({ campaign: linkedinCampaign, linkedin: "linkedin.com/in/hr-gone" });
+    const gone = await prospect({ campaign: linkedinCampaign, linkedin: "linkedin.com/in/hr-gone", lead: "hr-gone-id" });
     await sql("update crm.campaign_prospects set stop_requested_at = now(), stop_reason = 'removed' where id = any($1::uuid[])", [[down, gone]]);
     hr.fail = (path) => (path === "/campaign/StopLeadInCampaign" ? new Response("{}", { status: 500 }) : null);
     await processStops(owner.workspaceId, heyReachProvider, hrContext);
     assert.equal((await row(down)).stopped_at, null, "a failing HeyReach keeps the stop pending");
     hr.fail = (path) => (path === "/campaign/StopLeadInCampaign" ? new Response("{}", { status: 404 }) : null);
     await processStops(owner.workspaceId, heyReachProvider, hrContext);
-    assert.ok((await row(down)).stopped_at && (await row(gone)).stopped_at, "a 404 from HeyReach confirms the stop");
+    assert.ok((await row(gone)).stopped_at, "a 404 for a lead HeyReach gave an id confirms the stop");
+    assert.equal((await row(down)).stopped_at, null, "a 404 for a lead with no id may only mean HeyReach hasn't listed it yet, so the stop waits");
+    await sql("update crm.campaigns set sync_state = sync_state || jsonb_build_object('leadsAt', (now() + interval '1 second')::text) where id = $1", [linkedinCampaign]);
+    await processStops(owner.workspaceId, heyReachProvider, hrContext);
+    assert.ok((await row(down)).stopped_at, "once a full lead poll has passed since the push, the 404 confirms it");
     hr.fail = undefined;
     await sql("update crm.campaigns set status = 'archived' where id = $1", [linkedinCampaign]);
   });
@@ -647,6 +651,29 @@ describe("campaign hardening", () => {
     assert.deepEqual(filed, [{ title: "Reply to Agency outreach" }]);
     await threadFetched(id);
     assert.equal(await note(), null);
+
+    const unread = (line: string, prospectId: string) => sql("select private.campaign_thread_unread($1, $2)", [prospectId, line]);
+    const stopped = await prospect({ email: "stopped@note.test", lead: "lead-note-stopped" });
+    await unread("Couldn't read Stopped's reply from Smartlead.", stopped);
+    assert.match((await note()) ?? "", /Stopped/);
+    await sql("update crm.campaign_prospects set stop_requested_at = now(), stop_reason = 'replied' where id = $1", [stopped]);
+    await sql("select private.campaign_stop_confirmed($1, $2, 'stopped')", [owner.workspaceId, stopped]);
+    assert.equal(await note(), null, "a stopped person's note goes");
+
+    const removed = await prospect({ email: "removed@note.test", state: "queued" });
+    await unread("Couldn't read Removed's reply from Smartlead.", removed);
+    assert.match((await note()) ?? "", /Removed/);
+    await removeProspect(owner, removed, { fetchImpl });
+    assert.equal(await note(), null, "a removed person's note goes");
+
+    const archived = await prospect({ campaign: otherCampaign, email: "archived@note.test" });
+    await unread("Couldn't read Archived's reply from Smartlead.", archived);
+    const otherNote = async () => (await sql<{ note: string | null }>("select private.campaign_unread_note($1) as note", [otherCampaign]))[0].note;
+    assert.match((await otherNote()) ?? "", /Archived/);
+    await sql("select private.campaign_sync_update($1, '{\"status\": \"archived\"}'::jsonb)", [otherCampaign]);
+    assert.equal(await otherNote(), null, "an archived campaign's notes go");
+    assert.deepEqual(await sql("select thread_error from crm.campaign_prospects where id = $1", [archived]), [{ thread_error: null }]);
+    await sql("update crm.campaigns set status = 'active' where id = $1", [otherCampaign]);
   });
 
   it("keeps the Added to event for the next run when its note can't be filed", async () => {

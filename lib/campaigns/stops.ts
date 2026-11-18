@@ -71,6 +71,7 @@ export async function stopAtProvider(workspaceId: string, provider: CampaignProv
     if (error instanceof LeadNotReady) return false;
     const failure = provider.failure(error);
     if (failure?.missing) {
+      if (!row.external_lead_id && !absenceProven(row)) return false;
       await confirm(workspaceId, row.prospect_id, "stopped");
       return true;
     }
