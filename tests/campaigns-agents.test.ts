@@ -7,11 +7,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GET as listCampaignsRoute } from "@/app/api/v1/campaigns/route";
 import { GET as listProspectsRoute, POST as addProspectsRoute } from "@/app/api/v1/campaigns/[id]/prospects/route";
+import { companionTools } from "@/lib/assistant/chat";
 import { coldEmailGuide } from "@/lib/assistant/guides";
 import {
   ORBIT_TOOL_LIMIT,
   REQUEST_TOOL_LIMIT,
-  TOO_MANY_TOOLS,
   TOOL_DOMAIN_NAMES,
   assistantTools,
   describeAction,
@@ -574,25 +574,54 @@ describe("campaigns for the assistant, MCP and the API", () => {
       assert.ok(toolDefinitions().length + 2 <= REQUEST_TOOL_LIMIT, "the probe adds its own tool and web_search");
     });
 
-    it("drops the area that doesn't fit, keeps the areas a chat loaded first, and says so in find_tools", async () => {
+    const loadCalls = (domains: readonly string[]) => [
+      { tool_calls: domains.map((domain, index) => ({ id: `load-${index}`, type: "function" as const, function: { name: "find_tools", arguments: JSON.stringify({ domains: [domain] }) } })) },
+    ];
+
+    it("keeps check_web and social_lookup when everything is loaded, in a chat and on Orbit Agent", () => {
+      for (const options of switches) {
+        for (const order of [TOOL_DOMAIN_NAMES, [...TOOL_DOMAIN_NAMES].reverse()]) {
+          const chat = toolDefinitions({ ...options, domains: order, used: order }).map((tool) => tool.function.name);
+          const agent = companionTools(options, loadCalls(order) as never).map((tool) => tool.name);
+          const untouched = companionTools(options, []).map((tool) => tool.name);
+          for (const names of [chat, agent, untouched]) {
+            assert.ok(names.includes("check_web") && names.includes("social_lookup"), JSON.stringify(options));
+            assert.ok(names.length <= ORBIT_TOOL_LIMIT);
+          }
+        }
+        assert.ok(toolDefinitions(options).some((tool) => tool.function.name === "check_web"));
+      }
+    });
+
+    it("drops the least recently used area in a chat, and the last unused one on Orbit Agent, never web or an area in use", async () => {
       const full = { multiWorkspace: true, eclipse: true, linear: true };
-      const kept = fittingDomains(TOOL_DOMAIN_NAMES, full);
-      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !kept.includes(domain)), ["web"]);
-      const campaignsFirst = fittingDomains(["campaigns", ...TOOL_DOMAIN_NAMES.filter((domain) => domain !== "campaigns")], full);
-      assert.ok(campaignsFirst.includes("campaigns"));
-      const withoutWeb = TOOL_DOMAIN_NAMES.filter((domain) => domain !== "web");
-      const refusedWeb = (await runTool(owner, "find_tools", { domains: ["web"] }, { ...full, loaded: withoutWeb })) as { error: string; notLoaded: string[] };
-      assert.equal(refusedWeb.error, TOO_MANY_TOOLS);
-      assert.deepEqual(refusedWeb.notLoaded, ["web"]);
-      const some = (await runTool(owner, "find_tools", { domains: ["campaigns", "web"] }, { ...full, loaded: withoutWeb.filter((domain) => domain !== "campaigns") })) as {
+      assert.deepEqual(TOOL_DOMAIN_NAMES.slice(-3), ["web", "settings", "workspace"]);
+      const untouched = fittingDomains(TOOL_DOMAIN_NAMES, full, []);
+      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !untouched.includes(domain)), ["settings"]);
+      const usedSettings = fittingDomains(TOOL_DOMAIN_NAMES, full, ["settings"]);
+      assert.ok(usedSettings.includes("settings") && usedSettings.includes("web"));
+      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !usedSettings.includes(domain)), ["chat", "workspace"]);
+      const agentNames = companionTools(full, loadCalls(["settings"]) as never).map((tool) => tool.name);
+      assert.ok(agentNames.includes("remember") && agentNames.includes("check_web"));
+
+      const webFirst = ["web", ...TOOL_DOMAIN_NAMES.filter((domain) => domain !== "web")] as typeof TOOL_DOMAIN_NAMES;
+      const allUsed = fittingDomains(webFirst, full, webFirst);
+      assert.deepEqual(webFirst.filter((domain) => !allUsed.includes(domain)), ["records"]);
+      assert.ok(allUsed.includes("web"));
+
+      const beforeCampaigns = TOOL_DOMAIN_NAMES.filter((domain) => domain !== "campaigns");
+      const loaded = (await runTool(owner, "find_tools", { domains: ["campaigns"] }, { ...full, loaded: beforeCampaigns })) as {
         loaded: { domain: string }[];
-        notLoaded: string[];
+        unloaded: string[];
+        unloadedReason: string;
       };
-      assert.deepEqual(some.loaded.map((item) => item.domain), ["campaigns"]);
-      assert.deepEqual(some.notLoaded, ["web"]);
-      const fresh = (await runTool(owner, "find_tools", { domains: ["campaigns", "web"] }, full)) as { loaded: { domain: string }[]; notLoaded?: string[] };
+      assert.deepEqual(loaded.loaded.map((item) => item.domain), ["campaigns"]);
+      assert.deepEqual(loaded.unloaded, ["records"]);
+      assert.match(loaded.unloadedReason, /used least recently/);
+      const fresh = (await runTool(owner, "find_tools", { domains: ["campaigns", "web"] }, full)) as { loaded: { domain: string }[]; notLoaded?: string[]; unloaded?: string[] };
       assert.deepEqual(fresh.loaded.map((item) => item.domain), ["campaigns", "web"]);
       assert.equal(fresh.notLoaded, undefined);
+      assert.equal(fresh.unloaded, undefined);
     });
   });
 

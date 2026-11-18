@@ -86,7 +86,9 @@ describe("agent docs", () => {
     for (const multiWorkspace of [true, false]) {
       for (const eclipse of [true, false]) {
         for (const linear of [true, false]) {
-          const sent = toolDefinitions({ multiWorkspace, eclipse, linear, domains: TOOL_DOMAIN_NAMES }).length;
+          const definitions = toolDefinitions({ multiWorkspace, eclipse, linear, domains: TOOL_DOMAIN_NAMES, used: TOOL_DOMAIN_NAMES });
+          const sent = definitions.length;
+          for (const name of ["check_web", "social_lookup"]) assert.ok(definitions.some((tool) => tool.function.name === name), `${name} is never dropped`);
           assert.ok(
             sent + PROVIDER_ADDED_TOOLS <= REQUEST_TOOL_LIMIT,
             `A chat that loads every area sends ${sent} tools, and ChatGPT adds web_search and Orbit Agent continue_result. Some model APIs refuse more than ${REQUEST_TOOL_LIMIT}.`,
