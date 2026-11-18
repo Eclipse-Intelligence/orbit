@@ -1830,7 +1830,7 @@ export const ORBIT_TOOL_LIMIT = REQUEST_TOOL_LIMIT - PROVIDER_ADDED_TOOLS;
 export const TOO_MANY_TOOLS = "This chat has too many tools loaded to add these. Start a new chat for them.";
 export const UNLOADED_AREAS = "This chat had too many tools, so these areas, used least recently, are no longer loaded. Load one again with find_tools when you need it.";
 
-export const NEVER_DROPPED: readonly ToolDomain[] = ["web"];
+export const NEVER_DROPPED: readonly ToolDomain[] = ["web", "settings"];
 
 export function fittingDomains(domains: readonly ToolDomain[], options: ToolSwitches = {}, used: readonly ToolDomain[] = []) {
   const allowed = toolDomainNames(options);

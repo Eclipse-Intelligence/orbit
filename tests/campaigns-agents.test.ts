@@ -586,10 +586,12 @@ describe("campaigns for the assistant, MCP and the API", () => {
           const untouched = companionTools(options, []).map((tool) => tool.name);
           for (const names of [chat, agent, untouched]) {
             assert.ok(names.includes("check_web") && names.includes("social_lookup"), JSON.stringify(options));
+            assert.ok(names.includes("remember"), `remember: ${JSON.stringify(options)}`);
             assert.ok(names.length <= ORBIT_TOOL_LIMIT);
           }
         }
-        assert.ok(toolDefinitions(options).some((tool) => tool.function.name === "check_web"));
+        const plain = toolDefinitions(options).map((tool) => tool.function.name);
+        assert.ok(plain.includes("check_web") && plain.includes("remember"));
       }
     });
 
@@ -597,7 +599,9 @@ describe("campaigns for the assistant, MCP and the API", () => {
       const full = { multiWorkspace: true, eclipse: true, linear: true };
       assert.deepEqual(TOOL_DOMAIN_NAMES.slice(-3), ["web", "settings", "workspace"]);
       const untouched = fittingDomains(TOOL_DOMAIN_NAMES, full, []);
-      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !untouched.includes(domain)), ["settings"]);
+      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !untouched.includes(domain)), ["chat", "workspace"]);
+      const oneWorkspace = fittingDomains(TOOL_DOMAIN_NAMES, { ...full, multiWorkspace: false }, []);
+      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => domain !== "workspace" && !oneWorkspace.includes(domain)), ["chat"]);
       const usedSettings = fittingDomains(TOOL_DOMAIN_NAMES, full, ["settings"]);
       assert.ok(usedSettings.includes("settings") && usedSettings.includes("web"));
       assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !usedSettings.includes(domain)), ["chat", "workspace"]);
@@ -607,7 +611,11 @@ describe("campaigns for the assistant, MCP and the API", () => {
       const webFirst = ["web", ...TOOL_DOMAIN_NAMES.filter((domain) => domain !== "web")] as typeof TOOL_DOMAIN_NAMES;
       const allUsed = fittingDomains(webFirst, full, webFirst);
       assert.deepEqual(webFirst.filter((domain) => !allUsed.includes(domain)), ["records"]);
-      assert.ok(allUsed.includes("web"));
+      assert.ok(allUsed.includes("web") && allUsed.includes("settings"));
+      const settingsOldest = ["settings", "web", ...TOOL_DOMAIN_NAMES.filter((domain) => domain !== "web" && domain !== "settings")] as typeof TOOL_DOMAIN_NAMES;
+      const kept = fittingDomains(settingsOldest, full, settingsOldest);
+      assert.ok(kept.includes("settings") && kept.includes("web"));
+      assert.deepEqual(settingsOldest.filter((domain) => !kept.includes(domain)), ["records"]);
 
       const beforeCampaigns = TOOL_DOMAIN_NAMES.filter((domain) => domain !== "campaigns");
       const loaded = (await runTool(owner, "find_tools", { domains: ["campaigns"] }, { ...full, loaded: beforeCampaigns })) as {
