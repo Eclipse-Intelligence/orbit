@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { syncCalendar } from "@/lib/crm/calendar";
+import { listCalendarGroups, listCalendarItems } from "@/lib/crm/calendars";
 import { handleCalendarNotifications } from "@/lib/crm/calendar-notify";
 import { disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
 import { encryptSecret } from "@/lib/crypto/secret";
@@ -55,7 +56,7 @@ function wait(ms: number) {
 type Hooks = {
   inboxDelay?: number;
   beforeInbox?: (token: string) => Promise<Response | void> | Response | void;
-  beforeDelta?: (folder: string, token: string) => Promise<void> | void;
+  beforeDelta?: (folder: string, token: string) => Promise<Response | void> | Response | void;
   subscription?: (call: Call) => Response | undefined | Promise<Response | undefined>;
   calendarDelay?: number;
 };
@@ -97,7 +98,8 @@ function microsoft(people: () => Person[], hooks: Hooks = {}) {
     if (url.includes("$select=id,inferenceClassification")) return Response.json({ value: [] });
     const folder = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/)?.[1];
     if (folder) {
-      await hooks.beforeDelta?.(folder, token);
+      const custom = await hooks.beforeDelta?.(folder, token);
+      if (custom) return custom;
       if (folder === "f-inbox") {
         const early = await hooks.beforeInbox?.(token);
         if (early) return early;
@@ -631,6 +633,67 @@ describe("Microsoft change notifications", () => {
       }
     });
 
+    it("never backfills past the storage limit for a notification", async () => {
+      const admin = getAdminPool();
+      await admin.query("update crm.mail_folders set sync_state = 'backfill', sync_link = null where source_id = $1 and provider_folder_id = 'f-archive'", [alice.source]);
+      await admin.query(
+        `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id)
+         select workspace_id, user_id, source_id, id, 'archived-1' from crm.mail_folders where source_id = $1 and provider_folder_id = 'f-archive'
+         on conflict do nothing`,
+        [alice.source],
+      );
+      const limit = process.env.MAIL_STORAGE_LIMIT_MB;
+      const hardStop = process.env.MAIL_HARD_STOP_MB;
+      process.env.MAIL_STORAGE_LIMIT_MB = "1";
+      process.env.MAIL_HARD_STOP_MB = "1000000";
+      try {
+        const a = await mailSource(alice.actor.userId);
+        const box = microsoft(people, {
+          beforeDelta: (folder) =>
+            folder === "f-archive"
+              ? Response.json({ value: [message(`old-${Date.now()}-${Math.random()}`)], "@odata.nextLink": `${GRAPH}/me/mailFolders/f-archive/messages/delta?$skiptoken=${Date.now()}` })
+              : undefined,
+        });
+        await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "archived-1")])], box);
+        const pages = box.calls.filter((call) => call.url.includes("/f-archive/messages/delta")).length;
+        assert.equal(pages, 1, "it stops after the first page at the limit");
+        const folder = await admin.query<{ last_error: string | null }>("select last_error from crm.mail_folders where source_id = $1 and provider_folder_id = 'f-archive'", [
+          alice.source,
+        ]);
+        assert.match(folder.rows[0].last_error ?? "", /storage limit/);
+      } finally {
+        if (limit === undefined) delete process.env.MAIL_STORAGE_LIMIT_MB;
+        else process.env.MAIL_STORAGE_LIMIT_MB = limit;
+        if (hardStop === undefined) delete process.env.MAIL_HARD_STOP_MB;
+        else process.env.MAIL_HARD_STOP_MB = hardStop;
+        await admin.query(
+          "update crm.mail_folders set sync_state = 'live', last_error = null, sync_link = $2 || provider_folder_id || '/messages/delta?$deltatoken=x' where source_id = $1 and provider_folder_id = 'f-archive'",
+          [alice.source, `${GRAPH}/me/mailFolders/`],
+        );
+      }
+    });
+
+    it("marks only a folder that failed during a notification sync, not the whole mailbox", async () => {
+      const admin = getAdminPool();
+      const a = await mailSource(alice.actor.userId);
+      const denied = microsoft(people, {
+        beforeInbox: () => Response.json({ error: { code: "ErrorAccessDenied", message: "Access is denied." } }, { status: 403 }),
+      });
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!)])], denied);
+      const state = await admin.query<{ resync_full: boolean; last_error: string | null; inbox: boolean }>(
+        `select s.resync_full, s.last_error,
+                (select f.resync_pending from crm.mail_folders f where f.source_id = s.id and f.provider_folder_id = 'f-inbox') as inbox
+         from crm.mail_sources s where s.id = $1`,
+        [alice.source],
+      );
+      assert.deepEqual(state.rows[0], { resync_full: false, last_error: null, inbox: true });
+      await admin.query("update crm.mail_folders set failures = 0, retry_at = null where source_id = $1", [alice.source]);
+      alice.parents = { "sent-1": "f-sent" };
+      const next = microsoft(people);
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "sent-1", "created")])], next);
+      assert.deepEqual(next.deltaFolders("token-a"), ["f-inbox", "f-sent"], "the failed folder is tried again, nothing else is walked");
+    });
+
     it("keeps each person's echoes and the subscription lookups to themselves", async () => {
       const admin = getAdminPool();
       await admin.query("insert into crm.mail_echoes (source_id, user_id, provider_message_id) values ($1, $2, 'private-echo') on conflict do nothing", [
@@ -863,10 +926,27 @@ describe("Microsoft change notifications", () => {
       const failing = microsoft(people, {
         subscription: (call) => (call.method === "DELETE" ? Response.json({ error: { code: "ServiceUnavailable" } }, { status: 503 }) : undefined),
       });
+      await getAdminPool().query(
+        `insert into crm.calendar_events (workspace_id, connection_id, user_id, calendar_id, provider_event_id, subject, starts_at, ends_at)
+         select workspace_id, connection_id, user_id, id, 'gone-event', 'Gone meeting', now() + interval '1 hour', now() + interval '2 hours'
+         from crm.calendars where provider_calendar_id = 'cal-gone'`,
+      );
       await syncCalendar(alice.actor, { force: true, fetchImpl: failing.fetchImpl });
       assert.equal(failing.calendarViews("token-a").filter((call) => call.url.includes("cal-gone")).length, 0, "a gone calendar isn't read");
-      const kept = await getAdminPool().query("select 1 from crm.calendars where provider_calendar_id = 'cal-gone'");
-      assert.equal(kept.rowCount, 1, "kept until its subscription is removed");
+      const kept = await getAdminPool().query<{ is_visible: boolean; use_for_crm: boolean; removed: boolean; events: number }>(
+        `select is_visible, use_for_crm, removed_at is not null as removed,
+                (select count(*)::int from crm.calendar_events e where e.calendar_id = c.id) as events
+         from crm.calendars c where provider_calendar_id = 'cal-gone'`,
+      );
+      assert.deepEqual(kept.rows[0], { is_visible: false, use_for_crm: false, removed: true, events: 0 }, "kept until its subscription is removed, but hidden and empty");
+      const groups = await listCalendarGroups(alice.actor);
+      assert.ok(!groups.some((group) => group.calendars.some((calendar) => calendar.name === "Gone")), "the calendar list leaves it out");
+      const items = await listCalendarItems(alice.actor, { start: new Date(Date.now() - 86_400_000), end: new Date(Date.now() + 86_400_000) }, Date.now());
+      assert.ok(!items.some((item) => JSON.stringify(item).includes("Gone meeting")), "the grid leaves its events out");
+      const crmEvents = await getAdminPool().query(
+        "select 1 from crm.calendar_events e join crm.calendars c on c.id = e.calendar_id where c.provider_calendar_id = 'cal-gone' and (c.use_for_crm or c.is_visible)",
+      );
+      assert.equal(crmEvents.rowCount, 0, "Capture and scheduling, which read shown or CRM calendars' events, find nothing");
       const box = microsoft(people);
       await syncCalendar(alice.actor, { force: true, fetchImpl: box.fetchImpl });
       assert.ok(box.subscriptionCalls("token-a", "DELETE").some((call) => call.url.endsWith("/subscriptions/sub-gone")));

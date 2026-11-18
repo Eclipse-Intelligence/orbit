@@ -751,13 +751,15 @@ type FolderRun = { deadline: number; fetchImpl: typeof fetch; guard: boolean; pl
 async function runFolder(actor: UserActor, source: Source, folder: FolderRow, token: string, options: FolderRun, report: MailSyncReport) {
   try {
     await syncFolder(actor, source, folder, token, options, report);
+    return true;
   } catch (error) {
     if (error instanceof GraphOutOfTime) {
       report.backfilling += 1;
-      return;
+      return true;
     }
     if (await stopsSource(actor, source, error)) throw error;
     await folderFailed(actor, source, folder, error, report);
+    return false;
   }
 }
 
@@ -823,6 +825,12 @@ async function loadFolders(actor: UserActor, sourceId: string) {
     );
     return result.rows;
   });
+}
+
+async function remarkFolders(actor: UserActor, sourceId: string, folderIds: string[]) {
+  await withActor(actor, (db) =>
+    db.query("update crm.mail_folders set resync_pending = true where source_id = $1 and id = any($2::uuid[])", [sourceId, folderIds]),
+  ).catch((error) => console.error("Couldn't mark a failed mail folder", error instanceof Error ? error.message : error));
 }
 
 async function changePending(actor: UserActor, sourceId: string) {
@@ -1057,7 +1065,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
     let retryAt: Date | null = null;
     let unfinished = false;
     let walkedAll = false;
-    let foldersFailed = false;
+    const failedFolders = new Set<string>();
     try {
       const token = await currentToken(source.tokens, fetchImpl);
       await withActor(actor, (db) => saveToken(db, source, token));
@@ -1080,16 +1088,15 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
           ? await targetFolders(actor, source, folders, work, token.accessToken, places, { fetchImpl, deadline: sourceDeadline }, report)
           : { walk: live, all: true };
         const cutBefore = report.backfilling;
-        const errorsBefore = report.errors.length;
         let cut = false;
         for (const folder of plan.walk.filter(ready)) {
           if (Date.now() >= sourceDeadline) {
             cut = true;
             break;
           }
-          await runFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false, places, shares }, report);
+          const options = { deadline: sourceDeadline, fetchImpl, guard: folder.sync_state !== "live", places, shares };
+          if (!(await runFolder(actor, source, folder, token.accessToken, options, report))) failedFolders.add(folder.id);
         }
-        if (report.errors.length > errorsBefore) foldersFailed = true;
         if (cut || report.backfilling > cutBefore) unfinished = true;
         else if (plan.all) walkedAll = true;
         if (pass === 1) {
@@ -1118,7 +1125,8 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
         if (throttled(error)) retryAt = throttleUntil(error);
       }
     } finally {
-      await releaseSource(actor, source.id, lastError, retryAt, { unfinished, redo: lastError !== null || foldersFailed, walkedAll: walkedAll && !unfinished });
+      if (failedFolders.size > 0) await remarkFolders(actor, source.id, [...failedFolders]);
+      await releaseSource(actor, source.id, lastError, retryAt, { unfinished, redo: lastError !== null, walkedAll: walkedAll && !unfinished });
     }
   }
   await announce();

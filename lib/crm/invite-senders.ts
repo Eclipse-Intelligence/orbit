@@ -125,7 +125,7 @@ async function readCalendars(db: Db, actor: UserActor) {
   const result = await db.query<CalendarRow>(
     `select id, provider_calendar_id, name, is_default, connection_id, account_id
      from crm.calendars
-     where user_id = $1 and can_edit
+     where user_id = $1 and can_edit and removed_at is null
      order by is_default desc, lower(name), id`,
     [actor.userId],
   );

@@ -427,7 +427,8 @@ async function saveCalendarList(
          name = excluded.name,
          owner_email = excluded.owner_email,
          is_default = excluded.is_default,
-         can_edit = excluded.can_edit`,
+         can_edit = excluded.can_edit,
+         removed_at = null`,
       [actor.workspaceId, actor.userId, source.id, source.kind === "connection", rows],
     );
     await db.query(
@@ -440,11 +441,21 @@ async function saveCalendarList(
     );
   }
   if (listed.complete) {
+    const listedIds = listed.calendars.map((calendar) => calendar.providerCalendarId);
     await db.query(
       `delete from crm.calendars
        where ${column} = $1 and provider_calendar_id <> all($2::text[]) and graph_subscription_id is null`,
-      [source.id, listed.calendars.map((calendar) => calendar.providerCalendarId)],
+      [source.id, listedIds],
     );
+    const removed = await db.query<{ id: string }>(
+      `update crm.calendars set is_visible = false, use_for_crm = false, removed_at = coalesce(removed_at, now())
+       where ${column} = $1 and provider_calendar_id <> all($2::text[]) and provider_calendar_id <> $3
+       returning id`,
+      [source.id, listedIds, DEFAULT_CALENDAR_PLACEHOLDER],
+    );
+    if (removed.rows.length > 0) {
+      await db.query("delete from crm.calendar_events where calendar_id = any($1::uuid[])", [removed.rows.map((row) => row.id)]);
+    }
   }
   const targets = await db.query<{ id: string; provider_calendar_id: string }>(
     `select id, provider_calendar_id from crm.calendars

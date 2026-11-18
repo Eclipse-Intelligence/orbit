@@ -37,10 +37,11 @@ alter table crm.calendars add column if not exists graph_client_state text;
 alter table crm.calendars add column if not exists graph_subscription_retry_at timestamptz;
 alter table crm.calendars add column if not exists notify_locked_until timestamptz;
 alter table crm.calendars add column if not exists resync_pending boolean not null default false;
+alter table crm.calendars add column if not exists removed_at timestamptz;
 
 grant update (
   graph_subscription_id, graph_subscription_expires_at, graph_client_state, graph_subscription_retry_at,
-  notify_locked_until, resync_pending
+  notify_locked_until, resync_pending, removed_at
 ) on crm.calendars to authenticated;
 
 create or replace function private.mail_subscription_sources(p_subscriptions text[])

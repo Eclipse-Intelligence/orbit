@@ -374,7 +374,7 @@ function sourceToken(actor: UserActor, source: GraphSource, fetchImpl: typeof fe
 export async function ensureDefaultCalendar(db: Db, actor: UserActor, connectionId: string) {
   const found = await db.query<{ id: string }>(
     `select id from crm.calendars
-     where connection_id = $1 and is_default
+     where connection_id = $1 and is_default and removed_at is null
      order by (provider_calendar_id = $2) asc, id
      limit 1`,
     [connectionId, DEFAULT_CALENDAR_PLACEHOLDER],
