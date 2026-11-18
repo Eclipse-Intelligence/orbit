@@ -43,7 +43,6 @@ type EventDetail = {
   person: string;
   sender_user_id: string | null;
   handle_attempts: number;
-  counted_at: Date | null;
 };
 
 async function eventDetails(actor: UserActor, ids: string[]) {
@@ -56,7 +55,7 @@ async function eventDetails(actor: UserActor, ids: string[]) {
                 nullif(btrim(concat_ws(' ', p.lead->>'firstName', p.lead->>'lastName')), ''),
                 c.email, p.email, p.linkedin, 'Someone'
               ) as person,
-              s.user_id as sender_user_id, e.handle_attempts, e.counted_at
+              s.user_id as sender_user_id, e.handle_attempts
        from crm.campaign_events e
        join crm.campaign_prospects p on p.id = e.prospect_id
        join crm.campaigns k on k.id = e.campaign_id
@@ -275,7 +274,7 @@ export async function handleCampaignEvents(campaign: SyncedCampaign, events: Syn
       continue;
     }
     try {
-      const handled = event.counted_at ? { note: null, counted: true } : await handleReply(actor, provider, context, event);
+      const handled = await handleReply(actor, provider, context, event);
       syncError = handled.note ?? syncError;
       if (handled.counted && (await autoAdd(actor, event)) === "retry") retry.push(event.id);
     } catch (error) {

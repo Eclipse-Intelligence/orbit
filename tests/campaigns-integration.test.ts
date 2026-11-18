@@ -658,6 +658,7 @@ describe("campaign integration upgrade", () => {
       assert.equal(again.id, first.id);
       const clash = await upsertRecord(owner, input("https://www.linkedin.com/in/john-smith-3", "shared@smithworks.test"), { operation: "test" });
       assert.notEqual(clash.id, other.id, "an email held by a contact with another profile isn't that person");
+      assert.equal((clash as { note?: string }).note, "Email belongs to Jon Other, left off.");
       const profiles = await sql<{ id: string; normalized_linkedin: string | null }>(
         "select id, normalized_linkedin from crm.contacts where id = any($1::uuid[])",
         [[first.id, second.id, clash.id]],
@@ -753,6 +754,102 @@ describe("campaign integration upgrade", () => {
         [owner.workspaceId],
       );
       assert.deepEqual(contacts, [{ company: "North Studio" }], "one contact, with the prospect's company");
+    });
+  });
+
+  describe("round 2 review rules", () => {
+    it("re-runs a retried reply in full: the person is stopped, with one activity and one notification", async () => {
+      const contact = (await createContact(owner, { firstName: "Pat", lastName: "Pike", email: "pat@pikeco.test", linkedinUrl: "https://www.linkedin.com/in/pat-pike" }, { provenance: { operation: "test" } })).body.contact;
+      const emailRow = await sql<{ id: string }>(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, email, state, external_lead_id, pushed_at)
+         values ($1, $2, $3, 'pat@pikeco.test', 'pushed', 'sl-pat', now() - interval '2 days') returning id`,
+        [owner.workspaceId, emailId, contact.id],
+      );
+      const linkedinRow = await sql<{ id: string }>(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, linkedin, state, external_lead_id, lead_status, pushed_at)
+         values ($1, $2, $3, 'linkedin.com/in/pat-pike', 'pushed', 'lead-pat', 'in_progress', now() - interval '2 days') returning id`,
+        [owner.workspaceId, linkedinId, contact.id],
+      );
+      const repliedAt = minutesAgo(3);
+      await sql(
+        `insert into crm.campaign_messages (workspace_id, campaign_id, prospect_id, channel, direction, body, sent_at, external_id)
+         values ($1, $2, $3, 'email', 'inbound', 'Yes, send me more', $4, 'msg-pat-1')`,
+        [owner.workspaceId, emailId, emailRow[0].id, repliedAt],
+      );
+      const saved = await saveProviderEvents(
+        emailId,
+        smartleadEvents("5501", [{ leadId: "sl-pat", email: "pat@pikeco.test", name: "Pat Pike", category: null, step: 1, variant: null, sentAt: minutesAgo(60), openedAt: null, clickedAt: null, repliedAt, bounced: false, unsubscribed: false }]),
+        false,
+      );
+      const replied = saved.filter((event) => event.kind === "replied");
+      assert.equal(replied.length, 1);
+      const campaign = { id: emailId, workspaceId: owner.workspaceId, provider: "smartlead" as const, externalId: "5501", name: "Agency email" };
+      await sql(`create or replace function public.integration_no_stop() returns trigger language plpgsql as $$ begin raise exception 'stop failed for the test'; end; $$`);
+      await sql(
+        "create trigger integration_no_stop before update on crm.campaign_prospects for each row when (new.stop_requested_at is distinct from old.stop_requested_at) execute function public.integration_no_stop()",
+      );
+      const logged = mock.method(console, "error", () => undefined);
+      let first;
+      try {
+        first = await handleCampaignEvents(campaign, replied, owner);
+      } finally {
+        logged.mock.restore();
+        await sql("drop trigger integration_no_stop on crm.campaign_prospects");
+      }
+      assert.deepEqual(first.retry, [replied[0].eventId], "the reply is tried again");
+      const counted = await sql<{ counted_at: Date | null }>("select counted_at from crm.campaign_events where id = $1", [replied[0].eventId]);
+      assert.ok(counted[0].counted_at, "it was counted before the stop failed");
+      await handleCampaignEvents(campaign, replied, owner);
+      await handleCampaignEvents(campaign, replied, owner);
+      const stopped = await sql<{ stop_requested_at: Date | null }>("select stop_requested_at from crm.campaign_prospects where id = $1", [linkedinRow[0].id]);
+      assert.ok(stopped[0].stop_requested_at, "the retry still stops them everywhere");
+      const activities = await sql("select 1 from crm.activities where workspace_id = $1 and contact_id = $2 and metadata->>'prospectId' = $3", [
+        owner.workspaceId,
+        contact.id,
+        emailRow[0].id,
+      ]);
+      assert.equal(activities.length, 1, "one activity");
+      const alerts = await sql("select 1 from crm.push_log where key = $1", [`campaign-reply:${replied[0].eventId}`]);
+      assert.equal(alerts.length, 1, "one notification");
+    });
+
+    it("keeps marking Finished on a campaign that isn't live after a failed reply read", async () => {
+      eclipse.campaigns.push({
+        ...linkedinCampaign(),
+        id: 9102,
+        name: "Ended LinkedIn",
+        status: "FINISHED",
+        listId: undefined,
+        listLeads: [],
+        progress: undefined,
+        leads: [{ id: "lead-quin", profileUrl: "https://www.linkedin.com/in/quin-quay/", first: "Quin", last: "Quay", accountId: 1, connection: "ConnectionAccepted", status: "InSequence", lastActionTime: minutesAgo(600) }],
+        conversations: [],
+      });
+      await sync();
+      await sync();
+      const rows = await sql<{ id: string; backfilled_at: Date | null }>("select id, backfilled_at from crm.campaigns where workspace_id = $1 and external_id = '9102'", [owner.workspaceId]);
+      const ended = rows[0].id;
+      assert.ok(rows[0].backfilled_at);
+      const quin = eclipse.campaigns.find((item) => item.id === 9102)!.leads[0];
+      const dayLater = async (patch: Record<string, string>) => {
+        quin.lastActionTime = new Date().toISOString();
+        await sql("update crm.campaigns set sync_state = sync_state || $2::jsonb where id = $1", [ended, JSON.stringify(patch)]);
+      };
+      const finishedCount = async () => (await sql("select 1 from crm.campaign_events where campaign_id = $1 and kind = 'finished'", [ended])).length;
+      quin.status = "Finished";
+      await dayLater({ eventsAt: minutesAgo(25 * 60), repliesAt: minutesAgo(25 * 60) });
+      eclipse.fail = (path) => (path === "/inbox/GetConversationsV2" ? Response.json({ errorMessage: "Inbox unavailable" }, { status: 400 }) : null);
+      const logged = mock.method(console, "error", () => undefined);
+      try {
+        await sync();
+      } finally {
+        logged.mock.restore();
+        eclipse.fail = undefined;
+      }
+      assert.equal(await finishedCount(), 0, "day 1: the reply read failed");
+      await dayLater({ eventsAt: minutesAgo(25 * 60), repliesAt: minutesAgo(30) });
+      await sync();
+      assert.equal(await finishedCount(), 1, "a later pass reads replies with the events and marks Finished");
     });
   });
 });

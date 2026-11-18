@@ -469,7 +469,7 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
 
   let repliesComplete = !provider.readReplies || (!backfilling && Boolean(state.repliesAt));
   let repliesReadNow = !provider.readReplies;
-  if (provider.readReplies && (backfilling || live || typeof state.repliesOffset === "number" || due(state.repliesAt, IDLE_EVERY_MS, now)) && room()) {
+  if (provider.readReplies && (backfilling || live || eventsReadNow || typeof state.repliesOffset === "number" || due(state.repliesAt, IDLE_EVERY_MS, now)) && room()) {
     try {
       repliesComplete = await syncReplies(pass, row, backfilling || !options.onEvents);
       repliesReadNow = repliesComplete;

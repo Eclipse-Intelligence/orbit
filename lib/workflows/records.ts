@@ -213,7 +213,8 @@ async function contactWithLinkedin(actor: UserActor, input: UpsertInput, email: 
         ).rows[0]
       : undefined;
     if (byEmail && !byEmail.normalized_linkedin) return { id: byEmail.id, name: byEmail.name ?? email, found: true, created: false };
-    if (!input.create) return { id: null, name: null, found: false, created: false };
+    const clash = byEmail ? { note: emailClashNote(byEmail.name) } : {};
+    if (!input.create) return { id: null, name: null, found: false, created: false, ...clash };
     const saved = await upsertContactInDb(
       db,
       actor,
@@ -228,8 +229,12 @@ async function contactWithLinkedin(actor: UserActor, input: UpsertInput, email: 
       provenance,
       { nameMatch: false },
     );
-    return { id: saved.contact.id, name: saved.contact.name, found: !saved.created, created: saved.created };
+    return { id: saved.contact.id, name: saved.contact.name, found: !saved.created, created: saved.created, ...clash };
   });
+}
+
+export function emailClashNote(name: string | null) {
+  return `Email belongs to ${name || "another contact"}, left off.`;
 }
 
 async function findContactByName(actor: UserActor, firstName: string, lastName: string, companyId: string | null) {
