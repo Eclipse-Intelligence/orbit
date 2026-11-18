@@ -14,7 +14,7 @@ import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { getEnrichmentSettings, icpHashOf } from "@/lib/enrichment/settings";
 import { clearEclipseToolCache } from "@/lib/eclipse-mcp";
-import { createUser, messageText, queryAsUser, resetDatabase } from "./helpers";
+import { createUser, messageText, queryAsUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 const MIGRATION = "supabase/migrations/20261229200000_brand_profiles.sql";
 const SWITCH_MIGRATION = "supabase/migrations/20270109100000_remove_eclipse_switch.sql";
@@ -89,10 +89,8 @@ before(async () => {
   const second = await createUser("mark@ridgeon-brand.test", "Mark Ridgeon");
   await pool.query("update crm.workspaces set name = 'Mark Ridgeon' where id = $1", [second.workspaceId]);
   ridgeon = { ...second, workspaceName: "Mark Ridgeon" };
-  await pool.query(readFileSync(MIGRATION, "utf8"));
-  await pool.query(readFileSync(MIGRATION, "utf8"));
-  await pool.query(readFileSync(SWITCH_MIGRATION, "utf8"));
-  await pool.query(readFileSync(SWITCH_MIGRATION, "utf8"));
+  await reapplyMigrationsFrom("20261229200000_brand_profiles.sql");
+  await reapplyMigrationsFrom("20261229200000_brand_profiles.sql");
   member = await joinAs("hannah@eclipse-brand.test", "Hannah Cole", eclipse, "member");
   admin = await joinAs("ola@eclipse-brand.test", "Ola Admin", eclipse, "admin");
 });

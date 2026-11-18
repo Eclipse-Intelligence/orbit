@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
 import { POST as mcpRoute } from "@/app/api/mcp/route";
 import { MCP_BATCH_LIMIT, mcpCost } from "@/lib/api/mcp-request";
@@ -8,7 +7,7 @@ import { consumeRateLimitFor } from "@/lib/auth/rate-limit";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { createAgent, createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 type RpcReply = { id: unknown; result?: unknown; error?: { code: number; message: string; data?: Record<string, unknown> } };
 
@@ -106,7 +105,7 @@ describe("MCP rate limit", () => {
       await setUsed(key, 118);
       await assert.rejects(() => consumeRateLimitFor(key, 3), (error: unknown) => error instanceof CrmError && error.code === "rate_limited");
     } finally {
-      await admin.query(readFileSync("supabase/migrations/20270111400000_review_batch_3.sql", "utf8"));
+      await reapplyMigrationsFrom("20270111400000_review_batch_3.sql");
     }
     await consumeRateLimitFor("fallback:after", 2);
     assert.equal(await used("fallback:after"), 2);
