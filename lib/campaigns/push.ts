@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { connectedContext, mightHaveSent } from "@/lib/campaigns/context";
+import { connectedContext, mightHaveSent, rejectedKeyLine } from "@/lib/campaigns/context";
 import { fireCampaignEvents } from "@/lib/campaigns/events";
 import { prospectEmail, prospectLinkedin } from "@/lib/campaigns/normalize";
 import { fillVariables, type FillSource } from "@/lib/campaigns/fill";
@@ -29,6 +29,7 @@ import { ownerActor } from "@/lib/workflows/engine";
 import { ENRICHMENT_SERVICES, ServiceBusy, withService } from "@/lib/workflows/limits";
 
 export const FILL_BATCH = 25;
+export const MOST_ATTEMPTS = 5;
 const FILL_RESERVE_MS = 15_000;
 const FILLS_AT_ONCE = 8;
 
@@ -126,10 +127,48 @@ export function transient(provider: CampaignProvider, error: unknown) {
   return true;
 }
 
-function failureText(error: unknown) {
+function failureText(error: unknown, provider?: CampaignProvider) {
   if (error instanceof CrmError || error instanceof LlmError) return error.message;
-  if (error instanceof Error && error.message) return error.message;
+  const failure = provider?.failure(error);
+  if (failure) return failure.message;
   return "Couldn't add this person. Try again.";
+}
+
+class KeyWaiting extends Error {
+  constructor(provider: CampaignProvider) {
+    super(rejectedKeyLine(provider));
+    this.name = "KeyWaiting";
+  }
+}
+
+async function markKeyRejected(job: Job) {
+  await query("select private.campaign_key_rejected($1, $2, $3)", [job.actor.workspaceId, job.provider.id, rejectedKeyLine(job.provider)]).catch((error) =>
+    console.error("Couldn't note a rejected campaign key", redactedError(error)),
+  );
+}
+
+async function countedRelease(workspaceId: string, holder: string, prospectId: string, reason: string) {
+  const result = await query<{ state: ProspectState | null }>("select private.campaign_fill_retry($1, $2, $3, $4, $5) as state", [
+    workspaceId,
+    prospectId,
+    holder,
+    reason,
+    MOST_ATTEMPTS,
+  ]);
+  return result.rows[0]?.state ?? null;
+}
+
+async function releaseAfter(job: Job, prospectId: string, error: unknown) {
+  if (error instanceof ServiceBusy) {
+    await end(job, prospectId, null, null);
+    return null;
+  }
+  if (rejectedKey(job, error)) {
+    await markKeyRejected(job);
+    await end(job, prospectId, null, null);
+    return null;
+  }
+  return countedRelease(job.actor.workspaceId, job.holder, prospectId, failureText(error, job.provider));
 }
 
 async function writingFor(actor: UserActor) {
@@ -327,14 +366,20 @@ async function send(job: Job, items: Ready[]): Promise<ProspectOutcome[]> {
     if (error instanceof ServiceBusy || rejectedKey(job, error)) {
       await unsend(job, items.map((item) => item.prospect.id));
       if (error instanceof ServiceBusy) throw error;
+      await markKeyRejected(job);
       job.halted = true;
       return stillFilling(items);
     }
     const lasting = lastingFailure(job, error);
     if (lasting && items.length > 1) return sendOneByOne(job, items);
     for (const item of items) {
-      await end(job, item.prospect.id, lasting ? "failed" : null, lasting);
-      outcomes.push({ prospectId: item.prospect.id, state: lasting ? "failed" : "pushing", reason: lasting });
+      if (lasting) {
+        await end(job, item.prospect.id, "failed", lasting);
+        outcomes.push({ prospectId: item.prospect.id, state: "failed", reason: lasting });
+        continue;
+      }
+      const state = await countedRelease(job.actor.workspaceId, job.holder, item.prospect.id, failureText(error, job.provider));
+      outcomes.push({ prospectId: item.prospect.id, state: state === "failed" ? "failed" : "pushing", reason: state === "failed" ? failureText(error, job.provider) : null });
     }
     if (!lasting) console.error(`Couldn't add prospects to ${job.provider.name}`, redactedError(error));
     return outcomes;
@@ -353,8 +398,8 @@ async function send(job: Job, items: Ready[]): Promise<ProspectOutcome[]> {
           continue;
         }
       } catch (error) {
-        await end(job, item.prospect.id, null, null);
-        outcomes.push({ prospectId: item.prospect.id, state: "pushing", reason: null });
+        const state = await releaseAfter(job, item.prospect.id, error);
+        outcomes.push({ prospectId: item.prospect.id, state: state === "failed" ? "failed" : "pushing", reason: state === "failed" ? failureText(error, job.provider) : null });
         if (error instanceof ServiceBusy) throw error;
         continue;
       }
@@ -403,13 +448,14 @@ async function prepareOne(job: Job, prospect: ProspectRow): Promise<Ready | Pros
       return { prospectId: prospect.id, state: error.state, reason: error.message };
     }
     if (transient(job.provider, error)) {
-      await end(job, prospect.id, null, null);
       if (!(error instanceof ServiceBusy) && !(error instanceof CrmError) && !(error instanceof LlmError) && !job.provider.failure(error)) {
         console.error("Couldn't fill a campaign prospect", redactedError(error));
       }
+      const state = await releaseAfter(job, prospect.id, error);
+      if (state === "failed") return { prospectId: prospect.id, state: "failed", reason: failureText(error, job.provider) };
       throw error;
     }
-    const reason = failureText(error);
+    const reason = failureText(error, job.provider);
     await end(job, prospect.id, "failed", reason);
     return { prospectId: prospect.id, state: "failed", reason };
   }
@@ -423,6 +469,14 @@ async function jobFor(actor: UserActor, campaignId: string, holder: string, opti
   const refusal = addRefusal(campaign);
   if (refusal) throw new CrmError("conflict", refusal, 409);
   const { provider, context } = await connectedContext(actor.workspaceId, campaign.provider, { fetchImpl: options.fetchImpl });
+  const connection = await withActor(actor, async (db) => {
+    const result = await db.query<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = $2", [
+      actor.workspaceId,
+      provider.id,
+    ]);
+    return result.rows[0] ?? null;
+  });
+  if (connection?.last_error === rejectedKeyLine(provider)) throw new KeyWaiting(provider);
   return { actor, campaign, variables, provider, context, holder, fetchImpl: options.fetchImpl, deadline: options.deadline, runSteps: options.runSteps };
 }
 
@@ -450,8 +504,16 @@ export async function addOneNow(
     job = await jobFor(actor, prospect.campaign_id, holder, options);
   } catch (error) {
     const lasting = lastingSetup(error);
-    await finish(actor.workspaceId, holder, prospectId, lasting ? "failed" : null, lasting);
-    if (lasting) return { prospectId, state: "failed", reason: lasting };
+    if (lasting) {
+      await finish(actor.workspaceId, holder, prospectId, "failed", lasting);
+      return { prospectId, state: "failed", reason: lasting };
+    }
+    if (error instanceof KeyWaiting) {
+      await finish(actor.workspaceId, holder, prospectId, null, null);
+      throw new CrmError("upstream_error", `${error.message.replace(/\.$/, "")} in Settings › Tools.`, 502, { retry: true });
+    }
+    const state = await countedRelease(actor.workspaceId, holder, prospectId, failureText(error));
+    if (state === "failed") return { prospectId, state: "failed", reason: failureText(error) };
     throw error;
   }
   try {
@@ -496,8 +558,15 @@ async function runGroup(rows: BatchRow[], holder: string, options: { fetchImpl?:
     job = await jobFor(actor, first.campaign_id, holder, options);
   } catch (error) {
     const lasting = lastingSetup(error);
-    for (const id of ids) await finish(first.workspace_id, holder, id, lasting ? "failed" : null, lasting);
-    if (!lasting) throw error;
+    if (error instanceof KeyWaiting) {
+      await releaseAll(first.workspace_id, holder, ids);
+      return [];
+    }
+    if (!lasting) {
+      for (const id of ids) await countedRelease(first.workspace_id, holder, id, failureText(error));
+      throw error;
+    }
+    for (const id of ids) await finish(first.workspace_id, holder, id, "failed", lasting);
     return ids.map((id): ProspectOutcome => ({ prospectId: id, state: "failed", reason: lasting }));
   }
   const outcomes: ProspectOutcome[] = [];

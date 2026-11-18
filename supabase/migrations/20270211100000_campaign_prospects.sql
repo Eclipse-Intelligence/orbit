@@ -57,6 +57,7 @@ grant delete on crm.campaign_variables to authenticated;
 
 alter table crm.campaign_prospects add column if not exists claimed_by text;
 alter table crm.campaign_prospects add column if not exists filled_at timestamptz;
+alter table crm.campaign_prospects add column if not exists fill_attempts integer not null default 0;
 alter table crm.campaign_prospects drop constraint if exists campaign_prospects_claimed_by_length;
 alter table crm.campaign_prospects
   add constraint campaign_prospects_claimed_by_length check (claimed_by is null or char_length(claimed_by) <= 100) not valid;
@@ -288,6 +289,7 @@ begin
           claimed_at = null,
           claimed_by = null,
           filled_at = null,
+          fill_attempts = 0,
           stop_requested_at = null,
           stop_reason = null,
           "values" = '{}'::jsonb,
@@ -656,6 +658,55 @@ begin
   return v_count;
 end;
 $$;
+
+create or replace function private.campaign_fill_retry(p_workspace uuid, p_prospect uuid, p_holder text, p_reason text, p_most integer)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_state text;
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_prospects p
+  set fill_attempts = p.fill_attempts + 1,
+      state = case when p.fill_attempts + 1 >= p_most then 'failed' else p.state end,
+      skip_reason = case
+        when p.fill_attempts + 1 >= p_most then left(coalesce(nullif(btrim(p_reason), ''), 'Couldn''t add this person. Try again.'), 500)
+        else p.skip_reason
+      end,
+      claimed_at = case when p.fill_attempts + 1 >= p_most then null else now() - interval '9 minutes' end,
+      claimed_by = case when p.fill_attempts + 1 >= p_most then null else p.claimed_by end
+  where p.id = p_prospect and p.workspace_id = p_workspace and p.claimed_by = p_holder
+    and p.state in ('queued', 'filling', 'pushing')
+  returning p.state into v_state;
+  return v_state;
+end;
+$$;
+
+create or replace function private.campaign_key_rejected(p_workspace uuid, p_provider text, p_error text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_connections c
+  set last_error = left(p_error, 500)
+  where c.workspace_id = p_workspace and c.provider = p_provider;
+end;
+$$;
+
+revoke all on function private.campaign_fill_retry(uuid, uuid, text, text, integer) from public;
+revoke all on function private.campaign_key_rejected(uuid, text, text) from public;
+grant execute on function private.campaign_fill_retry(uuid, uuid, text, text, integer) to crm_app;
+grant execute on function private.campaign_key_rejected(uuid, text, text) to crm_app;
 
 revoke all on function private.campaign_push_undo(uuid, uuid[], text) from public;
 grant execute on function private.campaign_push_undo(uuid, uuid[], text) to crm_app;

@@ -649,6 +649,48 @@ describe("adding prospects", () => {
     state.smartleadFails = 401;
     await drainFills();
     assert.equal((await row(fin.prospectId)).state, "filling", "rows wait for the key to be replaced");
+    const marked = await sql<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId]);
+    assert.equal(marked[0].last_error, "Smartlead rejected the key. Save a new one.");
+
+    await contact(owner, "joy", { firstName: "Joy", lastName: "Bird", email: "joy@bird.test" });
+    const joy = (await addProspects(owner, emailCampaign, [people.joy.id], { operation: "test" })).prospects[0];
+    const pushesBefore = state.pushes.length;
+    for (let round = 0; round < 7; round += 1) {
+      await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = any($1::uuid[])", [[fin.prospectId, joy.prospectId]]);
+      await drainFills();
+    }
+    assert.equal(state.llm.filter((text) => text.includes('"firstName":"Joy"')).length, 0, "nothing is filled while the key is rejected");
+    assert.equal(state.pushes.length, pushesBefore, "and nothing is sent");
+    const waiting = await sql<{ state: string; fill_attempts: number }>("select state, fill_attempts from crm.campaign_prospects where id = any($1::uuid[]) order by created_at", [[fin.prospectId, joy.prospectId]]);
+    assert.deepEqual(waiting.map((item) => [item.state, item.fill_attempts]), [["filling", 0], ["filling", 0]], "waiting for a key never uses up attempts");
+
+    state.smartleadFails = null;
+    await sql("update crm.campaign_connections set last_error = null where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId]);
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = any($1::uuid[])", [[fin.prospectId, joy.prospectId]]);
+    await drainFills();
+    assert.equal((await row(fin.prospectId)).state, "pushed");
+    assert.equal((await row(joy.prospectId)).state, "pushed");
+  });
+
+  it("gives up after five failed attempts, and a re-add starts the count again", async () => {
+    await contact(owner, "ivo", { firstName: "Ivo", lastName: "Kent", email: "ivo@kent.test" });
+    const ivo = (await addProspects(owner, emailCampaign, [people.ivo.id], { operation: "test" })).prospects[0];
+    state.llmStatus = 503;
+    for (let round = 0; round < 8; round += 1) {
+      await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1 and state <> 'failed'", [ivo.prospectId]);
+      await drainFills();
+    }
+    const failed = await sql<{ state: string; skip_reason: string | null; fill_attempts: number }>("select state, skip_reason, fill_attempts from crm.campaign_prospects where id = $1", [ivo.prospectId]);
+    assert.equal(failed[0].state, "failed");
+    assert.equal(failed[0].fill_attempts, 5);
+    assert.ok(failed[0].skip_reason && failed[0].skip_reason.length > 0);
+    assert.equal(state.llm.filter((text) => text.includes('"firstName":"Ivo"')).length, 5, "the AI is asked five times, never more");
+    state.llmStatus = null;
+    const again = (await addProspects(owner, emailCampaign, [people.ivo.id], { operation: "test" })).prospects[0];
+    assert.equal(again.outcome, "requeued");
+    assert.equal((await sql<{ fill_attempts: number }>("select fill_attempts from crm.campaign_prospects where id = $1", [ivo.prospectId]))[0].fill_attempts, 0);
+    await drainFills();
+    assert.equal((await row(ivo.prospectId)).state, "pushed");
   });
 
   it("re-checks the campaign is still running when it pushes", async () => {
