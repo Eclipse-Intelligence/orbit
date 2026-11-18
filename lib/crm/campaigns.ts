@@ -260,6 +260,7 @@ type ProspectSqlRow = {
   stage: LinkedinStage | null;
   sender: string | null;
   import_error: string | null;
+  stop_error: string | null;
 };
 
 const FILTER_SQL: Record<ProspectFilter, string> = {
@@ -296,7 +297,7 @@ export async function listCampaignProspects(
                 ) as name,
                 coalesce(co.name, nullif(p.lead->>'companyName', '')) as company_name,
                 coalesce(c.email, p.email) as email,
-                p.state, p.skip_reason, p.lead_status, p.category, p.replied_at, p.stop_requested_at, p.stopped_at, p.import_error,
+                p.state, p.skip_reason, p.lead_status, p.category, p.replied_at, p.stop_requested_at, p.stopped_at, p.import_error, p.stop_error,
                 last.kind as last_kind, last.step as last_step, last.occurred_at as last_at,
                 case
                   when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_accepted') then 'accepted'
@@ -342,6 +343,7 @@ export async function listCampaignProspects(
         stage: row.stage,
         sender: row.sender,
         importError: row.contact_id ? null : row.import_error,
+        stopError: row.stop_requested_at && !row.stopped_at ? row.stop_error : null,
       })),
       total: total.rows[0]?.count ?? 0,
       page,

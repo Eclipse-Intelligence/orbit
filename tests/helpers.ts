@@ -8,6 +8,13 @@ import { scopesForRole, type Scope } from "@/lib/crm/scopes";
 import { generateAgentToken } from "@/lib/crm/tokens";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
 
+export async function reapplyMigrationsFrom(file: string) {
+  const later = readdirSync("supabase/migrations")
+    .filter((name) => name.endsWith(".sql") && name >= file)
+    .sort();
+  for (const name of later) await applyMigrationSql(getAdminPool(), readFileSync(`supabase/migrations/${name}`, "utf8"));
+}
+
 export async function resetDatabase() {
   const admin = getAdminPool();
   await admin.query(`

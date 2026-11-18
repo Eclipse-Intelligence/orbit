@@ -1,6 +1,7 @@
+import { auditJson } from "@/lib/campaigns/audit";
 import { campaignProvider } from "@/lib/campaigns/providers";
 import type { CampaignChannel, CampaignProviderId, CampaignStatus, ProspectState } from "@/lib/campaigns/types";
-import { withActor } from "@/lib/crm/context";
+import { scheduleWebhooks, withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
@@ -109,13 +110,14 @@ export async function addProspects(
   await assertConnected(actor.workspaceId, campaign.provider);
   let rows: AddRow[];
   try {
-    const result = await query<AddRow>("select * from private.campaign_add_prospects($1, $2, $3::uuid[], $4, $5, $6)", [
+    const result = await query<AddRow>("select * from private.campaign_add_prospects($1, $2, $3::uuid[], $4, $5, $6, $7::jsonb)", [
       actor.workspaceId,
       campaign.id,
       ids,
       actor.type === "user" ? actor.userId : null,
       actor.type === "agent" ? actor.agentId : null,
       options.runId ?? null,
+      auditJson(actor, PROSPECT_AUDIT_EVENTS.added, "campaign_prospect", null, provenance, { campaignId: campaign.id, campaign: campaign.name, channel: campaign.channel }),
     ]);
     rows = result.rows;
   } catch (error) {
@@ -133,17 +135,7 @@ export async function addProspects(
   }));
   const fresh = prospects.filter((item) => item.outcome === "added" || item.outcome === "requeued");
   if (fresh.length > 0) {
-    await withActor(actor, async (db) => {
-      for (const item of fresh) {
-        await recordAudit(db, actor, PROSPECT_AUDIT_EVENTS.added, "campaign_prospect", item.prospectId, provenance, {
-          campaignId: campaign.id,
-          campaign: campaign.name,
-          channel: campaign.channel,
-          contactId: item.contactId,
-          requeued: item.outcome === "requeued",
-        });
-      }
-    });
+    scheduleWebhooks();
     if (options.kick !== false && !options.runId) kickWorkflows();
   }
   return {

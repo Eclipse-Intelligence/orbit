@@ -13,22 +13,31 @@ export type SmartleadOptions = {
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   workspaceId?: string;
+  lane?: "push";
 };
 
 export class SmartleadError extends Error {
   readonly status: number | null;
   readonly retryAfter: string | null;
+  readonly keyCheck: boolean;
 
-  constructor(message: string, status: number | null, retryAfter: string | null = null) {
+  constructor(message: string, status: number | null, retryAfter: string | null = null, keyCheck = false) {
     super(message);
     this.name = "SmartleadError";
     this.status = status;
     this.retryAfter = retryAfter;
+    this.keyCheck = keyCheck;
   }
 
   get rejectedKey() {
-    return this.status === 401 || this.status === 403;
+    return this.keyCheck && (this.status === 401 || this.status === 403);
   }
+}
+
+export const UNREADABLE = "Smartlead sent a reply Orbit couldn't read.";
+
+function refusal(status: number) {
+  return `Smartlead refused this request (${status}).`;
 }
 
 type Json = Record<string, unknown>;
@@ -59,6 +68,13 @@ function time(value: unknown): string | null {
   return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
 }
 
+function rowsOf(body: unknown, ...keys: string[]): unknown[] {
+  if (Array.isArray(body)) return body;
+  const row = record(body);
+  for (const key of keys) if (Array.isArray(row[key])) return row[key] as unknown[];
+  throw new SmartleadError(UNREADABLE, null);
+}
+
 function yes(value: unknown) {
   return value === true || value === "true" || value === 1 || value === "1";
 }
@@ -66,9 +82,10 @@ function yes(value: unknown) {
 async function call(
   key: string,
   path: string,
-  options: SmartleadOptions & { query?: Record<string, string | number | null | undefined>; services?: Service[]; method?: "GET" | "POST" | "DELETE"; body?: Json; secrets?: string[] },
+  options: SmartleadOptions & { query?: Record<string, string | number | null | undefined>; services?: Service[]; method?: "GET" | "POST" | "DELETE"; body?: Json; secrets?: string[]; keyCheck?: boolean },
 ): Promise<unknown> {
-  const services = options.services ?? ["smartlead"];
+  const services = options.services ?? (options.lane === "push" ? ["smartlead_push", "smartlead"] : ["smartlead"]);
+  const keyCheck = options.keyCheck === true;
   const run = async () => {
     const url = new URL(`${SMARTLEAD_API}${path}`);
     url.searchParams.set("api_key", key);
@@ -93,7 +110,8 @@ async function call(
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       logUpstream("Smartlead", response.status, body, [key, ...(options.secrets ?? [])]);
-      throw new SmartleadError(upstreamMessage("Smartlead", response.status), response.status, response.headers.get("retry-after"));
+      const refused = (response.status === 401 || response.status === 403) && !keyCheck;
+      throw new SmartleadError(refused ? refusal(response.status) : upstreamMessage("Smartlead", response.status), response.status, response.headers.get("retry-after"), keyCheck);
     }
     const raw = await response.text().catch(() => "");
     if (!raw.trim()) return null;
@@ -102,12 +120,12 @@ async function call(
     } catch (error) {
       if ((options.method ?? (options.body ? "POST" : "GET")) !== "GET") return raw;
       logUpstream("Smartlead", response.status, error, [key, ...(options.secrets ?? [])]);
-      throw new SmartleadError("Smartlead sent a reply Orbit couldn't read.", response.status);
+      throw new SmartleadError(UNREADABLE, response.status);
     }
   };
   const statusOf = (error: unknown) => (error instanceof SmartleadError ? { status: error.status, retryAfter: error.retryAfter } : null);
   return services.reduceRight<() => Promise<unknown>>(
-    (inner, service) => () => withService(service, inner, { scope: service === "smartlead" ? options.workspaceId : undefined, statusOf }),
+    (inner, service) => () => withService(service, inner, { scope: service === "smartlead" || service === "smartlead_push" ? options.workspaceId : undefined, statusOf }),
     run,
   )();
 }
@@ -138,15 +156,36 @@ export function leadStatus(value: unknown): LeadStatus | null {
 
 export type SmartleadCampaign = { id: string; name: string; status: CampaignStatus; clientId: string | null };
 
+function campaignOf(item: unknown): SmartleadCampaign | null {
+  const row = record(item);
+  const id = text(row.id);
+  if (!id) return null;
+  return { id, name: text(row.name) ?? "", status: campaignStatus(row.status), clientId: text(row.client_id) };
+}
+
 export async function listSmartleadCampaigns(key: string, options: SmartleadOptions = {}): Promise<SmartleadCampaign[]> {
-  const body = await call(key, "/campaigns", options);
-  const rows = Array.isArray(body) ? body : list(record(body).data);
-  return rows.flatMap((item) => {
-    const row = record(item);
-    const id = text(row.id);
-    if (!id) return [];
-    return [{ id, name: text(row.name) ?? "", status: campaignStatus(row.status), clientId: text(row.client_id) }];
+  const body = await call(key, "/campaigns", { ...options, keyCheck: true });
+  return rowsOf(body, "data").flatMap((item) => {
+    const campaign = campaignOf(item);
+    return campaign ? [campaign] : [];
   });
+}
+
+export async function readSmartleadCampaign(key: string, campaignId: string, options: SmartleadOptions = {}): Promise<SmartleadCampaign | null> {
+  let body: unknown;
+  try {
+    body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}`, options);
+  } catch (error) {
+    if (error instanceof SmartleadError && error.status === 404) return null;
+    throw error;
+  }
+  const found = campaignOf(Array.isArray(body) ? body[0] : record(body).id !== undefined ? body : record(body).data);
+  if (!found) throw new SmartleadError(UNREADABLE, null);
+  return found;
+}
+
+export function smartleadClients(campaigns: SmartleadCampaign[]) {
+  return [...new Set(campaigns.map((item) => item.clientId).filter((id): id is string => Boolean(id)))];
 }
 
 export async function readSmartleadClient(key: string, clientIds: string[], options: SmartleadOptions = {}) {
@@ -172,7 +211,7 @@ export function variablesIn(steps: SequenceStep[]) {
 
 export async function readSmartleadSequence(key: string, campaignId: string, options: SmartleadOptions = {}): Promise<SequenceStep[]> {
   const body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}/sequences`, options);
-  const rows = (Array.isArray(body) ? body : list(record(body).data)).map(record);
+  const rows = rowsOf(body, "data").map(record);
   const steps: SequenceStep[] = [];
   rows.forEach((row, index) => {
     const step = count(row.seq_number) ?? index + 1;
@@ -238,7 +277,7 @@ export async function listSmartleadLeads(
       query: { offset, limit: SMARTLEAD_PAGE_SIZE },
     }),
   );
-  const rows = list(body.data).map(record);
+  const rows = rowsOf(body, "data").map(record);
   const leads = rows.flatMap((row): SmartleadLead[] => {
     const lead = record(row.lead);
     const id = text(lead.id) ?? text(row.lead_id);
@@ -292,7 +331,7 @@ export async function readSmartleadStatistics(
     services: ["smartlead_stats", "smartlead"],
     query: { event_time_gt: since, limit: SMARTLEAD_PAGE_SIZE, offset },
   });
-  const raw = (Array.isArray(body) ? body : list(record(body).data)).map(record);
+  const raw = rowsOf(body, "data").map(record);
   const rows = raw.map(
     (row): SmartleadStatRow => ({
       leadId: text(row.lead_id) ?? text(row.email_lead_id),
@@ -315,7 +354,7 @@ export async function readSmartleadStatistics(
 
 export async function readSmartleadMailboxes(key: string, campaignId: string, options: SmartleadOptions = {}): Promise<Mailbox[]> {
   const body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}/email-accounts`, options);
-  const rows = (Array.isArray(body) ? body : list(record(body).data)).map(record);
+  const rows = rowsOf(body, "data").map(record);
   return rows.flatMap((row): Mailbox[] => {
     const address = text(row.from_email) ?? text(row.email);
     if (!address) return [];
@@ -355,7 +394,7 @@ export function automaticReply(...values: (string | null | undefined)[]) {
 
 export async function readSmartleadThread(key: string, campaignId: string, leadId: string, options: SmartleadOptions = {}): Promise<SmartleadMessage[]> {
   const body = await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/message-history`, options);
-  const rows = (Array.isArray(body) ? body : list(record(body).history ?? record(body).data)).map(record);
+  const rows = rowsOf(body, "history", "data").map(record);
   return rows.flatMap((row): SmartleadMessage[] => {
     const sentAt = time(row.time) ?? time(row.sent_time) ?? time(row.created_at);
     if (!sentAt) return [];
@@ -426,7 +465,7 @@ export async function removeSmartleadLead(key: string, campaignId: string, leadI
 
 export async function listSmartleadCategories(key: string, options: SmartleadOptions = {}) {
   const body = await call(key, "/leads/fetch-categories", options);
-  const rows = (Array.isArray(body) ? body : list(record(body).data)).map(record);
+  const rows = rowsOf(body, "data").map(record);
   return rows.flatMap((row) => {
     const id = text(row.id);
     const name = text(row.name);
@@ -438,6 +477,13 @@ export async function setSmartleadCategory(key: string, campaignId: string, lead
   await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/category`, {
     ...options,
     body: { category_id: Number.isFinite(Number(categoryId)) ? Number(categoryId) : categoryId, pause_lead: false },
+  });
+}
+
+export async function clearSmartleadCategory(key: string, campaignId: string, leadId: string, options: SmartleadOptions = {}) {
+  await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads/${encodeURIComponent(leadId)}/category`, {
+    ...options,
+    body: { category_id: null, pause_lead: false },
   });
 }
 
@@ -473,6 +519,7 @@ export async function addSmartleadLeads(key: string, campaignId: string, leads: 
   const body = record(
     await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads`, {
       ...options,
+      lane: "push",
       body: {
         lead_list: leads.slice(0, SMARTLEAD_PUSH_BATCH).map((lead) => ({
           email: lead.email,
@@ -503,12 +550,20 @@ export async function findSmartleadLead(key: string, campaignId: string, email: 
     if (error instanceof SmartleadError && error.status === 404) return null;
     throw error;
   }
-  const row = record(Array.isArray(body) ? body[0] : body);
-  const id = text(row.id);
-  if (!id) return null;
-  const memberships = list(row.lead_campaign_data).map(record);
+  if (emptyResult(body)) return null;
+  const raw = Array.isArray(body) ? body[0] : body;
+  const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Json) : null;
+  const id = row ? text(row.id) : null;
+  if (!row || !id || !Array.isArray(row.lead_campaign_data)) throw new SmartleadError(UNREADABLE, null);
+  const memberships = row.lead_campaign_data.map(record);
   if (!memberships.some((item) => text(item.campaign_id) === campaignId)) return null;
   return { id };
+}
+
+function emptyResult(body: unknown) {
+  if (body === null || body === undefined || body === "") return true;
+  if (Array.isArray(body)) return body.length === 0;
+  return typeof body === "object" && Object.keys(body as Json).length === 0;
 }
 
 export const SMARTLEAD_BLOCK_BATCH = 100;
@@ -516,6 +571,18 @@ export const SMARTLEAD_BLOCK_BATCH = 100;
 export async function blockSmartleadAddresses(key: string, addresses: string[], options: SmartleadOptions = {}) {
   if (addresses.length === 0) return;
   await call(key, "/leads/add-domain-block-list", { ...options, body: { domain_block_list: addresses.slice(0, SMARTLEAD_BLOCK_BATCH) } });
+}
+
+export async function unblockSmartleadAddress(key: string, address: string, options: SmartleadOptions = {}) {
+  const wanted = address.trim().toLowerCase();
+  const body = await call(key, "/leads/get-domain-block-list", { ...options, query: { filter_email_or_domain: wanted, limit: 100 } });
+  const ids = rowsOf(body, "data")
+    .map(record)
+    .filter((row) => (text(row.email_or_domain) ?? text(row.domain) ?? text(row.email) ?? text(row.value) ?? "").toLowerCase() === wanted)
+    .map((row) => text(row.id))
+    .filter((id): id is string => Boolean(id));
+  for (const id of ids) await call(key, "/leads/delete-domain-block-list", { ...options, method: "DELETE", query: { id } });
+  return ids.length;
 }
 
 export const SMARTLEAD_WEBHOOK_EVENTS = ["EMAIL_REPLY", "LEAD_CATEGORY_UPDATED"] as const;

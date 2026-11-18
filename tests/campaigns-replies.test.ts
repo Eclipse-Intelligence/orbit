@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { campaignConnectionViews, removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
@@ -17,11 +16,10 @@ import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
 import { removeMember } from "@/lib/crm/team";
 import type { UserActor } from "@/lib/crm/types";
-import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { safeDefinition } from "@/lib/workflows/definition";
 import { fakeHeyReach, fakeSmartlead, sequenceOf, type FakeAccount, type FakeHeyReachAccount, type FakeHeyReachCampaign } from "./campaigns-fake";
-import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const SL_A = "sl_key_replies_alpha_01";
 const SL_B = "sl_key_replies_bravo_02";
@@ -235,7 +233,7 @@ describe("campaign events and replies", () => {
   useServerlessPool();
 
   it("runs its migration twice", async () => {
-    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270209100000_campaign_replies.sql", "utf8"));
+    await reapplyMigrationsFrom("20270209100000_campaign_replies.sql");
   });
 
   it("backfills without firing anything and keeps conversations from other accounts out", async () => {
@@ -951,7 +949,7 @@ describe("campaign events and replies", () => {
       const priya = await prospectId("lead-priya");
       const sends = () => (alpha.writes ?? []).filter((write) => write.path === "/campaigns/801/reply-email-thread").length;
       const before = sends();
-      await sql("revoke execute on function private.campaign_reply_finish(uuid, uuid, text, text, text) from crm_app");
+      await sql("revoke execute on function private.campaign_reply_finish(uuid, uuid, text, text, text, jsonb) from crm_app");
       try {
         await assert.rejects(replyToProspect(owner, priya, { text: "Sent but not recorded.", clientKey: "after-begin-1" }, { fetchImpl }), (error: unknown) => {
           assert.ok(error instanceof CrmError);
@@ -959,7 +957,7 @@ describe("campaign events and replies", () => {
           return true;
         });
       } finally {
-        await sql("grant execute on function private.campaign_reply_finish(uuid, uuid, text, text, text) to crm_app");
+        await sql("grant execute on function private.campaign_reply_finish(uuid, uuid, text, text, text, jsonb) to crm_app");
       }
       assert.equal(sends(), before + 1);
       const again = await replyToProspect(owner, priya, { text: "Sent but not recorded.", clientKey: "after-begin-1" }, { fetchImpl });

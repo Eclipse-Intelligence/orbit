@@ -18,18 +18,22 @@ export type HeyReachOptions = {
 export class HeyReachError extends Error {
   readonly status: number | null;
   readonly retryAfter: string | null;
+  readonly keyCheck: boolean;
 
-  constructor(message: string, status: number | null, retryAfter: string | null = null) {
+  constructor(message: string, status: number | null, retryAfter: string | null = null, keyCheck = false) {
     super(message);
     this.name = "HeyReachError";
     this.status = status;
     this.retryAfter = retryAfter;
+    this.keyCheck = keyCheck;
   }
 
   get rejectedKey() {
-    return this.status === 401 || this.status === 403;
+    return this.keyCheck && (this.status === 401 || this.status === 403);
   }
 }
+
+export const HEYREACH_UNREADABLE = "HeyReach sent a reply Orbit couldn't read.";
 
 type Json = Record<string, unknown>;
 
@@ -65,10 +69,18 @@ function first<T>(...values: (T | null | undefined)[]): T | null {
 }
 
 function itemsOf(body: unknown) {
-  return (Array.isArray(body) ? body : list(record(body).items)).map(record);
+  if (Array.isArray(body)) return body.map(record);
+  const items = record(body).items;
+  if (!Array.isArray(items)) throw new HeyReachError(HEYREACH_UNREADABLE, null);
+  return items.map(record);
 }
 
-async function call(key: string, path: string, options: HeyReachOptions & { method?: "GET" | "POST"; body?: Json; query?: Record<string, string>; secrets?: string[] }): Promise<unknown> {
+async function call(
+  key: string,
+  path: string,
+  options: HeyReachOptions & { method?: "GET" | "POST"; body?: Json; query?: Record<string, string>; secrets?: string[]; keyCheck?: boolean },
+): Promise<unknown> {
+  const keyCheck = options.keyCheck === true;
   const run = async () => {
     const url = new URL(`${HEYREACH_API}${path}`);
     for (const [name, value] of Object.entries(options.query ?? {})) url.searchParams.set(name, value);
@@ -90,7 +102,8 @@ async function call(key: string, path: string, options: HeyReachOptions & { meth
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       logUpstream("HeyReach", response.status, body, [key, ...(options.secrets ?? [])]);
-      throw new HeyReachError(upstreamMessage("HeyReach", response.status), response.status, response.headers.get("retry-after"));
+      const refused = (response.status === 401 || response.status === 403) && !keyCheck;
+      throw new HeyReachError(refused ? `HeyReach refused this request (${response.status}).` : upstreamMessage("HeyReach", response.status), response.status, response.headers.get("retry-after"), keyCheck);
     }
     const raw = await response.text().catch(() => "");
     if (!raw.trim()) return null;
@@ -98,14 +111,14 @@ async function call(key: string, path: string, options: HeyReachOptions & { meth
       return JSON.parse(raw);
     } catch (error) {
       logUpstream("HeyReach", response.status, error, [key, ...(options.secrets ?? [])]);
-      throw new HeyReachError("HeyReach sent a reply Orbit couldn't read.", response.status);
+      throw new HeyReachError(HEYREACH_UNREADABLE, response.status);
     }
   };
   const statusOf = (error: unknown) => (error instanceof HeyReachError ? { status: error.status, retryAfter: error.retryAfter } : null);
   return withService("heyreach", run, { scope: options.workspaceId, statusOf });
 }
 
-async function allPages(key: string, path: string, options: HeyReachOptions, extra: Json = {}) {
+async function allPages(key: string, path: string, options: HeyReachOptions & { keyCheck?: boolean }, extra: Json = {}) {
   const rows: Json[] = [];
   for (let offset = 0; ; offset += HEYREACH_PAGE_SIZE) {
     const body = await call(key, path, { ...options, body: { offset, limit: HEYREACH_PAGE_SIZE, ...extra } });
@@ -117,7 +130,7 @@ async function allPages(key: string, path: string, options: HeyReachOptions, ext
 }
 
 export async function checkHeyReachKey(key: string, options: HeyReachOptions = {}) {
-  await call(key, "/auth/CheckApiKey", options);
+  await call(key, "/auth/CheckApiKey", { ...options, keyCheck: true });
 }
 
 export function campaignStatus(value: unknown): CampaignStatus {
@@ -144,13 +157,32 @@ export function leadStatus(value: unknown): LeadStatus | null {
 export type HeyReachCampaign = { id: string; name: string; status: CampaignStatus; accountIds: string[] };
 
 export async function listHeyReachCampaigns(key: string, options: HeyReachOptions = {}): Promise<HeyReachCampaign[]> {
-  const rows = await allPages(key, "/campaign/GetAll", options);
+  const rows = await allPages(key, "/campaign/GetAll", { ...options, keyCheck: true });
   return rows.flatMap((row) => {
-    const id = text(row.id);
-    if (!id) return [];
-    const accounts = list(row.campaignAccountIds ?? row.linkedInAccountIds).map(text).filter((item): item is string => Boolean(item));
-    return [{ id, name: text(row.name) ?? "", status: campaignStatus(row.status), accountIds: [...new Set(accounts)] }];
+    const campaign = heyReachCampaignOf(row);
+    return campaign ? [campaign] : [];
   });
+}
+
+function heyReachCampaignOf(row: Json): HeyReachCampaign | null {
+  const id = text(row.id);
+  if (!id) return null;
+  const accounts = list(row.campaignAccountIds ?? row.linkedInAccountIds).map(text).filter((item): item is string => Boolean(item));
+  return { id, name: text(row.name) ?? "", status: campaignStatus(row.status), accountIds: [...new Set(accounts)] };
+}
+
+export async function readHeyReachCampaign(key: string, campaignId: string, options: HeyReachOptions = {}): Promise<HeyReachCampaign | null> {
+  let body: unknown;
+  try {
+    body = await call(key, "/campaign/GetById", { ...options, query: { campaignId } });
+  } catch (error) {
+    if (error instanceof HeyReachError && error.status === 404) return null;
+    throw error;
+  }
+  if (body === null) return null;
+  const found = heyReachCampaignOf(record(body));
+  if (!found) throw new HeyReachError(HEYREACH_UNREADABLE, null);
+  return found;
 }
 
 export type HeyReachAccount = {

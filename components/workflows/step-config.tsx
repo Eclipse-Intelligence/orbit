@@ -778,7 +778,7 @@ export default function StepConfig({
       );
     }
     case "find_email":
-      return <p className="caption-style text-subtle leading-[1.4]">Stops here when no valid email is found.</p>;
+      return <p className="caption-style text-subtle leading-[1.4]">Ends the item when no valid email is found.</p>;
     case "add_to_campaign": {
       const campaigns = options.campaigns ?? [];
       const chosen = str(c.campaignId);

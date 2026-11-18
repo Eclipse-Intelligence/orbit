@@ -1,16 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { keyFingerprint } from "@/lib/campaigns/connections";
 import { connectedContext, mightHaveSent, rejectedKeyLine } from "@/lib/campaigns/context";
 import { fireCampaignEvents } from "@/lib/campaigns/events";
+import { addedProvenance, fileAddedActivity } from "@/lib/campaigns/messages";
 import { prospectEmail, prospectLinkedin } from "@/lib/campaigns/normalize";
-import { fillVariables, type FillSource } from "@/lib/campaigns/fill";
+import { FILL_RESERVE_MS, FILL_START_MS, fillVariables, type FillSource } from "@/lib/campaigns/fill";
 import type { CampaignProvider, ProviderContext, PushLead } from "@/lib/campaigns/providers";
 import { addRefusal, readCampaignTarget, readCampaignVariables, type CampaignTarget, type CampaignVariable } from "@/lib/campaigns/prospects";
 import { syncActor } from "@/lib/campaigns/sync";
 import type { ProspectState, SequenceStep } from "@/lib/campaigns/types";
 import { senderFirstName } from "@/lib/assistant/cold-email";
 import { userLinks } from "@/lib/assistant/links";
-import { createActivityInDb } from "@/lib/crm/activities";
 import { brandOrEmpty, type BrandProfile } from "@/lib/crm/brand";
 import { getCompany } from "@/lib/crm/companies";
 import { getContact } from "@/lib/crm/contacts";
@@ -18,7 +17,7 @@ import { withActor } from "@/lib/crm/context";
 import { timeLeft } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
 import { listProof, type ProofEntry } from "@/lib/crm/proof";
-import type { Contact, Provenance, UserActor } from "@/lib/crm/types";
+import type { Contact, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { enrichContact } from "@/lib/enrichment/contacts";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
@@ -31,8 +30,8 @@ import { ENRICHMENT_SERVICES, ServiceBusy, withService } from "@/lib/workflows/l
 
 export const FILL_BATCH = 25;
 export const MOST_ATTEMPTS = 5;
-const FILL_RESERVE_MS = 15_000;
 const FILLS_AT_ONCE = 8;
+const CUT_OFF_MS = 2_000;
 
 export type ProspectOutcome = { prospectId: string; state: ProspectState; reason: string | null };
 
@@ -63,7 +62,6 @@ type Job = {
   fetchImpl?: typeof fetch;
   deadline: number;
   runSteps?: unknown;
-  fingerprint: string;
   halted?: boolean;
   writing?: Promise<{ brand: BrandProfile; proof: ProofEntry[]; sender: { firstName: string; bookingUrl: string | null } }>;
 };
@@ -115,17 +113,13 @@ async function unsend(job: Job, ids: string[]) {
   await query("select private.campaign_push_undo($1, $2::uuid[], $3)", [job.actor.workspaceId, ids, job.holder]);
 }
 
-function rejectedKey(job: Job, error: unknown) {
-  return Boolean(job.provider.failure(error)?.rejectedKey);
-}
-
 export function transient(provider: CampaignProvider, error: unknown) {
   if (error instanceof Ended) return false;
   if (error instanceof ServiceBusy) return true;
   if (error instanceof LlmError) return true;
   if (error instanceof CrmError) return error.status >= 500 || error.status === 429 || error.details?.retry === true;
   const failure = provider.failure(error);
-  if (failure) return failure.rejectedKey || failure.status === null || failure.status >= 500 || failure.status === 429;
+  if (failure) return failure.status === null || failure.status === 401 || failure.status === 403 || failure.status >= 500 || failure.status === 429;
   return true;
 }
 
@@ -148,12 +142,9 @@ export function aiSetupProblem(error: unknown) {
   return error.status === 401 || error.status === 402 || error.status === 403 || (error.status === null && error.actionable);
 }
 
-async function markKeyRejected(job: Job) {
-  await query("select private.campaign_key_rejected($1, $2, $3, $4)", [job.actor.workspaceId, job.provider.id, job.fingerprint, rejectedKeyLine(job.provider)]).catch((error) =>
-    console.error("Couldn't note a rejected campaign key", redactedError(error)),
-  );
+function cutOff(job: Job) {
+  return Date.now() >= job.deadline - CUT_OFF_MS;
 }
-
 async function countedRelease(workspaceId: string, holder: string, prospectId: string, reason: string) {
   const result = await query<{ state: ProspectState | null }>("select private.campaign_fill_retry($1, $2, $3, $4, $5) as state", [
     workspaceId,
@@ -175,7 +166,10 @@ async function releaseAfter(job: Job, prospectId: string, error: unknown) {
     job.halted = true;
     return null;
   }
-  if (rejectedKey(job, error)) await markKeyRejected(job);
+  if (cutOff(job)) {
+    await end(job, prospectId, null, null);
+    return null;
+  }
   return countedRelease(job.actor.workspaceId, job.holder, prospectId, failureText(error, job.provider));
 }
 
@@ -299,27 +293,14 @@ async function fileAdded(job: Job, done: { prospect_id: string; event_id: string
   await fireCampaignEvents(events).catch((error) => console.error("Couldn't fire campaign events", redactedError(error)));
   for (const row of done) {
     if (!row.contact_id || !row.event_id) continue;
-    const provenance: Provenance = row.workflow_id
-      ? { operation: "campaign_prospect_added", source: "workflow", workflowId: row.workflow_id, depth: row.depth, sourceUrl: `/workflows/${row.workflow_id}` }
-      : { operation: "campaign_prospect_added", source: "campaign" };
-    await withActor(job.actor, async (db) => {
-      const existing = await db.query("select 1 from crm.activities where workspace_id = $1 and metadata->>'campaignAddedProspectId' = $2 limit 1", [
-        job.actor.workspaceId,
-        row.prospect_id,
-      ]);
-      if (existing.rows.length > 0) return;
-      await createActivityInDb(
+    await withActor(job.actor, (db) =>
+      fileAddedActivity(
         db,
         job.actor,
-        {
-          type: "note",
-          title: `Added to ${job.campaign.name || "a campaign"}`.slice(0, 200),
-          contactId: row.contact_id,
-          metadata: { campaignAddedProspectId: row.prospect_id, campaignId: job.campaign.id },
-        },
-        provenance,
-      );
-    }).catch((error) => console.error("Couldn't file a campaign add on the timeline", redactedError(error)));
+        { prospectId: row.prospect_id, contactId: row.contact_id, campaignId: job.campaign.id, campaignName: job.campaign.name },
+        addedProvenance({ workflowId: row.workflow_id, depth: row.depth }),
+      ),
+    ).catch((error) => console.error("Couldn't file a campaign add on the timeline", redactedError(error)));
   }
 }
 
@@ -371,31 +352,24 @@ async function send(job: Job, items: Ready[]): Promise<ProspectOutcome[]> {
   try {
     pushed = await job.provider.pushLeads(job.context, job.campaign.external_id, items.map((item) => item.lead));
   } catch (error) {
-    if (error instanceof ServiceBusy || rejectedKey(job, error)) {
+    if (error instanceof ServiceBusy) {
       await unsend(job, items.map((item) => item.prospect.id));
-      if (error instanceof ServiceBusy) throw error;
-      await markKeyRejected(job);
-      job.halted = true;
-      const reason = failureText(error, job.provider);
-      const counted: ProspectOutcome[] = [];
-      for (const item of items) {
-        const state = await countedRelease(job.actor.workspaceId, job.holder, item.prospect.id, reason);
-        counted.push({ prospectId: item.prospect.id, state: state === "failed" ? "failed" : "filling", reason: state === "failed" ? reason : null });
-      }
-      return counted;
+      throw error;
     }
     const lasting = lastingFailure(job, error);
     if (lasting && items.length > 1) return sendOneByOne(job, items);
+    const refused = !lasting && !mightHaveSent(job.provider, error);
+    if (refused) await unsend(job, items.map((item) => item.prospect.id));
     for (const item of items) {
       if (lasting) {
         await end(job, item.prospect.id, "failed", lasting);
         outcomes.push({ prospectId: item.prospect.id, state: "failed", reason: lasting });
         continue;
       }
-      const state = await countedRelease(job.actor.workspaceId, job.holder, item.prospect.id, failureText(error, job.provider));
-      outcomes.push({ prospectId: item.prospect.id, state: state === "failed" ? "failed" : "pushing", reason: state === "failed" ? failureText(error, job.provider) : null });
+      const state = await releaseAfter(job, item.prospect.id, error);
+      outcomes.push({ prospectId: item.prospect.id, state: state === "failed" ? "failed" : refused ? "filling" : "pushing", reason: state === "failed" ? failureText(error, job.provider) : null });
     }
-    if (!lasting) console.error(`Couldn't add prospects to ${job.provider.name}`, redactedError(error));
+    if (!lasting && !job.provider.failure(error)) console.error(`Couldn't add prospects to ${job.provider.name}`, redactedError(error));
     return outcomes;
   }
   const done: { id: string; externalLeadId: string | null; senderId: string | null }[] = [];
@@ -440,6 +414,20 @@ async function push(job: Job, ready: Ready[]): Promise<ProspectOutcome[]> {
   }
   outcomes.push(...(await send(job, begun)));
   return outcomes;
+}
+
+async function settleEnded(job: Job, prospectId: string, reason: string): Promise<ProspectOutcome | null> {
+  const prospect = await readProspect(job.actor.workspaceId, prospectId, job.actor);
+  if (!prospect || !["queued", "filling", "pushing"].includes(prospect.state)) return null;
+  try {
+    if (prospect.state === "pushing" && (await resumePushing(job, prospect)) === "pushed") return { prospectId, state: "pushed", reason: null };
+  } catch (error) {
+    await end(job, prospectId, null, null);
+    if (error instanceof ServiceBusy) throw error;
+    return { prospectId, state: prospect.state, reason: null };
+  }
+  await end(job, prospectId, "failed", reason);
+  return { prospectId, state: "failed", reason };
 }
 
 async function resumePushing(job: Job, prospect: ProspectRow): Promise<"pushed" | "again"> {
@@ -492,7 +480,7 @@ async function jobFor(actor: UserActor, campaignId: string, holder: string, opti
     return result.rows[0] ?? null;
   });
   if (connection?.last_error === rejectedKeyLine(provider)) throw new Waiting(`${rejectedKeyLine(provider).replace(/\.$/, "")} in Settings › Tools.`);
-  return { actor, campaign, variables, provider, context, holder, fingerprint: keyFingerprint(provider.id, context.key), fetchImpl: options.fetchImpl, deadline: options.deadline, runSteps: options.runSteps };
+  return { actor, campaign, variables, provider, context: { ...context, lane: "push" }, holder, fetchImpl: options.fetchImpl, deadline: options.deadline, runSteps: options.runSteps };
 }
 
 function lastingSetup(error: unknown) {
@@ -549,7 +537,7 @@ export async function fillActor(workspaceId: string, provider: string, addedBy: 
   return syncActor(workspaceId, result.rows.find((row) => row.provider === provider)?.connected_by ?? null);
 }
 
-type BatchRow = { prospect_id: string; campaign_id: string; workspace_id: string; added_by_user_id: string | null; provider: string };
+type BatchRow = { prospect_id: string; campaign_id: string; workspace_id: string; added_by_user_id: string | null; provider: string; run_ended?: string | null };
 
 export async function claimFillBatch(holder = `fill:${randomUUID()}`, limit = FILL_BATCH) {
   const claimed = await query<BatchRow>("select * from private.claim_campaign_fills($1, $2)", [limit, holder]);
@@ -601,8 +589,17 @@ async function runGroup(rows: BatchRow[], holder: string, options: { fetchImpl?:
         continue;
       }
       try {
+        if (row.run_ended) {
+          const settled = await settleEnded(job, row.prospect_id, row.run_ended);
+          if (settled) outcomes.push(settled);
+          continue;
+        }
         const prospect = await readProspect(row.workspace_id, row.prospect_id, actor);
         if (!prospect) continue;
+        if (!prospect.filled_at && !timeLeft(options.deadline, FILL_START_MS)) {
+          await end(job, row.prospect_id, null, null);
+          continue;
+        }
         const prepared = await prepareOne(job, prospect);
         if ("lead" in prepared) ready.push(prepared);
         else outcomes.push(prepared);

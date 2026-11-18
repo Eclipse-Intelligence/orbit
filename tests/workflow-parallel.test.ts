@@ -524,7 +524,7 @@ describe("parallel workflows", () => {
     delete process.env.MINDCASE_API_KEY;
   });
 
-  it("fails a step that has waited 60 times for a busy service", async () => {
+  it("fails a step that has waited six hours for a busy service, however many times it waited", async () => {
     const ai = gateway({ reply: () => Response.json({ error: { message: "slow down" } }, { status: 429 }) });
     const id = await workflow(graph([node("ai_1", "ai", { prompt: "Hello.", outputs: [{ key: "text", type: "text" }] })], [["trigger", "out", "ai_1"]]));
     const started = await startRun(owner, id, { test: false, record: { type: "company", id: home }, fetchImpl: ai.fetchImpl });
@@ -532,12 +532,27 @@ describe("parallel workflows", () => {
     const state = (await runRow(started.runId)).state;
     await getAdminPool().query("update crm.workflow_runs set resume_at = now() - interval '1 second', state = $2::jsonb where id = $1", [
       started.runId,
-      JSON.stringify({ ...state, busy: { step: "ai_1", count: 60 } }),
+      JSON.stringify({ ...state, busy: { step: "ai_1", count: 2, since: Date.now() - 6 * 60 * 60_000 - 1_000 } }),
     ]);
     await drain(ai.fetchImpl);
     const failed = await runRow(started.runId);
     assert.equal(failed.status, "failed");
     assert.equal(failed.error, "ai_1: This step waited too long for a busy service. Try again.");
+  });
+
+  it("keeps a step waiting for a busy service within six hours, however many times it waited", async () => {
+    const ai = gateway({ reply: () => Response.json({ error: { message: "slow down" } }, { status: 429 }) });
+    const id = await workflow(graph([node("ai_1", "ai", { prompt: "Hello.", outputs: [{ key: "text", type: "text" }] })], [["trigger", "out", "ai_1"]]));
+    const started = await startRun(owner, id, { test: false, record: { type: "company", id: home }, fetchImpl: ai.fetchImpl });
+    const state = (await runRow(started.runId)).state;
+    await getAdminPool().query("update crm.workflow_runs set resume_at = now() - interval '1 second', state = $2::jsonb where id = $1", [
+      started.runId,
+      JSON.stringify({ ...state, busy: { step: "ai_1", count: 500, since: Date.now() - 60 * 60_000 } }),
+    ]);
+    await drain(ai.fetchImpl);
+    const waiting = await runRow(started.runId);
+    assert.equal(waiting.status, "waiting", "an item in a loop of 500 waits its turn instead of failing");
+    assert.equal((waiting.state as { busy?: { count: number } }).busy?.count, 501);
   });
 });
 

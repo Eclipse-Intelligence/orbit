@@ -141,6 +141,7 @@ export type ProspectRow = {
   stage: LinkedinStage | null;
   sender: string | null;
   importError: string | null;
+  stopError?: string | null;
 };
 
 export type LinkedinStage = "invited" | "accepted";

@@ -25,6 +25,7 @@ import { getTask } from "@/lib/crm/tasks";
 import { listProducts } from "@/lib/proposals/catalogue";
 import { createDocument, getDocument } from "@/lib/proposals/documents";
 import { formatMoney, type Currency } from "@/lib/proposals/model";
+import { FILL_START_MS } from "@/lib/campaigns/fill";
 import { campaignThreadPath, positiveCategory } from "@/lib/campaigns/format";
 import type { Company, CompanyWrite, Contact, ContactWrite, Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
@@ -95,9 +96,10 @@ export type RunState = {
   waitingChildren?: WaitingChildren | null;
   itemName?: string;
   loadItem?: boolean;
-  busy?: { step: string; count: number } | null;
+  busy?: { step: string; count: number; since?: number } | null;
   linkedin?: { key: string; text: string } | null;
   lookup?: Lookup | null;
+  adding?: { step: string; key: string; contactId: string; prospectId: string; campaign: string; channel: string } | null;
 };
 
 type Lookup = {
@@ -165,7 +167,8 @@ export const RUNS_AT_ONCE = 5;
 export const CRON_RUNS_AT_ONCE = 25;
 const CHILD_BATCH = 500;
 const TEST_CHILDREN = 3;
-const MAX_BUSY_WAITS = 60;
+export const BUSY_WAIT_MS = 6 * 60 * 60_000;
+export const ADD_WAIT_MS = 12 * 60 * 60_000;
 const SKIP_REASONS_MAX = 1000;
 const WEBHOOK_TIMEOUT_MS = 10_000;
 const WEBHOOK_BODY_MAX = 2_000_000;
@@ -1250,24 +1253,72 @@ async function addToCampaignStep(ctx: Ctx, step: Step): Promise<StepResult> {
   if (!contactId) throw new ItemSkipped("This run has no contact to add.", { state: "skipped", reason: "No contact" });
   const { addProspects } = await import("@/lib/campaigns/prospects");
   const { addOneNow } = await import("@/lib/campaigns/push");
-  const added = await addProspects(ctx.actor, campaignId, [contactId], provenance(ctx, step), { runId: ctx.run.id });
-  const row = added.prospects[0];
-  if (!row) throw new ItemSkipped("This contact isn't in this workspace.", { state: "skipped", reason: "Not in this workspace" });
-  const output = (state: string, reason: string | null) => ({
-    state,
-    reason,
-    campaign: added.campaign.name,
-    channel: added.campaign.channel,
-    prospectId: row.prospectId,
-    threadUrl: link(campaignThreadPath(row.prospectId)),
-  });
-  if (row.outcome === "skipped") throw new ItemSkipped(row.skipReason ?? "Skipped", output("skipped", row.skipReason));
-  if (row.outcome === "already" && !row.mine) throw new ItemSkipped("Already in this campaign", output(row.state, "Already in this campaign"));
-  const done = await addOneNow(ctx.actor, row.prospectId, `run:${ctx.run.id}`, { fetchImpl: ctx.fetchImpl, deadline: ctx.deadline, runSteps: ctx.vars.steps });
+  const key = effectKey(step.id, ctx.state.frames ?? []);
+  let adding = ctx.state.adding?.key === key && ctx.state.adding.contactId === contactId ? ctx.state.adding : null;
+  if (!adding) {
+    const added = await addProspects(ctx.actor, campaignId, [contactId], provenance(ctx, step), { runId: ctx.run.id });
+    const row = added.prospects[0];
+    if (!row) throw new ItemSkipped("This contact isn't in this workspace.", { state: "skipped", reason: "Not in this workspace" });
+    adding = { step: step.id, key, contactId, prospectId: row.prospectId, campaign: added.campaign.name, channel: added.campaign.channel };
+    const early = (state: string, reason: string | null) => addOutput(adding!, state, reason);
+    if (row.outcome === "skipped") throw new ItemSkipped(row.skipReason ?? "Skipped", early("skipped", row.skipReason));
+    if (row.outcome === "already" && !row.mine) throw new ItemSkipped("Already in this campaign", early(row.state, "Already in this campaign"));
+    ctx.state.adding = adding;
+  }
+  const current = adding;
+  const output = (state: string, reason: string | null) => addOutput(current, state, reason);
+  let done;
+  try {
+    done = await addOneNow(ctx.actor, current.prospectId, `run:${ctx.run.id}`, { fetchImpl: ctx.fetchImpl, deadline: ctx.deadline, runSteps: ctx.vars.steps });
+  } catch (error) {
+    if (error instanceof ServiceBusy) throw error;
+    if (error instanceof CrmError && error.details?.retry !== true) throw error;
+    throw new CrmError("upstream_error", error instanceof Error ? error.message : "Couldn't finish adding this person. Try again.", 502, { retry: true, keepTrying: true });
+  }
   if (done.state === "pushed") return { kind: "next", output: output("pushed", null) };
   if (done.state === "skipped") throw new ItemSkipped(done.reason ?? "Skipped", output("skipped", done.reason));
   if (done.state === "failed") throw new CrmError("upstream_error", done.reason ?? "Couldn't add this person. Try again.", 502);
-  throw new CrmError("upstream_error", "Couldn't finish adding this person. Try again.", 502, { retry: true });
+  throw new CrmError("upstream_error", "Couldn't finish adding this person. Try again.", 502, { retry: true, keepTrying: true });
+}
+
+type Adding = NonNullable<RunState["adding"]>;
+
+function addOutput(adding: Adding, state: string, reason: string | null) {
+  return {
+    state,
+    reason,
+    campaign: adding.campaign,
+    channel: adding.channel,
+    prospectId: adding.prospectId,
+    threadUrl: link(campaignThreadPath(adding.prospectId)),
+  };
+}
+
+function keepsTrying(error: unknown) {
+  return error instanceof CrmError && error.details?.keepTrying === true;
+}
+
+async function addRetryAt(ctx: Ctx) {
+  const fallback = new Date(Date.now() + RETRY_DELAY_MS);
+  const adding = ctx.state.adding;
+  if (!adding) return fallback;
+  const row = await withActor(ctx.actor, (db) =>
+    db.query<{ until: Date | null }>("select claimed_at + interval '10 minutes' as until from crm.campaign_prospects where id = $1 and workspace_id = $2", [
+      adding.prospectId,
+      ctx.actor.workspaceId,
+    ]),
+  ).catch(() => null);
+  const until = row?.rows[0]?.until ?? null;
+  return until && until.getTime() > fallback.getTime() ? until : fallback;
+}
+
+async function giveUpAdding(ctx: Ctx, step: Step, reason: string) {
+  const adding = ctx.state.adding;
+  ctx.state.adding = null;
+  if (!adding || adding.step !== step.id) return;
+  await query("select private.campaign_run_gave_up($1, $2, $3, $4)", [ctx.actor.workspaceId, adding.prospectId, ctx.run.id, reason]).catch((error) =>
+    console.error("Couldn't end a campaign prospect after its run gave up", error),
+  );
 }
 
 async function loadOutreach(ctx: Ctx) {
@@ -1998,6 +2049,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
       if (state.busy) state.busy = null;
       if (state.linkedin) state.linkedin = null;
       if (state.lookup) state.lookup = null;
+      if (state.adding) state.adding = null;
       if (state.effect || SIDE_EFFECTS.has(step.type)) {
         done = state.effect ?? null;
         state.effect = null;
@@ -2006,25 +2058,31 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
     } catch (error) {
       if (error instanceof RunStopped) throw error;
       state.effect = null;
-      if (error instanceof ServiceBusy && !run.test) {
-        const waits = state.busy?.step === step.id ? state.busy.count + 1 : 1;
-        if (waits <= MAX_BUSY_WAITS) {
-          state.busy = { step: step.id, count: waits };
-          if (waits === 1) await logStep(ctx, step, "waiting", input, { until: error.until.toISOString(), retrying: error.message }, null, started);
-          await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "delay", resume_at: error.until.toISOString() });
+      if ((error instanceof ServiceBusy || keepsTrying(error)) && !run.test) {
+        const same = state.busy?.step === step.id;
+        const waits = same ? state.busy!.count + 1 : 1;
+        const since = same && typeof state.busy?.since === "number" ? state.busy.since : Date.now();
+        const adding = keepsTrying(error) || (step.type === "add_to_campaign" && state.adding?.step === step.id);
+        if (Date.now() - since < (adding ? ADD_WAIT_MS : BUSY_WAIT_MS)) {
+          const until = error instanceof ServiceBusy ? error.until : await addRetryAt(ctx);
+          const retrying = error instanceof Error ? error.message : "Trying again.";
+          state.busy = { step: step.id, count: waits, since };
+          if (waits === 1) await logStep(ctx, step, "waiting", input, { until: until.toISOString(), retrying }, null, started);
+          await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "delay", resume_at: until.toISOString() });
           return "waiting";
         }
       }
       state.lookup = null;
       const skipped = error instanceof ItemSkipped ? error : null;
       const message = error instanceof ServiceBusy ? (run.test ? error.message : BUSY_TOO_LONG) : skipped ? skipped.message : errorText(error);
-      if (retryable(error) && !run.test && state.retried !== step.id) {
+      if (retryable(error) && !keepsTrying(error) && !run.test && state.retried !== step.id) {
         state.retried = step.id;
         const until = new Date(Date.now() + RETRY_DELAY_MS).toISOString();
         await logStep(ctx, step, "waiting", input, { until, retrying: message }, null, started);
         await saveRun(actor, run.id, { state: { ...state, at, vars }, status: "waiting", waiting_for: "delay", resume_at: until });
         return "waiting";
       }
+      if (step.type === "add_to_campaign" && !run.test) await giveUpAdding(ctx, step, message);
       const endsItem = (step.type === "ai" || Boolean(skipped)) && ((state.frames?.length ?? 0) > 0 || Boolean(run.parent_run_id));
       await logStep(ctx, step, skipped ? "skipped" : "failed", input, skipped?.output ?? null, message, started);
       if (skipped && !endsItem) {
@@ -2147,7 +2205,29 @@ export async function runWorkflowTick(options: TickOptions = {}) {
   let processed = 0;
   let drained = false;
   let fillsDrained = options.long !== true;
+  let fills = 0;
+  const startFill = async () => {
+    const { claimFillBatch, runFillBatch } = await import("@/lib/campaigns/push");
+    const batch = await claimFillBatch();
+    if (!batch) return false;
+    fills += 1;
+    const task: Promise<void> = runFillBatch(batch, { deadline, fetchImpl: options.fetchImpl })
+      .then(
+        () => undefined,
+        (error) => console.error("Campaign fill failed", error),
+      )
+      .finally(() => {
+        running.delete(task);
+        fills -= 1;
+        processed += 1;
+      });
+    running.add(task);
+    return true;
+  };
   for (;;) {
+    if (!fillsDrained && fills === 0 && running.size < most && deadline - Date.now() >= FILL_START_MS) {
+      if (!(await startFill())) fillsDrained = true;
+    }
     if (!drained && running.size < most && Date.now() < deadline - STEP_RESERVE_MS) {
       const wanted = most - running.size;
       const roomForLong = options.long === true && deadline - Date.now() >= LONG_AI_MS + STEP_RESERVE_MS;
@@ -2170,22 +2250,8 @@ export async function runWorkflowTick(options: TickOptions = {}) {
       }
       if (claimed.rows.length > 0) continue;
     }
-    if (!fillsDrained && running.size < most && deadline - Date.now() >= LONG_AI_MS + STEP_RESERVE_MS) {
-      const { claimFillBatch, runFillBatch } = await import("@/lib/campaigns/push");
-      const batch = await claimFillBatch();
-      if (batch) {
-        const task: Promise<void> = runFillBatch(batch, { deadline, fetchImpl: options.fetchImpl })
-          .then(
-            () => undefined,
-            (error) => console.error("Campaign fill failed", error),
-          )
-          .finally(() => {
-            running.delete(task);
-            processed += 1;
-          });
-        running.add(task);
-        continue;
-      }
+    if (!fillsDrained && running.size < most && deadline - Date.now() >= FILL_START_MS) {
+      if (await startFill()) continue;
       fillsDrained = true;
     }
     if (running.size === 0) break;

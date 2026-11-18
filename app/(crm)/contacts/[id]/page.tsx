@@ -96,7 +96,7 @@ export default async function ContactPage({
     }),
     contactSuppression(user, contact.id).catch((error: unknown) => {
       console.error("Couldn't read the contact's do not contact status", error);
-      return { doNotContact: null, caution: null };
+      return { doNotContact: null, caution: null, blockLine: null };
     }),
   ]);
   const available = enrichmentAvailability();
@@ -144,6 +144,7 @@ export default async function ContactPage({
       campaignRows={campaignRows}
       doNotContact={suppression.doNotContact}
       sendCaution={suppression.caution}
+      blockLine={suppression.blockLine}
       canSetDoNotContact={user.scopes.includes("campaigns:write")}
       meetings={meetings}
       tags={tags}

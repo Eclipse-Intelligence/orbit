@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { campaignProvider, CAMPAIGN_PROVIDER_CLIENTS, type CampaignProvider } from "@/lib/campaigns/providers";
+import { ACCOUNT_KEY, campaignProvider, CAMPAIGN_PROVIDER_CLIENTS, type CampaignProvider } from "@/lib/campaigns/providers";
 import { listCampaignSenders, saveProviderSenders } from "@/lib/campaigns/senders";
 import type { CampaignProviderId, ConnectionView } from "@/lib/campaigns/types";
 import { withActor } from "@/lib/crm/context";
@@ -45,6 +45,7 @@ async function checkKey(provider: CampaignProvider, key: string, workspaceId: st
     if (error instanceof ServiceBusy) throw new CrmError("rate_limited", `${provider.name} is busy. Try again in a minute.`, 429);
     const failure = provider.failure(error);
     if (failure?.rejectedKey) throw new CrmError("invalid_input", `${provider.name} rejected the key.`, 400, { field: "key" });
+    if (failure?.message === ACCOUNT_KEY) throw new CrmError("invalid_input", ACCOUNT_KEY, 400, { field: "key" });
     if (failure) throw new CrmError("upstream_failed", failure.message, 502);
     throw error;
   }

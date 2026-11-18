@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { query } from "@/lib/db/pool";
 import type { ProviderId } from "@/lib/enrichment/providers";
 
-export const SERVICES = ["llm", "web_search", "parallel", "context_dev", "mindcase", "enrow", "icypeas", "hunter", "smartlead", "smartlead_stats", "heyreach"] as const;
+export const SERVICES = ["llm", "web_search", "parallel", "context_dev", "mindcase", "enrow", "icypeas", "hunter", "smartlead", "smartlead_push", "smartlead_stats", "heyreach"] as const;
 export type Service = (typeof SERVICES)[number];
 
 export const ENRICHMENT_SERVICES: Record<ProviderId, Service> = { context: "context_dev", hunter: "hunter", enrow: "enrow", icypeas: "icypeas" };
@@ -25,6 +25,7 @@ const DEFAULTS: Record<Service, { perMinute?: number; perHour?: number; atOnce?:
   icypeas: { perMinute: 60, atOnce: 10 },
   hunter: { perMinute: 60, atOnce: 10 },
   smartlead: { perMinute: 60, perHour: 1000 },
+  smartlead_push: { perMinute: 40, perHour: 700 },
   smartlead_stats: { perMinute: 10 },
   heyreach: { perMinute: 300 },
 };
@@ -61,6 +62,7 @@ const SERVICE_NAMES: Record<Service, string> = {
   icypeas: "Icypeas",
   hunter: "Hunter",
   smartlead: "Smartlead",
+  smartlead_push: "Smartlead",
   smartlead_stats: "Smartlead",
   heyreach: "HeyReach",
 };

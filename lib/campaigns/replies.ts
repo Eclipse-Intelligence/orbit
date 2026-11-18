@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
+import { auditJson } from "@/lib/campaigns/audit";
 import { connectedContext, mightHaveSent, providerError, type ProviderOptions } from "@/lib/campaigns/context";
 import { CAMPAIGN_AUDIT_EVENTS, leadRef, readProspectRef, type ProspectRef } from "@/lib/campaigns/manage";
 import { FILABLE_SQL, fileMessageActivity, saveThread, threadFetched, type FilableMessage } from "@/lib/campaigns/messages";
 import type { CampaignProvider, ProviderContext, ReplyTarget } from "@/lib/campaigns/providers";
-import { withActor } from "@/lib/crm/context";
+import { scheduleWebhooks, withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
-import { recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
@@ -146,9 +146,9 @@ function emailTarget(prospect: ProspectRef, messages: StoredTarget[]): ReplyTarg
   };
 }
 
-async function refresh(provider: CampaignProvider, context: ProviderContext, prospect: ProspectRef) {
+async function refresh(provider: CampaignProvider, context: ProviderContext, prospect: ProspectRef, actor: UserActor) {
   const messages = await provider.readThread(context, { externalId: prospect.campaign_external_id }, leadRef(prospect));
-  await saveThread(prospect.id, messages, { replyEvents: provider.repliesFromThreads, handled: false });
+  await saveThread(prospect.id, messages, { replyEvents: provider.repliesFromThreads, handled: false, fileFor: actor });
   await threadFetched(prospect.id);
 }
 
@@ -191,7 +191,7 @@ export async function replyToProspect(
       : emailTarget(read.prospect, read.messages);
   if (!target) {
     try {
-      await refresh(provider, context, read.prospect);
+      await refresh(provider, context, read.prospect, actor);
     } catch (error) {
       throw providerError(provider, error, "Couldn't read the conversation. Try again.");
     }
@@ -256,19 +256,23 @@ async function sendBegun(
       failure = error instanceof ServiceBusy ? providerError(provider, error, "") : providerError(provider, error, "Couldn't send. Try again.");
     }
   }
-  await query("select private.campaign_reply_finish($1, $2, $3, $4, $5)", [actor.workspaceId, messageId, state, providerMessageId, failure?.message ?? (state === "unknown" ? "May not have gone." : null)]);
+  const audit = auditJson(actor, CAMPAIGN_AUDIT_EVENTS.replySent, "campaign_prospect", prospect.id, provenance, {
+    campaignId: prospect.campaign_id,
+    campaign: prospect.campaign_name,
+    contactId: prospect.contact_id,
+    channel: prospect.channel,
+  });
+  const finished = await query<{ audited: boolean }>("select private.campaign_reply_finish($1, $2, $3, $4, $5, $6::jsonb) as audited", [
+    actor.workspaceId,
+    messageId,
+    state,
+    providerMessageId,
+    failure?.message ?? (state === "unknown" ? "May not have gone." : null),
+    audit,
+  ]);
   if (failure) throw new CrmError(failure.code, failure.message, failure.status, { ...(failure.details ?? {}), messageId });
+  if (finished.rows[0]?.audited) scheduleWebhooks();
 
   await fileSent(actor, messageId, provenance);
-  await withActor(actor, (db) =>
-    recordAudit(db, actor, CAMPAIGN_AUDIT_EVENTS.replySent, "campaign_prospect", prospect.id, provenance, {
-      campaignId: prospect.campaign_id,
-      campaign: prospect.campaign_name,
-      contactId: prospect.contact_id,
-      channel: prospect.channel,
-      messageId,
-      sendState: state,
-    }),
-  );
   return { messageId, sendState: state, repeated: false };
 }

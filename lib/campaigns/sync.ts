@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { saveThread, threadFetched } from "@/lib/campaigns/messages";
 import { campaignProvider, type CampaignProvider, type ProviderCampaign, type ProviderContext, type ProviderEvent, type ProviderLead } from "@/lib/campaigns/providers";
 import { processStops } from "@/lib/campaigns/stops";
-import { pushBlockList } from "@/lib/campaigns/suppression";
+import { refusedByProvider } from "@/lib/campaigns/stops";
+import { liftBlocks, pushBlockList } from "@/lib/campaigns/suppression";
 import { campaignWebhookUrl, ensureWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { saveProviderSenders } from "@/lib/campaigns/senders";
 import type { CampaignProviderId, CampaignStatus } from "@/lib/campaigns/types";
@@ -26,6 +27,7 @@ const REPLY_PAGES = 20;
 const REQUESTED_BATCH = 25;
 const WEBHOOK_RETRY_MS = 24 * 60 * 60_000;
 const STRAY_KEPT = 1_000;
+const PROBE_EVERY_MS = 24 * 60 * 60_000;
 
 export type SyncState = {
   sequenceAt?: string;
@@ -45,13 +47,19 @@ export type SyncState = {
   strayIds?: string[];
   webhookId?: string | null;
   webhookFailedAt?: string | null;
+  probedAt?: string | null;
 };
 
 export type SyncedEvent = { eventId: string; prospectId: string; contactId: string | null; kind: string; occurredAt: string };
 
 export type SyncedCampaign = { id: string; workspaceId: string; provider: CampaignProviderId; externalId: string; name: string };
 
-export type EventHandler = (campaign: SyncedCampaign, events: SyncedEvent[], actor: UserActor, context: ProviderContext) => Promise<void | { retry: string[]; busy?: string }>;
+export type EventHandler = (
+  campaign: SyncedCampaign,
+  events: SyncedEvent[],
+  actor: UserActor,
+  context: ProviderContext,
+) => Promise<void | { retry: string[]; busy?: string; syncError?: string }>;
 
 export type CampaignSyncOptions = {
   deadline: number;
@@ -148,9 +156,9 @@ function eventJson(event: ProviderEvent) {
   };
 }
 
-export async function saveProviderLeads(campaignId: string, leads: ProviderLead[]) {
+export async function saveProviderLeads(campaignId: string, leads: ProviderLead[], handled = true) {
   if (leads.length === 0) return 0;
-  const result = await query<{ saved: number }>("select private.campaign_sync_prospects($1, $2::jsonb) as saved", [campaignId, JSON.stringify(leads.map(leadJson))]);
+  const result = await query<{ saved: number }>("select private.campaign_sync_prospects($1, $2::jsonb, $3) as saved", [campaignId, JSON.stringify(leads.map(leadJson)), handled]);
   return result.rows[0]?.saved ?? 0;
 }
 
@@ -178,6 +186,7 @@ async function handOverEvents(pass: Pass, campaign: SyncedCampaign) {
       const outcome = await onEvents(campaign, waiting.rows.map(syncedEvent), pass.actor, pass.context);
       retry = outcome?.retry ?? [];
       if (outcome?.busy) pass.report.busy.push(outcome.busy);
+      if (outcome?.syncError) pass.notes.set(campaign.id, outcome.syncError);
     } catch (error) {
       await query("select private.campaign_events_release($1, $2::uuid[])", [campaign.id, ids]).catch(() => undefined);
       throw error;
@@ -245,7 +254,6 @@ async function registerWebhook(pass: Pass, row: CampaignRow) {
   } catch (error) {
     if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return;
     const failure = pass.provider.failure(error);
-    if (failure?.rejectedKey) throw error;
     if (!failure) console.error(`Couldn't add the ${pass.provider.name} reply webhook`, redactedError(error));
     await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
   }
@@ -278,7 +286,7 @@ async function syncRequested(pass: Pass, campaigns: Map<string, CampaignRow>) {
           senderId: row.sender_id,
         });
         const campaign = campaigns.get(row.campaign_id);
-        await saveThread(row.prospect_id, messages, { replyEvents: pass.provider.repliesFromThreads, handled: !campaign?.backfilled_at || !pass.options.onEvents });
+        await saveThread(row.prospect_id, messages, { replyEvents: pass.provider.repliesFromThreads, handled: !campaign?.backfilled_at || !pass.options.onEvents, fileFor: pass.actor });
         await threadFetched(row.prospect_id, row.requested_at);
         pass.report.threads += 1;
         touched.add(row.campaign_id);
@@ -287,7 +295,12 @@ async function syncRequested(pass: Pass, campaigns: Map<string, CampaignRow>) {
           pass.report.busy.push(`${pass.provider.name}: ${error.message}`);
           return touched;
         }
-        if (pass.provider.failure(error)?.rejectedKey) throw error;
+        const refused = refusedByProvider(pass.provider, error);
+        if (refused) {
+          await query("select private.campaign_thread_request_done($1, $2)", [row.prospect_id, row.requested_at]);
+          pass.report.errors.push(`Couldn't read a thread from ${pass.provider.name}. ${refused}`);
+          continue;
+        }
         console.error(`Couldn't read a ${pass.provider.name} thread`, redactedError(error));
       }
     }
@@ -304,7 +317,13 @@ type Pass = {
   options: CampaignSyncOptions;
   report: CampaignSyncReport;
   listed: Map<string, ProviderCampaign>;
+  notes: Map<string, string>;
+  statsBusy: boolean;
 };
+
+function statsBusy(error: unknown) {
+  return error instanceof ServiceBusy && error.service === "smartlead_stats";
+}
 
 async function syncCampaign(pass: Pass, row: CampaignRow) {
   const { provider, context, options, report } = pass;
@@ -339,13 +358,14 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     let offset = state.leadsOffset ?? 0;
     while (room()) {
       const page = await provider.readLeads(context, row.external_id, offset);
-      report.prospects += await saveProviderLeads(row.id, page.items);
+      report.prospects += await saveProviderLeads(row.id, page.items, backfilling || !options.onEvents);
       if (page.next === null) {
         await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: new Date().toISOString() } });
         leadsComplete = true;
         await query("select private.campaign_link_contacts($1, null)", [row.id]).catch((error) =>
           console.error("Couldn't link campaign prospects to contacts", redactedError(error)),
         );
+        if (!backfilling) await handOverEvents(pass, campaign);
         break;
       }
       offset = page.next;
@@ -355,12 +375,21 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
 
   const eventsInProgress = typeof state.eventsOffset === "number";
   let eventsComplete = !eventsInProgress && Boolean(state.eventsAt);
-  if (eventsInProgress || backfilling || live || due(state.eventsAt, IDLE_EVERY_MS, now)) {
+  if (!pass.statsBusy && (eventsInProgress || backfilling || live || due(state.eventsAt, IDLE_EVERY_MS, now))) {
     eventsComplete = false;
     const startedAt = state.eventsStartedAt ?? new Date().toISOString();
     let offset = state.eventsOffset ?? 0;
     while (room()) {
-      const page = await provider.readEvents(context, row.external_id, state.eventsSince ?? null, offset);
+      let page;
+      try {
+        page = await provider.readEvents(context, row.external_id, state.eventsSince ?? null, offset);
+      } catch (error) {
+        if (!statsBusy(error)) throw error;
+        pass.statsBusy = true;
+        report.busy.push(`${provider.name}: ${(error as ServiceBusy).message}`);
+        await saveCampaign(row.id, { syncState: { eventsOffset: offset, eventsStartedAt: startedAt } });
+        break;
+      }
       const inserted = await saveProviderEvents(row.id, page.items, backfilling || !options.onEvents);
       report.events += inserted.length;
       if (!backfilling && inserted.length > 0) await handOverEvents(pass, campaign);
@@ -407,8 +436,33 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     await saveCampaign(row.id, { backfilled: true });
     report.backfilled += 1;
   }
-  await saveCampaign(row.id, { syncError: null, syncState: { missingAt: null } });
+  const unread = pass.notes.get(row.id) ?? (await query<{ note: string | null }>("select private.campaign_unread_note($1) as note", [row.id])).rows[0]?.note ?? null;
+  await saveCampaign(row.id, { syncError: unread, syncState: { missingAt: null } });
   report.campaigns += 1;
+}
+
+function eventsOrder(row: CampaignRow) {
+  const at = row.sync_state?.eventsAt ? Date.parse(row.sync_state.eventsAt) : NaN;
+  return Number.isNaN(at) ? 0 : at;
+}
+
+async function probeUnlisted(pass: Pass, row: CampaignRow) {
+  if (row.status === "archived") return;
+  const state = row.sync_state ?? {};
+  if (state.probedAt && !due(state.probedAt, PROBE_EVERY_MS, Date.now())) return;
+  const probedAt = new Date().toISOString();
+  let found;
+  try {
+    found = await pass.provider.readCampaign(pass.context, row.external_id);
+  } catch (error) {
+    if (!(error instanceof ServiceBusy) && pass.provider.failure(error) && !pass.context.signal?.aborted) await saveCampaign(row.id, { syncState: { probedAt } });
+    throw error;
+  }
+  if (!found || found.status === "archived") {
+    await saveCampaign(row.id, { status: "archived", syncState: { probedAt } });
+    return;
+  }
+  await saveCampaign(row.id, { syncState: { probedAt } });
 }
 
 async function syncCampaignSafely(pass: Pass, row: CampaignRow) {
@@ -421,7 +475,6 @@ async function syncCampaignSafely(pass: Pass, row: CampaignRow) {
     }
     if (pass.context.signal?.aborted) return;
     const failure = pass.provider.failure(error);
-    if (failure?.rejectedKey) throw error;
     if (!failure) console.error(`${pass.provider.name} campaign sync failed`, redactedError(error));
     const message = failure?.missing
       ? `${pass.provider.name} can't find this campaign.`
@@ -455,7 +508,13 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
   report.connections += 1;
   const outOfTime = AbortSignal.timeout(Math.max(1_000, options.deadline - Date.now() - STEP_RESERVE_MS));
   try {
-    const context: ProviderContext = { key: decryptSecret(target.key_encrypted), workspaceId: target.workspace_id, fetchImpl: options.fetchImpl, signal: outOfTime };
+    const context: ProviderContext = {
+      key: decryptSecret(target.key_encrypted),
+      workspaceId: target.workspace_id,
+      fetchImpl: options.fetchImpl,
+      signal: outOfTime,
+      details: target.details ?? {},
+    };
     const listed = await provider.listCampaigns(context);
     const senders = provider.listSenders ? await provider.listSenders(context) : null;
     if (senders) await saveProviderSenders(actor, provider.id, senders);
@@ -465,7 +524,17 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
       provider.channel,
       JSON.stringify(listed.map((item) => ({ external_id: item.externalId, name: item.name, status: item.status }))),
     ]);
-    const pass: Pass = { provider, context, workspaceId: target.workspace_id, actor, options, report, listed: new Map(listed.map((item) => [item.externalId, item])) };
+    const pass: Pass = {
+      provider,
+      context,
+      workspaceId: target.workspace_id,
+      actor,
+      options,
+      report,
+      listed: new Map(listed.map((item) => [item.externalId, item])),
+      notes: new Map(),
+      statsBusy: false,
+    };
     const byId = new Map(rows.rows.map((row) => [row.id, row]));
     const touched = await syncRequested(pass, byId);
     for (const id of touched) {
@@ -478,19 +547,32 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
           report.busy.push(`${provider.name}: ${error.message}`);
           continue;
         }
-        if (provider.failure(error)?.rejectedKey) throw error;
         console.error(`Couldn't hand over ${row.name || "a campaign"}'s events`, redactedError(error));
         report.errors.push(`Couldn't sync ${row.name || "a campaign"}. Try again.`);
       }
     }
     if (timeLeft(options.deadline, STEP_RESERVE_MS)) report.stopped += await processStops(target.workspace_id, provider, context, options.deadline);
-    for (const row of rows.rows) {
+    const ordered = [...rows.rows].sort((a, b) => Number(Boolean(a.backfilled_at)) - Number(Boolean(b.backfilled_at)) || eventsOrder(a) - eventsOrder(b));
+    for (const row of ordered) {
       if (!timeLeft(options.deadline, STEP_RESERVE_MS) || outOfTime.aborted) break;
-      if (!pass.listed.has(row.external_id)) continue;
+      if (!pass.listed.has(row.external_id)) {
+        try {
+          await probeUnlisted(pass, row);
+        } catch (error) {
+          if (error instanceof ServiceBusy) {
+            report.busy.push(`${provider.name}: ${error.message}`);
+            continue;
+          }
+          if (outOfTime.aborted) break;
+          if (!provider.failure(error)) console.error(`Couldn't check ${row.name || "a campaign"} at ${provider.name}`, redactedError(error));
+        }
+        continue;
+      }
       await syncCampaignSafely(pass, row);
     }
     if (timeLeft(options.deadline, STEP_RESERVE_MS)) report.stopped += await processStops(target.workspace_id, provider, context, options.deadline);
     if (timeLeft(options.deadline, STEP_RESERVE_MS)) await pushBlockList(target.workspace_id, provider, context);
+    if (timeLeft(options.deadline, STEP_RESERVE_MS)) await liftBlocks(target.workspace_id, provider, context);
     await finish(target, null, { campaigns: listed.length, ...(senders ? { senders: senders.length } : {}) });
   } catch (error) {
     if (error instanceof ServiceBusy) {

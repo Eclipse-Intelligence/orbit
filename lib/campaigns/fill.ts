@@ -11,6 +11,8 @@ import { withService } from "@/lib/workflows/limits";
 import { writingStyle } from "@/lib/writing-style";
 
 export const WEB_FILL_MS = 180_000;
+export const FILL_RESERVE_MS = 15_000;
+export const FILL_START_MS = WEB_FILL_MS + FILL_RESERVE_MS;
 const FILL_TOKENS = 4000;
 const CONTEXT_SHARE = 4;
 

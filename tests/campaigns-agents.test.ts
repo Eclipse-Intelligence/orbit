@@ -40,7 +40,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { registerCampaignTools } from "@/server/mcp/campaigns";
 import { createCrmMcpServer } from "@/server/mcp/server";
 import { fakeHeyReach, fakeSmartlead, sequenceOf, type FakeAccount, type FakeHeyReachAccount } from "./campaigns-fake";
-import { createAgent, createUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const SL_A = "sl_key_agents_alpha_01";
 const SL_B = "sl_key_agents_bravo_02";
@@ -444,7 +444,7 @@ describe("campaigns for the assistant, MCP and the API", () => {
   describe("idempotency claims", () => {
     it("runs its migration twice", async () => {
       await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270212100000_idempotency_claims.sql", "utf8"));
-      await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270212100000_idempotency_claims.sql", "utf8"));
+      await reapplyMigrationsFrom("20270212100000_idempotency_claims.sql");
     });
 
     it("runs two concurrent identical requests once, and every replay gets the first run's answer", async () => {

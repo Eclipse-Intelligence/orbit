@@ -1,11 +1,12 @@
+import { auditJson } from "@/lib/campaigns/audit";
 import { connectedContext, providerError, type ProviderOptions } from "@/lib/campaigns/context";
 import { fireCampaignEvents } from "@/lib/campaigns/events";
-import type { LeadRef } from "@/lib/campaigns/providers";
-import { stopAtProvider } from "@/lib/campaigns/stops";
+import type { CampaignProvider, LeadRef, ProviderContext } from "@/lib/campaigns/providers";
+import { leadAtProvider, refusedByProvider, stopAtProvider } from "@/lib/campaigns/stops";
 import type { CampaignChannel, CampaignProviderId, CampaignStatus, ProspectState } from "@/lib/campaigns/types";
-import { withActor } from "@/lib/crm/context";
+import { scheduleWebhooks, withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
-import { isUuid, recordAudit } from "@/lib/crm/mutate";
+import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
@@ -95,17 +96,24 @@ export async function setCampaignPaused(actor: Actor, campaignId: string, paused
   } catch (error) {
     throw providerError(provider, error, paused ? "Couldn't pause the campaign. Try again." : "Couldn't resume the campaign. Try again.");
   }
-  await query("select private.campaign_status_set($1, $2, $3)", [actor.workspaceId, campaign.id, want]);
-  await withActor(actor, (db) =>
-    recordAudit(db, actor, paused ? CAMPAIGN_AUDIT_EVENTS.paused : CAMPAIGN_AUDIT_EVENTS.resumed, "campaign", campaign.id, web(paused ? "pause_campaign" : "resume_campaign", options), {
-      provider: campaign.provider,
-      channel: campaign.channel,
-      name: campaign.name,
-      before: campaign.status,
-      after: want,
-    }),
-  );
+  const audit = auditJson(actor, paused ? CAMPAIGN_AUDIT_EVENTS.paused : CAMPAIGN_AUDIT_EVENTS.resumed, "campaign", campaign.id, web(paused ? "pause_campaign" : "resume_campaign", options), {
+    provider: campaign.provider,
+    channel: campaign.channel,
+    name: campaign.name,
+  });
+  const changed = await query<{ changed: boolean }>("select private.campaign_status_set($1, $2, $3, $4::jsonb) as changed", [actor.workspaceId, campaign.id, want, audit]);
+  if (changed.rows[0]?.changed) scheduleWebhooks();
   return { status: want };
+}
+
+export function notAtProvider(provider: Pick<CampaignProvider, "name">) {
+  return new CrmError("conflict", `${provider.name} doesn't have this person in the campaign.`, 409);
+}
+
+async function leadFor(actor: Actor, provider: CampaignProvider, context: ProviderContext, prospect: ProspectRef) {
+  const lead = await leadAtProvider(actor.workspaceId, provider, context, prospect.campaign_external_id, prospect.id, leadRef(prospect));
+  if (!lead) throw notAtProvider(provider);
+  return lead;
 }
 
 function assertPushed(prospect: ProspectRef) {
@@ -124,22 +132,20 @@ export async function setProspectPaused(actor: Actor, prospectId: string, paused
   const want = paused ? "paused" : "in_progress";
   if (prospect.lead_status === want) return { leadStatus: want };
   try {
-    await call(context, prospect.campaign_external_id, leadRef(prospect));
+    await call(context, prospect.campaign_external_id, await leadFor(actor, provider, context, prospect));
   } catch (error) {
     throw providerError(provider, error, paused ? "Couldn't pause this person. Try again." : "Couldn't resume this person. Try again.");
   }
-  await query("select private.campaign_prospect_lead_status($1, $2, $3)", [actor.workspaceId, prospect.id, want]);
-  await withActor(actor, (db) =>
-    recordAudit(
-      db,
-      actor,
-      paused ? CAMPAIGN_AUDIT_EVENTS.prospectPaused : CAMPAIGN_AUDIT_EVENTS.prospectResumed,
-      "campaign_prospect",
-      prospect.id,
-      web(paused ? "pause_prospect" : "resume_prospect", options),
-      { campaignId: prospect.campaign_id, campaign: prospect.campaign_name, contactId: prospect.contact_id, channel: prospect.channel, before: prospect.lead_status, after: want },
-    ),
+  const audit = auditJson(
+    actor,
+    paused ? CAMPAIGN_AUDIT_EVENTS.prospectPaused : CAMPAIGN_AUDIT_EVENTS.prospectResumed,
+    "campaign_prospect",
+    prospect.id,
+    web(paused ? "pause_prospect" : "resume_prospect", options),
+    { campaignId: prospect.campaign_id, campaign: prospect.campaign_name, contactId: prospect.contact_id, channel: prospect.channel },
   );
+  const changed = await query<{ changed: boolean }>("select private.campaign_prospect_lead_status($1, $2, $3, $4::jsonb) as changed", [actor.workspaceId, prospect.id, want, audit]);
+  if (changed.rows[0]?.changed) scheduleWebhooks();
   return { leadStatus: want };
 }
 
@@ -149,18 +155,16 @@ export async function removeProspect(actor: Actor, prospectId: string, options: 
   assertScope(actor.scopes, "campaigns:write");
   const prospect = await withActor(actor, (db) => readProspectRef(db, actor, prospectId));
   if (prospect.stopped_at || prospect.state === "skipped" || prospect.state === "failed") throw new CrmError("conflict", "This person is already out of the campaign.", 409);
-  const before = await query<{ state: string | null }>("select private.campaign_prospect_remove($1, $2) as state", [actor.workspaceId, prospect.id]);
+  const audit = auditJson(actor, CAMPAIGN_AUDIT_EVENTS.prospectRemoved, "campaign_prospect", prospect.id, web("remove_prospect", options), {
+    campaignId: prospect.campaign_id,
+    campaign: prospect.campaign_name,
+    contactId: prospect.contact_id,
+    channel: prospect.channel,
+  });
+  const before = await query<{ state: string | null }>("select private.campaign_prospect_remove($1, $2, $3::jsonb) as state", [actor.workspaceId, prospect.id, audit]);
   if (!before.rows[0]?.state) throw notFound("prospect");
   if (before.rows[0].state === "unchanged") throw new CrmError("conflict", "This person is already out of the campaign.", 409);
-  await withActor(actor, (db) =>
-    recordAudit(db, actor, CAMPAIGN_AUDIT_EVENTS.prospectRemoved, "campaign_prospect", prospect.id, web("remove_prospect", options), {
-      campaignId: prospect.campaign_id,
-      campaign: prospect.campaign_name,
-      contactId: prospect.contact_id,
-      channel: prospect.channel,
-      state: prospect.state,
-    }),
-  );
+  scheduleWebhooks();
   if (prospect.state !== "pushed") return { state: prospect.state === "pushing" ? "stopping" : "removed" };
   try {
     const { provider, context } = await connectedContext(actor.workspaceId, prospect.provider, options);
@@ -181,6 +185,15 @@ export async function removeProspect(actor: Actor, prospectId: string, options: 
   }
 }
 
+export function cantClear(provider: Pick<CampaignProvider, "name">) {
+  return `${provider.name} wouldn't clear the category. Set another one instead.`;
+}
+
+function clearedKeys(provider: CampaignProvider, campaignExternalId: string, lead: LeadRef, category: string) {
+  const refs: LeadRef[] = [lead, { ...lead, externalLeadId: null }, { ...lead, externalLeadId: null, email: null }];
+  return [...new Set(refs.map((ref) => provider.categoryKey(campaignExternalId, ref, category)))];
+}
+
 function cleanCategory(value: string | null) {
   if (value === null) return null;
   const text = value.replace(/\s+/g, " ").trim();
@@ -195,33 +208,37 @@ export async function setProspectCategory(actor: Actor, prospectId: string, rawC
   const prospect = await withActor(actor, (db) => readProspectRef(db, actor, prospectId));
   if ((prospect.category ?? null) === category) return { category, fired: false };
   const { provider, context } = await connectedContext(actor.workspaceId, prospect.provider, options);
-  if (category && provider.setCategory && prospect.state === "pushed") {
+  let lead = leadRef(prospect);
+  const atProvider = prospect.state === "pushed" && (category ? Boolean(provider.setCategory) : Boolean(provider.clearCategory && prospect.category));
+  if (atProvider) {
     try {
-      await provider.setCategory(context, prospect.campaign_external_id, leadRef(prospect), category);
+      lead = await leadFor(actor, provider, context, prospect);
+      if (category) await provider.setCategory!(context, prospect.campaign_external_id, lead, category);
+      else await provider.clearCategory!(context, prospect.campaign_external_id, lead);
     } catch (error) {
-      throw providerError(provider, error, "Couldn't set the category. Try again.");
+      if (!category && refusedByProvider(provider, error)) throw new CrmError("conflict", cantClear(provider), 409, { field: "category" });
+      throw providerError(provider, error, category ? "Couldn't set the category. Try again." : "Couldn't clear the category. Try again.");
     }
   }
   const provenance = web("set_prospect_category", options);
   const payload = { ...(provenance.workflowId ? { sourceWorkflowId: provenance.workflowId } : {}), depth: provenance.depth ?? 0, setInOrbit: true };
-  const saved = await query<{ event: string | null }>("select private.campaign_set_category($1, $2, $3, $4, $5::jsonb) as event", [
+  const audit = auditJson(actor, CAMPAIGN_AUDIT_EVENTS.categoryChanged, "campaign_prospect", prospect.id, provenance, {
+    campaignId: prospect.campaign_id,
+    campaign: prospect.campaign_name,
+    contactId: prospect.contact_id,
+    channel: prospect.channel,
+  });
+  const saved = await query<{ changed: boolean; event_id: string | null }>("select * from private.campaign_set_category($1, $2, $3, $4, $5::jsonb, $6::text[], $7::jsonb)", [
     actor.workspaceId,
     prospect.id,
     category,
-    category ? provider.categoryKey(prospect.campaign_external_id, leadRef(prospect), category) : null,
+    category ? provider.categoryKey(prospect.campaign_external_id, lead, category) : null,
     JSON.stringify(payload),
+    !category && prospect.category ? clearedKeys(provider, prospect.campaign_external_id, lead, prospect.category) : [],
+    audit,
   ]);
-  await withActor(actor, (db) =>
-    recordAudit(db, actor, CAMPAIGN_AUDIT_EVENTS.categoryChanged, "campaign_prospect", prospect.id, provenance, {
-      campaignId: prospect.campaign_id,
-      campaign: prospect.campaign_name,
-      contactId: prospect.contact_id,
-      channel: prospect.channel,
-      before: prospect.category,
-      after: category,
-    }),
-  );
-  const eventId = saved.rows[0]?.event ?? null;
+  if (saved.rows[0]?.changed) scheduleWebhooks();
+  const eventId = saved.rows[0]?.event_id ?? null;
   if (!eventId) return { category, fired: false };
   const fired = await fireCampaignEvents([eventId]);
   await query("select private.campaign_events_handled($1, $2::uuid[])", [prospect.campaign_id, [eventId]]);
