@@ -36,6 +36,7 @@ export type BuilderOptions = {
   chatRooms?: { id: string; name: string }[];
   senders?: { email: string; primary: boolean }[];
   campaigns?: { id: string; name: string; channel: "email" | "linkedin" }[];
+  triggerCampaigns?: { id: string; name: string; channel: "email" | "linkedin" }[];
 };
 
 export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {

@@ -275,7 +275,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
   });
 }
 
-export async function campaignOptions(actor: Actor): Promise<CampaignOption[]> {
+export async function campaignOptions(actor: Actor, options: { all?: boolean } = {}): Promise<CampaignOption[]> {
   assertScope(actor.scopes, "crm:read");
   return withActor(actor, async (db) => {
     const result = await db.query<{ id: string; name: string; channel: CampaignOption["channel"]; status: CampaignStatus; provider: CampaignProviderId }>(
@@ -285,7 +285,7 @@ export async function campaignOptions(actor: Actor): Promise<CampaignOption[]> {
        order by k.channel, lower(k.name), k.id`,
       [actor.workspaceId],
     );
-    return result.rows.filter((row) => !addRefusal(row)).map((row) => ({ id: row.id, name: row.name, channel: row.channel }));
+    return result.rows.filter((row) => options.all || !addRefusal(row)).map((row) => ({ id: row.id, name: row.name, channel: row.channel }));
   });
 }
 
@@ -311,6 +311,7 @@ type ProspectSqlRow = {
   import_error: string | null;
   stop_error: string | null;
   not_enrolled: boolean;
+  importable: boolean;
 };
 
 const FILTER_SQL: Record<ProspectFilter, string> = {
@@ -354,7 +355,8 @@ export async function listCampaignProspects(
                   when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_sent') then 'invited'
                 end as stage,
                 sender.name as sender,
-                ($6 and p.state = 'pushed' and p.lead_status is null and p.external_lead_id is null) as not_enrolled
+                ($6 and p.state = 'pushed' and p.lead_status is null and p.external_lead_id is null) as not_enrolled,
+                (p.contact_id is null and p.state = 'pushed' and (p.email is not null or p.linkedin is not null)) as importable
          ${from}
          left join lateral (
            select coalesce(nullif(btrim(pr.full_name), ''), pr.email, nullif(s.name, '')) as name
@@ -396,6 +398,7 @@ export async function listCampaignProspects(
         importError: row.contact_id ? null : row.import_error,
         stopError: row.stop_requested_at && !row.stopped_at ? row.stop_error : null,
         notEnrolled: row.not_enrolled,
+        importable: row.importable,
       })),
       total: total.rows[0]?.count ?? 0,
       page,

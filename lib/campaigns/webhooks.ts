@@ -47,11 +47,11 @@ async function saveWebhookActions(workspaceId: string, providerId: CampaignProvi
   ]);
   const campaign = found.rows[0];
   if (!campaign) return json({ ignored: true });
+  const saved = await saveProviderEvents(campaign.campaign_id, actions.events, !campaign.backfilled);
   const key = createHash("sha256").update(receiptKey).digest("hex");
   const receipt = await query<{ fresh: boolean }>("select private.campaign_webhook_receipt($1, $2, $3) as fresh", [workspaceId, providerId, key]);
-  if (!receipt.rows[0]?.fresh) return json({ duplicate: true });
-  const saved = await saveProviderEvents(campaign.campaign_id, actions.events, !campaign.backfilled);
   if (saved.length > 0 && campaign.backfilled) syncSoon(workspaceId, providerId, options);
+  if (saved.length === 0 && !receipt.rows[0]?.fresh) return json({ duplicate: true });
   return json({ saved: saved.length });
 }
 

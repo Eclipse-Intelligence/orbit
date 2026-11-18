@@ -47,7 +47,7 @@ export default async function WorkflowPage({
   if (!user) redirect("/login");
   if (!workflow) notFound();
   const query = await searchParams;
-  const [runs, boards, pipeline, members, companies, contacts, lifecycles, proposalTemplates, products, aiFields, chat, senders, campaigns] = await Promise.all([
+  const [runs, boards, pipeline, members, companies, contacts, lifecycles, proposalTemplates, products, aiFields, chat, senders, campaigns, triggerCampaigns] = await Promise.all([
     workflow.mine ? listRuns(user, workflow.id) : Promise.resolve([]),
     listBoards(user),
     listPipeline(user),
@@ -61,6 +61,7 @@ export default async function WorkflowPage({
     workflow.mine ? listConversations(user).catch(() => null) : Promise.resolve(null),
     workflow.mine ? listSenders(user).catch(() => []) : Promise.resolve([]),
     campaignOptions(user).catch(() => []),
+    campaignOptions(user, { all: true }).catch(() => []),
   ]);
   const fullBoards = await Promise.all(boards.map((board) => getBoard(user, board.id)));
   return (
@@ -85,6 +86,7 @@ export default async function WorkflowPage({
         chatRooms: (chat?.conversations ?? []).filter((conversation) => conversation.kind === "room").map((room) => ({ id: room.id, name: room.name })),
         senders: senders.map((sender) => ({ email: sender.email, primary: sender.primary })),
         campaigns,
+        triggerCampaigns,
       }}
       records={{
         companies: companies.data.map((company) => ({ id: company.id, name: company.name })),

@@ -5,10 +5,11 @@ import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { setCampaignAutoAdd } from "@/lib/campaigns/manage";
 import { addProspects } from "@/lib/campaigns/prospects";
 import { smartleadEvents } from "@/lib/campaigns/providers";
-import { saveProviderEvents, syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
+import { finishedReady, saveProviderEvents, syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
 import { ensureWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { handleCampaignWebhook } from "@/lib/campaigns/webhooks";
-import { getCampaign, importCampaignProspect, listCampaignProspects } from "@/lib/crm/campaigns";
+import { campaignOptions, getCampaign, importCampaignProspect, listCampaignProspects } from "@/lib/crm/campaigns";
+import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -17,11 +18,14 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { HEYREACH_SINCE_FILTER, heyReachSteps } from "@/lib/heyreach";
 import { readSmartleadStats } from "@/lib/smartlead";
 import { providerReason } from "@/lib/upstream";
-import { definitionFromInput, type Trigger } from "@/lib/workflows/definition";
-import { campaignTriggerMatches } from "@/lib/workflows/engine";
+import { withCampaignChannel, withCampaignEvent, type CampaignTrigger } from "@/lib/workflows/campaign-trigger";
+import { definitionFromInput, triggerProblem, type Trigger } from "@/lib/workflows/definition";
+import { campaignTriggerMatches, LONG_TICK_MS, runWorkflowTick } from "@/lib/workflows/engine";
+import { upsertRecord } from "@/lib/workflows/records";
+import { createWorkflow, getRunSteps, saveWorkflow, setWorkflowStatus } from "@/lib/workflows/store";
 import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { fakeHeyReach, type FakeHeyReachAccount, type FakeHeyReachCampaign } from "./campaigns-fake";
-import { createAgent, createUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const KEY = "hr_key_integration_0001";
 const OUTSIDER_KEY = "hr_key_integration_0002";
@@ -446,6 +450,309 @@ describe("campaign integration upgrade", () => {
       const stopped = await sql<{ stop_requested_at: Date | null; stop_reason: string | null }>("select stop_requested_at, stop_reason from crm.campaign_prospects where id = $1", [fay.id]);
       assert.ok(stopped[0].stop_requested_at, "a reply on email stops the LinkedIn campaign");
       assert.equal(stopped[0].stop_reason, "replied");
+    });
+  });
+
+  describe("round 1 review rules", () => {
+    let wfEmailCampaign: string;
+
+    it("never marks Finished after a failed or skipped reply read, and does once the reads succeed", async () => {
+      const now = new Date().toISOString();
+      campaignRow().leads.push(
+        { id: "lead-gus", profileUrl: "https://www.linkedin.com/in/gus-gray/", first: "Gus", last: "Gray", accountId: 1, connection: "ConnectionAccepted", status: "Finished", lastActionTime: now },
+        { id: "lead-hal", profileUrl: "https://www.linkedin.com/in/hal-hart/", first: "Hal", last: "Hart", accountId: 1, connection: "ConnectionAccepted", status: "Finished", lastActionTime: now },
+      );
+      campaignRow().conversations = [
+        { id: "conv-gus", accountId: 1, profileUrl: "https://www.linkedin.com/in/gus-gray", leadId: "lead-gus", messages: [{ createdAt: now, body: "Sounds good, call me", sender: "CORRESPONDENT" }] },
+      ];
+      eclipse.fail = (path) => (path === "/inbox/GetConversationsV2" ? Response.json({ errorMessage: "Inbox unavailable" }, { status: 400 }) : null);
+      const logged = mock.method(console, "error", () => undefined);
+      try {
+        await sync();
+      } finally {
+        logged.mock.restore();
+        eclipse.fail = undefined;
+      }
+      const [gus] = await prospect(linkedinId, "linkedin.com/in/gus-gray");
+      const [hal] = await prospect(linkedinId, "linkedin.com/in/hal-hart");
+      assert.equal(gus.lead_status, "completed");
+      const finishedFor = async (id: string) => (await sql("select 1 from crm.campaign_events where prospect_id = $1 and kind = 'finished'", [id])).length;
+      assert.equal(await finishedFor(gus.id), 0, "a failed reply read never lets Finished through");
+      assert.equal(await finishedFor(hal.id), 0, "nothing is marked until both reads complete");
+      await sync();
+      await sync();
+      assert.equal(await finishedFor(gus.id), 0, "someone who replied never finishes");
+      assert.equal(await finishedFor(hal.id), 1);
+      assert.equal(finishedReady({ handled: false, eventsReadNow: true, repliesReadNow: false }), false);
+      assert.equal(finishedReady({ handled: false, eventsReadNow: false, repliesReadNow: true }), false);
+      assert.equal(finishedReady({ handled: false, eventsReadNow: true, repliesReadNow: true }), true);
+      assert.equal(finishedReady({ handled: true, eventsReadNow: false, repliesReadNow: false }), true, "handled rows never fire, so backfill may mark them");
+    });
+
+    it("never marks Finished for someone stopped, removed, or who replied on another row", async () => {
+      const contact = (await createContact(owner, { firstName: "Ivy", lastName: "Ink", email: "ivy@inkco.test" }, { provenance: { operation: "test" } })).body.contact;
+      const rows = await sql<{ id: string }>(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, email, state, external_lead_id, lead_status, pushed_at, stop_requested_at, stopped_at)
+         values ($1, $2, $3, 'ivy@inkco.test', 'pushed', 'sl-ivy', 'completed', now(), null, null),
+                ($1, $2, null, 'stop@inkco.test', 'pushed', 'sl-stop', 'completed', now(), now(), null),
+                ($1, $2, null, 'gone@inkco.test', 'pushed', 'sl-gone', 'completed', now(), now(), now())
+         returning id`,
+        [owner.workspaceId, emailId, contact.id],
+      );
+      await sql(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, linkedin, state, external_lead_id, pushed_at, replied_at)
+         values ($1, $2, $3, 'linkedin.com/in/ivy-ink', 'pushed', 'lead-ivy', now(), now())`,
+        [owner.workspaceId, linkedinId, contact.id],
+      );
+      await sql("select private.campaign_mark_finished($1, false)", [emailId]);
+      const finished = await sql("select 1 from crm.campaign_events where prospect_id = any($1::uuid[]) and kind = 'finished'", [rows.map((row) => row.id)]);
+      assert.equal(finished.length, 0);
+    });
+
+    it("seeds Finished as handled on upgrade for campaigns already backfilled", async () => {
+      const lead = await sql<{ id: string }>(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, email, state, external_lead_id, lead_status, pushed_at)
+         values ($1, $2, 'early@agency.test', 'pushed', 'sl-early', 'completed', now()) returning id`,
+        [owner.workspaceId, emailId],
+      );
+      const before = (await workflowEvents("finished")).length;
+      await reapplyMigrationsFrom("20270216100000_campaign_integration.sql");
+      const seeded = await sql<{ handled_at: Date | null; fired_at: Date | null }>("select handled_at, fired_at from crm.campaign_events where prospect_id = $1 and kind = 'finished'", [lead[0].id]);
+      assert.equal(seeded.length, 1);
+      assert.ok(seeded[0].handled_at && seeded[0].fired_at);
+      await sql("select private.campaign_mark_finished($1, false)", [emailId]);
+      assert.equal((await workflowEvents("finished")).length, before, "upgrading fires nothing");
+    });
+
+    it("stores one prospect and one event when a webhook and a poll for the same person overlap", async () => {
+      const client = await getAdminPool().connect();
+      try {
+        await client.query("begin");
+        await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`campaign-person:${linkedinId}:linkedin.com/in/kit-kay`]);
+        const event = (dedupeKey: string, externalLeadId: string | null) => ({
+          externalLeadId,
+          email: null,
+          linkedin: "linkedin.com/in/kit-kay",
+          lead: { firstName: "Kit", lastName: "Kay" },
+          kind: "invite_sent" as const,
+          step: null,
+          variant: null,
+          occurredAt: minutesAgo(3),
+          dedupeKey,
+          category: null,
+        });
+        const both = Promise.all([
+          saveProviderEvents(linkedinId, [event("heyreach:9101:linkedin.com/in/kit-kay:invite_sent", null)], false),
+          saveProviderEvents(linkedinId, [event("heyreach:9101:linkedin.com/in/kit-kay:invite_sent:other", null)], false),
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await client.query("commit");
+        const saved = await both;
+        assert.equal(saved.flat().length, 1);
+      } finally {
+        client.release();
+      }
+      const rows = await prospect(linkedinId, "linkedin.com/in/kit-kay");
+      assert.equal(rows.length, 1, "one prospect");
+      const events = await sql("select 1 from crm.campaign_events where prospect_id = $1 and kind = 'invite_sent'", [rows[0].id]);
+      assert.equal(events.length, 1, "one event");
+    });
+
+    it("keeps a webhook that failed to save open for HeyReach's retry", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "heyreach"))!;
+      const body = JSON.stringify({ event_type: "VIEWED_PROFILE", campaign: { id: 9101 }, lead: { profile_url: "https://www.linkedin.com/in/lou-lane" }, timestamp: minutesAgo(4) });
+      const post = () =>
+        handleCampaignWebhook(new Request(`${ORIGIN}/api/webhooks/heyreach?w=${owner.workspaceId}&secret=${encodeURIComponent(secret)}`, { method: "POST", body }), "heyreach", { syncAfter: false });
+      await sql(`create or replace function public.integration_refuse() returns trigger language plpgsql as $$ begin raise exception 'refused for the test'; end; $$`);
+      await sql("create trigger integration_refuse before insert on crm.campaign_events for each row execute function public.integration_refuse()");
+      const shapes = mock.method(console, "info", () => undefined);
+      try {
+        await assert.rejects(post());
+      } finally {
+        await sql("drop trigger integration_refuse on crm.campaign_events");
+      }
+      try {
+        assert.deepEqual(await (await post()).json(), { saved: 1 });
+        assert.deepEqual(await (await post()).json(), { duplicate: true });
+      } finally {
+        shapes.mock.restore();
+      }
+    });
+
+    it("drops a late message webhook instead of counting a phantom next step", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "heyreach"))!;
+      const post = (at: string) =>
+        handleCampaignWebhook(
+          new Request(`${ORIGIN}/api/webhooks/heyreach?w=${owner.workspaceId}&secret=${encodeURIComponent(secret)}`, {
+            method: "POST",
+            body: JSON.stringify({ event_type: "MESSAGE_SENT", campaign: { id: 9101 }, lead: { profile_url: "https://www.linkedin.com/in/fay-fox" }, timestamp: at }),
+          }),
+          "heyreach",
+          { syncAfter: false },
+        );
+      const shapes = mock.method(console, "info", () => undefined);
+      try {
+        assert.deepEqual(await (await post(minutesAgo(60))).json(), { saved: 0 });
+      } finally {
+        shapes.mock.restore();
+      }
+      const [fay] = await prospect(linkedinId, "linkedin.com/in/fay-fox");
+      const steps = await sql<{ step: number }>("select step from crm.campaign_events where prospect_id = $1 and kind = 'message_sent' order by step", [fay.id]);
+      assert.deepEqual(steps.map((row) => row.step), [1, 2]);
+    });
+
+    it("retries an auto-add that failed for a passing reason, without duplicating", async () => {
+      await sql(`create or replace function public.integration_busy() returns trigger language plpgsql as $$ begin raise exception 'busy' using errcode = '40001'; end; $$`);
+      await sql("create trigger integration_busy before insert on crm.contacts for each row execute function public.integration_busy()");
+      campaignRow().leads.push({ id: "lead-max", profileUrl: "https://www.linkedin.com/in/max-moss/", first: "Max", last: "Moss", accountId: 1, connection: "ConnectionAccepted", lastActionTime: new Date().toISOString() });
+      const logged = mock.method(console, "error", () => undefined);
+      try {
+        await sync();
+      } finally {
+        logged.mock.restore();
+        await sql("drop trigger integration_busy on crm.contacts");
+      }
+      const [max] = await prospect(linkedinId, "linkedin.com/in/max-moss");
+      assert.equal(max.contact_id, null);
+      const waiting = await sql<{ handled_at: Date | null; handle_attempts: number }>(
+        "select handled_at, handle_attempts from crm.campaign_events where prospect_id = $1 and kind = 'invite_accepted'",
+        [max.id],
+      );
+      assert.equal(waiting[0].handled_at, null, "the event waits for another try");
+      assert.equal(waiting[0].handle_attempts, 1);
+      await sql("update crm.campaign_events set claimed_at = null where prospect_id = $1", [max.id]);
+      await sync();
+      await sql("update crm.campaign_events set claimed_at = null where prospect_id = $1", [max.id]);
+      await sync();
+      const contacts = await sql("select 1 from crm.contacts where workspace_id = $1 and normalized_linkedin = 'linkedin.com/in/max-moss'", [owner.workspaceId]);
+      assert.equal(contacts.length, 1);
+      assert.ok((await prospect(linkedinId, "linkedin.com/in/max-moss"))[0].contact_id);
+    });
+
+    it("resolves a LinkedIn profile only to that profile, never by name", async () => {
+      const company = (await createCompany(owner, { name: "Smith Works", domain: "smithworks.test" })).body.company;
+      const named = (await createContact(owner, { firstName: "John", lastName: "Smith", companyId: company.id }, { provenance: { operation: "test" } })).body.contact;
+      const other = (
+        await createContact(owner, { firstName: "Jon", lastName: "Other", email: "shared@smithworks.test", linkedinUrl: "https://www.linkedin.com/in/jon-other" }, { provenance: { operation: "test" } })
+      ).body.contact;
+      const input = (linkedinUrl: string, email = "") => ({
+        object: "contact" as const,
+        name: "",
+        domain: "",
+        website: "",
+        email,
+        firstName: "John",
+        lastName: "Smith",
+        jobTitle: "",
+        companyId: company.id,
+        linkedinUrl,
+        create: true,
+      });
+      const first = await upsertRecord(owner, input("https://www.linkedin.com/in/john-smith-1"), { operation: "test" });
+      const second = await upsertRecord(owner, input("https://www.linkedin.com/in/john-smith-2"), { operation: "test" });
+      const again = await upsertRecord(owner, input("https://www.linkedin.com/in/john-smith-1"), { operation: "test" });
+      assert.equal(first.created, true);
+      assert.equal(second.created, true);
+      assert.notEqual(first.id, second.id, "two John Smiths with different profiles are two contacts");
+      assert.notEqual(first.id, named.id, "a profile never falls back to the name");
+      assert.equal(again.id, first.id);
+      const clash = await upsertRecord(owner, input("https://www.linkedin.com/in/john-smith-3", "shared@smithworks.test"), { operation: "test" });
+      assert.notEqual(clash.id, other.id, "an email held by a contact with another profile isn't that person");
+      const profiles = await sql<{ id: string; normalized_linkedin: string | null }>(
+        "select id, normalized_linkedin from crm.contacts where id = any($1::uuid[])",
+        [[first.id, second.id, clash.id]],
+      );
+      assert.deepEqual(profiles.map((row) => row.normalized_linkedin).sort(), ["linkedin.com/in/john-smith-1", "linkedin.com/in/john-smith-2", "linkedin.com/in/john-smith-3"]);
+    });
+
+    it("offers every campaign to the trigger, and switching to Reached a step keeps it valid", async () => {
+      await sql("update crm.campaigns set status = 'completed' where id = $1", [emailId]);
+      const forSteps = await campaignOptions(owner);
+      const forTrigger = await campaignOptions(owner, { all: true });
+      assert.equal(forSteps.some((item) => item.id === emailId), false);
+      assert.equal(forTrigger.some((item) => item.id === emailId), true);
+      await sql("update crm.campaigns set status = 'active' where id = $1", [emailId]);
+      const choices = forTrigger.map((item) => ({ id: item.id, channel: item.channel }));
+      const base: CampaignTrigger = { type: "campaign_event", event: "replied", channel: null, campaignId: linkedinId, campaignName: "Founders LinkedIn" };
+      const stepped = withCampaignEvent(base, "step", choices);
+      assert.equal(stepped.channel, "linkedin");
+      assert.equal(triggerProblem(stepped), null);
+      const toEmail = withCampaignChannel(stepped, "email", choices);
+      assert.equal(toEmail.campaignId, null, "a campaign on the other channel is cleared");
+      assert.equal(triggerProblem(toEmail), null);
+      for (const event of ["added", "finished", "step"] as const) {
+        for (const channel of [null, "email", "linkedin"] as const) {
+          const made = withCampaignChannel(withCampaignEvent({ ...base, channel }, event, choices), event === "step" && !channel ? "email" : channel, choices);
+          assert.equal(triggerProblem(made), null, `${event} ${channel}`);
+        }
+      }
+    });
+
+    it("hides Import on a prospect with no email or profile", async () => {
+      await sql("insert into crm.campaign_prospects (workspace_id, campaign_id, state, external_lead_id, pushed_at) values ($1, $2, 'pushed', 'sl-blank', now())", [owner.workspaceId, emailId]);
+      const page = await listCampaignProspects(owner, emailId);
+      const blank = page.rows.find((row) => row.name === "Unnamed");
+      assert.ok(blank);
+      assert.equal(blank.importable, false);
+      assert.equal(page.rows.find((row) => row.email === "early@agency.test")?.importable, true);
+    });
+
+    it("runs the LinkedIn-to-email templates to Find email with a company", async () => {
+      const rows = await sql<{ id: string }>(
+        `insert into crm.campaigns (workspace_id, provider, channel, external_id, name, status, backfilled_at, synced_at)
+         values ($1, 'smartlead', 'email', '5502', 'Follow-up email', 'active', now(), now()) returning id`,
+        [owner.workspaceId],
+      );
+      wfEmailCampaign = rows[0].id;
+      for (const key of ["linkedin-finished-then-email", "linkedin-step-then-email"]) {
+        const template = STARTER_TEMPLATES.find((item) => item.key === key)!;
+        const definition = {
+          ...template.definition,
+          trigger: { ...template.definition.trigger, campaignId: linkedinId },
+          nodes: template.definition.nodes.map((node) =>
+            node.type === "add_to_campaign" ? { ...node, config: { campaignId: wfEmailCampaign, campaignName: "Follow-up email", channel: "email" } } : node,
+          ),
+        };
+        const created = await createWorkflow(owner, { name: key });
+        await saveWorkflow(owner, created.id, { definition });
+        await setWorkflowStatus(owner, created.id, "active");
+      }
+      const prospects = await sql<{ id: string }>(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, linkedin, lead, state, external_lead_id, lead_status, pushed_at)
+         values ($1, $2, 'linkedin.com/in/nia-north', '{"firstName": "Nia", "lastName": "North", "companyName": "North Studio"}'::jsonb, 'pushed', 'lead-nia', 'completed', now())
+         returning id`,
+        [owner.workspaceId, linkedinId],
+      );
+      const nia = prospects[0].id;
+      await sql(
+        `insert into crm.campaign_events (workspace_id, campaign_id, prospect_id, kind, step, occurred_at, dedupe_key)
+         values ($1, $2, $3, 'message_sent', 1, now(), 'test:nia:message_sent:1')`,
+        [owner.workspaceId, linkedinId, nia],
+      );
+      await sql("select private.campaign_mark_finished($1, false)", [linkedinId]);
+      const waiting = await sql<{ id: string }>("select id from crm.campaign_events where prospect_id = $1 and fired_at is null", [nia]);
+      await sql("select private.campaign_fire_events($1::uuid[])", [waiting.map((row) => row.id)]);
+      for (let round = 0; round < 6; round += 1) {
+        const tick = await runWorkflowTick({ fetchImpl, budgetMs: LONG_TICK_MS, long: true, limit: 25 });
+        if (tick.processed === 0) break;
+      }
+      const runs = await sql<{ id: string; name: string }>(
+        `select r.id, w.name from crm.workflow_runs r join crm.workflows w on w.id = r.workflow_id
+         where w.workspace_id = $1 and w.name in ('linkedin-finished-then-email', 'linkedin-step-then-email')
+           and r.event->'data'->>'prospectId' = $2 and r.parent_run_id is null
+         order by w.name`,
+        [owner.workspaceId, nia],
+      );
+      assert.deepEqual(runs.map((run) => run.name), ["linkedin-finished-then-email", "linkedin-step-then-email"]);
+      for (const run of runs) {
+        const { steps } = await getRunSteps(owner, run.id);
+        assert.ok(steps.some((step) => step.stepId === "find_email_1"), `${run.name} reached Find email: ${JSON.stringify(steps.map((step) => [step.stepId, step.status, step.error]))}`);
+      }
+      const contacts = await sql<{ company: string | null }>(
+        "select co.name as company from crm.contacts c left join crm.companies co on co.id = c.company_id where c.workspace_id = $1 and c.normalized_linkedin = 'linkedin.com/in/nia-north'",
+        [owner.workspaceId],
+      );
+      assert.deepEqual(contacts, [{ company: "North Studio" }], "one contact, with the prospect's company");
     });
   });
 });

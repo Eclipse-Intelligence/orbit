@@ -4,6 +4,7 @@ import { Checkbox } from "@/components/_ui/checkbox";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
 import { matchLifecycleOption, type BuilderOptions } from "@/components/workflows/step-config";
+import { withCampaignChannel, withCampaignEvent } from "@/lib/workflows/campaign-trigger";
 import {
   CAMPAIGN_EVENT_HINTS,
   CAMPAIGN_EVENT_LABELS,
@@ -365,28 +366,16 @@ function stepNumber(value: string) {
 }
 
 function CampaignTrigger({ trigger, onChange, options }: { trigger: CampaignTriggerValue; onChange: (trigger: Trigger) => void; options: BuilderOptions }) {
-  const campaigns = (options.campaigns ?? []).filter((item) => !trigger.channel || item.channel === trigger.channel);
+  const all = options.triggerCampaigns ?? options.campaigns ?? [];
+  const campaigns = all.filter((item) => !trigger.channel || item.channel === trigger.channel);
   const missing = trigger.campaignId && !campaigns.some((item) => item.id === trigger.campaignId);
   const step = trigger.event === "step";
   const counted = trigger.action === "message_sent" || trigger.action === "inmail_sent";
   function setEvent(event: CampaignEvent) {
-    if (event !== "step") {
-      onChange({ type: trigger.type, event, channel: trigger.channel ?? null, campaignId: trigger.campaignId ?? null, campaignName: trigger.campaignName });
-      return;
-    }
-    const channel = trigger.channel ?? "email";
-    onChange({ ...trigger, event, channel, ...(channel === "email" ? { step: trigger.step ?? 1, action: null, nth: null } : { step: null, action: trigger.action ?? "invite_sent" }) });
+    onChange(withCampaignEvent(trigger, event, all));
   }
   function setChannel(value: string) {
-    const channel = (value || null) as "email" | "linkedin" | null;
-    const keepCampaign = channel === null || (options.campaigns ?? []).some((item) => item.id === trigger.campaignId && item.channel === channel);
-    const base = { ...trigger, channel, ...(keepCampaign ? {} : { campaignId: null, campaignName: "" }) };
-    if (!step) {
-      onChange(base);
-      return;
-    }
-    if (channel === "linkedin") onChange({ ...base, step: null, action: trigger.action ?? "invite_sent" });
-    else onChange({ ...base, channel: "email", step: trigger.step ?? 1, action: null, nth: null });
+    onChange(withCampaignChannel(trigger, (value || null) as "email" | "linkedin" | null, all));
   }
   return (
     <div className="flex flex-col gap-1.5">
@@ -412,7 +401,7 @@ function CampaignTrigger({ trigger, onChange, options }: { trigger: CampaignTrig
             id="trigger-campaign-id"
             value={trigger.campaignId ?? ""}
             onChange={(event) => {
-              const picked = (options.campaigns ?? []).find((item) => item.id === event.target.value);
+              const picked = all.find((item) => item.id === event.target.value);
               onChange({ ...trigger, campaignId: picked?.id ?? null, campaignName: picked?.name ?? "" });
             }}
             className={recordSelectClass}

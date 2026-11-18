@@ -320,7 +320,7 @@ function ProspectsList({ prospects, linkedin, campaignId, canImport }: { prospec
       )}
       {prospects.rows.map((row) => {
         const tag = prospectTag(row, linkedin ? "linkedin" : "email");
-        const importable = canImport && !row.contactId && row.state === "pushed";
+        const importable = canImport && row.importable === true;
         const line = linkedin && row.sender ? `${row.sender} · ${lowerFirst(prospectLine(row))}` : prospectLine(row);
         return (
           <li

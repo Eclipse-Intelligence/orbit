@@ -300,8 +300,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     description: "Finished a LinkedIn campaign without replying: add to an email campaign.",
     definition: graph(
       { type: "campaign_event", event: "finished", channel: "linkedin" },
-      [notRepliedNode(), prospectContactNode(), { id: "find_email_1", type: "find_email", config: {} }, campaignNode("Email campaign")],
-      chain(["if_1:true", "upsert_record_1", "find_email_1", "add_to_campaign_1"]),
+      ...prospectFlow(true, [{ id: "find_email_1", type: "find_email", config: {} }, campaignNode("Email campaign")]),
     ),
   },
   {
@@ -310,8 +309,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     description: "Finished an email campaign without replying: add to a LinkedIn campaign.",
     definition: graph(
       { type: "campaign_event", event: "finished", channel: "email" },
-      [notRepliedNode(), prospectContactNode(), campaignNode("LinkedIn campaign")],
-      chain(["if_1:true", "upsert_record_1", "add_to_campaign_1"]),
+      ...prospectFlow(true, [campaignNode("LinkedIn campaign")]),
     ),
   },
   {
@@ -320,8 +318,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     description: "When a LinkedIn step goes out, add them to an email campaign too. Both keep running.",
     definition: graph(
       { type: "campaign_event", event: "step", channel: "linkedin", action: "message_sent", nth: 1 },
-      [prospectContactNode(), { id: "find_email_1", type: "find_email", config: {} }, campaignNode("Email campaign")],
-      chain(["upsert_record_1", "find_email_1", "add_to_campaign_1"]),
+      ...prospectFlow(false, [{ id: "find_email_1", type: "find_email", config: {} }, campaignNode("Email campaign")]),
     ),
   },
   {
@@ -330,8 +327,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     description: "When an email step goes out, add them to a LinkedIn campaign too. Both keep running.",
     definition: graph(
       { type: "campaign_event", event: "step", channel: "email", step: 1 },
-      [prospectContactNode(), campaignNode("LinkedIn campaign")],
-      chain(["upsert_record_1", "add_to_campaign_1"]),
+      ...prospectFlow(false, [campaignNode("LinkedIn campaign")]),
     ),
   },
   {
@@ -383,6 +379,46 @@ function notRepliedNode(): Omit<WorkflowNode, "position"> {
   };
 }
 
+function prospectFlow(notReplied: boolean, tail: Omit<WorkflowNode, "position">[]): [Omit<WorkflowNode, "position">[], WorkflowEdge[]] {
+  const nodes = [...(notReplied ? [notRepliedNode()] : []), companyCheckNode(), prospectCompanyNode(), prospectContactNode(), ...tail];
+  const edges: WorkflowEdge[] = [
+    ...(notReplied ? chain(["if_1:true", "if_company"]) : chain(["if_company"])),
+    { source: "if_company", handle: "true", target: "upsert_record_2" },
+    { source: "upsert_record_2", handle: "out", target: "upsert_record_1" },
+    { source: "if_company", handle: "false", target: "upsert_record_1" },
+  ];
+  let source = "upsert_record_1";
+  for (const node of tail) {
+    edges.push({ source, handle: "out", target: node.id });
+    source = node.id;
+  }
+  return [nodes, edges];
+}
+
+function companyCheckNode(): Omit<WorkflowNode, "position"> {
+  return {
+    id: "if_company",
+    type: "if",
+    label: "Company known?",
+    config: {
+      match: "any",
+      conditions: [
+        { left: "{{campaign.prospect.companyName}}", op: "is_not_empty" },
+        { left: "{{campaign.prospect.website}}", op: "is_not_empty" },
+      ],
+    },
+  };
+}
+
+function prospectCompanyNode(): Omit<WorkflowNode, "position"> {
+  return {
+    id: "upsert_record_2",
+    type: "upsert_record",
+    label: "Find or create company",
+    config: { object: "company", name: "{{campaign.prospect.companyName}}", domain: "{{campaign.prospect.website}}", create: true, useInRun: true },
+  };
+}
+
 function prospectContactNode(): Omit<WorkflowNode, "position"> {
   return {
     id: "upsert_record_1",
@@ -395,6 +431,7 @@ function prospectContactNode(): Omit<WorkflowNode, "position"> {
       firstName: "{{campaign.prospect.firstName}}",
       lastName: "{{campaign.prospect.lastName}}",
       jobTitle: "{{campaign.prospect.jobTitle}}",
+      companyId: "{{steps.upsert_record_2.id}}",
       create: true,
       useInRun: true,
     },

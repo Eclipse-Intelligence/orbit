@@ -420,6 +420,7 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
 
   const eventsInProgress = typeof state.eventsOffset === "number";
   let eventsComplete = !eventsInProgress && Boolean(state.eventsAt);
+  let eventsReadNow = false;
   if (!pass.statsBusy && (eventsInProgress || backfilling || live || due(state.eventsAt, IDLE_EVERY_MS, now))) {
     eventsComplete = false;
     const startedAt = state.eventsStartedAt ?? new Date().toISOString();
@@ -449,6 +450,7 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
           },
         });
         eventsComplete = true;
+        eventsReadNow = true;
         break;
       }
       offset = page.next;
@@ -466,9 +468,11 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   }
 
   let repliesComplete = !provider.readReplies || (!backfilling && Boolean(state.repliesAt));
+  let repliesReadNow = !provider.readReplies;
   if (provider.readReplies && (backfilling || live || typeof state.repliesOffset === "number" || due(state.repliesAt, IDLE_EVERY_MS, now)) && room()) {
     try {
       repliesComplete = await syncReplies(pass, row, backfilling || !options.onEvents);
+      repliesReadNow = repliesComplete;
     } catch (error) {
       const failure = provider.failure(error);
       if (error instanceof ServiceBusy || !failure || failure.rejectedKey || pass.context.signal?.aborted) throw error;
@@ -478,18 +482,26 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     if (!backfilling) await handOverEvents(pass, campaign);
   }
 
-  if (room()) {
-    const finished = await query<{ count: number }>("select private.campaign_mark_finished($1, $2) as count", [row.id, backfilling || !options.onEvents]);
+  const handled = backfilling || !options.onEvents;
+  const backfillDone = backfilling && leadsComplete && listComplete && eventsComplete && repliesComplete;
+  let finishedMarked = false;
+  if (room() && (backfillDone || finishedReady({ handled, eventsReadNow, repliesReadNow }))) {
+    const finished = await query<{ count: number }>("select private.campaign_mark_finished($1, $2) as count", [row.id, handled]);
+    finishedMarked = true;
     if (!backfilling && (finished.rows[0]?.count ?? 0) > 0) await handOverEvents(pass, campaign);
   }
 
-  if (backfilling && leadsComplete && listComplete && eventsComplete && repliesComplete) {
+  if (backfillDone && finishedMarked) {
     await saveCampaign(row.id, { backfilled: true });
     report.backfilled += 1;
   }
   const unread = pass.notes.get(row.id) ?? (await query<{ note: string | null }>("select private.campaign_unread_note($1) as note", [row.id])).rows[0]?.note ?? null;
   await saveCampaign(row.id, { syncError: unread, syncState: { missingAt: null } });
   report.campaigns += 1;
+}
+
+export function finishedReady(pass: { handled: boolean; eventsReadNow: boolean; repliesReadNow: boolean }) {
+  return pass.handled || (pass.eventsReadNow && pass.repliesReadNow);
 }
 
 function eventsOrder(row: CampaignRow) {
