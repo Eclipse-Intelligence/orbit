@@ -194,14 +194,26 @@ export async function checkHeyReachKey(key: string, options: HeyReachOptions = {
   await call(key, "/auth/CheckApiKey", { ...options, keyCheck: true });
 }
 
-export function campaignStatus(value: unknown): CampaignStatus {
-  const status = (text(value) ?? "").toUpperCase().replace(/[\s-]/g, "_");
-  if (status === "IN_PROGRESS" || status === "INPROGRESS" || status === "ACTIVE" || status === "RUNNING") return "active";
-  if (status === "PAUSED") return "paused";
-  if (status === "FINISHED" || status === "COMPLETED") return "completed";
-  if (status === "FAILED" || status === "CANCELED" || status === "CANCELLED" || status === "STOPPED") return "stopped";
-  if (status === "ARCHIVED") return "archived";
-  return "drafted";
+const CAMPAIGN_STATUSES: Record<string, CampaignStatus> = {
+  DRAFT: "drafted",
+  SCHEDULED: "active",
+  STARTING: "active",
+  IN_PROGRESS: "active",
+  INPROGRESS: "active",
+  ACTIVE: "active",
+  RUNNING: "active",
+  PAUSED: "paused",
+  FINISHED: "completed",
+  COMPLETED: "completed",
+  CANCELED: "stopped",
+  CANCELLED: "stopped",
+  FAILED: "stopped",
+  STOPPED: "stopped",
+  ARCHIVED: "archived",
+};
+
+export function campaignStatus(value: unknown): CampaignStatus | null {
+  return CAMPAIGN_STATUSES[(text(value) ?? "").toUpperCase().replace(/[\s-]/g, "_")] ?? null;
 }
 
 export const HEYREACH_LEAD_STATES = ["pending", "in_sequence", "finished", "paused", "failed", "excluded"] as const;
@@ -242,7 +254,7 @@ export type HeyReachLeadCounts = {
   excluded?: number;
 };
 
-export type HeyReachCampaign = { id: string; name: string; status: CampaignStatus; accountIds: string[]; listId: string | null; leadCounts: HeyReachLeadCounts | null };
+export type HeyReachCampaign = { id: string; name: string; status: CampaignStatus | null; accountIds: string[]; listId: string | null; leadCounts: HeyReachLeadCounts | null };
 
 function leadCountsOf(value: unknown): HeyReachLeadCounts | null {
   const row = record(value);
@@ -743,7 +755,13 @@ export function heyReachWebhookName(campaignId: string, eventType: string) {
   return `Orbit ${what} ${campaignId}`;
 }
 
-export type HeyReachWebhook = { id: string; eventType: string; url: string; campaignIds: string[]; active: boolean };
+export type HeyReachWebhook = { id: string; eventType: string; url: string; campaignIds: string[] | null; active: boolean };
+
+function webhookCampaignIds(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const ids = value.map((item) => (typeof item === "number" && Number.isSafeInteger(item) ? String(item) : typeof item === "string" && /^\d+$/.test(item.trim()) ? item.trim() : null));
+  return ids.every((id): id is string => id !== null) ? ids : null;
+}
 
 export async function listHeyReachWebhooks(key: string, url: string, options: HeyReachOptions = {}): Promise<HeyReachWebhook[]> {
   const rows = await allPages(key, "/webhooks/GetAllWebhooks", { ...options, secrets: urlSecrets(url) }, { includeCustomHeaders: false });
@@ -752,12 +770,12 @@ export async function listHeyReachWebhooks(key: string, url: string, options: He
     const eventType = text(row.eventType);
     const webhookUrl = text(row.webhookUrl);
     if (!id || !eventType || !webhookUrl) return [];
-    return [{ id, eventType: eventType.toUpperCase(), url: webhookUrl, campaignIds: list(row.campaignIds).map(text).filter((item): item is string => Boolean(item)), active: row.isActive !== false }];
+    return [{ id, eventType: eventType.toUpperCase(), url: webhookUrl, campaignIds: webhookCampaignIds(row.campaignIds), active: row.isActive !== false }];
   });
 }
 
 export function matchingHeyReachWebhook(hooks: HeyReachWebhook[], campaignId: string, url: string, eventType: string) {
-  return hooks.find((hook) => hook.active && hook.url === url && hook.eventType === eventType && (hook.campaignIds.length === 0 || hook.campaignIds.includes(campaignId)))?.id ?? null;
+  return hooks.find((hook) => hook.active && hook.url === url && hook.eventType === eventType && hook.campaignIds !== null && (hook.campaignIds.length === 0 || hook.campaignIds.includes(campaignId)))?.id ?? null;
 }
 
 export async function createHeyReachWebhook(key: string, campaignId: string, url: string, options: HeyReachOptions & { eventType?: string } = {}) {

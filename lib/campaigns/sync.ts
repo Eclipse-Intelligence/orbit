@@ -254,8 +254,10 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
 
 export function registeredWebhooks(provider: Pick<CampaignProvider, "id" | "webhookEvents">, state: SyncState) {
   const done = new Set(state.webhooks ?? []);
-  const confirmed = state.webhookId && !(provider.id === "heyreach" && state.webhookId === UNCONFIRMED_WEBHOOK);
-  if (confirmed && provider.webhookEvents[0]) done.add(provider.webhookEvents[0]);
+  const first = provider.webhookEvents[0];
+  const placeholder = provider.id === "heyreach" && state.webhookId === UNCONFIRMED_WEBHOOK;
+  if (state.webhookId && !placeholder && first) done.add(first);
+  if (placeholder && first) done.delete(first);
   return provider.webhookEvents.filter((event) => done.has(event));
 }
 
@@ -277,9 +279,10 @@ async function registerWebhook(pass: Pass, row: CampaignRow) {
     return !failure || failure.status === null || failure.status >= 500 || failure.status === 429 || failure.rejectedKey ? "stop" : "next";
   };
   const firstEvent = pass.provider.webhookEvents[0];
-  const remember = (ids: Record<string, string>) => {
+  const remember = (ids: Record<string, string | null>) => {
     done.push(...Object.keys(ids));
-    return saveCampaign(row.id, { syncState: { webhooks: done, ...(ids[firstEvent] ? { webhookId: ids[firstEvent] } : {}), ...(failed ? {} : { webhookFailedAt: null }) } });
+    const firstId = Object.hasOwn(ids, firstEvent) ? { webhookId: ids[firstEvent] } : {};
+    return saveCampaign(row.id, { syncState: { webhooks: done, ...firstId, ...(failed ? {} : { webhookFailedAt: null }) } });
   };
   if (pass.provider.findWebhooks) {
     if (!timeLeft(pass.options.deadline, STEP_RESERVE_MS)) return;
@@ -290,7 +293,8 @@ async function registerWebhook(pass: Pass, row: CampaignRow) {
       if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return;
       const failure = pass.provider.failure(error);
       console.error(`Couldn't read the ${pass.provider.name} webhooks`, failure ? failure.message : redactedError(error));
-      if (!failure || failure.status === null || failure.status >= 500 || failure.status === 429 || failure.rejectedKey) return;
+      await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
+      return;
     }
   }
   for (const event of missing.filter((item) => !done.includes(item))) {

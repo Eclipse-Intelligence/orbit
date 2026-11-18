@@ -88,7 +88,7 @@ export type ProviderContext = {
 
 export const ACCOUNT_KEY = "Use the client's key, not the account key.";
 
-export type ProviderCampaign = { externalId: string; name: string; status: CampaignStatus; senderIds?: string[] };
+export type ProviderCampaign = { externalId: string; name: string; status: CampaignStatus | null; senderIds?: string[] };
 
 export type ProviderSender = {
   externalId: string;
@@ -241,7 +241,7 @@ export type CampaignProvider = {
   blockAddresses?(context: ProviderContext, addresses: string[]): Promise<void>;
   categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
   webhookEvents: string[];
-  registerWebhook(context: ProviderContext, campaignExternalId: string, url: string, event: string): Promise<string>;
+  registerWebhook(context: ProviderContext, campaignExternalId: string, url: string, event: string): Promise<string | null>;
   findWebhooks?(context: ProviderContext, campaignExternalId: string, url: string, events: string[]): Promise<Record<string, string>>;
   webhookHint(payload: unknown, headers: Headers): WebhookHint | null;
   webhookActions?(payload: unknown): WebhookActions | null;
@@ -706,9 +706,11 @@ export const heyReachProvider: CampaignProvider = {
     const eventType = event || HEYREACH_REPLY_EVENT;
     const id = await createHeyReachWebhook(context.key, campaignExternalId, url, { ...context, eventType });
     if (id) return id;
-    const found = matchingHeyReachWebhook(await listHeyReachWebhooks(context.key, url, context), campaignExternalId, url, eventType);
-    if (found) return found;
-    throw new HeyReachError("HeyReach added the webhook without saying its id.", 200);
+    try {
+      return matchingHeyReachWebhook(await listHeyReachWebhooks(context.key, url, context), campaignExternalId, url, eventType);
+    } catch {
+      return null;
+    }
   },
   async findWebhooks(context, campaignExternalId, url, events) {
     const hooks = await listHeyReachWebhooks(context.key, url, context);

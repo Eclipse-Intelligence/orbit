@@ -180,7 +180,11 @@ describe("campaigns through HeyReach", () => {
   describe("the parser", () => {
     it("reads statuses, single-brace variables and lead events", async () => {
       assert.equal(campaignStatus("IN_PROGRESS"), "active");
-      assert.equal(campaignStatus("SCHEDULED"), "drafted");
+      assert.equal(campaignStatus("DRAFT"), "drafted");
+      for (const started of ["IN_PROGRESS", "STARTING", "SCHEDULED"]) assert.equal(campaignStatus(started), "active", started);
+      assert.equal(campaignStatus("CANCELED"), "stopped");
+      assert.equal(campaignStatus("SOMETHING_NEW"), null);
+      assert.equal(campaignStatus(null), null);
       assert.equal(campaignStatus("FINISHED"), "completed");
       assert.equal(campaignStatus("FAILED"), "stopped");
       assert.deepEqual(variablesIn([{ step: 1, variant: null, subject: "Message", body: "Hi {first_name}, {{not_this}} { opener }", delayDays: null }]), ["first_name", "opener"]);
@@ -405,9 +409,21 @@ describe("campaigns through HeyReach", () => {
         ["POST", "/api/public/webhooks/CreateWebhook", { webhookName: "Orbit message sent 744784", webhookUrl: url, eventType: "MESSAGE_SENT", campaignIds: [744784] }],
         ["POST", "/api/public/webhooks/GetAllWebhooks", { offset: 0, limit: 100, includeCustomHeaders: false }],
       ]);
-      await assert.rejects(provider.registerWebhook(context, "744784", url, "FOLLOW_SENT"), /without saying its id/);
+      assert.equal(await provider.registerWebhook(context, "744784", url, "FOLLOW_SENT"), null);
       assert.deepEqual(await provider.findWebhooks!(context, "744784", url, ["MESSAGE_SENT", "FOLLOW_SENT"]), { MESSAGE_SENT: "124" });
       assert.deepEqual(await provider.findWebhooks!(context, "9001", url, ["MESSAGE_SENT"]), {});
+      const unclear = { totalCount: 4, items: [
+        { id: 201, webhookUrl: url, eventType: "FOLLOW_SENT", isActive: true },
+        { id: 202, webhookUrl: url, eventType: "LIKED_POST", campaignIds: null, isActive: true },
+        { id: 203, webhookUrl: url, eventType: "VIEWED_PROFILE", campaignIds: [{ id: 744784 }], isActive: true },
+        { id: 204, webhookUrl: url, eventType: "INMAIL_SENT", campaignIds: [], isActive: true },
+      ] };
+      const unclearFetch: typeof fetch = async () => reply(unclear);
+      assert.deepEqual(
+        await provider.findWebhooks!({ ...context, fetchImpl: unclearFetch }, "744784", url, ["FOLLOW_SENT", "LIKED_POST", "VIEWED_PROFILE", "INMAIL_SENT"]),
+        { INMAIL_SENT: "204" },
+        "only a real empty campaignIds array covers every campaign",
+      );
     });
 
     it("starts a campaign with StartCampaign and its id in the query", async () => {
@@ -419,6 +435,8 @@ describe("campaigns through HeyReach", () => {
     it("counts only a webhook id HeyReach returned, not the placeholder older builds saved", () => {
       const heyreach = campaignProvider("heyreach")!;
       assert.deepEqual(registeredWebhooks(heyreach, { webhookId: "registered" }), []);
+      assert.deepEqual(registeredWebhooks(heyreach, { webhookId: "registered", webhooks: [HEYREACH_WEBHOOK_EVENTS[0], HEYREACH_WEBHOOK_EVENTS[1]] }), [HEYREACH_WEBHOOK_EVENTS[1]], "the placeholder saved with the list doesn't count the reply webhook");
+      assert.deepEqual(registeredWebhooks(heyreach, { webhookId: null, webhooks: [HEYREACH_WEBHOOK_EVENTS[0]] }), [HEYREACH_WEBHOOK_EVENTS[0]]);
       assert.deepEqual(registeredWebhooks(heyreach, { webhookId: "55" }), [HEYREACH_WEBHOOK_EVENTS[0]]);
       assert.deepEqual(registeredWebhooks(campaignProvider("smartlead")!, { webhookId: "registered" }).length, 1);
     });
@@ -801,6 +819,62 @@ describe("campaigns through HeyReach", () => {
         else process.env.SITE_URL = savedSite;
       }
       await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+    });
+
+    it("adds nothing when HeyReach's webhook list can't be read, and never adds a webhook twice when it can't be found afterwards", async () => {
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = "https://orbit.test";
+      const creates = () => eclipse.calls.filter((call) => call.path === "/webhooks/CreateWebhook").length;
+      const reset = () => sql("update crm.campaigns set sync_state = (sync_state - 'webhooks' - 'webhookId') || jsonb_build_object('webhookFailedAt', (now() - interval '61 minutes')::text) where id = $1", [foundersId]);
+      const sync = () => syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      try {
+        await reset();
+        eclipse.fail = (path) => (path === "/webhooks/GetAllWebhooks" ? new Response(JSON.stringify({ errorMessage: "Bad request" }), { status: 400 }) : null);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.equal(creates(), 0, "a 400 on the list adds nothing");
+        eclipse.fail = (path) => (path === "/webhooks/GetAllWebhooks" ? new Response("not json", { status: 200 }) : null);
+        await reset();
+        eclipse.calls.length = 0;
+        await sync();
+        assert.equal(creates(), 0, "an unreadable list adds nothing");
+
+        let listed = 0;
+        eclipse.fail = (path) => {
+          if (path === "/webhooks/CreateWebhook") return new Response(null, { status: 200 });
+          if (path === "/webhooks/GetAllWebhooks") return listed++ === 0 ? new Response(JSON.stringify({ totalCount: 0, items: [] }), { status: 200 }) : new Response("busy", { status: 500 });
+          return null;
+        };
+        await reset();
+        eclipse.calls.length = 0;
+        await sync();
+        assert.equal(creates(), HEYREACH_WEBHOOK_EVENTS.length);
+        const state = (await sql<{ state: { webhooks?: string[]; webhookId?: string | null } }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+        assert.deepEqual([...(state.webhooks ?? [])].sort(), [...HEYREACH_WEBHOOK_EVENTS].sort());
+        assert.equal(state.webhookId ?? null, null);
+        await sql("update crm.campaigns set sync_state = sync_state || jsonb_build_object('webhookFailedAt', (now() - interval '2 hours')::text) where id = $1", [foundersId]);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.equal(creates(), 0, "a webhook added without an id isn't added again an hour later");
+      } finally {
+        eclipse.fail = undefined;
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+    });
+
+    it("keeps a started campaign started when HeyReach reports STARTING or a status Orbit doesn't know", async () => {
+      const founders = eclipse.campaigns.find((item) => item.id === 9001)!;
+      const status = async () => (await sql<{ status: string }>("select status from crm.campaigns where id = $1", [foundersId]))[0].status;
+      try {
+        for (const reported of ["STARTING", "SCHEDULED", "SOMETHING_NEW"]) {
+          founders.status = reported;
+          await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+          assert.equal(await status(), "active", reported);
+        }
+      } finally {
+        founders.status = "IN_PROGRESS";
+      }
     });
 
     it("adds no webhooks to a finished campaign", async () => {
