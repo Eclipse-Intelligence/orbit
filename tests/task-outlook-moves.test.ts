@@ -52,6 +52,8 @@ class FakeOutlook {
   failPatches = 0;
   failDeletes = new Set<string>();
   deleteStatus = 503;
+  createStatuses: number[] = [];
+  sentKeys: (string | null)[] = [];
 
   token(owner: string) {
     const token = `token-${owner}`;
@@ -82,6 +84,9 @@ class FakeOutlook {
     if (method === "POST" && parsed.pathname === "/v1.0/me/events") {
       const properties = (body!.singleValueExtendedProperties as { id: string; value: string }[] | undefined) ?? [];
       const key = properties.find((item) => item.id === TASK_BLOCK_PROPERTY)?.value ?? null;
+      this.sentKeys.push(key);
+      const failWith = this.createStatuses.shift();
+      if (failWith) return json({ error: { code: "Refused", message: "Refused" } }, failWith);
       const existing = [...this.events.entries()].find(([, event]) => event.owner === owner && event.transactionId === body!.transactionId);
       let id: string;
       if (existing) {
@@ -289,6 +294,11 @@ describe("the migration", () => {
   it("runs again over itself", async () => {
     await reapplyMigrationsFrom("20270129100000_tasks_outlook_moves.sql");
     await reapplyMigrationsFrom("20270129100000_tasks_outlook_moves.sql");
+  });
+
+  it("runs the refused create change again over itself", async () => {
+    await reapplyMigrationsFrom("20270214100000_task_block_refused_create.sql");
+    await reapplyMigrationsFrom("20270214100000_task_block_refused_create.sql");
   });
 });
 
@@ -770,6 +780,79 @@ describe("looking up a block whose create never confirmed", () => {
     assert.equal(outlook.events.get(id)!.start, minuteAt(at));
     assert.equal((await getTask(mark, tasks[0].id)).dueAt, minuteAt(at));
   });
+});
+
+describe("a create Graph answers with an error", () => {
+  async function key(taskId: string) {
+    return ((await queued(taskId)) as { create_key: string | null } | null)?.create_key ?? null;
+  }
+
+  it("parks a 400 and creates straight away with a new key once the task changes", async () => {
+    await connect(mark);
+    const at = Date.now() + 2 * DAY;
+    const task = await timed(mark, "Call Jane", at);
+    outlook.createStatuses = [400];
+    const run = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(run.deferred, 1);
+    const parked = (await queued(task.id)) as { refused: boolean; create_key: string | null; create_user_id: string | null; create_sent_at: Date | null };
+    assert.equal(parked.refused, true);
+    assert.equal(parked.create_key, null);
+    assert.equal(parked.create_user_id, null);
+    assert.equal(parked.create_sent_at, null);
+    await placeTask(mark, task.id, { at: minuteAt(at + HOUR), durationMinutes: 30 });
+    await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(outlook.searches.length, 0);
+    assert.equal(outlook.sentKeys.length, 2);
+    assert.ok(outlook.sentKeys[1]);
+    assert.notEqual(outlook.sentKeys[1], outlook.sentKeys[0]);
+    assert.equal(outlook.events.size, 1);
+    assert.equal(await ref(task.id), [...outlook.events.keys()][0]);
+    assert.equal(await queued(task.id), null);
+  });
+
+  it("backs off after a 403 and creates straight away with a new key on the next attempt", async () => {
+    await connect(mark);
+    const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+    outlook.createStatuses = [403];
+    const run = await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+    assert.equal(run.deferred, 1);
+    const waiting = (await queued(task.id)) as { refused: boolean; retry_at: Date; create_key: string | null; create_user_id: string | null; create_sent_at: Date | null };
+    assert.equal(waiting.refused, false);
+    assert.ok(new Date(waiting.retry_at).getTime() > Date.now());
+    assert.equal(waiting.create_key, null);
+    assert.equal(waiting.create_user_id, null);
+    assert.equal(waiting.create_sent_at, null);
+    await retryNow();
+    await syncTaskBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(outlook.searches.length, 0);
+    assert.equal(outlook.sentKeys.length, 2);
+    assert.ok(outlook.sentKeys[1]);
+    assert.notEqual(outlook.sentKeys[1], outlook.sentKeys[0]);
+    assert.equal(outlook.events.size, 1);
+    assert.equal(await queued(task.id), null);
+  });
+
+  for (const status of [429, 500, 503]) {
+    it(`keeps the key after a ${status} and looks it up before creating again`, async () => {
+      await connect(mark);
+      const task = await timed(mark, "Call Jane", Date.now() + 2 * DAY);
+      outlook.createStatuses = [status, status];
+      await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
+      const sent = outlook.sentKeys[0];
+      const tries = outlook.sentKeys.length;
+      assert.ok(sent);
+      assert.ok(outlook.sentKeys.every((item) => item === sent));
+      assert.equal(await key(task.id), sent);
+      await retryNow();
+      const run = await syncTaskBlocks({ fetchImpl: outlook.fetch });
+      assert.equal(outlook.searches.length, 1);
+      assert.ok(outlook.searches[0].includes(sent));
+      assert.equal(run.deferred, 1);
+      assert.equal(outlook.sentKeys.length, tries);
+      assert.equal(outlook.events.size, 0);
+      assert.equal(await key(task.id), sent);
+    });
+  }
 });
 
 describe("a run", () => {
