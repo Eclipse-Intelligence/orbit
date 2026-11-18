@@ -439,8 +439,8 @@ describe("campaign integration upgrade", () => {
       assert.equal((await getCampaign(owner, linkedinId)).leadFunnel?.interested, undefined, "Interested stays hidden until the positive auto-tag webhook is registered");
       const shapes = mock.method(console, "info", () => undefined);
       try {
-        assert.deepEqual(await (await post(tag("LEAD_AUTO_TAGGED_POSITIVE", "fay-fox"))).json(), { saved: 1 });
-        assert.deepEqual(await (await post(tag("LEAD_AUTO_TAGGED_POSITIVE", "fay-fox", { timestamp: minutesAgo(1) }))).json(), { saved: 0 });
+        assert.deepEqual(await (await post(tag("LEAD_AUTO_TAGGED_INTERESTED", "fay-fox"))).json(), { saved: 1 });
+        assert.deepEqual(await (await post(tag("LEAD_AUTO_TAGGED_INTERESTED", "fay-fox", { timestamp: minutesAgo(1) }))).json(), { saved: 0 });
         await post(tag("LEAD_TAG_UPDATED", "fay-fox", { tags: [{ name: "Hot" }, "Founder"] }));
         await post(tag("LEAD_AUTO_TAGGED_GENERIC", "fay-fox", { tags: ["Question"] }));
       } finally {
@@ -454,7 +454,7 @@ describe("campaign integration upgrade", () => {
       const categories = await sql<{ count: number }>("select count(*)::int as count from crm.campaign_events where prospect_id = $1 and kind = 'category'", [fay.id]);
       assert.equal(categories[0].count, 1);
       await sql(
-        "update crm.campaign_connections set details = jsonb_set(details, '{webhooks}', '{\"events\": {\"LEAD_AUTO_TAGGED_POSITIVE\": \"1\"}}'::jsonb) where workspace_id = $1 and provider = 'heyreach'",
+        "update crm.campaign_connections set details = jsonb_set(details, '{webhooks}', '{\"events\": {\"LEAD_AUTO_TAGGED_INTERESTED\": \"1\"}}'::jsonb) where workspace_id = $1 and provider = 'heyreach'",
         [owner.workspaceId],
       );
       assert.equal((await getCampaign(owner, linkedinId)).leadFunnel?.interested, 1);
@@ -474,7 +474,7 @@ describe("campaign integration upgrade", () => {
         const response = await handleCampaignWebhook(
           new Request(`${ORIGIN}/api/webhooks/heyreach?w=${owner.workspaceId}&secret=${encodeURIComponent(secret)}`, {
             method: "POST",
-            body: JSON.stringify({ event_type: "LEAD_AUTO_TAGGED_POSITIVE", campaign: { id: 9101 }, lead: { profile_url: "https://www.linkedin.com/in/gus-new" }, tags: ["Warm"], timestamp: minutesAgo(2) }),
+            body: JSON.stringify({ event_type: "LEAD_AUTO_TAGGED_INTERESTED", campaign: { id: 9101 }, lead: { profile_url: "https://www.linkedin.com/in/gus-new" }, tags: ["Warm"], timestamp: minutesAgo(2) }),
           }),
           "heyreach",
           { syncAfter: false },

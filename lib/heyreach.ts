@@ -753,16 +753,16 @@ export const HEYREACH_TAG_EVENT = "LEAD_TAG_UPDATED";
 export type HeyReachAutoTag = "positive" | "negative" | "generic";
 
 export const HEYREACH_AUTO_TAG_EVENTS: Record<string, HeyReachAutoTag> = {
-  LEAD_AUTO_TAGGED_POSITIVE: "positive",
-  LEAD_AUTO_TAGGED_NEGATIVE: "negative",
+  LEAD_AUTO_TAGGED_INTERESTED: "positive",
+  LEAD_AUTO_TAGGED_NOT_INTERESTED: "negative",
   LEAD_AUTO_TAGGED_GENERIC: "generic",
 };
 
-export const HEYREACH_POSITIVE_TAG_EVENT = "LEAD_AUTO_TAGGED_POSITIVE";
+export const HEYREACH_POSITIVE_TAG_EVENT = "LEAD_AUTO_TAGGED_INTERESTED";
 
 export const HEYREACH_CORE_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS)];
 
-export const HEYREACH_WEBHOOK_EVENTS: string[] = [...HEYREACH_CORE_WEBHOOK_EVENTS, HEYREACH_TAG_EVENT];
+export const HEYREACH_WEBHOOK_EVENTS: string[] = [...HEYREACH_CORE_WEBHOOK_EVENTS, HEYREACH_TAG_EVENT, ...Object.keys(HEYREACH_AUTO_TAG_EVENTS)];
 
 export const HEYREACH_WEBHOOK_NAME_LIMIT = 25;
 
@@ -776,6 +776,9 @@ const WEBHOOK_NAMES: Record<string, string> = {
   FOLLOW_SENT: "followed",
   LIKED_POST: "liked post",
   VIEWED_PROFILE: "viewed profile",
+  LEAD_AUTO_TAGGED_INTERESTED: "interested",
+  LEAD_AUTO_TAGGED_NOT_INTERESTED: "not interested",
+  LEAD_AUTO_TAGGED_GENERIC: "auto tag",
 };
 
 export function heyReachWebhookName(eventType: string) {
@@ -815,7 +818,7 @@ export async function createHeyReachWebhook(key: string, url: string, options: H
       body: { webhookName: heyReachWebhookName(eventType), webhookUrl: url, eventType, campaignIds: [] },
     }),
   );
-  return text(body.id) ?? text(record(body.data).id) ?? null;
+  return text(body.webhookId) ?? text(body.id) ?? text(record(body.data).id) ?? null;
 }
 
 function eventTypeOf(row: Json) {
