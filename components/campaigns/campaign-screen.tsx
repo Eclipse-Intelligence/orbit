@@ -221,8 +221,7 @@ function Steps({ campaign }: { campaign: CampaignDetail }) {
   );
 }
 
-function Figure({ value, share }: { value: number | undefined; share: string | null }) {
-  if (value === undefined) return <span className="ui-style text-faint leading-6">Not available</span>;
+function Figure({ value, share }: { value: number; share: string | null }) {
   return (
     <span className="flex items-baseline gap-1.5">
       <span className="text-[18px] leading-6 font-medium tabular-nums">{number(value)}</span>
@@ -231,23 +230,30 @@ function Figure({ value, share }: { value: number | undefined; share: string | n
   );
 }
 
+const HEYREACH_FUNNEL_KEYS = new Set<string>(["contacted", "accepted", "replied"]);
+
+const FUNNEL_COLUMNS: Record<number, string> = { 1: "grid-cols-1", 3: "grid-cols-3", 4: "grid-cols-2 sm:grid-cols-4" };
+
 function Funnel({ campaign }: { campaign: CampaignDetail }) {
-  const items = PROVIDER_STATS[campaign.provider].funnel;
   const unread = campaign.provider === "heyreach" && !campaign.leadFunnel;
+  const items = PROVIDER_STATS[campaign.provider].funnel
+    .map((item) => ({ ...item, value: providerFigure(campaign, item.key) }))
+    .filter((item) => item.value !== undefined || (unread && HEYREACH_FUNNEL_KEYS.has(item.key)));
+  if (items.length === 0) return null;
   return (
-    <dl aria-label="Lead funnel" className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-4">
-      {items.map((item) => {
-        const value = providerFigure(campaign, item.key);
-        const waiting = value === undefined && unread && item.key !== "interested";
-        return (
-          <div key={item.key} className="flex min-w-0 flex-col-reverse gap-1">
-            <dt className="caption-style text-subtle truncate">{item.label}</dt>
-            <dd className="min-w-0">
-              {waiting ? <span className="ui-style text-faint leading-6">Not synced yet</span> : <Figure value={value} share={value === undefined ? null : percent(value, providerFigure(campaign, item.of))} />}
-            </dd>
-          </div>
-        );
-      })}
+    <dl aria-label="Lead funnel" className={cn("grid gap-x-4 gap-y-4", FUNNEL_COLUMNS[items.length] ?? "grid-cols-2")}>
+      {items.map((item) => (
+        <div key={item.key} className="flex min-w-0 flex-col-reverse gap-1">
+          <dt className="caption-style text-subtle truncate">{item.label}</dt>
+          <dd className="min-w-0">
+            {item.value === undefined ? (
+              <span className="ui-style text-faint leading-6">Not synced yet</span>
+            ) : (
+              <Figure value={item.value} share={percent(item.value, providerFigure(campaign, item.of))} />
+            )}
+          </dd>
+        </div>
+      ))}
     </dl>
   );
 }
@@ -576,6 +582,7 @@ export default function CampaignScreen({
   }
 
   const synced = Object.keys(campaign.stats).length > 0;
+  const active = campaign.days.some((day) => day.sent > 0 || day.replied > 0 || (day.accepted ?? 0) > 0);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -630,19 +637,21 @@ export default function CampaignScreen({
               <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_16rem] lg:gap-10">
                 <div className="flex min-w-0 flex-col gap-5">
                   <Funnel campaign={campaign} />
-                  <div className="flex flex-col gap-2">
-                    <Chart days={campaign.days} channel={campaign.channel} />
-                    <div className="caption-style text-subtle flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <span className="flex items-center gap-1.5">
-                        <span aria-hidden className="bg-foreground/25 size-2 rounded-[2px]" />
-                        {CHART_WORDS[campaign.channel].bar}
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        <span aria-hidden className="bg-primary size-2 rounded-[2px]" />
-                        {CHART_WORDS[campaign.channel].overlay}
-                      </span>
+                  {active && (
+                    <div className="flex flex-col gap-2">
+                      <Chart days={campaign.days} channel={campaign.channel} />
+                      <div className="caption-style text-subtle flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="flex items-center gap-1.5">
+                          <span aria-hidden className="bg-foreground/25 size-2 rounded-[2px]" />
+                          {CHART_WORDS[campaign.channel].bar}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <span aria-hidden className="bg-primary size-2 rounded-[2px]" />
+                          {CHART_WORDS[campaign.channel].overlay}
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
                 <LeadStatuses campaign={campaign} />
               </div>
@@ -653,7 +662,7 @@ export default function CampaignScreen({
             {campaign.strayConversations > 0 && <p className="caption-style text-subtle">{strayLine(campaign.strayConversations)}</p>}
           </Section>
 
-          <Section title="Steps" className={linkedin ? "max-sm:hidden" : undefined}>
+          <Section title="Steps">
             <Steps campaign={campaign} />
             {linkedin && campaign.capacity && (
               <p className="ui-style text-soft">{linkedinCapacityLine(campaign.capacity, campaign.sequence.filter((step) => step.subject !== "Invite").length)}</p>
