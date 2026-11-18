@@ -366,8 +366,10 @@ as $$
     );
 $$;
 
+drop function if exists private.claim_campaign_fills(integer, text);
+
 create or replace function private.claim_campaign_fills(p_limit integer, p_holder text)
-returns table (prospect_id uuid, campaign_id uuid, workspace_id uuid, added_by_user_id uuid)
+returns table (prospect_id uuid, campaign_id uuid, workspace_id uuid, added_by_user_id uuid, provider text)
 language plpgsql
 security definer
 set search_path = ''
@@ -412,7 +414,8 @@ begin
       claimed_by = left(p_holder, 100)
   from picked
   where p.id = picked.id
-  returning p.id, p.campaign_id, p.workspace_id, p.added_by_user_id;
+  returning p.id, p.campaign_id, p.workspace_id, p.added_by_user_id,
+    (select k.provider from crm.campaigns k where k.id = p.campaign_id);
 end;
 $$;
 

@@ -405,14 +405,14 @@ export async function addOneNow(
   return outcome;
 }
 
-async function actorFor(workspaceId: string, addedBy: string | null) {
+export async function fillActor(workspaceId: string, provider: string, addedBy: string | null) {
   const added = addedBy ? await ownerActor(addedBy, workspaceId) : null;
   if (added) return added;
-  const result = await query<{ connected_by: string | null }>("select connected_by from private.campaign_connection_targets($1)", [workspaceId]);
-  return syncActor(workspaceId, result.rows.find((row) => row.connected_by)?.connected_by ?? null);
+  const result = await query<{ provider: string; connected_by: string | null }>("select provider, connected_by from private.campaign_connection_targets($1)", [workspaceId]);
+  return syncActor(workspaceId, result.rows.find((row) => row.provider === provider)?.connected_by ?? null);
 }
 
-type BatchRow = { prospect_id: string; campaign_id: string; workspace_id: string; added_by_user_id: string | null };
+type BatchRow = { prospect_id: string; campaign_id: string; workspace_id: string; added_by_user_id: string | null; provider: string };
 
 export async function claimFillBatch(holder = `fill:${randomUUID()}`, limit = FILL_BATCH) {
   const claimed = await query<BatchRow>("select * from private.claim_campaign_fills($1, $2)", [limit, holder]);
@@ -426,7 +426,7 @@ async function releaseAll(workspaceId: string, holder: string, ids: string[]) {
 async function runGroup(rows: BatchRow[], holder: string, options: { fetchImpl?: typeof fetch; deadline: number }) {
   const first = rows[0];
   const ids = rows.map((row) => row.prospect_id);
-  const actor = await actorFor(first.workspace_id, first.added_by_user_id);
+  const actor = await fillActor(first.workspace_id, first.provider, first.added_by_user_id);
   if (!actor) {
     await releaseAll(first.workspace_id, holder, ids);
     return [];

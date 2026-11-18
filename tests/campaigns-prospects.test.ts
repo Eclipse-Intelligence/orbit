@@ -5,7 +5,7 @@ import { saveCampaignConnection } from "@/lib/campaigns/connections";
 import { judgeFill, type FillInput } from "@/lib/campaigns/fill";
 import { addedLine, emailCapacityLine, linkedinCapacityLine, overflowLine } from "@/lib/campaigns/format";
 import { addCompanyContacts, addProspects, contactOutreach, outreachOf, saveCampaignVariables } from "@/lib/campaigns/prospects";
-import { claimFillBatch, runFillBatch } from "@/lib/campaigns/push";
+import { claimFillBatch, fillActor, runFillBatch } from "@/lib/campaigns/push";
 import { getCampaign } from "@/lib/crm/campaigns";
 import { createCompany, updateCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -40,6 +40,7 @@ type Push = { provider: "smartlead" | "heyreach"; body: Record<string, unknown> 
 const state = {
   pushes: [] as Push[],
   llm: [] as string[],
+  webSearch: [] as boolean[],
   smartleadFails: null as number | null,
   smartleadShort: false,
   found: new Set<string>(),
@@ -72,6 +73,7 @@ function router(accounts: FakeAccount[], heyreach: FakeHeyReachAccount[]): typeo
     if (url.hostname === "api.llmapi.ai") {
       const user = String((body?.messages as { content: string }[] | undefined)?.[1]?.content ?? "");
       state.llm.push(user);
+      state.webSearch.push(Boolean(body?.web_search_options));
       return json({ model: "test", choices: [{ message: { content: JSON.stringify(fillReply(user)) }, finish_reason: "stop" }] });
     }
     if (url.hostname === "server.smartlead.ai") {
@@ -328,6 +330,8 @@ describe("adding prospects", () => {
     const activity = await sql<{ title: string }>("select title from crm.activities where contact_id = $1 and metadata->>'campaignAddedProspectId' = $2", [people.ben.id, ben.prospectId]);
     assert.deepEqual(activity.map((item) => item.title), ["Added to Agency outreach"]);
     assert.equal((await row(ben.prospectId)).claimed_by, null);
+    assert.ok(state.webSearch.length > 0 && state.webSearch.every(Boolean), "every fill can search the web");
+    assert.match(String(state.llm[0]), /Prospect:/);
     const tia = await sql<{ state: string; added_by_agent_id: string | null }>("select state, added_by_agent_id from crm.campaign_prospects where contact_id = $1", [people.tia.id]);
     assert.deepEqual(tia.map((item) => item.state), ["pushed"], "a prospect an agent token added is filled as the sync's member");
     await drainFills();
@@ -511,6 +515,19 @@ describe("adding prospects", () => {
       addedLine({ campaign: { name: "Agency outreach" }, added: 9, already: 0, skipped: 3, missing: 0, reasons: [{ reason: "Open opportunity", count: 2 }, { reason: "Already replied", count: 1 }] }),
       "9 added to Agency outreach. 3 skipped: 2 open opportunity, 1 already replied.",
     );
+  });
+
+  it("fills an agent's prospects as the member who connected that campaign's tool while they're an owner or admin, else an owner", async () => {
+    const dee = await createUser("dee@prospects.test", "Dee Admin");
+    await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'admin')", [owner.workspaceId, dee.userId]);
+    await sql("update crm.campaign_connections set connected_by = $2 where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId, dee.userId]);
+    await sql("update crm.campaign_connections set connected_by = $2 where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId, ann.userId]);
+    assert.equal((await fillActor(owner.workspaceId, "heyreach", null))?.userId, dee.userId, "the campaign's own connection decides");
+    assert.equal((await fillActor(owner.workspaceId, "smartlead", null))?.userId, owner.userId, "a member who isn't an owner or admin is passed over");
+    await sql("update crm.workspace_members set role = 'member' where workspace_id = $1 and user_id = $2", [owner.workspaceId, dee.userId]);
+    assert.equal((await fillActor(owner.workspaceId, "heyreach", null))?.userId, owner.userId, "a demoted member falls back to an owner");
+    assert.equal((await fillActor(owner.workspaceId, "heyreach", ann.userId))?.userId, ann.userId, "a person's own adds run as them");
+    await sql("update crm.campaign_connections set connected_by = $2 where workspace_id = $1", [owner.workspaceId, owner.userId]);
   });
 
   it("keeps a value only when its figures come from a source", () => {
