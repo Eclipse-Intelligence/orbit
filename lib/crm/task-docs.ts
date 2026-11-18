@@ -3,6 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { actorIds, iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
+import { TASK_DOC_IDS_SQL } from "@/lib/crm/task-doc-sql";
 import { withMailThreadsInDb } from "@/lib/crm/task-mail";
 import { canChangeTask } from "@/lib/crm/task-rights";
 import type { Actor, Task, TaskDoc } from "@/lib/crm/types";
@@ -13,7 +14,6 @@ export const MAX_TASK_DOCS = 20;
 
 export const NOT_A_DOC = "Choose a doc you can open in this workspace.";
 
-export const TASK_DOC_IDS_SQL = "array(select d.page_id::text from crm.task_docs d where d.task_id = t.id and not d.page_archived order by d.created_at, d.page_id)";
 
 export type TaskDocEntry = {
   id: string;

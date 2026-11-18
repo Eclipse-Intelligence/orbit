@@ -3,7 +3,7 @@ import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { memberActor } from "@/lib/crm/conversations";
-import { applyMailAction } from "@/lib/mail/actions";
+import { applyMailAction, everyEmailChanged } from "@/lib/mail/actions";
 import { claimDueDrafts, dueDraftInput, failDueDraft, sendMailDraft } from "@/lib/mail/compose";
 import { mailOrigin } from "@/lib/mail/origin";
 import { threadKey } from "@/lib/mail/threads";
@@ -58,7 +58,7 @@ function mailHref(sourceId: string, key: string) {
 
 async function returnSnooze(actor: UserActor, reminder: ReminderRow, fetchImpl: typeof fetch) {
   const thread = threadKey(reminder.source_id, reminder.thread_key);
-  await applyMailAction(actor, { thread, action: "inbox", view: { role: "snoozed" } }, fetchImpl);
+  await everyEmailChanged(applyMailAction(actor, { thread, action: "inbox", view: { role: "snoozed" } }, fetchImpl));
   await applyMailAction(actor, { thread, action: "unread", view: { role: "inbox" } }, fetchImpl).catch(() => undefined);
   await withActor(actor, (db) =>
     db.query("update crm.mail_reminders set state = 'due', surfaced_at = now() where id = $1", [reminder.id]),

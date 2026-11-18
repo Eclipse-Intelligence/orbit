@@ -20,7 +20,7 @@ import { actorIn, workspaceActors } from "@/lib/crm/workspaces";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { query } from "@/lib/db/pool";
-import { AUTOMATED_DOMAIN, AUTOMATED_SENDER } from "@/lib/mail/split";
+import { AUTOMATED_DOMAIN, AUTOMATED_SENDER } from "@/lib/mail/patterns";
 import { addressHomesInDb } from "@/lib/mail/routing";
 
 const RULE_GRACE_MS = 5 * 60 * 1000;

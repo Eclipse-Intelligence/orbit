@@ -6,7 +6,6 @@ import { discardAttachments, loadAttachments } from "@/lib/crm/email-attachments
 import {
   companyHasOpenTask,
   createFollowUpUnlessOpen,
-  FREE_MAIL_DOMAINS,
   isFreeMailDomain,
   isRecent,
 } from "@/lib/crm/communications";
@@ -16,6 +15,7 @@ import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
 import { checkSuppressed, sentToSuppressed, type SuppressionPolicy } from "@/lib/crm/suppressions";
 import { followUpTitle } from "@/lib/mail/follow-up-title";
+import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";

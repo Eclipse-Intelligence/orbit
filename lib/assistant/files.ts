@@ -5,7 +5,8 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { fileText, hasReadableText, isAudio } from "@/lib/knowledge/indexing";
-import { addKnowledgeFile, CONTENT_LIMIT, READ_WINDOW, type KnowledgeTarget } from "@/lib/knowledge/store";
+import { CONTENT_LIMIT } from "@/lib/knowledge/limits";
+import { addKnowledgeFile, READ_WINDOW, type KnowledgeTarget } from "@/lib/knowledge/store";
 import { ATTACHMENT_MAX_BYTES, chatFileKey, putObject, readObject, removeObjects, signedUploadUrl, storageConfigured } from "@/lib/storage";
 
 const CHAT_FILES_MAX = 10;

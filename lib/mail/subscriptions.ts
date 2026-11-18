@@ -7,8 +7,9 @@ import type { Db } from "@/lib/db/pool";
 import { moveMessages, type MessageMove } from "@/lib/mail/actions";
 import { sendMailDraft } from "@/lib/mail/compose";
 import { stripQuoted } from "@/lib/mail/format";
-import { ensureMicrosoftFolder, fetchMicrosoftHeaders, GraphMailError } from "@/lib/mail/microsoft";
-import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, CALENDAR_SENDER, CALENDAR_SUBJECT, senderKey, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+import { ensureMicrosoftFolder, fetchMicrosoftHeaders, GraphMailError, SHORTEST_CALL_MS } from "@/lib/mail/microsoft";
+import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, CALENDAR_SENDER, CALENDAR_SUBJECT, UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
+import { senderKey, splitJoin } from "@/lib/mail/split";
 import { addressHomesInDb, captureWorkspaceSql, homesJson } from "@/lib/mail/routing";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
@@ -449,6 +450,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
   for (const row of rows) bySource.set(row.source_id, [...(bySource.get(row.source_id) ?? []), row]);
   const movedIds: string[] = [];
   let attempted = 0;
+  let late = 0;
   let error: string | null = null;
   for (const [sourceId, list] of bySource) {
     let target: MessageMove;
@@ -460,7 +462,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
       continue;
     }
     for (let index = 0; index < list.length; index += MOVE_CHUNK) {
-      if (Date.now() >= deadline) return { moved: movedIds.length, movedIds, remaining: rows.length - attempted, error };
+      if (deadline - Date.now() < SHORTEST_CALL_MS) return { moved: movedIds.length, movedIds, remaining: rows.length - attempted + late, error };
       const chunk = list.slice(index, index + MOVE_CHUNK);
       attempted += chunk.length;
       try {
@@ -470,8 +472,10 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
           chunk.map((row) => ({ id: row.id, providerMessageId: row.provider_message_id, threadKey: row.tk })),
           target,
           fetchImpl,
+          { deadline },
         );
         movedIds.push(...result.moved);
+        late += result.late;
         error = error ?? result.error;
       } catch (problem) {
         error = problem instanceof Error ? problem.message : "Outlook didn't move the emails.";
@@ -480,7 +484,7 @@ async function moveGrouped(actor: UserActor, rows: MoveRow[], choice: "archive" 
       }
     }
   }
-  return { moved: movedIds.length, movedIds, remaining: 0, error };
+  return { moved: movedIds.length, movedIds, remaining: late, error };
 }
 
 async function clearSenderMail(
@@ -874,11 +878,12 @@ export async function markColdPitch(
   message: { id: string; sourceId: string; providerMessageId: string; threadKey: string; from: string },
   mode: "other" | "archive",
   fetchImpl: typeof fetch = fetch,
+  options: { deadline?: number } = {},
 ) {
   const key = senderKey(message.from);
   if (!key) return;
   if (mode === "archive") {
-    const moved = await moveMessages(actor, message.sourceId, [{ id: message.id, providerMessageId: message.providerMessageId, threadKey: message.threadKey }], "archive", fetchImpl);
+    const moved = await moveMessages(actor, message.sourceId, [{ id: message.id, providerMessageId: message.providerMessageId, threadKey: message.threadKey }], "archive", fetchImpl, options);
     if (moved.moved.length === 0) throw new Error(moved.error ?? "Outlook didn't archive the cold pitch.");
   }
   await withActor(actor, async (db) => {

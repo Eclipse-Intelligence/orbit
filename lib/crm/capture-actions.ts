@@ -6,7 +6,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
-import { applyMailAction } from "@/lib/mail/actions";
+import { applyMailAction, everyEmailChanged } from "@/lib/mail/actions";
 import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail, neverAskUnknownMail, showUnknownMail } from "@/lib/mail/filing";
 import { removeSenderRule } from "@/lib/mail/capture-filter";
 import { updatePrepared } from "@/lib/mail/prepare";
@@ -138,10 +138,10 @@ export async function runCaptureAction(actor: UserActor, action: CaptureAction, 
       await finishReminder(actor, action.id);
       return { ok: true };
     case "reply-done":
-      await applyMailAction(actor, { thread: action.thread, action: "archive", view: { role: "inbox" } }, options.fetchImpl);
+      await everyEmailChanged(applyMailAction(actor, { thread: action.thread, action: "archive", view: { role: "inbox" } }, options.fetchImpl));
       return { ok: true };
     case "reply-snooze":
-      await applyMailAction(actor, { thread: action.thread, action: "snooze", view: { role: "inbox" }, until: action.until }, options.fetchImpl);
+      await everyEmailChanged(applyMailAction(actor, { thread: action.thread, action: "snooze", view: { role: "inbox" }, until: action.until }, options.fetchImpl));
       return { ok: true };
     case "reply-dismiss":
       await dismissReply(actor, action.thread, action.at);

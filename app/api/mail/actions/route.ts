@@ -3,6 +3,7 @@ import { applyMailAction, MAIL_ACTIONS, type MailAction } from "@/lib/mail/actio
 import { readMailView } from "@/lib/mail/view";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as { thread?: unknown; action?: unknown; view?: unknown; until?: unknown };

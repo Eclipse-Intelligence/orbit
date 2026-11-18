@@ -4,7 +4,7 @@ import { withActor } from "@/lib/crm/context";
 import type { CaptureSection, CaptureSectionCounts } from "@/lib/crm/capture-format";
 import { listPeopleMet, type CalendarStatus, type MetPerson } from "@/lib/crm/calendar";
 import type { CallSyncSummary } from "@/lib/crm/calls";
-import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
+import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { listUnfiledImports, type UnfiledImport } from "@/lib/crm/conversations";
 import type { GranolaStatus } from "@/lib/crm/granola";
 import type { MailboxSummary } from "@/lib/crm/inbox";

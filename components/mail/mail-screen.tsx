@@ -33,6 +33,8 @@ import {
   forgetThread,
   loadThread,
   noteDwellRead,
+  partlyMoved,
+  partlyUpdated,
   postAction,
   prefetchThreads,
   refreshFailure,
@@ -43,6 +45,7 @@ import {
   storeThread,
   syncNow,
   type ListQuery,
+  type MailActionReply,
   type ThreadPage,
 } from "@/components/mail/mail-cache";
 import AskPanel, { type AskState } from "@/components/mail/ask-panel";
@@ -682,7 +685,9 @@ export default function MailScreen({
     }
     forgetOtherLists(target);
     let reconnecting = false;
-    const runAll = async (run: (thread: ThreadSummary) => Promise<unknown>) => {
+    let missed = 0;
+    let missedProblem: string | null = null;
+    const runAll = async (run: (thread: ThreadSummary) => Promise<MailActionReply>) => {
       const failures: string[] = [];
       let next = 0;
       await Promise.all(
@@ -690,7 +695,11 @@ export default function MailScreen({
           while (next < chosen.length) {
             const thread = chosen[next++];
             try {
-              await run(thread);
+              const result = await run(thread);
+              if (result.failed) {
+                missed += result.failed;
+                missedProblem ??= result.problem ?? null;
+              }
             } catch (error) {
               if (flagReconnect(error, { sourceId: thread.sourceId })) reconnecting = true;
               else failures.push(error instanceof Error ? error.message : "Couldn't move it. Try again.");
@@ -732,6 +741,7 @@ export default function MailScreen({
       .then((failures) => {
         if (reconnecting) dismissToast(shown);
         if (failures.length) showToast({ message: `${failures.length} of ${count} didn't move. ${failures[0]}`, tone: "alert" });
+        else if (missed) showToast({ message: partlyMoved(missed, missedProblem, count), tone: "alert" });
         settleNav();
       })
       .finally(() => chosen.forEach((thread) => removing.current.delete(thread.key)));
@@ -784,7 +794,9 @@ export default function MailScreen({
           : undefined,
       });
       const pendingMove = postAction(key, action, from, until)
-        .then(() => undefined)
+        .then((result) => {
+          if (result.failed) showToast({ message: partlyMoved(result.failed, result.problem ?? null), tone: "alert" });
+        })
         .catch((error: Error) => {
           putBack();
           if (flagReconnect(error, { sourceId: thread.sourceId })) dismissToast(shown);
@@ -808,6 +820,12 @@ export default function MailScreen({
     if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, change));
     const undoAction: ReaderAction = action === "read" ? "unread" : action === "unread" ? "read" : action === "flag" ? "unflag" : "flag";
     postAction(key, action, from)
+      .then((result) => {
+        if (!result.failed) return;
+        forgetThread(key);
+        fetchDetail(key, true);
+        if (!silent) showToast({ message: partlyUpdated(result.failed, result.problem ?? null), tone: "alert" });
+      })
       .catch((error: Error) => {
         setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, undoAction) : item)) } : existing));
         forgetThread(key);

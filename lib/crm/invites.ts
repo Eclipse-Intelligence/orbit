@@ -14,6 +14,7 @@ import {
 import { withActor } from "@/lib/crm/context";
 import { createContactFromAttendeeInDb } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
+import { INVITE_NOT_CONNECTED } from "@/lib/crm/invite-problems";
 import { readStored, type StoredConnection } from "@/lib/crm/inbox";
 import {
   accountEmail,
@@ -22,7 +23,6 @@ import {
   defaultCalendarAddress,
   defaultInviteAddress,
   graphSourceFor,
-  INVITE_NOT_CONNECTED,
   INVITE_RECONNECT,
   personalCalendars,
   pickInviteSender,

@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { brandOrEmpty, type BrandProfile } from "@/lib/crm/brand";
 import { withActor } from "@/lib/crm/context";
-import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
+import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -25,7 +25,8 @@ import {
   threadRoute,
   upsertRoute,
 } from "@/lib/mail/routing";
-import { splitCase, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+import { UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
+import { splitCase, splitJoin } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
 import { captureCutoff, ownAddressesSql } from "@/lib/mail/waiting";

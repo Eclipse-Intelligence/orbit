@@ -5,7 +5,16 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, reconnectProblem, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import {
+  ensureMicrosoftFolder,
+  GraphMailError,
+  GraphOutOfTime,
+  moveMicrosoftMessage,
+  reconnectProblem,
+  SNOOZE_FOLDER,
+  updateMicrosoftMessage,
+  type GraphLimit,
+} from "@/lib/mail/microsoft";
 import { sourceReconnect } from "@/lib/mail/accounts";
 import { announceSharedThreads, shareVisibleRole } from "@/lib/mail/share-live";
 import { mailSourceToken, recordMailEchoes } from "@/lib/mail/sync";
@@ -28,6 +37,7 @@ const SNOOZE_MAX_MS = 366 * 24 * 60 * 60 * 1000;
 
 const PARALLEL = 4;
 const MESSAGE_LIMIT = 100;
+export const ACTION_BUDGET_MS = 40_000;
 
 type Row = {
   id: string;
@@ -85,6 +95,27 @@ async function eachLimited<T>(items: T[], run: (item: T) => Promise<void>) {
   return failures;
 }
 
+function graphFailure(error: unknown) {
+  if (error instanceof GraphMailError) return { status: error.status, code: error.code.split(/\s/)[0] || null };
+  if (error instanceof CrmError) return { status: error.status, code: error.code };
+  return { status: null, code: error instanceof Error ? error.name : "unknown" };
+}
+
+function logFailures(action: string, sourceId: string, failures: unknown[]) {
+  for (const failure of failures) console.error("Mail action failed in Microsoft", { action, mailbox: sourceId, ...graphFailure(failure) });
+}
+
+function landsIn(actor: UserActor, sourceId: string, role: MailRole) {
+  let roles: Promise<Map<string, MailRole>> | null = null;
+  return async (providerFolderId: string) => {
+    roles ??= withActor(actor, async (db) => {
+      const result = await db.query<{ provider_folder_id: string; role: MailRole }>("select provider_folder_id, role from crm.mail_folders where source_id = $1", [sourceId]);
+      return new Map(result.rows.map((row) => [row.provider_folder_id, row.role]));
+    });
+    return (await roles).get(providerFolderId) === role;
+  };
+}
+
 async function snoozeFolder(actor: UserActor, sourceId: string, token: string, fetchImpl: typeof fetch) {
   const stored = await withActor(actor, async (db) => {
     const result = await db.query<{ snooze_folder_id: string | null }>("select snooze_folder_id from crm.mail_sources where id = $1", [sourceId]);
@@ -104,7 +135,16 @@ async function snoozeFolder(actor: UserActor, sourceId: string, token: string, f
   return providerId;
 }
 
-async function settleReminders(db: Db, actor: UserActor, sourceId: string, key: string, action: MailAction, until: Date | null, subject: string | null) {
+async function settleReminders(
+  db: Db,
+  actor: UserActor,
+  sourceId: string,
+  key: string,
+  action: MailAction,
+  until: Date | null,
+  subject: string | null,
+  complete = true,
+) {
   if (action === "archive" || action === "trash") {
     await db.query(
       `update crm.mail_reminders set state = 'done'
@@ -112,7 +152,7 @@ async function settleReminders(db: Db, actor: UserActor, sourceId: string, key: 
       [actor.userId, sourceId, key],
     );
   }
-  if (action === "inbox" || action === "snooze") {
+  if ((action === "inbox" && complete) || action === "snooze") {
     await db.query(
       "update crm.mail_reminders set state = 'done' where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'snooze' and state <> 'done'",
       [actor.userId, sourceId, key],
@@ -188,11 +228,15 @@ async function failureMessage(actor: UserActor, sourceId: string, error: unknown
   return error instanceof Error ? error.message : "Outlook didn't accept that change. Try again.";
 }
 
+export type MailActionResult = { changed: number; failed: number; problem: string | null };
+
 export async function applyMailAction(
   actor: UserActor,
   input: { thread: string; action: MailAction; view?: MailView | null; until?: string | null },
   fetchImpl: typeof fetch = fetch,
-): Promise<{ changed: number }> {
+  options: { deadline?: number } = {},
+): Promise<MailActionResult> {
+  const limit: GraphLimit = { deadline: options.deadline ?? Date.now() + ACTION_BUDGET_MS };
   if (!MAIL_ACTIONS.includes(input.action)) throw new CrmError("validation_error", "Choose a mail action.", 400);
   const until = input.action === "snooze" ? new Date(input.until ?? "") : null;
   if (until && (Number.isNaN(until.getTime()) || until.getTime() < Date.now() + SNOOZE_MIN_MS || until.getTime() > Date.now() + SNOOZE_MAX_MS)) {
@@ -223,27 +267,28 @@ export async function applyMailAction(
   const subject = rows[rows.length - 1].subject?.slice(0, 2000) ?? null;
   if (chosen.length === 0) {
     if (input.action !== "snooze") await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, null, subject));
-    return { changed: 0 };
+    return { changed: 0, failed: 0, problem: null };
   }
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
   const base = MOVES[input.action];
   const move = base && input.action === "snooze" ? { ...base, destination: await snoozeFolder(actor, sourceId, token, fetchImpl) } : base;
   const done: { row: Row; folder: string | null; providerId: string }[] = [];
+  const landed = move ? landsIn(actor, sourceId, move.role) : undefined;
   const failures = await eachLimited(chosen, async (row) => {
     if (move) {
-      const moved = await moveMicrosoftMessage(token, row.provider_message_id, move.destination, fetchImpl);
+      const moved = await moveMicrosoftMessage(token, row.provider_message_id, move.destination, fetchImpl, limit, landed);
       done.push({ row, folder: moved.folderId, providerId: moved.id });
       return;
     }
     const isRead = input.action === "read" ? true : input.action === "unread" ? false : undefined;
     const flagged = input.action === "flag" ? true : input.action === "unflag" ? false : undefined;
-    await updateMicrosoftMessage(token, row.provider_message_id, { isRead, flagged }, fetchImpl);
+    await updateMicrosoftMessage(token, row.provider_message_id, { isRead, flagged }, fetchImpl, limit);
     done.push({ row, folder: null, providerId: row.provider_message_id });
   });
   if (done.length > 0) {
     const touched = await withActor(actor, async (db) => {
       await recordMailEchoes(db, actor, sourceId, done.flatMap((item) => [item.row.provider_message_id, item.providerId]));
-      await settleReminders(db, actor, sourceId, key, input.action, until, subject);
+      await settleReminders(db, actor, sourceId, key, input.action, until, subject, failures.length === 0);
       const ids = done.map((item) => item.row.id);
       if (input.action === "read" || input.action === "unread") {
         await db.query("update crm.mail_messages set is_read = $2 where id = any($1::uuid[])", [ids, input.action === "read"]);
@@ -257,10 +302,24 @@ export async function applyMailAction(
     announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
-  if (failures.length > 0) {
+  if (failures.length === 0) return { changed: done.length, failed: 0, problem: null };
+  logFailures(input.action, sourceId, failures);
+  if (done.length === 0) {
     throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
   }
-  return { changed: done.length };
+  return { changed: done.length, failed: failures.length, problem: await failureMessage(actor, sourceId, failures[0]) };
+}
+
+export function partialProblem(result: MailActionResult) {
+  if (result.failed === 0) return null;
+  return `Couldn't change ${result.failed} ${result.failed === 1 ? "email" : "emails"} in this conversation. ${result.problem ?? "Try again."}`;
+}
+
+export async function everyEmailChanged(pending: Promise<MailActionResult>) {
+  const result = await pending;
+  const problem = partialProblem(result);
+  if (problem) throw new CrmError("mail_action_failed", problem, 502);
+  return result;
 }
 
 export async function threadForEmail(actor: UserActor, emailId: string) {
@@ -284,14 +343,16 @@ export async function moveMessages(
   messages: { id: string; providerMessageId: string; threadKey: string }[],
   target: MessageMove,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ moved: string[]; error: string | null }> {
-  if (messages.length === 0) return { moved: [], error: null };
+  options: { deadline?: number } = {},
+): Promise<{ moved: string[]; error: string | null; late: number }> {
+  if (messages.length === 0) return { moved: [], error: null, late: 0 };
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
   const destination = typeof target === "string" ? MOVES[target]!.destination : target.providerFolderId;
   const role = typeof target === "string" ? MOVES[target]!.role : target.role;
   const done: { id: string; folder: string | null; threadKey: string; providerIds: string[] }[] = [];
+  const landed = typeof target === "string" ? landsIn(actor, sourceId, role) : undefined;
   const failures = await eachLimited(messages, async (message) => {
-    const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl);
+    const moved = await moveMicrosoftMessage(token, message.providerMessageId, destination, fetchImpl, { deadline: options.deadline }, landed);
     done.push({ id: message.id, folder: moved.folderId, threadKey: message.threadKey, providerIds: [message.providerMessageId, moved.id] });
   });
   if (done.length > 0) {
@@ -306,5 +367,10 @@ export async function moveMessages(
     announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
-  return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };
+  const moved = done.map((item) => item.id);
+  if (failures.length === 0) return { moved, error: null, late: 0 };
+  logFailures(typeof target === "string" ? target : "move", sourceId, failures);
+  const refused = failures.filter((failure) => !(failure instanceof GraphOutOfTime && !failure.sent));
+  const late = failures.length - refused.length;
+  return { moved, error: refused.length ? await failureMessage(actor, sourceId, refused[0]) : null, late };
 }

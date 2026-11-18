@@ -1,5 +1,5 @@
 import { createCompany, findByLinkedin, getCompany, updateCompany } from "@/lib/crm/companies";
-import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
+import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, errorText, tooMany, notSetUp } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";

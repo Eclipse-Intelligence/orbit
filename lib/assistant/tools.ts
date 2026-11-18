@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { dueDayOfInput, repeatAnchorDay, type RepeatAnchorTask } from "@/lib/assistant/repeat-anchor";
 import { after } from "next/server";
-import { applyMailAction, threadForEmail } from "@/lib/mail/actions";
+import { applyMailAction, partialProblem, threadForEmail } from "@/lib/mail/actions";
 import { addFollowUp } from "@/lib/mail/prepare";
 import { everywhereAllowed, forgetMemory, lessTrusted, listMemories, OUTSIDE_ORIGINS, recall, rememberNote, type NoteOrigin } from "@/lib/learning/memories";
 import { addWatchItems, listWatchlist, removeWatchItems, WATCH_KINDS } from "@/lib/learning/market";
@@ -11,7 +11,8 @@ import { DOCS_URL, eclipseDocsIndex, readEclipsePage } from "@/lib/eclipse-sourc
 import { readWebPage, WebPageError } from "@/lib/web-page";
 import { checkWeb } from "@/lib/assistant/check-web";
 import { searchKnowledge } from "@/lib/knowledge/search";
-import { addKnowledgePages, archiveKnowledge, CONTENT_LIMIT, listKnowledge, readKnowledge, targetFrom, type KnowledgeItem } from "@/lib/knowledge/store";
+import { CONTENT_LIMIT } from "@/lib/knowledge/limits";
+import { addKnowledgePages, archiveKnowledge, listKnowledge, readKnowledge, targetFrom, type KnowledgeItem } from "@/lib/knowledge/store";
 import { addMailAttachmentToKnowledge } from "@/lib/knowledge/attachments";
 import { addChatFileToKnowledge, readChatFile } from "@/lib/assistant/files";
 import { docCardDetails, describeDocAction, readDocForAssistant, runDocAction, SAVE_DOC_ACTIONS, searchDocsForAssistant, type DocApproval } from "@/lib/assistant/docs";
@@ -3116,7 +3117,11 @@ const TOOL_LIST: AssistantTool[] = [
           if (seen.has(thread)) continue;
           seen.add(thread);
           if (action === "remind_if_no_reply") await addFollowUp(actor, { thread, dueAt: until!, subject });
-          else await applyMailAction(actor, { thread, action, until: until?.toISOString() ?? null });
+          else {
+            const result = await applyMailAction(actor, { thread, action, until: until?.toISOString() ?? null });
+            const problem = partialProblem(result);
+            if (problem) failed.push({ emailId: id, error: problem });
+          }
           done.push(subject || "(no subject)");
         } catch (error) {
           failed.push({ emailId: id, error: error instanceof Error ? error.message : "That didn't work." });

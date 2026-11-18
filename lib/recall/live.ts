@@ -1,7 +1,8 @@
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 import { readYouTube, youtubeId } from "@/lib/knowledge/media";
-import { CONTENT_LIMIT, READ_WINDOW } from "@/lib/knowledge/store";
+import { CONTENT_LIMIT } from "@/lib/knowledge/limits";
+import { READ_WINDOW } from "@/lib/knowledge/store";
 import { RECALL_MAX_CHUNKS, RECALL_MAX_TAGS, recallClient, type RecallChunk, type RecallClient, type RecallTag } from "@/lib/recall";
 import { requireRecallKey, saveTagProbe, tagProbeDue, type RecallKeyRow } from "@/lib/recall/keys";
 import type { Renderer } from "@/lib/browserbase";

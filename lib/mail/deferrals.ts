@@ -1,7 +1,7 @@
 import { onDayKeepingKind } from "@/lib/crm/task-time";
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
-import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
+import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { dayKeyAt } from "@/lib/crm/task-due";
