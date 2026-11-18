@@ -11,6 +11,7 @@ import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
+import { signalCampaigns } from "@/lib/sync-signals";
 import { ServiceBusy } from "@/lib/workflows/limits";
 
 export const CAMPAIGN_AUDIT_EVENTS = {
@@ -261,7 +262,10 @@ export async function setProspectCategory(actor: Actor, prospectId: string, rawC
     !category && prospect.category ? clearedKeys(provider, prospect.campaign_external_id, lead, prospect.category) : [],
     audit,
   ]);
-  if (saved.rows[0]?.changed) scheduleWebhooks();
+  if (saved.rows[0]?.changed) {
+    scheduleWebhooks();
+    await signalCampaigns(actor.workspaceId);
+  }
   const eventId = saved.rows[0]?.event_id ?? null;
   if (!eventId) return { category, fired: false };
   const fired = await fireCampaignEvents([eventId]);

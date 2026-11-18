@@ -63,6 +63,7 @@ export default function SyncSignals() {
   const transport = seed?.live ?? null;
   const publishing = seed?.livePublish === true;
   const userId = seed?.viewer.id ?? null;
+  const workspaceId = seed?.workspaceId ?? null;
 
   useEffect(() => {
     if (!transport || !userId || !publishing) {
@@ -76,7 +77,7 @@ export default function SyncSignals() {
       .then((module) =>
         module.watchSyncSignals(
           transport,
-          userId,
+          { userId, workspaceId },
           (kind) => {
             for (const listener of [...listeners]) listener(kind);
           },
@@ -97,7 +98,7 @@ export default function SyncSignals() {
       stop?.();
       setLive(false);
     };
-  }, [transport, userId, publishing]);
+  }, [transport, userId, workspaceId, publishing]);
 
   return null;
 }

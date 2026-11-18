@@ -39,6 +39,7 @@ import {
   type DayStats,
   type ProspectFilter,
   type ProspectPage,
+  type ProspectRow,
   type SequenceStep,
   type StepStats,
 } from "@/lib/campaigns/types";
@@ -348,6 +349,20 @@ function AutoAddSetting({ campaignId, channel, value }: { campaignId: string; ch
   );
 }
 
+function MessageCount({ row, channel }: { row: ProspectRow; channel: CampaignChannel }) {
+  if (!row.messages) return null;
+  return (
+    <Link
+      href={`/campaigns/conversations/${row.id}`}
+      aria-label={`${row.messages === 1 ? "1 message" : `${row.messages.toLocaleString("en-GB")} messages`} with ${row.name}`}
+      className="caption-style text-soft hover:text-foreground hit relative z-10 flex shrink-0 items-center gap-1 tabular-nums transition-colors duration-150"
+    >
+      <ChannelIcon channel={channel} className="size-3.5" />
+      <span aria-hidden>{row.messages.toLocaleString("en-GB")}</span>
+    </Link>
+  );
+}
+
 function EmailProspects({ prospects }: { prospects: ProspectPage }) {
   return (
     <ul className="-mx-4 flex flex-col sm:-mx-5">
@@ -380,6 +395,7 @@ function EmailProspects({ prospects }: { prospects: ProspectPage }) {
                   <span className="sr-only">None</span>
                 </span>
               )}
+              <MessageCount row={row} channel="email" />
             </span>
             <span className="caption-style text-subtle hidden truncate md:block">{line}</span>
           </li>
@@ -440,12 +456,13 @@ function LinkedinProspects({ prospects, campaignId, canImport }: { prospects: Pr
             <span className="caption-style text-subtle hidden truncate md:block" suppressHydrationWarning>
               {action ?? ""}
             </span>
-            <span className="flex items-center justify-end gap-2">
+            <span className="flex items-center justify-end gap-2 pointer-coarse:gap-4">
               {tag && (
                 <Tag tone={tag.tone} size="sm" className="caption-style md:hidden">
                   {tag.label}
                 </Tag>
               )}
+              <MessageCount row={row} channel="linkedin" />
               {canImport && row.importable === true ? (
                 <ImportOne campaignId={campaignId} prospectId={row.id} name={row.name} />
               ) : row.contactId ? (

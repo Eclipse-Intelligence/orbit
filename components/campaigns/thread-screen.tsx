@@ -25,8 +25,10 @@ import DetailSection from "@/components/companies/detail/detail-section";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { When } from "@/components/mail/thread-reader";
+import { useSyncSignal, useSyncSignalsLive } from "@/components/crm/sync-signals";
 import { useShortcut, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import {
+  markConversationReadAction,
   refreshProspectThreadAction,
   removeProspectAction,
   replyToProspectAction,
@@ -83,6 +85,7 @@ function MessageBody({ message }: { message: Pick<ThreadMessage, "body" | "chann
 
 function Bubble({
   author,
+  address,
   channel,
   at,
   inbound,
@@ -90,6 +93,7 @@ function Bubble({
   children,
 }: {
   author: string;
+  address?: string | null;
   channel: CampaignChannel;
   at: string;
   inbound: boolean;
@@ -101,7 +105,10 @@ function Bubble({
       <Monogram name={author} className="mt-0.5 size-7 rounded-full text-[11px]" />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className={cn("truncate text-[14px]", inbound ? "text-foreground" : "text-soft")}>{author}</span>
+          <span title={address && address !== author ? address : undefined} className={cn("truncate text-[14px]", inbound ? "text-foreground" : "text-soft")}>
+            {author}
+            {address && address !== author && <span className="sr-only">, {address}</span>}
+          </span>
           <span className="text-subtle ml-auto flex shrink-0 items-center gap-1.5 text-[12px] tabular-nums">
             <ChannelIcon channel={channel} className="size-3 self-center" />
             <When at={at} />
@@ -379,7 +386,7 @@ function Variables({ thread }: { thread: ProspectThread }) {
   );
 }
 
-export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewer; thread: ProspectThread; canAct: boolean }) {
+export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer: Viewer; thread: ProspectThread; canAct: boolean; pane?: { back: string } }) {
   const router = useRouter();
   const [pending, setPending] = useState<PendingReply[]>([]);
   const [sends, setSends] = useState<Record<string, SendStatus>>({});
@@ -395,10 +402,42 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
   const opened = thread.campaigns.find((campaign) => campaign.prospectId === thread.prospectId) ?? null;
   const shownCategory = category ? category.value : thread.category;
   const items = withPending(thread.items, pending);
+  const signalsLive = useSyncSignalsLive();
+  const signalsLiveNow = useRef(signalsLive);
+  const latestInbound = thread.items.findLast((item) => item.type === "message" && item.direction === "inbound")?.id ?? null;
 
   useEffect(() => {
     end.current?.scrollIntoView({ block: "nearest" });
   }, []);
+
+  useSyncSignal("campaigns", () => {
+    if (!pane) router.refresh();
+  });
+
+  useEffect(() => {
+    signalsLiveNow.current = signalsLive;
+  });
+
+  useEffect(() => {
+    if (!latestInbound) return;
+    let live = true;
+    let marked = false;
+    const mark = () => {
+      if (marked || document.visibilityState !== "visible") return;
+      marked = true;
+      void markConversationReadAction(thread.prospectId)
+        .then((outcome) => {
+          if (live && outcome.read && !signalsLiveNow.current) router.refresh();
+        })
+        .catch(() => null);
+    };
+    mark();
+    document.addEventListener("visibilitychange", mark);
+    return () => {
+      live = false;
+      document.removeEventListener("visibilitychange", mark);
+    };
+  }, [thread.prospectId, latestInbound, router]);
 
   useEffect(() => {
     let live = true;
@@ -501,40 +540,65 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SectionHeader
-        title={thread.person.name}
-        viewer={viewer}
-        heading={
-          <span className="flex min-w-0 items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              href={opened ? `/campaigns/${opened.campaignId}` : "/campaigns"}
-              data-shortcut="back"
-              aria-label={opened ? `Back to ${opened.name}` : "Back to Campaigns"}
-              title={opened ? `Back to ${opened.name}` : "Back to Campaigns"}
-              className="text-subtle hit shrink-0"
-            >
-              <ChevronLeftIcon aria-hidden className="size-3" />
-            </Button>
-            <h1 className="truncate">{thread.person.name}</h1>
-            <CategoryPicker category={shownCategory} disabled={!canAct} onChange={(value) => void chooseCategory(value)} />
+      {pane ? (
+        <header className="border-border flex min-h-13 shrink-0 items-center gap-2 border-b px-3 py-2 sm:px-4 lg:h-(--header-height) lg:py-0">
+          <Button variant="ghost" size="icon" href={pane.back} data-shortcut="back" aria-label="Back to Conversations" title="Back to Conversations" className="text-subtle hit shrink-0 md:hidden">
+            <ChevronLeftIcon aria-hidden className="size-3" />
+          </Button>
+          <h2 className="truncate">{thread.person.name}</h2>
+          <CategoryPicker category={shownCategory} disabled={!canAct} onChange={(value) => void chooseCategory(value)} />
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            {thread.person.contactId && (
+              <Button variant="secondary" href={contactHref(thread.person.contactId)} className="hit max-sm:hidden">
+                Open contact
+              </Button>
+            )}
+            <MoreMenu
+              campaigns={thread.campaigns}
+              contactId={thread.person.contactId}
+              canAct={canAct}
+              busy={busy}
+              onAction={(action) => (action.kind === "remove" ? setRemoving(action.campaign) : void act(action))}
+              onDoNotContact={canAct && !thread.doNotContact ? () => setBlocking(true) : undefined}
+            />
           </span>
-        }
-        action={
-          <MoreMenu
-            campaigns={thread.campaigns}
-            contactId={thread.person.contactId}
-            canAct={canAct}
-            busy={busy}
-            onAction={(action) => (action.kind === "remove" ? setRemoving(action.campaign) : void act(action))}
-            onDoNotContact={canAct && !thread.doNotContact ? () => setBlocking(true) : undefined}
-          />
-        }
-      />
+        </header>
+      ) : (
+        <SectionHeader
+          title={thread.person.name}
+          viewer={viewer}
+          heading={
+            <span className="flex min-w-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                href={opened ? `/campaigns/${opened.campaignId}` : "/campaigns"}
+                data-shortcut="back"
+                aria-label={opened ? `Back to ${opened.name}` : "Back to Campaigns"}
+                title={opened ? `Back to ${opened.name}` : "Back to Campaigns"}
+                className="text-subtle hit shrink-0"
+              >
+                <ChevronLeftIcon aria-hidden className="size-3" />
+              </Button>
+              <h1 className="truncate">{thread.person.name}</h1>
+              <CategoryPicker category={shownCategory} disabled={!canAct} onChange={(value) => void chooseCategory(value)} />
+            </span>
+          }
+          action={
+            <MoreMenu
+              campaigns={thread.campaigns}
+              contactId={thread.person.contactId}
+              canAct={canAct}
+              busy={busy}
+              onAction={(action) => (action.kind === "remove" ? setRemoving(action.campaign) : void act(action))}
+              onDoNotContact={canAct && !thread.doNotContact ? () => setBlocking(true) : undefined}
+            />
+          }
+        />
+      )}
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_300px]">
-          <div className="border-border flex min-w-0 flex-col gap-3 border-b px-3 py-4 sm:px-5 lg:border-r lg:border-b-0">
+        <div className={cn("grid min-h-full", !pane && "lg:grid-cols-[minmax(0,1fr)_300px]")}>
+          <div className={cn("border-border flex min-w-0 flex-col gap-3 px-3 py-4 sm:px-5", !pane && "border-b lg:border-r lg:border-b-0")}>
             <div className="mx-auto flex w-full max-w-[47.5em] flex-col gap-3 pb-20">
               {thread.doNotContact && <DoNotContactStatus status={thread.doNotContact} target={{ prospectId: thread.prospectId }} canLift={canAct} />}
               {problem && (
@@ -568,6 +632,7 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
                   <Bubble
                     key={item.id}
                     author={item.author}
+                    address={inbound ? null : item.address}
                     channel={item.channel}
                     at={item.at}
                     inbound={inbound}
@@ -582,24 +647,26 @@ export default function ThreadScreen({ viewer, thread, canAct }: { viewer: Viewe
               <div ref={end} />
             </div>
           </div>
-          <aside aria-label="About this thread" className="flex min-w-0 flex-col">
-            <DetailSection title="Campaigns" className="gap-3">
-              <ul className="flex flex-col gap-1.5">
-                {thread.campaigns.map((campaign) => (
-                  <li key={campaign.prospectId} className="flex min-w-0">
-                    <Link
-                      href={`/campaigns/${campaign.campaignId}`}
-                      className="caption-style text-soft hover:text-foreground hit flex min-w-0 items-center gap-1.5 transition-colors duration-150"
-                    >
-                      <ChannelIcon channel={campaign.channel} className="size-3 shrink-0" />
-                      <span className="truncate">{campaignStateLine(campaign)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </DetailSection>
-            <Variables thread={thread} />
-          </aside>
+          {!pane && (
+            <aside aria-label="About this thread" className="flex min-w-0 flex-col">
+              <DetailSection title="Campaigns" className="gap-3">
+                <ul className="flex flex-col gap-1.5">
+                  {thread.campaigns.map((campaign) => (
+                    <li key={campaign.prospectId} className="flex min-w-0">
+                      <Link
+                        href={`/campaigns/${campaign.campaignId}`}
+                        className="caption-style text-soft hover:text-foreground hit flex min-w-0 items-center gap-1.5 transition-colors duration-150"
+                      >
+                        <ChannelIcon channel={campaign.channel} className="size-3 shrink-0" />
+                        <span className="truncate">{campaignStateLine(campaign)}</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </DetailSection>
+              <Variables thread={thread} />
+            </aside>
+          )}
         </div>
       </div>
       <ConfirmDialog

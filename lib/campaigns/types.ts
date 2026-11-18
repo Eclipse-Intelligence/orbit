@@ -169,6 +169,7 @@ export type ProspectRow = {
   stopError?: string | null;
   notEnrolled?: boolean;
   importable?: boolean;
+  messages?: number;
 };
 
 export type LinkedinStage = "invited" | "accepted";

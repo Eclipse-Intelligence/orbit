@@ -136,7 +136,7 @@ type ContactSeed = {
   tags?: string[];
 };
 
-type CampaignProspectSeed = { contact: string; invited?: When; accepted?: When; reply?: { at: When; text: string } };
+type CampaignProspectSeed = { contact: string; invited?: When; accepted?: When; reply?: { at: When; text: string }; answered?: { at: When; text: string }; category?: string };
 
 type CampaignSeed = {
   name: string;

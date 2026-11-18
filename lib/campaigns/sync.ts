@@ -13,6 +13,7 @@ import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
 import { query } from "@/lib/db/pool";
 import { redactedError } from "@/lib/upstream";
+import { signalCampaigns } from "@/lib/sync-signals";
 import { ServiceBusy } from "@/lib/workflows/limits";
 
 export const CAMPAIGN_SYNC_MS = 280_000;
@@ -655,6 +656,7 @@ export async function syncConnection(target: Target, options: CampaignSyncOption
   const locked = await query<{ ok: boolean }>("select private.take_slot($1, 1, $2, $3) as ok", [lockKey, holder, LOCK_SECONDS]);
   if (!locked.rows[0]?.ok) return;
   report.connections += 1;
+  const changedBefore = report.threads + report.events;
   const outOfTime = AbortSignal.timeout(Math.max(1_000, options.deadline - Date.now() - STEP_RESERVE_MS));
   try {
     const fresh = await query<Target>("select * from private.campaign_connection_targets($1)", [target.workspace_id]);
@@ -741,6 +743,7 @@ export async function syncConnection(target: Target, options: CampaignSyncOption
     await finish(target, message);
   } finally {
     await query("select private.release_slot($1, $2)", [lockKey, holder]).catch((error) => console.error("Couldn't release the campaign sync lock", redactedError(error)));
+    if (report.threads + report.events > changedBefore) await signalCampaigns(target.workspace_id);
   }
 }
 

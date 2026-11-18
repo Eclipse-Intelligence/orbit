@@ -7,6 +7,7 @@ import {
   failedSendPlan,
   messageStatus,
   newClientKey,
+  mailboxParts,
   noteLabel,
   replyChannel,
   restoredDraft,
@@ -167,5 +168,17 @@ describe("the contact timeline", () => {
     ]);
     assert.equal(campaignRowMeta(row), "Agency founders · Mark Ridgeon");
     assert.equal(campaignRowMeta({ ...row, detail: null }), "Agency founders");
+  });
+});
+
+describe("the sending mailbox", () => {
+  it("splits a From display name from its address and keeps a bare address as it is", () => {
+    assert.deepEqual(mailboxParts("Mark Ridgeon <mark@ridgeon-mail.test>"), { name: "Mark Ridgeon", address: "mark@ridgeon-mail.test" });
+    assert.deepEqual(mailboxParts('"Ridgeon, Mark" <mark@ridgeon-mail.test> '), { name: "Ridgeon, Mark", address: "mark@ridgeon-mail.test" });
+    assert.deepEqual(mailboxParts("<mark@ridgeon-mail.test>"), { name: null, address: "mark@ridgeon-mail.test" });
+    assert.deepEqual(mailboxParts("mark@ridgeon-mail.test <mark@ridgeon-mail.test>"), { name: null, address: "mark@ridgeon-mail.test" });
+    assert.deepEqual(mailboxParts("mark@ridgeon-mail.test"), { name: null, address: "mark@ridgeon-mail.test" });
+    assert.equal(mailboxParts("  "), null);
+    assert.equal(mailboxParts(null), null);
   });
 });

@@ -145,3 +145,13 @@ export function messageStatus(message: Pick<ThreadMessage, "direction" | "sendSt
   if (message.sendState === "unknown") return "May not have gone.";
   return null;
 }
+
+export function mailboxParts(raw: string | null | undefined): { name: string | null; address: string } | null {
+  const text = (raw ?? "").trim();
+  if (!text) return null;
+  const bracketed = text.match(/^(.*?)<([^<>]+)>\s*$/);
+  if (!bracketed) return { name: null, address: text };
+  const name = bracketed[1].trim().replace(/^"(.*)"$/, "$1").trim();
+  const address = bracketed[2].trim();
+  return { name: name && name.toLowerCase() !== address.toLowerCase() ? name : null, address };
+}

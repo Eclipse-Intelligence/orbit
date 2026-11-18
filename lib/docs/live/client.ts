@@ -622,10 +622,11 @@ export async function watchMailShares(
 }
 
 const SYNCED_KINDS: readonly string[] = ["mail", "calendar"];
+const WORKSPACE_SYNCED_KINDS: readonly string[] = ["campaigns"];
 
 export async function watchSyncSignals(
   source: LiveTransportKind | LiveTransport,
-  userId: string,
+  scope: { userId: string; workspaceId: string | null },
   onSignal: (kind: SyncedKind) => void,
   onJoined: (joined: boolean) => void,
 ) {
@@ -635,19 +636,22 @@ export async function watchSyncSignals(
     return () => {};
   }
   let closed = false;
-  const channel = openShared(transport, personTopic(userId), {
-    message: (event, payload) => {
-      if (closed || event !== "synced" || !payload || typeof payload !== "object") return;
-      const kind = (payload as SyncedMessage).kind;
-      if (SYNCED_KINDS.includes(kind)) onSignal(kind);
-    },
+  const listen = (kinds: readonly string[]) => (event: string, payload: unknown) => {
+    if (closed || event !== "synced" || !payload || typeof payload !== "object") return;
+    const kind = (payload as SyncedMessage).kind;
+    if (kinds.includes(kind)) onSignal(kind);
+  };
+  const channel = openShared(transport, personTopic(scope.userId), {
+    message: listen(SYNCED_KINDS),
     status: (status) => {
       if (!closed) onJoined(status === "joined");
     },
   });
+  const shared = scope.workspaceId ? openShared(transport, workspaceTopic(scope.workspaceId), { message: listen(WORKSPACE_SYNCED_KINDS), status: () => {} }) : null;
   return () => {
     closed = true;
     channel.close();
+    shared?.close();
   };
 }
 

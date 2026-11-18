@@ -9,6 +9,7 @@ import DocsProvider from "@/components/docs/docs-provider";
 import ChatLive from "@/components/chat/chat-live";
 import SyncSignals from "@/components/crm/sync-signals";
 import MailUnread from "@/components/mail/mail-unread";
+import CampaignsWaiting from "@/components/campaigns/campaigns-waiting";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
 import { getHomeActor, getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { syncClickUp } from "@/lib/crm/clickup";
@@ -100,6 +101,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
           <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
             <KeepPageInPlace />
             <MailUnread />
+            <CampaignsWaiting />
             <ChatLive />
             <SyncSignals />
             <Sidebar

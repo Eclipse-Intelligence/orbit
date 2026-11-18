@@ -5,6 +5,7 @@ import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
+import { markConversationRead } from "@/lib/campaigns/conversations";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { addedLine, campaignThreadPath } from "@/lib/campaigns/format";
 import { addCompanyContacts, addProspects, saveCampaignVariables } from "@/lib/campaigns/prospects";
@@ -137,6 +138,15 @@ export async function refreshProspectThreadAction(prospectId: string): Promise<{
     return { saved };
   } catch (error) {
     return { error: errorText(error, "Couldn't read the conversation. Try again.") };
+  }
+}
+
+export async function markConversationReadAction(prospectId: string): Promise<{ error?: string; read?: number }> {
+  const user = await requireUser();
+  try {
+    return await markConversationRead(user, prospectId);
+  } catch (error) {
+    return { error: errorText(error, "Couldn't mark it read. Try again.") };
   }
 }
 

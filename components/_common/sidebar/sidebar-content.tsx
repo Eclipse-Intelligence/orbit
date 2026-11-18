@@ -54,6 +54,7 @@ export default function SidebarContent({
   const openProfile = useCompaniesStore((state) => state.openProfile);
   const liveMailUnread = useCompaniesStore((state) => state.mailUnread);
   const unreadMail = liveMailUnread ?? 0;
+  const campaignsWaiting = useCompaniesStore((state) => state.campaignsWaiting) ?? 0;
   const chat = sidebarBadge(useCompaniesStore((state) => state.chat));
   const liveCapture = useCompaniesStore((state) => state.capture);
   const captureCleared = useCompaniesStore((state) => state.captureCleared);
@@ -172,6 +173,8 @@ export default function SidebarContent({
               href="/campaigns"
               icon={SendIcon}
               label="Campaigns"
+              count={campaignsWaiting > 0 ? campaignsWaiting : undefined}
+              countLabel="need a reply"
               active={current("/campaigns")}
             />
           </SidebarSection>

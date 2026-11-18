@@ -385,6 +385,68 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(failed(wrong), ["proposes a LinkedIn reply to Sarah", "doesn't reply by email"]);
   });
 
+  it("answers who is waiting on a reply from the conversations view", async () => {
+    let listed = "";
+    const result = await runOnce(
+      byId("campaign-replies-waiting"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "find_tools", args: { domains: ["campaigns"] } }] }),
+          () => ({ calls: [{ name: "campaigns", args: { view: "conversations" } }] }),
+          (call) => {
+            listed = JSON.stringify(call.body.messages);
+            return { content: "Imogen Marsh (Clinic owners Q4) and Lena Fischer (Longevity founders, LinkedIn) are waiting on you." };
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(listed, /Who else are you working with in Munich/);
+    assert.match(listed, /Onboarding is exactly what we are stuck on/);
+    assert.doesNotMatch(listed, /Thursday works/);
+    assert.doesNotMatch(listed, /Not for us right now/);
+    const wrong = await runOnce(
+      byId("campaign-replies-waiting"),
+      settings(scripted([() => ({ calls: [{ name: "campaigns", args: { view: "activity", kinds: ["replied"] } }] }), () => ({ content: "Imogen, James and Lena replied." })])),
+    );
+    assert.deepEqual(failed(wrong), ["reads the conversations waiting on a reply", "answer leaves out James, Tom"]);
+  });
+
+  it("reads Imogen's thread before proposing one campaign reply to her", async () => {
+    const reply: Step = ({ world }) => ({
+      content: "Here's the reply.",
+      calls: [{ name: "campaign_action", args: { action: "reply", prospectId: world.id("prospect:Clinic owners Q4:Imogen Marsh"), text: "Yes, Tuesday at 10 works. I'll send an invite." } }],
+    });
+    let thread = "";
+    const result = await runOnce(
+      byId("campaign-reply-to-waiting-person"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "find_tools", args: { domains: ["campaigns"] } }] }),
+          () => ({ calls: [{ name: "campaigns", args: { view: "conversations", search: "Imogen" } }] }),
+          ({ world }) => ({ calls: [{ name: "campaigns", args: { view: "thread", prospectId: world.id("prospect:Clinic owners Q4:Imogen Marsh") } }] }),
+          (call) => {
+            thread = JSON.stringify(call.body.messages);
+            return reply(call);
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(thread, /Could we talk next week/);
+    assert.deepEqual(
+      result.cards.map((item) => [item.title, item.lines]),
+      [["Reply to Imogen Marsh", ["In Clinic owners Q4", "Yes, Tuesday at 10 works. I'll send an invite."]]],
+    );
+    const unread = await getAdminPool().query<{ unread: boolean }>(
+      `select exists (select 1 from crm.campaign_messages m where m.prospect_id = p.id and m.direction = 'inbound' and m.created_at > coalesce(p.conversation_read_at, '-infinity'::timestamptz)) as unread
+       from crm.campaign_prospects p join crm.campaigns k on k.id = p.campaign_id where k.name = 'Clinic owners Q4' order by p.created_at desc limit 1`,
+    );
+    assert.equal(unread.rows[0]?.unread, true, "reading through the assistant leaves the reply unread");
+    const blind = await runOnce(byId("campaign-reply-to-waiting-person"), settings(scripted([reply])));
+    assert.deepEqual(failed(blind), ["reads Imogen's thread before replying"]);
+  });
+
   it("answers the Zoom link and agenda from an invite's description", async () => {
     const zoom = "https://us02web.zoom.us/j/84529173006?pwd=dHJ1c3RlZA.1";
     let listed = "";

@@ -12,6 +12,13 @@ export const AGENCY_RUN = RUN_NAMES.map((first) => ({ first, last: "Runwell", em
 
 const RUN_KEYS = AGENCY_RUN.map((person) => `contact:${person.first} ${person.last}`);
 
+const WAITING_PEOPLE = [
+  { first: "Imogen", last: "Marsh", email: "imogen@vitalyears.test", title: "Founder" },
+  { first: "James", last: "Okafor", email: "james@okafor-medical.test", title: "Director" },
+  { first: "Tom", last: "Baker", email: "tom@bakerclinics.test", title: "Owner" },
+  { first: "Lena", last: "Fischer", email: "lena@fischer-longevity.test", title: "Founder" },
+];
+
 const CAMPAIGNS = [
   { name: "Agency outreach", channel: "email" as const },
   { name: "Agency founders", channel: "linkedin" as const, sender: "me" as const },
@@ -128,6 +135,70 @@ export const CAMPAIGN_TASKS: EvalTask[] = [
         "proposes a LinkedIn reply to Sarah",
       ),
       noCard("campaign_action", arg.any(arg.is("prospectId", "prospect:Agency outreach:Sarah Lindqvist"), arg.equals("channel", "email")), "doesn't reply by email"),
+      oneCard("campaign_action"),
+      noCard(EMAIL_TOOLS),
+    ],
+  }),
+  task({
+    id: "campaign-replies-waiting",
+    suite: "core",
+    category: "find",
+    origin: "Campaign conversations: who has replied that the user hasn't answered, across email and LinkedIn campaigns.",
+    fixture: {
+      eclipse: {
+        contacts: WAITING_PEOPLE,
+        campaigns: [
+          {
+            name: "Clinic owners Q4",
+            channel: "email",
+            prospects: [
+              { contact: "Imogen Marsh", reply: { at: { days: -1, at: "09:41" }, text: "Onboarding is exactly what we are stuck on. Next week?" } },
+              { contact: "James Okafor", reply: { at: { days: -2, at: "10:00" }, text: "Thursday works." }, answered: { at: { days: -2, at: "11:00" }, text: "Great, invite sent for Thursday." } },
+              { contact: "Tom Baker", reply: { at: { days: -1, at: "08:12" }, text: "Not for us right now." }, category: "Not interested" },
+            ],
+          },
+          {
+            name: "Longevity founders",
+            channel: "linkedin",
+            sender: "me",
+            prospects: [{ contact: "Lena Fischer", accepted: { days: -4 }, reply: { at: { days: 0, at: "08:30" }, text: "Who else are you working with in Munich?" } }],
+          },
+        ],
+      },
+    },
+    message: "Who's replied to my campaigns that I haven't answered?",
+    checks: [
+      called("campaigns", arg.equals("view", "conversations"), "reads the conversations waiting on a reply"),
+      answerIncludes("Imogen", "Lena"),
+      answerExcludes("James", "Tom"),
+      noWrites(),
+    ],
+  }),
+  task({
+    id: "campaign-reply-to-waiting-person",
+    suite: "core",
+    category: "propose_write",
+    origin: "Campaign conversations: reply to someone by first name, reading their thread before drafting.",
+    fixture: {
+      eclipse: {
+        contacts: WAITING_PEOPLE,
+        campaigns: [
+          {
+            name: "Clinic owners Q4",
+            channel: "email",
+            prospects: [{ contact: "Imogen Marsh", reply: { at: { days: -1, at: "09:41" }, text: "Onboarding is exactly what we are stuck on. Could we talk next week?" } }],
+          },
+        ],
+      },
+    },
+    message: "Reply to Imogen: yes, Tuesday at 10 works, I'll send an invite.",
+    checks: [
+      calledBefore("campaigns", "campaign_action", "reads Imogen's thread before replying", arg.equals("view", "thread")),
+      card(
+        "campaign_action",
+        arg.all(arg.equals("action", "reply"), arg.any(arg.is("prospectId", "prospect:Clinic owners Q4:Imogen Marsh"), arg.is("contactId", "contact:Imogen Marsh")), arg.mentions("text", "Tuesday")),
+        "proposes a campaign reply to Imogen",
+      ),
       oneCard("campaign_action"),
       noCard(EMAIL_TOOLS),
     ],
