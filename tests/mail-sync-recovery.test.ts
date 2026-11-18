@@ -286,7 +286,7 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
     assert.equal(screenSyncOptions({ manual: true }).ignoreFolderWaits, true);
     assert.equal(screenSyncOptions({}).ignoreFolderWaits, false);
     assert.equal(screenSyncOptions(null).ignoreFolderWaits, false);
-    await admin.query("update crm.mail_sources set last_synced_at = now() - interval '3 minutes'");
+    await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '3 minutes'");
     const refresh = outlook();
     await syncMail(owner, { ...screenSyncOptions({ manual: true }), fetchImpl: refresh.fetchImpl });
     assert.equal(refresh.deltaCalls("f-inbox").length, 1);

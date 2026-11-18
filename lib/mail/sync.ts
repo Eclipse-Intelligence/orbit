@@ -63,14 +63,18 @@ type SourceRow = {
   graph_subscription_id: string | null;
   graph_subscription_expires_at: Date | string | null;
   graph_subscription_scope: string | null;
+  graph_subscription_retry_at: Date | string | null;
   retry_at: Date | string | null;
   last_synced_at: Date | string | null;
+  last_full_synced_at: Date | string | null;
   resync_pending: boolean;
+  resync_full: boolean;
   backfilling: boolean;
 };
 
 const SOURCE_COLUMNS = `s.id, s.email, s.connection_id, s.account_id, s.folders_synced_at, s.snooze_folder_id, s.graph_subscription_id,
-  s.graph_subscription_expires_at, s.graph_subscription_scope, s.retry_at, s.last_synced_at, s.resync_pending,
+  s.graph_subscription_expires_at, s.graph_subscription_scope, s.graph_subscription_retry_at, s.retry_at, s.last_synced_at, s.last_full_synced_at,
+  s.resync_pending, s.resync_full,
   exists (select 1 from crm.mail_folders f where f.source_id = s.id and f.sync_state in ('pending', 'backfill')) as backfilling`;
 
 type FolderRow = {
@@ -586,12 +590,33 @@ async function syncFolder(
 
 const RENEW_BEFORE_MS = 24 * 60 * 60 * 1000;
 
+const SUBSCRIBE_RETRY_MS = 6 * 60 * 60 * 1000;
+
+export function subscriptionRefused(error: unknown) {
+  return error instanceof GraphMailError && (error.status === 400 || error.status === 403) && !/validat/i.test(`${error.message} ${error.code}`);
+}
+
+async function renewLegacy(actor: UserActor, source: Source, id: string, token: string, fetchImpl: typeof fetch, deadline: number) {
+  try {
+    const expiresAt = await renewMailSubscription(token, id, fetchImpl, { deadline });
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_sources set graph_subscription_expires_at = $3 where id = $1 and graph_subscription_id = $2", [source.id, id, expiresAt]),
+    );
+  } catch (error) {
+    if (!(error instanceof GraphMailError && error.status === 404)) throw error;
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_sources set graph_subscription_id = null, graph_subscription_expires_at = null where id = $1 and graph_subscription_id = $2", [source.id, id]),
+    );
+  }
+}
+
 async function keepSubscription(actor: UserActor, source: Source, token: string, fetchImpl: typeof fetch, deadline: number) {
   const origin = mailOrigin();
   if (!origin) return;
   const current = source.graph_subscription_scope === MAILBOX_SUBSCRIPTION_SCOPE;
   const expires = source.graph_subscription_expires_at ? new Date(source.graph_subscription_expires_at).getTime() : 0;
-  if (source.graph_subscription_id && current && expires - Date.now() > RENEW_BEFORE_MS) return;
+  const due = expires - Date.now() <= RENEW_BEFORE_MS;
+  if (source.graph_subscription_id && current && !due) return;
   let gone = false;
   if (source.graph_subscription_id && current) {
     try {
@@ -605,11 +630,33 @@ async function keepSubscription(actor: UserActor, source: Source, token: string,
       gone = true;
     }
   }
+  const legacy = source.graph_subscription_id && !current ? source.graph_subscription_id : null;
+  if (waitingUntil(source.graph_subscription_retry_at)) {
+    if (legacy && due) await renewLegacy(actor, source, legacy, token, fetchImpl, deadline);
+    return;
+  }
   const clientState = randomBytes(24).toString("hex");
-  const created = await createMailSubscription(token, { notificationUrl: `${origin}/api/microsoft/mail-webhook`, clientState }, fetchImpl, { deadline });
+  let created: { id: string; expiresAt: string };
+  try {
+    created = await createMailSubscription(token, { notificationUrl: `${origin}/api/microsoft/mail-webhook`, clientState }, fetchImpl, { deadline });
+  } catch (error) {
+    if (!subscriptionRefused(error)) throw error;
+    const message = `Microsoft refused mail notifications: ${error instanceof Error ? error.message : "unknown"}`.slice(0, 480);
+    console.error("Mail subscription refused", source.email, message);
+    await withActor(actor, (db) =>
+      db.query("update crm.mail_sources set graph_subscription_error = $2, graph_subscription_retry_at = now() + make_interval(secs => $3) where id = $1", [
+        source.id,
+        message,
+        SUBSCRIBE_RETRY_MS / 1000,
+      ]),
+    );
+    if (legacy && due) await renewLegacy(actor, source, legacy, token, fetchImpl, deadline);
+    return;
+  }
   const stored = await withActor(actor, (db) =>
     db.query(
-      `update crm.mail_sources set graph_subscription_id = $2, graph_subscription_expires_at = $3, graph_client_state = $4, graph_subscription_scope = $5
+      `update crm.mail_sources set graph_subscription_id = $2, graph_subscription_expires_at = $3, graph_client_state = $4, graph_subscription_scope = $5,
+         graph_subscription_error = null, graph_subscription_retry_at = null
        where id = $1 and graph_subscription_id is not distinct from $6
        returning id`,
       [source.id, created.id, created.expiresAt, clientState, MAILBOX_SUBSCRIPTION_SCOPE, source.graph_subscription_id],
@@ -778,7 +825,18 @@ async function loadFolders(actor: UserActor, sourceId: string) {
   });
 }
 
-async function releaseSource(actor: UserActor, sourceId: string, lastError: string | null, retryAt: Date | null, unfinished = false, redo = false) {
+async function changePending(actor: UserActor, sourceId: string) {
+  const result = await withActor(actor, (db) => db.query<{ pending: boolean }>("select resync_pending as pending from crm.mail_sources where id = $1", [sourceId]));
+  return result.rows[0]?.pending === true;
+}
+
+async function releaseSource(
+  actor: UserActor,
+  sourceId: string,
+  lastError: string | null,
+  retryAt: Date | null,
+  { unfinished = false, redo = false, walkedAll = false }: { unfinished?: boolean; redo?: boolean; walkedAll?: boolean } = {},
+) {
   try {
     await withActor(actor, (db) =>
       db.query(
@@ -787,9 +845,10 @@ async function releaseSource(actor: UserActor, sourceId: string, lastError: stri
            last_error = $2,
            retry_at = $3,
            resync_pending = resync_pending or $4,
-           resync_full = resync_full or $5
+           resync_full = resync_full or $5,
+           last_full_synced_at = case when $2::text is null and $6 then now() else last_full_synced_at end
          where id = $1`,
-        [sourceId, lastError, retryAt, unfinished, unfinished || redo],
+        [sourceId, lastError, retryAt, unfinished, unfinished || redo, walkedAll],
       ),
     );
   } catch (error) {
@@ -838,14 +897,17 @@ async function takeWork(actor: UserActor, sourceId: string): Promise<Work> {
 async function targetFolders(
   actor: UserActor,
   source: Source,
-  live: FolderRow[],
+  folders: FolderRow[],
   work: Work,
   token: string,
   places: Places,
   limit: { fetchImpl: typeof fetch; deadline: number },
   report: MailSyncReport,
-) {
-  if (work.full || work.lookups.length > LOOKUP_LIMIT) return live;
+): Promise<{ walk: FolderRow[]; all: boolean }> {
+  const live = folderOrder(folders).live;
+  if (work.full || work.lookups.length > LOOKUP_LIMIT) return { walk: live, all: true };
+  let known = folders;
+  const skipped = () => new Set(known.filter((folder) => folder.sync_state === "skipped").map((folder) => folder.provider_folder_id));
   const wanted = new Set(work.folderIds);
   for (const id of work.lookups) {
     report.lookups += 1;
@@ -854,13 +916,25 @@ async function targetFolders(
       parent = await fetchMicrosoftMessageFolder(token, id, limit.fetchImpl, { deadline: limit.deadline, mailScope: places.mailScope });
     } catch (error) {
       if (error instanceof GraphOutOfTime || (await stopsSource(actor, source, error))) throw error;
-      return live;
+      return { walk: live, all: true };
     }
-    const folder = parent ? places.folders.get(parent) : undefined;
-    if (!folder) return live;
-    wanted.add(folder);
+    if (!parent || skipped().has(parent)) continue;
+    if (!places.folders.has(parent) && !places.refreshed) {
+      places.refreshed = true;
+      try {
+        await refreshFolders(actor, source, token, limit.fetchImpl, limit.deadline);
+      } catch (error) {
+        if (error instanceof GraphOutOfTime || (await stopsSource(actor, source, error))) throw error;
+        return { walk: live, all: true };
+      }
+      known = await loadFolders(actor, source.id);
+      places.folders = new Map(known.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id]));
+    }
+    const folder = places.folders.get(parent);
+    if (folder) wanted.add(folder);
   }
-  return live.filter((folder) => wanted.has(folder.id));
+  const ordered = [...folderOrder(known).live, ...known.filter((folder) => folder.sync_state === "pending" || folder.sync_state === "backfill")];
+  return { walk: ordered.filter((folder) => wanted.has(folder.id)), all: false };
 }
 
 export async function noteMailChanges(actor: UserActor, changes: MailChange[]) {
@@ -946,8 +1020,8 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
   }
   const backfillWanted = options.backfill !== false;
   const due = sources.filter((source) => {
-    if (!options.skipRecentMs || source.resync_pending || (backfillWanted && source.backfilling)) return true;
-    if (!syncedWithin(source.last_synced_at, options.skipRecentMs)) return true;
+    if (!options.skipRecentMs || source.resync_pending || source.resync_full || (backfillWanted && source.backfilling)) return true;
+    if (!syncedWithin(source.last_full_synced_at, options.skipRecentMs)) return true;
     report.recent.push(source.id);
     return false;
   });
@@ -982,6 +1056,8 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
     let lastError: string | null = null;
     let retryAt: Date | null = null;
     let unfinished = false;
+    let walkedAll = false;
+    let foldersFailed = false;
     try {
       const token = await currentToken(source.tokens, fetchImpl);
       await withActor(actor, (db) => saveToken(db, source, token));
@@ -1000,25 +1076,32 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
         const { live, backfill } = folderOrder(folders);
         places.folders = new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id]));
         const work = await takeWork(actor, source.id);
-        const walk = options.targeted ? await targetFolders(actor, source, live, work, token.accessToken, places, { fetchImpl, deadline: sourceDeadline }, report) : live;
+        const plan = options.targeted
+          ? await targetFolders(actor, source, folders, work, token.accessToken, places, { fetchImpl, deadline: sourceDeadline }, report)
+          : { walk: live, all: true };
         const cutBefore = report.backfilling;
-        for (const folder of walk.filter(ready)) {
+        const errorsBefore = report.errors.length;
+        let cut = false;
+        for (const folder of plan.walk.filter(ready)) {
           if (Date.now() >= sourceDeadline) {
-            unfinished = true;
+            cut = true;
             break;
           }
           await runFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: false, places, shares }, report);
         }
-        if (report.backfilling > cutBefore) unfinished = true;
+        if (report.errors.length > errorsBefore) foldersFailed = true;
+        if (cut || report.backfilling > cutBefore) unfinished = true;
+        else if (plan.all) walkedAll = true;
         if (pass === 1) {
           for (const folder of live.filter((item) => item.role === "inbox" && !item.classified_at)) {
             if (Date.now() >= sourceDeadline) break;
             await classifyFolderSafely(actor, source, folder, token.accessToken, sourceDeadline, fetchImpl);
           }
           if (backfillWanted) {
+            const backfillDeadline = sourceDeadline - AGAIN_MIN_MS;
             for (const folder of backfill.filter(ready)) {
-              if (Date.now() >= sourceDeadline || report.paused) break;
-              await runFolder(actor, source, folder, token.accessToken, { deadline: sourceDeadline, fetchImpl, guard: true, places, shares }, report);
+              if (Date.now() >= backfillDeadline || report.paused || (await changePending(actor, source.id))) break;
+              await runFolder(actor, source, folder, token.accessToken, { deadline: backfillDeadline, fetchImpl, guard: true, places, shares }, report);
             }
           }
         }
@@ -1035,7 +1118,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
         if (throttled(error)) retryAt = throttleUntil(error);
       }
     } finally {
-      await releaseSource(actor, source.id, lastError, retryAt, unfinished, lastError !== null);
+      await releaseSource(actor, source.id, lastError, retryAt, { unfinished, redo: lastError !== null || foldersFailed, walkedAll: walkedAll && !unfinished });
     }
   }
   await announce();
@@ -1131,5 +1214,5 @@ export const REFRESH_FLOOR_MS = 2 * 60_000;
 
 export function screenSyncOptions(body: unknown): MailSyncOptions {
   const manual = typeof body === "object" && body !== null && (body as { manual?: unknown }).manual === true;
-  return { budgetMs: 8_000, backfill: false, ignoreFolderWaits: manual, skipRecentMs: REFRESH_FLOOR_MS };
+  return { budgetMs: 8_000, backfill: false, ignoreFolderWaits: manual, skipRecentMs: REFRESH_FLOOR_MS, announce: true };
 }

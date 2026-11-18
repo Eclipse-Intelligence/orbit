@@ -71,7 +71,6 @@ export default function SyncSignals() {
     }
     let stopped = false;
     let stop: (() => void) | null = null;
-    let joinedOnce = false;
     let joined = false;
     void import("@/lib/docs/live/client")
       .then((module) =>
@@ -82,8 +81,7 @@ export default function SyncSignals() {
             for (const listener of [...listeners]) listener(kind);
           },
           (now) => {
-            if (now && !joined && joinedOnce) for (const listener of [...rejoins]) listener();
-            if (now) joinedOnce = true;
+            if (now && !joined) for (const listener of [...rejoins]) listener();
             joined = now;
             setLive(now);
           },

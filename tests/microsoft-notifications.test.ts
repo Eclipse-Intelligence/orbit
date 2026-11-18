@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { syncCalendar } from "@/lib/crm/calendar";
 import { handleCalendarNotifications } from "@/lib/crm/calendar-notify";
-import { saveMailbox } from "@/lib/crm/inbox";
+import { disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
+import { encryptSecret } from "@/lib/crypto/secret";
 import { DEFAULT_STEPS } from "@/lib/crm/scheduler";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -12,7 +13,7 @@ import { applyMailAction } from "@/lib/mail/actions";
 import { handleMailNotifications } from "@/lib/mail/notifications";
 import { REFRESH_FLOOR_MS, SCHEDULED_FLOOR_MS, screenSyncOptions, syncMail, syncNotifiedMailboxes } from "@/lib/mail/sync";
 import { readGraphNotices } from "@/lib/microsoft/notifications";
-import { createUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE = "https://orbit.test";
@@ -21,7 +22,7 @@ type Call = { method: string; url: string; token: string; body: Record<string, u
 
 type Person = { actor: UserActor; token: string; source: string; inbox: unknown[]; parents: Record<string, string> };
 
-const FOLDERS: Record<string, string> = { inbox: "f-inbox", sentitems: "f-sent", archive: "f-archive" };
+const FOLDERS: Record<string, string> = { inbox: "f-inbox", sentitems: "f-sent", archive: "f-archive", outbox: "f-outbox" };
 
 function message(id: string) {
   return {
@@ -53,7 +54,8 @@ function wait(ms: number) {
 
 type Hooks = {
   inboxDelay?: number;
-  beforeInbox?: (token: string) => Promise<void> | void;
+  beforeInbox?: (token: string) => Promise<Response | void> | Response | void;
+  beforeDelta?: (folder: string, token: string) => Promise<void> | void;
   subscription?: (call: Call) => Response | undefined | Promise<Response | undefined>;
   calendarDelay?: number;
 };
@@ -88,14 +90,17 @@ function microsoft(people: () => Person[], hooks: Hooks = {}) {
     const lookup = url.match(/\/me\/messages\/([^/?]+)\?\$select=id,parentFolderId$/);
     if (lookup) {
       const parent = people().find((item) => item.token === token)?.parents[decodeURIComponent(lookup[1])];
+      if (parent === "ERROR") return Response.json({ error: { code: "ErrorInvalidRequest", message: "Bad request." } }, { status: 400 });
       return parent ? Response.json({ id: lookup[1], parentFolderId: parent }) : Response.json({ error: { code: "ErrorItemNotFound" } }, { status: 404 });
     }
     if (method === "PATCH" && /\/me\/messages\/[^/?]+\?\$select=id$/.test(url)) return Response.json({ id: "x" });
     if (url.includes("$select=id,inferenceClassification")) return Response.json({ value: [] });
     const folder = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/)?.[1];
     if (folder) {
+      await hooks.beforeDelta?.(folder, token);
       if (folder === "f-inbox") {
-        await hooks.beforeInbox?.(token);
+        const early = await hooks.beforeInbox?.(token);
+        if (early) return early;
         if (hooks.inboxDelay) await wait(hooks.inboxDelay);
       }
       const person = people().find((item) => item.token === token);
@@ -174,9 +179,12 @@ describe("Microsoft change notifications", () => {
     signals.length = 0;
     alice.inbox = [];
     bruno.inbox = [];
-    alice.parents = {};
-    bruno.parents = {};
-    await getAdminPool().query("update crm.mail_sources set locked_until = null, resync_pending = false, retry_at = null, last_synced_at = now() - interval '1 hour'");
+    alice.parents = { y: "f-inbox" };
+    bruno.parents = { y: "f-inbox" };
+    await getAdminPool().query(
+      "update crm.mail_sources set locked_until = null, resync_pending = false, resync_full = false, resync_lookups = '{}', retry_at = null, last_error = null, graph_subscription_retry_at = null, last_synced_at = now() - interval '1 hour', last_full_synced_at = now() - interval '1 hour'",
+    );
+    await getAdminPool().query("update crm.mail_folders set resync_pending = false");
     await getAdminPool().query("update crm.calendars set notify_locked_until = null, resync_pending = false");
   });
 
@@ -357,23 +365,23 @@ describe("Microsoft change notifications", () => {
 
     it("skips a mailbox synced in the last minute unless a notification asked for it", async () => {
       const admin = getAdminPool();
-      await admin.query("update crm.mail_sources set last_synced_at = now() - interval '30 seconds' where id = $1", [alice.source]);
+      await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '30 seconds' where id = $1", [alice.source]);
       const skipped = microsoft(people);
       const report = await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: skipped.fetchImpl, skipRecentMs: SCHEDULED_FLOOR_MS });
       assert.deepEqual(report.recent, [alice.source]);
       assert.equal(skipped.calls.length, 0);
 
-      await admin.query("update crm.mail_sources set last_synced_at = now() - interval '61 seconds' where id = $1", [alice.source]);
+      await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '61 seconds' where id = $1", [alice.source]);
       const due = microsoft(people);
       await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: due.fetchImpl, skipRecentMs: SCHEDULED_FLOOR_MS });
       assert.equal(due.inboxDeltas("token-a").length, 1);
 
-      await admin.query("update crm.mail_sources set last_synced_at = now() - interval '5 seconds', resync_pending = true where id = $1", [alice.source]);
+      await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '5 seconds', resync_pending = true where id = $1", [alice.source]);
       const pending = microsoft(people);
       await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: pending.fetchImpl, skipRecentMs: SCHEDULED_FLOOR_MS });
       assert.equal(pending.inboxDeltas("token-a").length, 1, "a change still waiting is never skipped");
 
-      await admin.query("update crm.mail_sources set last_synced_at = now() - interval '5 seconds' where id = $1", [alice.source]);
+      await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '5 seconds' where id = $1", [alice.source]);
       const notified = microsoft(people);
       await syncNotifiedMailboxes(alice.actor, [alice.source], { deadline: Date.now() + 30_000, fetchImpl: notified.fetchImpl });
       assert.equal(notified.inboxDeltas("token-a").length, 1, "a notification sync ignores the floor");
@@ -384,11 +392,11 @@ describe("Microsoft change notifications", () => {
       const options = screenSyncOptions({ manual: true });
       assert.equal(options.skipRecentMs, REFRESH_FLOOR_MS);
       assert.equal(options.ignoreFolderWaits, true);
-      await admin.query("update crm.mail_sources set last_synced_at = now() - interval '90 seconds' where id = $1", [alice.source]);
+      await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '90 seconds' where id = $1", [alice.source]);
       const recent = microsoft(people);
       await syncMail(alice.actor, { ...options, fetchImpl: recent.fetchImpl });
       assert.equal(recent.calls.length, 0);
-      await admin.query("update crm.mail_sources set last_synced_at = now() - interval '150 seconds' where id = $1", [alice.source]);
+      await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '150 seconds' where id = $1", [alice.source]);
       const stale = microsoft(people);
       await syncMail(alice.actor, { ...options, fetchImpl: stale.fetchImpl });
       assert.equal(stale.inboxDeltas("token-a").length, 1);
@@ -471,11 +479,185 @@ describe("Microsoft change notifications", () => {
       assert.equal(pending.rowCount, 0);
     });
 
-    it("walks every folder for a message it doesn't know and can't find", async () => {
+    it("walks every folder only when looking up an unknown message fails", async () => {
+      alice.parents = { mystery: "ERROR" };
       const a = await mailSource(alice.actor.userId);
       const box = microsoft(people);
       await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "mystery", "created")])], box);
       assert.deepEqual(box.deltaFolders("token-a"), ["f-archive", "f-inbox", "f-sent"]);
+    });
+
+    it("walks nothing for a message Microsoft no longer has, or one in a folder Orbit skips", async () => {
+      alice.parents = { outgoing: "f-outbox" };
+      const a = await mailSource(alice.actor.userId);
+      const box = microsoft(people);
+      await runMail(
+        [
+          post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "vanished", "created")]),
+          post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "outgoing", "created")]),
+        ],
+        box,
+      );
+      assert.deepEqual(box.deltaFolders("token-a"), []);
+      assert.equal(box.calls.filter((call) => call.url.includes("parentFolderId")).length, 2);
+    });
+
+    it("keeps the scheduled and Refresh syncs walking every folder after a targeted sync", async () => {
+      const admin = getAdminPool();
+      await admin.query("update crm.mail_sources set last_full_synced_at = now() - interval '5 minutes' where id = $1", [alice.source]);
+      const a = await mailSource(alice.actor.userId);
+      const targeted = microsoft(people);
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!)])], targeted);
+      assert.deepEqual(targeted.deltaFolders("token-a"), ["f-inbox"]);
+      const scheduled = microsoft(people);
+      const report = await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: scheduled.fetchImpl, skipRecentMs: SCHEDULED_FLOOR_MS });
+      assert.deepEqual(report.recent, [], "a targeted sync doesn't count as a full one");
+      assert.deepEqual(scheduled.deltaFolders("token-a"), ["f-archive", "f-inbox", "f-sent"]);
+      const refresh = microsoft(people);
+      await syncMail(alice.actor, { ...screenSyncOptions({ manual: true }), fetchImpl: refresh.fetchImpl });
+      assert.equal(refresh.calls.length, 0, "the full walk just now does count");
+    });
+
+    it("walks every folder after a targeted run that failed", async () => {
+      const a = await mailSource(alice.actor.userId);
+      const failing = microsoft(people, {
+        beforeInbox: () => {
+          return Response.json({ error: { code: "InvalidAuthenticationToken", message: "Expired." } }, { status: 401 });
+        },
+      });
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!)])], failing);
+      const failed = await getAdminPool().query<{ resync_full: boolean }>("select resync_full from crm.mail_sources where id = $1", [alice.source]);
+      assert.equal(failed.rows[0].resync_full, true);
+      const next = microsoft(people);
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!)])], next);
+      assert.deepEqual(next.deltaFolders("token-a"), ["f-archive", "f-inbox", "f-sent"]);
+    });
+
+    it("records every person's notifications before syncing anyone, so a slow first mailbox drops nobody's", async () => {
+      const a = await mailSource(alice.actor.userId);
+      const b = await mailSource(bruno.actor.userId);
+      const box = microsoft(people, { inboxDelay: 3_500 });
+      const tasks: (() => Promise<unknown>)[] = [];
+      await handleMailNotifications(
+        post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!), notice(b.graph_subscription_id!, b.graph_client_state!)]),
+        { fetchImpl: box.fetchImpl, pollMs: 50, deadline: Date.now() + 4_000, schedule: (task) => tasks.push(task), afterSync: async () => undefined },
+      );
+      await Promise.all(tasks.map((task) => task()));
+      assert.equal(box.inboxDeltas("token-b").length, 0, "the budget ran out before Bruno's mailbox");
+      const waiting = await getAdminPool().query<{ resync_pending: boolean; resync_lookups: string[] }>(
+        "select resync_pending, resync_lookups from crm.mail_sources where id = $1",
+        [b.id],
+      );
+      assert.deepEqual(waiting.rows[0], { resync_pending: true, resync_lookups: ["y"] }, "his change waits for the next sync");
+    });
+
+    it("finds a new folder by refreshing the folder list once, then syncs only that folder", async () => {
+      FOLDERS.projects = "f-projects";
+      alice.parents = { filed: "f-projects" };
+      try {
+        const a = await mailSource(alice.actor.userId);
+        const box = microsoft(people);
+        await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "filed", "created")])], box);
+        assert.equal(box.calls.filter((call) => call.url.startsWith(`${GRAPH}/me/mailFolders?$top=100`)).length, 1);
+        assert.deepEqual(box.deltaFolders("token-a"), ["f-projects"]);
+      } finally {
+        delete FOLDERS.projects;
+      }
+    });
+
+    it("tells other tabs and devices after a Refresh or one of Orbit's own actions", async () => {
+      assert.equal(screenSyncOptions({ manual: true }).announce, true);
+      alice.inbox = [message("refresh-new")];
+      await syncMail(alice.actor, { ...screenSyncOptions({ manual: true }), fetchImpl: microsoft(people).fetchImpl });
+      assert.ok(signals.some((item) => item.topic === personTopic(alice.actor.userId) && item.event === "synced"));
+      signals.length = 0;
+      await applyMailAction(alice.actor, { thread: `${alice.source}|conv-refresh-new`, action: "flag" }, microsoft(people).fetchImpl);
+      for (let tries = 0; tries < 50 && signals.length === 0; tries += 1) await wait(20);
+      assert.deepEqual(
+        signals.map((item) => [item.topic, item.event, item.payload]),
+        [[personTopic(alice.actor.userId), "synced", { kind: "mail" }]],
+      );
+    });
+
+    it("keeps the old Inbox subscription and records why when Microsoft refuses one for the whole mailbox", async () => {
+      const admin = getAdminPool();
+      await admin.query(
+        "update crm.mail_sources set graph_subscription_id = 'legacy-inbox', graph_subscription_scope = null, graph_subscription_expires_at = now() + interval '2 hours', graph_subscription_error = null where id = $1",
+        [alice.source],
+      );
+      const refused = microsoft(people, {
+        subscription: (call) => (call.method === "POST" ? Response.json({ error: { code: "ExtensionError", message: "Operation not supported." } }, { status: 403 }) : undefined),
+      });
+      await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: refused.fetchImpl });
+      assert.equal(refused.subscriptionCalls("token-a", "POST").length, 1);
+      assert.deepEqual(refused.subscriptionCalls("token-a", "PATCH").map((call) => call.url), [`${GRAPH}/subscriptions/legacy-inbox`]);
+      const row = await admin.query<{ graph_subscription_id: string; graph_subscription_error: string | null }>(
+        "select graph_subscription_id, graph_subscription_error from crm.mail_sources where id = $1",
+        [alice.source],
+      );
+      assert.equal(row.rows[0].graph_subscription_id, "legacy-inbox");
+      assert.match(row.rows[0].graph_subscription_error ?? "", /refused/);
+      const later = microsoft(people);
+      await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: later.fetchImpl });
+      assert.equal(later.subscriptionCalls("token-a", "POST").length, 0, "it waits before asking again");
+      await admin.query("update crm.mail_sources set graph_subscription_retry_at = null where id = $1", [alice.source]);
+      const retry = microsoft(people);
+      await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: retry.fetchImpl });
+      assert.equal(retry.subscriptionCalls("token-a", "POST").length, 1);
+      assert.equal((await mailSource(alice.actor.userId)).graph_subscription_scope, "mailbox");
+    });
+
+    it("stops backfilling to look again when a change arrives during a backfill", async () => {
+      const admin = getAdminPool();
+      await admin.query("update crm.mail_folders set sync_state = 'pending', sync_link = null where source_id = $1 and provider_folder_id in ('f-archive', 'f-sent')", [alice.source]);
+      try {
+        let noted = false;
+        const box = microsoft(people, {
+          beforeDelta: async (folder, token) => {
+            if (token !== "token-a" || noted || !["f-archive", "f-sent"].includes(folder)) return;
+            noted = true;
+            await admin.query("update crm.mail_sources set resync_pending = true where id = $1", [alice.source]);
+          },
+        });
+        await syncMail(alice.actor, { budgetMs: 30_000, fetchImpl: box.fetchImpl });
+        const backfilled = box.calls.filter((call) => call.token === "token-a" && call.url.includes("/f-archive/messages/delta")).length;
+        assert.equal(backfilled, 0, "the next backfill folder waits");
+        assert.equal(box.inboxDeltas("token-a").length, 2, "one more pass picks up the change");
+      } finally {
+        await admin.query(
+          "update crm.mail_folders set sync_state = 'live', sync_link = $2 || provider_folder_id || '/messages/delta?$deltatoken=x' where source_id = $1 and provider_folder_id in ('f-archive', 'f-sent')",
+          [alice.source, `${GRAPH}/me/mailFolders/`],
+        );
+      }
+    });
+
+    it("keeps each person's echoes and the subscription lookups to themselves", async () => {
+      const admin = getAdminPool();
+      await admin.query("insert into crm.mail_echoes (source_id, user_id, provider_message_id) values ($1, $2, 'private-echo') on conflict do nothing", [
+        alice.source,
+        alice.actor.userId,
+      ]);
+      await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member') on conflict do nothing", [
+        alice.actor.workspaceId,
+        bruno.actor.userId,
+      ]);
+      try {
+        assert.deepEqual(await queryAsUser(bruno.actor.userId, "select provider_message_id from crm.mail_echoes where source_id = $1", [alice.source]), []);
+        await assert.rejects(
+          queryAsUser(bruno.actor.userId, "insert into crm.mail_echoes (source_id, user_id, provider_message_id) values ($1, $2, 'forged')", [alice.source, bruno.actor.userId]),
+        );
+        await assert.rejects(
+          queryAsUser(bruno.actor.userId, "insert into crm.mail_echoes (source_id, user_id, provider_message_id) values ($1, $2, 'forged')", [alice.source, alice.actor.userId]),
+        );
+        assert.deepEqual(
+          await queryAsUser(bruno.actor.userId, "update crm.mail_echoes set changed_at = now() where source_id = $1 returning provider_message_id", [alice.source]),
+          [],
+        );
+        await assert.rejects(queryAsUser(alice.actor.userId, "select * from private.mail_subscription_sources(array['x'])"));
+        await assert.rejects(queryAsUser(alice.actor.userId, "select * from private.calendar_subscription_owners(array['x'])"));
+      } finally {
+        await admin.query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [alice.actor.workspaceId, bruno.actor.userId]);
+      }
     });
 
     it("no longer syncs mail from the ten-minute job", () => {
@@ -598,6 +780,130 @@ describe("Microsoft change notifications", () => {
       const again = microsoft(people);
       await syncCalendar(alice.actor, { force: true, fetchImpl: again.fetchImpl });
       assert.equal(again.subscriptionCalls("token-a", "POST").length, 0);
+    });
+
+    it("tries again on the next run when making a calendar subscription fails for a passing reason", async () => {
+      const a = await calendarRow(alice.actor.userId);
+      for (const failure of [
+        () => Response.json({ error: { code: "ServiceUnavailable" } }, { status: 503 }),
+        () => Response.json({ error: { code: "TooManyRequests" } }, { status: 429 }),
+        () => Response.json({ error: { code: "ValidationError", message: "Subscription validation request timed out." } }, { status: 400 }),
+      ]) {
+        await getAdminPool().query("update crm.calendars set graph_subscription_id = null, graph_subscription_retry_at = null where id = $1", [a.id]);
+        const failing = microsoft(people, { subscription: (call) => (call.method === "POST" ? failure() : undefined) });
+        await syncCalendar(alice.actor, { force: true, fetchImpl: failing.fetchImpl });
+        const row = await getAdminPool().query<{ retry: Date | null }>("select graph_subscription_retry_at as retry from crm.calendars where id = $1", [a.id]);
+        assert.equal(row.rows[0].retry, null);
+      }
+      const next = microsoft(people);
+      await syncCalendar(alice.actor, { force: true, fetchImpl: next.fetchImpl });
+      assert.equal(next.subscriptionCalls("token-a", "POST").length, 1);
+    });
+
+    it("remakes a calendar subscription Microsoft has expired", async () => {
+      const a = await calendarRow(alice.actor.userId);
+      await getAdminPool().query("update crm.calendars set graph_subscription_expires_at = now() + interval '1 hour' where id = $1", [a.id]);
+      const expired = microsoft(people, {
+        subscription: (call) => (call.method === "PATCH" ? Response.json({ error: { code: "ResourceNotFound" } }, { status: 404 }) : undefined),
+      });
+      await syncCalendar(alice.actor, { force: true, fetchImpl: expired.fetchImpl });
+      assert.equal(expired.subscriptionCalls("token-a", "POST").length, 1);
+      const after = await calendarRow(alice.actor.userId);
+      assert.ok(after.graph_subscription_id && after.graph_subscription_id !== a.graph_subscription_id);
+    });
+
+    it("keeps one calendar subscription when two syncs make one at once, and deletes the spare", async () => {
+      const a = await calendarRow(alice.actor.userId);
+      await getAdminPool().query("update crm.calendars set graph_subscription_id = null, graph_subscription_retry_at = null where id = $1", [a.id]);
+      const box = microsoft(people, {
+        subscription: async (call) => {
+          if (call.method === "POST") await wait(200);
+          return undefined;
+        },
+      });
+      await Promise.all([
+        syncCalendar(alice.actor, { force: true, fetchImpl: box.fetchImpl }),
+        syncCalendar(alice.actor, { force: true, fetchImpl: box.fetchImpl }),
+      ]);
+      const made = box.subscriptionCalls("token-a", "POST").length;
+      assert.equal(made, 2, "both syncs asked Microsoft");
+      assert.equal(box.subscriptionCalls("token-a", "DELETE").length, 1, "the spare is deleted");
+      assert.ok((await calendarRow(alice.actor.userId)).graph_subscription_id);
+    });
+
+    it("never stamps the connection or clears its error when a notification syncs one calendar", async () => {
+      const a = await calendarRow(alice.actor.userId);
+      await getAdminPool().query(
+        "update crm.calendars set graph_subscription_id = 'cal-pinned', graph_client_state = $2, graph_subscription_expires_at = now() + interval '2 days' where id = $1",
+        [a.id, encryptSecret("pinned-state")],
+      );
+      await getAdminPool().query(
+        "update crm.integration_state set last_attempt_at = now() - interval '1 hour', last_error = 'Kept error' where user_id = $1 and source = 'calendar'",
+        [alice.actor.userId],
+      );
+      const box = microsoft(people);
+      await runCalendar([post("/api/microsoft/calendar-webhook", [notice("cal-pinned", "pinned-state")])], box);
+      assert.equal(box.calendarViews("token-a").length, 1);
+      const state = await getAdminPool().query<{ stale: boolean; last_error: string | null }>(
+        "select last_attempt_at < now() - interval '30 minutes' as stale, last_error from crm.integration_state where user_id = $1 and source = 'calendar'",
+        [alice.actor.userId],
+      );
+      assert.deepEqual(state.rows[0], { stale: true, last_error: "Kept error" });
+      const scheduled = microsoft(people);
+      await syncCalendar(alice.actor, { fetchImpl: scheduled.fetchImpl });
+      assert.equal(scheduled.calendarViews("token-a").length, 1, "the scheduled sync still runs for the connection");
+    });
+
+    it("removes the subscription of a calendar that disappeared from Outlook before forgetting it", async () => {
+      await getAdminPool().query(
+        `insert into crm.calendars (workspace_id, user_id, connection_id, provider_calendar_id, name, color, graph_subscription_id, graph_client_state, graph_subscription_expires_at)
+         select workspace_id, user_id, connection_id, 'cal-gone', 'Gone', color, 'sub-gone', 'x', now() + interval '2 days' from crm.calendars where user_id = $1 limit 1`,
+        [alice.actor.userId],
+      );
+      const failing = microsoft(people, {
+        subscription: (call) => (call.method === "DELETE" ? Response.json({ error: { code: "ServiceUnavailable" } }, { status: 503 }) : undefined),
+      });
+      await syncCalendar(alice.actor, { force: true, fetchImpl: failing.fetchImpl });
+      assert.equal(failing.calendarViews("token-a").filter((call) => call.url.includes("cal-gone")).length, 0, "a gone calendar isn't read");
+      const kept = await getAdminPool().query("select 1 from crm.calendars where provider_calendar_id = 'cal-gone'");
+      assert.equal(kept.rowCount, 1, "kept until its subscription is removed");
+      const box = microsoft(people);
+      await syncCalendar(alice.actor, { force: true, fetchImpl: box.fetchImpl });
+      assert.ok(box.subscriptionCalls("token-a", "DELETE").some((call) => call.url.endsWith("/subscriptions/sub-gone")));
+      const gone = await getAdminPool().query("select 1 from crm.calendars where provider_calendar_id = 'cal-gone'");
+      assert.equal(gone.rowCount, 0);
+    });
+
+    it("keeps calendar subscription details from colleagues", async () => {
+      const admin = getAdminPool();
+      const a = await calendarRow(alice.actor.userId);
+      await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member') on conflict do nothing", [
+        alice.actor.workspaceId,
+        bruno.actor.userId,
+      ]);
+      try {
+        assert.deepEqual(await queryAsUser(bruno.actor.userId, "select graph_client_state, graph_subscription_id from crm.calendars where id = $1", [a.id]), []);
+        assert.deepEqual(
+          await queryAsUser(bruno.actor.userId, "update crm.calendars set graph_subscription_id = 'stolen', graph_client_state = 'x' where id = $1 returning id", [a.id]),
+          [],
+        );
+      } finally {
+        await admin.query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [alice.actor.workspaceId, bruno.actor.userId]);
+      }
+    });
+
+    it("removes the mailbox's and calendars' subscriptions at Microsoft when the mailbox is disconnected", async () => {
+      const mail = await mailSource(bruno.actor.userId);
+      const calendar = await calendarRow(bruno.actor.userId);
+      const box = microsoft(people);
+      await disconnectMailbox(bruno.actor, box.fetchImpl);
+      const deleted = box.subscriptionCalls("token-b", "DELETE").map((call) => call.url).sort();
+      assert.deepEqual(deleted, [`${GRAPH}/subscriptions/${calendar.graph_subscription_id}`, `${GRAPH}/subscriptions/${mail.graph_subscription_id}`].sort());
+      const left = await getAdminPool().query(
+        "select 1 from crm.calendars where user_id = $1 and graph_subscription_id is not null union all select 1 from crm.mail_sources where user_id = $1 and graph_subscription_id is not null",
+        [bruno.actor.userId],
+      );
+      assert.equal(left.rowCount, 0);
     });
   });
 });

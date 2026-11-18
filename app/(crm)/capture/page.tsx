@@ -8,11 +8,10 @@ import { captureContext, captureStatus, connectionAlert, listToFile, markCapture
 import { listDismissedImports } from "@/lib/crm/conversations";
 import { listFollowUps } from "@/lib/crm/follow-ups";
 import { getGranolaStatus } from "@/lib/crm/granola";
-import { getMailbox, shouldSyncMailbox, syncMailbox } from "@/lib/crm/inbox";
+import { getMailbox } from "@/lib/crm/inbox";
 import { getTeamsTranscriptStatus } from "@/lib/crm/teams-transcripts";
 import type { CaptureSection } from "@/lib/crm/capture-format";
 import { classifyCapture, listSenderRules, listUnknownMail } from "@/lib/mail/capture-filter";
-import { microsoftConfigured } from "@/lib/microsoft/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -32,11 +31,7 @@ export default async function CapturePage() {
   if (!user) redirect("/login");
   const openedAt = requestTime();
 
-  let mailbox = await getMailbox(user);
-  if (microsoftConfigured() && mailbox?.status === "connected" && shouldSyncMailbox(mailbox.lastAttemptAt)) {
-    await syncMailbox(user);
-    mailbox = await getMailbox(user);
-  }
+  const mailbox = await getMailbox(user);
   const live = mailbox?.status === "connected";
   const context = await captureContext(user, openedAt.getTime(), { inline: true });
   const failed = new Set<CaptureSection>(context.failed);

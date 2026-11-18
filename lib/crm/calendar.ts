@@ -25,7 +25,7 @@ import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
-import { dropCalendarSubscriptions, keepCalendarSubscriptions, type CalendarSourceRef } from "@/lib/crm/calendar-subscriptions";
+import { keepCalendarSubscriptions, releaseGoneCalendars, type CalendarSourceRef } from "@/lib/crm/calendar-subscriptions";
 import { isMeetingNoise } from "@/lib/mail/senders";
 import { readFeed } from "@/lib/ical/events";
 import { FeedError, feedErrorSummary, fetchFeed, type Lookup } from "@/lib/ical/fetch";
@@ -379,7 +379,6 @@ async function saveCalendarList(
   actor: UserActor,
   source: SyncSource,
   listed: CalendarListFetch,
-  dropped?: string[],
 ): Promise<SyncTarget[]> {
   const column = sourceColumn(source);
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`calendars:${source.id}`]);
@@ -441,20 +440,19 @@ async function saveCalendarList(
     );
   }
   if (listed.complete) {
-    const removed = await db.query<{ graph_subscription_id: string | null }>(
+    await db.query(
       `delete from crm.calendars
-       where ${column} = $1 and provider_calendar_id <> all($2::text[])
-       returning graph_subscription_id`,
+       where ${column} = $1 and provider_calendar_id <> all($2::text[]) and graph_subscription_id is null`,
       [source.id, listed.calendars.map((calendar) => calendar.providerCalendarId)],
     );
-    for (const row of removed.rows) if (row.graph_subscription_id) dropped?.push(row.graph_subscription_id);
   }
   const targets = await db.query<{ id: string; provider_calendar_id: string }>(
     `select id, provider_calendar_id from crm.calendars
      where ${column} = $1 and (is_visible or use_for_crm)
        and provider_calendar_id <> $2
+       and (not $3::boolean or provider_calendar_id = any($4::text[]))
      order by last_attempt_at asc nulls first, is_default desc, name`,
-    [source.id, DEFAULT_CALENDAR_PLACEHOLDER],
+    [source.id, DEFAULT_CALENDAR_PLACEHOLDER, listed.complete, listed.calendars.map((calendar) => calendar.providerCalendarId)],
   );
   return targets.rows.map((row) => ({ id: row.id, providerCalendarId: row.provider_calendar_id }));
 }
@@ -744,8 +742,13 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
       colorOffset: source.colorOffset,
     });
     if (!listed.complete) outcome.complete = false;
-    const dropped: string[] = [];
-    const listedTargets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed, dropped));
+    if (listed.complete) {
+      await releaseGoneCalendars(actor, { kind: source.kind, id: source.id }, listed.calendars.map((calendar) => calendar.providerCalendarId), token.accessToken, {
+        fetchImpl: context.fetchImpl,
+        deadline: context.deadline,
+      }).catch((error) => console.error("Removing calendar subscriptions failed", error instanceof Error ? error.message : error));
+    }
+    const listedTargets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed));
     const only = context.calendarIds;
     const targets = only ? listedTargets.filter((calendar) => only.includes(calendar.id)) : listedTargets;
     if (only) outcome.complete = false;
@@ -788,24 +791,26 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
       }
     }
     if (!outcome.error || !REJECTED.test(outcome.error)) {
-      await dropCalendarSubscriptions(token.accessToken, dropped, { fetchImpl: context.fetchImpl, deadline: context.deadline });
       await keepCalendarSubscriptions(actor, { kind: source.kind, id: source.id }, token.accessToken, {
         fetchImpl: context.fetchImpl,
         deadline: context.deadline,
         only,
         placeholder: DEFAULT_CALENDAR_PLACEHOLDER,
+        listed: listed.complete ? listed.calendars.map((calendar) => calendar.providerCalendarId) : undefined,
       }).catch((error) => console.error("Calendar subscriptions failed", error instanceof Error ? error.message : error));
     }
-    await finishSource(actor, source, {
-      syncedAt: outcome.complete ? new Date(context.now).toISOString() : null,
-      error: outcome.error ?? null,
-      scopeMissing: false,
-    });
+    if (!only) {
+      await finishSource(actor, source, {
+        syncedAt: outcome.complete ? new Date(context.now).toISOString() : null,
+        error: outcome.error ?? null,
+        scopeMissing: false,
+      });
+    }
     return outcome;
   } catch (error) {
     if (error instanceof CalendarScopeError) return missing();
     const message = microsoftErrorText(error, SYNC_FAILED);
-    await finishSource(actor, source, { error: message, scopeMissing: false });
+    if (!context.calendarIds) await finishSource(actor, source, { error: message, scopeMissing: false });
     return { ...outcome, complete: false, error: message };
   }
 }
@@ -1022,7 +1027,7 @@ export async function syncCalendar(
       complete = false;
       break;
     }
-    const claimed = await claimSource(actor, source, Boolean(options.force));
+    const claimed = options.calendarIds ? true : await claimSource(actor, source, Boolean(options.force));
     if (!claimed) continue;
     result.ran = true;
     const outcome = await syncSource(actor, source, {

@@ -3,6 +3,9 @@ set lock_timeout = '5s';
 alter table crm.mail_sources add column if not exists graph_subscription_scope text;
 alter table crm.mail_sources add column if not exists resync_pending boolean not null default false;
 alter table crm.mail_sources add column if not exists resync_full boolean not null default false;
+alter table crm.mail_sources add column if not exists last_full_synced_at timestamptz;
+alter table crm.mail_sources add column if not exists graph_subscription_error text;
+alter table crm.mail_sources add column if not exists graph_subscription_retry_at timestamptz;
 alter table crm.mail_sources add column if not exists resync_lookups text[] not null default '{}';
 alter table crm.mail_folders add column if not exists resync_pending boolean not null default false;
 

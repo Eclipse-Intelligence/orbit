@@ -13,7 +13,7 @@ export const CALENDAR_CHANGES = "created,updated,deleted";
 
 export type CalendarSourceRef = { kind: "connection" | "account"; id: string };
 
-type Options = { fetchImpl?: typeof fetch; deadline: number; only?: string[]; placeholder: string };
+type Options = { fetchImpl?: typeof fetch; deadline: number; only?: string[]; placeholder: string; listed?: string[] };
 
 type CalendarRow = {
   id: string;
@@ -123,8 +123,9 @@ export async function keepCalendarSubscriptions(actor: UserActor, source: Calend
   );
   let kept = 0;
   let failed = 0;
-  for (const row of rows.rows) {
+  for (const found of rows.rows) {
     if (options.deadline - Date.now() < STEP_RESERVE_MS) break;
+    const row = options.listed && !options.listed.includes(found.provider_calendar_id) ? { ...found, wanted: false } : found;
     try {
       await keepOne(actor, token, row, origin, options);
       kept += 1;
@@ -132,6 +133,7 @@ export async function keepCalendarSubscriptions(actor: UserActor, source: Calend
       failed += 1;
       console.error("Calendar subscription failed", error instanceof Error ? error.message : error);
       if (error instanceof GraphSubscriptionError && error.status === 408) break;
+      if (!calendarSubscriptionRefused(error)) continue;
       await withActor(actor, (db) =>
         db.query("update crm.calendars set graph_subscription_retry_at = now() + make_interval(secs => $2) where id = $1", [
           row.id,
@@ -143,11 +145,31 @@ export async function keepCalendarSubscriptions(actor: UserActor, source: Calend
   return { kept, failed };
 }
 
-export async function dropCalendarSubscriptions(token: string, subscriptionIds: string[], options: { fetchImpl?: typeof fetch; deadline: number }) {
-  for (const id of subscriptionIds) {
+export function calendarSubscriptionRefused(error: unknown) {
+  return error instanceof GraphSubscriptionError && (error.status === 400 || error.status === 403) && !/validat/i.test(`${error.message} ${error.code}`);
+}
+
+export async function releaseGoneCalendars(
+  actor: UserActor,
+  source: CalendarSourceRef,
+  listedProviderIds: string[],
+  token: string,
+  options: { fetchImpl?: typeof fetch; deadline: number },
+) {
+  const rows = await withActor(actor, (db) =>
+    db.query<{ id: string; graph_subscription_id: string }>(
+      `select id, graph_subscription_id from crm.calendars
+       where ${column(source)} = $1 and provider_calendar_id <> all($2::text[]) and graph_subscription_id is not null`,
+      [source.id, listedProviderIds],
+    ),
+  );
+  for (const row of rows.rows) {
     if (options.deadline - Date.now() < STEP_RESERVE_MS) break;
-    await deleteGraphSubscription(token, id, options).catch((error) =>
-      console.error("Couldn't remove a calendar subscription", error instanceof Error ? error.message : error),
-    );
+    try {
+      await deleteGraphSubscription(token, row.graph_subscription_id, options);
+      await clearSubscription(actor, row.id, row.graph_subscription_id);
+    } catch (error) {
+      console.error("Couldn't remove the subscription of a calendar that's gone", error instanceof Error ? error.message : error);
+    }
   }
 }

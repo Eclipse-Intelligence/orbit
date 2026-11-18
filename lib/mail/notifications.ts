@@ -133,12 +133,20 @@ async function followUp(target: MailTarget, outcome: Outcome, deadline: number) 
 }
 
 export async function processMailTargets(targets: MailTarget[], deadline: number, options: Options = {}) {
+  const planned: { target: MailTarget; changes: MailChange[] }[] = [];
   for (const target of targets) {
-    if (left(deadline) < SHORTEST_SYNC_MS) break;
     try {
       const changes = await planChanges(target);
       if (changes.length === 0) continue;
       await noteMailChanges(target.actor, changes);
+      planned.push({ target, changes });
+    } catch (error) {
+      console.error("Recording a mail notification failed", error);
+    }
+  }
+  for (const { target, changes } of planned) {
+    if (left(deadline) < SHORTEST_SYNC_MS) break;
+    try {
       const outcome = await syncNotifiedMailboxes(
         target.actor,
         changes.map((change) => change.sourceId),

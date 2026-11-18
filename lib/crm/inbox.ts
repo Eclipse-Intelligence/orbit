@@ -645,8 +645,12 @@ async function markTrackingSent(
   );
 }
 
-export async function disconnectMailbox(actor: UserActor) {
-  await withActor(actor, async (db) => {
+export async function disconnectMailbox(actor: UserActor, fetchImpl?: typeof fetch) {
+  const { forgetSubscriptionsInDb, releaseSubscriptions, subscriptionsOfInDb } = await import("@/lib/crm/microsoft-subscriptions");
+  const release = await withActor(actor, async (db) => {
+    const stored = await readStored(db, actor);
+    const ids = stored ? await subscriptionsOfInDb(db, actor, { connectionId: stored.id }) : [];
+    if (stored) await forgetSubscriptionsInDb(db, actor, { connectionId: stored.id });
     await db.query(
       `update crm.mailbox_connections
        set status = 'disconnected',
@@ -657,7 +661,9 @@ export async function disconnectMailbox(actor: UserActor) {
        where user_id = $1 and provider = 'microsoft'`,
       [actor.userId],
     );
+    return { ids, tokens: stored };
   });
+  await releaseSubscriptions(release.ids, release.tokens, { fetchImpl });
 }
 
 export async function syncMailbox(

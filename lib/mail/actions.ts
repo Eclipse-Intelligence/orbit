@@ -1,4 +1,5 @@
 import { chatBackground } from "@/lib/crm/chat";
+import { signalSynced } from "@/lib/sync-signals";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -159,6 +160,10 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
   return [...touched];
 }
 
+function announceMailChange(actor: UserActor) {
+  chatBackground(() => signalSynced(actor.userId, "mail"));
+}
+
 function announceMoves(actor: UserActor, sourceId: string, threadKeys: string[]) {
   if (threadKeys.length === 0) return;
   chatBackground(() =>
@@ -249,6 +254,7 @@ export async function applyMailAction(
       }
       return [];
     });
+    announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
   if (failures.length > 0) {
@@ -297,6 +303,7 @@ export async function moveMessages(
       }
       return keys;
     });
+    announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
   return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };
