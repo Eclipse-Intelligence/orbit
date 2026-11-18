@@ -133,6 +133,17 @@ type ContactSeed = {
   linkedin?: string;
   notes?: string;
   unowned?: boolean;
+  tags?: string[];
+};
+
+type CampaignProspectSeed = { contact: string; invited?: When; accepted?: When; reply?: { at: When; text: string } };
+
+type CampaignSeed = {
+  name: string;
+  channel: "email" | "linkedin";
+  status?: "active" | "paused";
+  sender?: "me" | "colleague";
+  prospects?: CampaignProspectSeed[];
 };
 
 type TaskSeed = { title: string; due?: When; company?: string; contact?: string; done?: boolean; remindMinutes?: number; owner?: "colleague"; docs?: string[] };
@@ -205,6 +216,7 @@ export type WorkspaceSeed = {
   memories?: MemorySeed[];
   changes?: ChangeSeed[];
   chat?: ChatSeed[];
+  campaigns?: CampaignSeed[];
   booking?: boolean;
 };
 

@@ -21,6 +21,7 @@ import {
   findTool,
   isWriteCall,
   loadedDomains,
+  usedDomains,
   matchWorkspace,
   recordNames,
   runTool,
@@ -709,7 +710,7 @@ async function runTurns(actor: UserActor, conversation: ConversationRow, emit: E
   }
 }
 
-function companionTools(options: ToolOptions) {
+export function companionTools(options: ToolOptions) {
   return [
     ...assistantTools(options).filter((tool) => tool.name !== "find_tools").map((tool) => ({
       name: tool.name,
@@ -1000,9 +1001,17 @@ async function savedContext(actor: UserActor, conversation: ConversationRow, row
   });
 }
 
+function historyCalls(rows: Pick<MessageRow, "tool_calls">[]) {
+  return rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments })));
+}
+
+function historyUse(rows: Pick<MessageRow, "tool_calls">[]) {
+  return usedDomains(historyCalls(rows));
+}
+
 function toolsFor(rows: MessageRow[], options: ToolOptions) {
-  const calls = rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments })));
-  return toolDefinitions({ ...options, domains: loadedDomains(calls) });
+  const calls = historyCalls(rows);
+  return toolDefinitions({ ...options, domains: loadedDomains(calls), used: usedDomains(calls) });
 }
 
 function trailingSteers(rows: MessageRow[]) {
@@ -1290,7 +1299,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches, loaded: historyUse(rows) });
         if (signal?.aborted) return;
         await insertMessage(actor, conversation.id, {
           role: "tool",

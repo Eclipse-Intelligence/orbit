@@ -28,6 +28,10 @@ import { callEclipseTool, EclipseMcpError, eclipseGuide, findEclipseTools, type 
 import { ECLIPSE_SCOPED_TOOLS, ECLIPSE_UNAVAILABLE, eclipseScopeFor } from "@/lib/assistant/eclipse-scope";
 import { assertLinearHere, LINEAR_ELSEWHERE } from "@/lib/crm/linear-connection";
 import { checkColdEmail, evidenceFrom, playbookFor, proofListFor, senderFirstName, withProofList } from "@/lib/assistant/cold-email";
+import { CAMPAIGN_ACTIONS, CAMPAIGN_READS, campaignActionNames, readCampaigns, runCampaignAction } from "@/lib/campaigns/agent";
+import { connectedProviders } from "@/lib/campaigns/connections";
+import { CAMPAIGN_CATEGORIES } from "@/lib/campaigns/format";
+import { EVENT_KINDS } from "@/lib/campaigns/types";
 import { brandOrEmpty } from "@/lib/crm/brand";
 import { listProof } from "@/lib/crm/proof";
 import { socialLookup } from "@/lib/social-lookup";
@@ -215,7 +219,7 @@ type Names = (id: unknown) => string;
 
 type Defer = (work: () => Promise<unknown>) => void;
 
-type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval; multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean };
+type ToolContext = { callId?: string; deadline?: number; defer?: Defer; unattended?: boolean; approval?: DocApproval; multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean; loaded?: readonly ToolDomain[] };
 
 function undoRefusal(reason: string) {
   return /^Can't undo:|can't be undone/i.test(reason) ? reason : `Can't be undone: ${reason}`;
@@ -1705,6 +1709,10 @@ export const TOOL_DOMAINS = {
       "cold_email_check",
     ],
   },
+  campaigns: {
+    summary: "email and LinkedIn campaigns: stats, prospects, threads and who accepted or replied, adding people, pausing, removing, categories and replies",
+    tools: ["campaigns", "campaign_action"],
+  },
   pipeline: {
     summary: "the pipeline, new deals, deal history, pipeline_report, stalled_deals and boards",
     tools: [
@@ -1814,6 +1822,58 @@ export function domainSummary(domain: ToolDomain, options: ToolSwitches = {}) {
 
 export function toolDomainNames(options: ToolSwitches = {}) {
   return TOOL_DOMAIN_NAMES.filter((domain) => domainTools(domain, options).length > 0);
+}
+
+export const REQUEST_TOOL_LIMIT = 128;
+export const PROVIDER_ADDED_TOOLS = 2;
+export const ORBIT_TOOL_LIMIT = REQUEST_TOOL_LIMIT - PROVIDER_ADDED_TOOLS;
+export const TOO_MANY_TOOLS = "This chat has too many tools loaded to add these. Start a new chat for them.";
+export const UNLOADED_AREAS = "This chat had too many tools, so these areas, used least recently, are no longer loaded. Load one again with find_tools when you need it.";
+
+export const NEVER_DROPPED: readonly ToolDomain[] = ["web", "settings"];
+
+export function fittingDomains(domains: readonly ToolDomain[], options: ToolSwitches = {}, used: readonly ToolDomain[] = []) {
+  const allowed = toolDomainNames(options);
+  const wanted = [...new Set(domains)].filter((domain) => allowed.includes(domain));
+  const size = (domain: ToolDomain) => domainTools(domain, options).length;
+  const core = CORE_TOOLS.filter((name) => !hiddenTool(name, options)).length;
+  let count = core + wanted.reduce((sum, domain) => sum + size(domain), 0);
+  if (count <= ORBIT_TOOL_LIMIT) return wanted;
+  const recent = [...new Set(used)].filter((domain) => wanted.includes(domain));
+  const unused = wanted.filter((domain) => !recent.includes(domain)).sort((a, b) => TOOL_DOMAIN_NAMES.indexOf(b) - TOOL_DOMAIN_NAMES.indexOf(a));
+  const dropOrder = [...unused, ...recent].filter((domain) => !NEVER_DROPPED.includes(domain));
+  const dropped: ToolDomain[] = [];
+  for (const domain of dropOrder) {
+    if (count <= ORBIT_TOOL_LIMIT) break;
+    dropped.push(domain);
+    count -= size(domain);
+  }
+  for (const domain of [...dropped].reverse()) {
+    if (count + size(domain) > ORBIT_TOOL_LIMIT) continue;
+    dropped.splice(dropped.indexOf(domain), 1);
+    count += size(domain);
+  }
+  return wanted.filter((domain) => !dropped.includes(domain));
+}
+
+export function usedDomains(calls: { name: string; arguments: string }[]) {
+  const order: ToolDomain[] = [];
+  const touch = (domain: ToolDomain | null | undefined) => {
+    if (!domain) return;
+    const at = order.indexOf(domain);
+    if (at >= 0) order.splice(at, 1);
+    order.push(domain);
+  };
+  for (const call of calls) {
+    if (call.name === "find_tools") {
+      let args: unknown = null;
+      try {
+        args = JSON.parse(call.arguments || "{}");
+      } catch {}
+      for (const domain of strings((args as Args | null)?.domains)) touch(oneOf(domain, TOOL_DOMAIN_NAMES));
+    } else touch(toolDomain(call.name));
+  }
+  return order;
 }
 
 export function guideTopics(options: ToolSwitches = {}) {
@@ -3151,6 +3211,131 @@ const TOOL_LIST: AssistantTool[] = [
     },
   },
   {
+    name: "campaigns",
+    label: "Checking campaigns",
+    description:
+      "Read the workspace's outreach campaigns, email (Smartlead) and LinkedIn (HeyReach), shared with every member. view list gives every campaign with its stats (channel filters it). view campaign gives one campaign with its steps, step stats, 30 days by day and its variables. view prospects gives a campaign's people a page of 100 at a time, with each one's state, last event, LinkedIn stage and sender. view thread gives one person's whole conversation across every campaign, with replyOptions saying who can reply on each channel; pass prospectId, or contactId (with channel to pick their LinkedIn or email campaign). view activity lists events newest first across campaigns (channel, campaignId, kinds, since and until filter it): for example kinds [\"invite_accepted\"] with since this Monday answers who accepted this week.",
+    parameters: {
+      type: "object",
+      properties: {
+        view: { type: "string", enum: [...CAMPAIGN_READS], description: "What to read: list, campaign, prospects, thread or activity." },
+        channel: { type: "string", enum: ["email", "linkedin"], description: "email or linkedin. Filters list and activity, and picks the campaign for thread with contactId." },
+        campaignId: idParam("A campaign id from view list. Needed for campaign and prospects; filters activity."),
+        prospectId: idParam("For thread: a prospect id from view prospects or activity."),
+        contactId: idParam("For thread: the person's contact id, instead of prospectId."),
+        filter: { type: "string", enum: ["all", "replied", "skipped"], description: "For prospects on an email campaign: all (default), replied, or skipped (skipped and failed, with the reason)." },
+        search: { type: "string", description: "For prospects: a name, email, LinkedIn profile or company to search for." },
+        page: { type: "integer", minimum: 1, description: "For prospects: the page of 100 to read. Defaults to 1." },
+        kinds: {
+          type: "array",
+          items: { type: "string", enum: [...EVENT_KINDS] },
+          description: "For activity: which events, for example [\"replied\"], [\"invite_accepted\"] or [\"bounced\", \"unsubscribed\"]. Leave out for all.",
+        },
+        since: { type: "string", description: "For activity: from this day or time, YYYY-MM-DD or YYYY-MM-DDTHH:mm London time. Defaults to 30 days ago." },
+        until: { type: "string", description: "For activity: before this day or time, YYYY-MM-DD or YYYY-MM-DDTHH:mm London time." },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "For activity: how many events, up to 500. Defaults to 100." },
+      },
+      required: ["view"],
+    },
+    run: async (actor, args) =>
+      readCampaigns(actor, {
+        view: optionalStr(args.view) ?? null,
+        channel: optionalStr(args.channel) ?? null,
+        campaignId: optionalStr(args.campaignId) ?? null,
+        prospectId: optionalStr(args.prospectId) ?? null,
+        contactId: optionalStr(args.contactId) ?? null,
+        filter: optionalStr(args.filter) ?? null,
+        search: optionalStr(args.search) ?? null,
+        page: typeof args.page === "number" ? args.page : null,
+        kinds: strings(args.kinds),
+        since: optionalStr(args.since) ?? null,
+        until: optionalStr(args.until) ?? null,
+        limit: typeof args.limit === "number" ? args.limit : null,
+      }),
+  },
+  {
+    name: "campaign_action",
+    label: "Updating a campaign",
+    write: true,
+    description:
+      "Change a campaign or a person in one. add puts contactIds (or the people at companyIds) into campaignId, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact (Do not contact, customers, open opportunities, people the workspace has written to or met, already in another campaign on that channel) with the reason. pause and resume take campaignId alone for the whole campaign, or a person (prospectId, or contactId with campaignId) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (category null clears it). reply sends text to a person in their campaign thread, by email or on LinkedIn (channel); a LinkedIn reply goes out as the LinkedIn account's own member, so only they can send it. A reply result with repeated true was sent before and not sent again (its note says when): tell the user that, never report it as a new send. Nothing here lifts Do not contact: only a person can, in Orbit.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: [...CAMPAIGN_ACTIONS], description: "add, pause, resume, remove, set_category or reply." },
+        campaignId: idParam("A campaign id from campaigns view list. Needed for add, and for pause or resume of a whole campaign."),
+        contactIds: { type: "array", items: { type: "string" }, maxItems: 1000, description: "For add: contact ids to add, up to 1,000." },
+        companyIds: { type: "array", items: { type: "string" }, maxItems: 1000, description: "For add, instead of contactIds: add the people at these companies." },
+        prospectId: idParam("The person in a campaign, from campaigns view prospects, thread or activity."),
+        contactId: idParam("The person's contact id, instead of prospectId; with campaignId or channel to say which campaign."),
+        channel: { type: "string", enum: ["email", "linkedin"], description: "For reply: email or linkedin. Defaults to the channel they last wrote on." },
+        category: { type: "string", description: `For set_category: for example ${CAMPAIGN_CATEGORIES.join(", ")}, or null to clear it.` },
+        text: { type: "string", description: "For reply: the message, plain text." },
+      },
+      required: ["action"],
+    },
+    details: async (actor, args) =>
+      campaignActionNames(actor, {
+        action: optionalStr(args.action) ?? null,
+        campaignId: optionalStr(args.campaignId) ?? null,
+        prospectId: optionalStr(args.prospectId) ?? null,
+        contactId: optionalStr(args.contactId) ?? null,
+        channel: optionalStr(args.channel) ?? null,
+      }),
+    describe: (args, name) => {
+      const action = str(args.action);
+      const campaign = chatTargetName(name, str(args.campaignId), "a campaign Orbit can't find");
+      const refusedProspect = chatTargetName(name, "prospect:refused", "");
+      const person = chatTargetName(name, "prospect:person", str(args.contactId) ? name(args.contactId) : "someone Orbit can't find");
+      const inCampaign = chatTargetName(name, "prospect:campaign", str(args.campaignId) || !refusedProspect ? campaign : "a campaign");
+      if (action === "add") {
+        const companies = strings(args.companyIds);
+        const people = companies.length > 0 ? companies : strings(args.contactIds);
+        const shown = people.slice(0, 8).map((id) => name(id));
+        const more = people.length > shown.length ? [`and ${people.length - shown.length} more`] : [];
+        const title =
+          companies.length > 0
+            ? `Add the people at ${companies.length} ${companies.length === 1 ? "company" : "companies"} to ${campaign}`
+            : `Add ${people.length} ${people.length === 1 ? "person" : "people"} to ${campaign}`;
+        return { title, lines: [...shown, ...more] };
+      }
+      if (action === "pause" || action === "resume") {
+        const verb = action === "pause" ? "Pause" : "Resume";
+        if (str(args.campaignId) && !str(args.prospectId) && !str(args.contactId)) return { title: `${verb} ${campaign}`, lines: [] };
+        return { title: `${verb} ${person} in ${inCampaign}`, lines: [refusedProspect] };
+      }
+      if (action === "remove") return { title: `Remove ${person} from ${inCampaign}`, lines: [refusedProspect] };
+      if (action === "set_category") {
+        const category = str(args.category);
+        return { title: category ? `Set ${person} to ${category}` : `Clear ${person}'s category`, lines: [`In ${inCampaign}`, refusedProspect] };
+      }
+      if (action === "reply") {
+        const to = chatTargetName(name, "reply:person", "someone Orbit can't find");
+        const refused = chatTargetName(name, "reply:refused", "");
+        const linkedin = chatTargetName(name, "reply:channel", str(args.channel)) === "linkedin";
+        const title = linkedin ? `Send on LinkedIn as ${chatTargetName(name, "reply:sender", "the account's member")}` : `Reply to ${to}`;
+        return { title, lines: [linkedin ? `To ${to}` : `In ${chatTargetName(name, "reply:campaign", "their campaign")}`, str(args.text), refused] };
+      }
+      return { title: "Change a campaign", lines: [] };
+    },
+    run: async (actor, args) =>
+      runCampaignAction(
+        actor,
+        {
+          action: optionalStr(args.action) ?? null,
+          campaignId: optionalStr(args.campaignId) ?? null,
+          contactIds: strings(args.contactIds),
+          companyIds: strings(args.companyIds),
+          prospectId: optionalStr(args.prospectId) ?? null,
+          contactId: optionalStr(args.contactId) ?? null,
+          channel: optionalStr(args.channel) ?? null,
+          category: args.category === null ? null : typeof args.category === "string" ? args.category : undefined,
+          text: typeof args.text === "string" ? args.text : null,
+        },
+        { provenance: { operation: `campaign_${str(args.action) || "action"}`, ...provenanceSource() }, allowReply: true },
+      ),
+  },
+  {
     name: "list_email_templates",
     label: "Reading email templates",
     description: "Saved email templates with their subject, body and tags. Tokens like {{first_name}} are filled in per person.",
@@ -3574,7 +3759,10 @@ const TOOL_LIST: AssistantTool[] = [
       const topics = guideTopics(context);
       const topic = oneOf(args.topic, topics);
       if (!topic) return { error: `Choose a topic: ${topics.join(", ")}.`, field: "topic" };
-      if (topic === "cold_email") return { topic, guide: coldEmailGuide(actor.workspaceName), ...(await coldEmailPlaybook(actor)) };
+      if (topic === "cold_email") {
+        const [providers, playbook] = await Promise.all([connectedProviders(actor).catch((): string[] => []), coldEmailPlaybook(actor)]);
+        return { topic, guide: coldEmailGuide(actor.workspaceName, { email: providers.includes("smartlead"), linkedin: providers.includes("heyreach") }), ...playbook };
+      }
       if (topic === "workflows") return { topic, guide: `${WORKFLOWS_RULES}\n${WORKFLOW_GUIDE}` };
       if (topic === "eclipse") return withEclipseScope(actor, async () => ({ topic, guide: eclipseGuideText(actor.workspaceName) }));
       if (topic === "linear") await assertLinearHere(actor);
@@ -3598,11 +3786,20 @@ const TOOL_LIST: AssistantTool[] = [
       const offered = toolDomainNames(context);
       const wanted = strings(args.domains).map((domain) => oneOf(domain, offered)).filter((domain): domain is ToolDomain => Boolean(domain));
       if (wanted.length === 0) return { error: `Choose at least one area: ${offered.join(", ")}.`, field: "domains" };
+      const before = context.loaded ?? [];
+      const used = [...before.filter((domain) => !wanted.includes(domain)), ...new Set(wanted)];
+      const fits = fittingDomains(used, context, used);
+      const loading = [...new Set(wanted)].filter((domain) => fits.includes(domain));
+      const left = [...new Set(wanted)].filter((domain) => !fits.includes(domain));
+      const unloaded = fittingDomains(before, context, before).filter((domain) => !fits.includes(domain));
+      if (loading.length === 0) return { error: TOO_MANY_TOOLS, notLoaded: left, field: "domains" };
       return {
-        loaded: [...new Set(wanted)].map((domain) => ({
+        loaded: loading.map((domain) => ({
           domain,
           tools: domainTools(domain, context).map((name) => ({ name, description: firstSentence(TOOL_LIST.find((tool) => tool.name === name)?.description ?? "") })),
         })),
+        ...(left.length > 0 ? { notLoaded: left, notLoadedReason: TOO_MANY_TOOLS } : {}),
+        ...(unloaded.length > 0 ? { unloaded, unloadedReason: UNLOADED_AREAS } : {}),
         note: "These tools are now loaded, with their full inputs, from your next step for the rest of this conversation.",
       };
     },
@@ -6502,7 +6699,7 @@ export function toolLabel(name: string) {
   return findTool(name)?.label ?? (Object.hasOwn(RETIRED_TOOLS, name) ? RETIRED_TOOLS[name].label : name);
 }
 
-export type ToolOptions = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean; domains?: readonly ToolDomain[] };
+export type ToolOptions = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean; domains?: readonly ToolDomain[]; used?: readonly ToolDomain[] };
 
 export function toolDomain(name: string) {
   const tool = findTool(name);
@@ -6531,14 +6728,13 @@ export function assistantTools(options: ToolOptions = {}) {
     .map((tool) => (options.multiWorkspace === true ? tool : withoutWorkspaceParam(tool)))
     .map((tool) => (tool.name === "find_tools" ? { ...tool, ...findToolsSchema(options) } : tool.name === "guide" ? { ...tool, ...guideSchema(options) } : tool));
   if (!options.domains) return offered;
-  const allowed = toolDomainNames(options);
-  const order = [...CORE_TOOLS, ...options.domains.filter((domain) => allowed.includes(domain)).flatMap((domain) => domainTools(domain, options))];
+  const order = [...CORE_TOOLS, ...fittingDomains(options.domains, options, options.used ?? []).flatMap((domain) => domainTools(domain, options))];
   const byName = new Map(offered.map((tool) => [tool.name, tool]));
   return [...new Set(order)].flatMap((name) => byName.get(name) ?? []);
 }
 
 export function toolDefinitions(options: ToolOptions = {}) {
-  return assistantTools(options).map((tool) => ({
+  return assistantTools({ ...options, domains: options.domains ?? TOOL_DOMAIN_NAMES }).map((tool) => ({
     type: "function" as const,
     function: { name: tool.name, description: toolDescription(tool), parameters: tool.parameters },
   }));
@@ -6589,6 +6785,8 @@ const EXTERNAL_TOOLS = new Set([
   "read_chat_file",
   "list_workflow_approvals",
   "team_chat",
+  "campaigns",
+  "campaign_action",
 ]);
 
 const OWN_FIELDS: Record<string, ReadonlySet<string>> = {
@@ -6834,7 +7032,19 @@ export async function runTool(
   actor: UserActor,
   name: string,
   args: Args,
-  options: { deadline?: number; callId?: string; defer?: Defer; unattended?: boolean; approval?: DocApproval; source?: AssistantSource; fence?: string; multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean } = {},
+  options: {
+    deadline?: number;
+    callId?: string;
+    defer?: Defer;
+    unattended?: boolean;
+    approval?: DocApproval;
+    source?: AssistantSource;
+    fence?: string;
+    multiWorkspace?: boolean;
+    eclipse?: boolean;
+    linear?: boolean;
+    loaded?: readonly ToolDomain[];
+  } = {},
 ) {
   if (options.unattended && name !== "save_doc") return { error: "Only doc edits can run without approval. Propose this for approval instead." };
   const resolved = resolveTool(name, args);
@@ -6882,6 +7092,7 @@ export async function runTool(
           multiWorkspace: options.multiWorkspace === true,
           eclipse: options.eclipse,
           linear: options.linear,
+          loaded: options.loaded,
         };
         return scope ? runAcross(tool, actor, scope, cleaned, context) : tool.run(actor, cleaned, context);
       }),

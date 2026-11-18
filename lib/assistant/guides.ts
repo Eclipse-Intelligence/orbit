@@ -30,10 +30,29 @@ export function eclipseClientRule(workspaceName: string) {
   return `In ${name}, use the Eclipse client named '${name}'. Find it with list_clients and pass its clientId on every call. Use another client only when the user names it. If no client of that name exists, say so and ask the user which client to use before going on.`;
 }
 
-export function coldEmailGuide(workspaceName: string) {
+export type CampaignRouting = { email: boolean; linkedin: boolean };
+
+export function campaignRoutingRules(routing: CampaignRouting) {
+  const rules: string[] = [];
+  if (routing.email) {
+    rules.push(
+      "Smartlead is connected, so a first email to someone this workspace hasn't written to or met goes into an email campaign, never send_email. Find the right campaign with campaigns (view list, channel email) and propose campaign_action add with their contact ids. The campaign's steps are written in Smartlead and Orbit fills its variables, so don't draft the email or run cold_email_check for it. Orbit skips anyone it shouldn't contact and says why.",
+    );
+  }
+  if (routing.linkedin) {
+    rules.push("When the person has no email address, offer a LinkedIn campaign instead: campaigns view list with channel linkedin, then campaign_action add.");
+  }
+  if (rules.length === 0) return "";
+  return `## Campaigns first\n${rules.join(" ")} campaigns and campaign_action are in find_tools campaigns.\n\n`;
+}
+
+export function coldEmailGuide(workspaceName: string, routing: CampaignRouting = { email: false, linkedin: false }) {
   const name = workspaceName.trim() || "the business";
+  const who = routing.email
+    ? `## Writing one yourself\nOnly for someone the workspace has already written to or met, which Orbit tells you by skipping them as Written to or met when you add them to a campaign.`
+    : `Writing to a prospect who doesn't know the user yet (a first email, cold outreach, "email X about ${name}") is its own job.`;
   return `# First emails to prospects
-Writing to a prospect who doesn't know the user yet (a first email, cold outreach, "email X about ${name}") is its own job. Follow the playbook below, then run cold_email_check with all your evidence and what their company already offers, fix what it flags, and only then propose send_email. The bar is an email worth a busy expert's time. It never tells them about themselves, it hooks on a recent trigger or their own point, and it gives them one specific thing they probably don't know: client proof from the proof list in Knowledge (the user keeps it, so use any entry as it stands and never check it against Orbit or mail), a finding from a published article or source, or something made for them. It is 50 to 90 words with no link or attachment and at most one figure, and never puts proof and a finding together. If you can't find that, say it's a NO-SEND and what's missing. Tell the user the angle, the signal and its date, the new information and its source, the proof entry, your honest view of whether it's worth replying to, and anything you couldn't verify. This doesn't apply to replies or emails to people the user already talks to.
+${campaignRoutingRules(routing)}${who} Follow the playbook below, then run cold_email_check with all your evidence and what their company already offers, fix what it flags, and only then propose send_email. The bar is an email worth a busy expert's time. It never tells them about themselves, it hooks on a recent trigger or their own point, and it gives them one specific thing they probably don't know: client proof from the proof list in Knowledge (the user keeps it, so use any entry as it stands and never check it against Orbit or mail), a finding from a published article or source, or something made for them. It is 50 to 90 words with no link or attachment and at most one figure, and never puts proof and a finding together. If you can't find that, say it's a NO-SEND and what's missing. Tell the user the angle, the signal and its date, the new information and its source, the proof entry, your honest view of whether it's worth replying to, and anything you couldn't verify. This doesn't apply to replies or emails to people the user already talks to.
 
 Before sending a first email to an address Orbit hasn't confirmed (get_contact's emailCheck isn't valid, or is stale), check it with verify_email. Never send to an invalid address. Tell the user instead.
 

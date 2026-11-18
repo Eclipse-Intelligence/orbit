@@ -3,7 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { PROPOSED, type CompanionResult } from "@/companion/src/protocol";
 import { applyCompanionResult, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { ASSISTANT_TOOLS, WORKSPACE_READ_TOOLS, crossWorkspaceRefusal, runTool } from "@/lib/assistant/tools";
+import { ASSISTANT_TOOLS, ORBIT_TOOL_LIMIT, WORKSPACE_READ_TOOLS, crossWorkspaceRefusal, runTool, toolDefinitions } from "@/lib/assistant/tools";
 import { createBoard } from "@/lib/crm/boards";
 import { runCaptureAction } from "@/lib/crm/capture-actions";
 import { createCompany, getCompany } from "@/lib/crm/companies";
@@ -82,7 +82,7 @@ describe("assistant across workspaces", () => {
     assert.deepEqual(withParam, [...WORKSPACE_READ_TOOLS].sort());
     for (const name of ["get_overview", "get_pipeline", "get_board", "list_quiet_relationships", "search_records", "get_company"]) assert.ok(withParam.includes(name), name);
     assert.ok(ASSISTANT_TOOLS.every((tool) => !tool.write || !("workspace" in ((tool.parameters.properties ?? {}) as object))));
-    assert.ok(ASSISTANT_TOOLS.length <= 126);
+    assert.ok(toolDefinitions({ multiWorkspace: true, eclipse: true, linear: true }).length <= ORBIT_TOOL_LIMIT);
   });
 
   it("reads the current workspace by default, exactly as before", async () => {

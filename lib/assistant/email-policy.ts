@@ -58,6 +58,7 @@ export const EMAIL_POLICY: Record<string, EmailRule> = {
   respond_to_meeting: CONTACTS_SOMEONE,
   send_proposal: CONTACTS_SOMEONE,
   team_chat: CONTACTS_SOMEONE,
+  campaign_action: CONTACTS_SOMEONE,
   update_proposal_steps: CONTACTS_SOMEONE,
   withdraw_proposal: CONTACTS_SOMEONE,
   revise_proposal: CONTACTS_SOMEONE,

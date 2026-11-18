@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Db } from "@/lib/db/pool";
-import { actorKey } from "@/lib/crm/context";
+import { actorKey, withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { stableStringify } from "@/lib/crm/normalize";
 import { enqueueWebhookDeliveries } from "@/lib/crm/webhooks";
@@ -154,6 +154,78 @@ export async function replayOrRun<T>(
       workspace_id, actor_key, idempotency_key, request_hash, status_code, response
     ) values ($1, $2, $3, $4, $5, $6::jsonb)`,
     [actor.workspaceId, actorKey(actor), key, hash, status, JSON.stringify(body)],
+  );
+  return { status, body, replayed: false };
+}
+
+const PENDING = 0;
+const STALE_CLAIM_SECONDS = 300;
+
+export const REQUEST_IN_PROGRESS = "A request with this idempotency key is still running. Try again in a minute.";
+
+type StoredKey<T> = { id: string; status_code: number; request_hash: string; response: T; stale: boolean };
+
+function inProgress() {
+  return new CrmError("idempotency_in_progress", REQUEST_IN_PROGRESS, 409);
+}
+
+async function claimKey<T>(db: Db, actor: Actor, key: string, hash: string): Promise<{ claimed: string } | MutationOutcome<T>> {
+  const inserted = await db.query<{ id: string }>(
+    `insert into crm.idempotency_keys (workspace_id, actor_key, idempotency_key, request_hash, status_code, response)
+     values ($1, $2, $3, $4, $5, '{"pending":true}'::jsonb)
+     on conflict (workspace_id, actor_key, idempotency_key) do nothing
+     returning id`,
+    [actor.workspaceId, actorKey(actor), key, hash, PENDING],
+  );
+  if (inserted.rows[0]) return { claimed: inserted.rows[0].id };
+  const existing = await db.query<StoredKey<T>>(
+    `select id, status_code, request_hash, response, created_at < now() - make_interval(secs => $4) as stale
+     from crm.idempotency_keys
+     where workspace_id = $1 and actor_key = $2 and idempotency_key = $3`,
+    [actor.workspaceId, actorKey(actor), key, STALE_CLAIM_SECONDS],
+  );
+  const row = existing.rows[0];
+  if (!row) throw inProgress();
+  if (row.request_hash !== hash) {
+    throw new CrmError("idempotency_conflict", "This idempotency key was already used for a different request.", 409);
+  }
+  if (row.status_code !== PENDING) return { status: row.status_code, body: row.response, replayed: true };
+  if (!row.stale) throw inProgress();
+  const taken = await db.query<{ id: string }>(
+    `update crm.idempotency_keys set created_at = now()
+     where id = $1 and status_code = $2 and created_at < now() - make_interval(secs => $3)
+     returning id`,
+    [row.id, PENDING, STALE_CLAIM_SECONDS],
+  );
+  if (!taken.rows[0]) throw inProgress();
+  return { claimed: row.id };
+}
+
+export async function replayOrRunOutside<T>(
+  actor: Actor,
+  key: string | null | undefined,
+  hash: string,
+  status: number,
+  run: () => Promise<T>,
+): Promise<MutationOutcome<T>> {
+  if (!key) return { status, body: await run(), replayed: false };
+  const claim = await withActor(actor, (db) => claimKey<T>(db, actor, key, hash));
+  if (!("claimed" in claim)) return claim;
+  let body: T;
+  try {
+    body = await run();
+  } catch (error) {
+    await withActor(actor, (db) =>
+      db.query("update crm.idempotency_keys set created_at = now() - make_interval(secs => $3) where id = $1 and status_code = $2", [
+        claim.claimed,
+        PENDING,
+        STALE_CLAIM_SECONDS * 2,
+      ]),
+    ).catch(() => undefined);
+    throw error;
+  }
+  await withActor(actor, (db) =>
+    db.query("update crm.idempotency_keys set status_code = $2, response = $3::jsonb where id = $1 and status_code = $4", [claim.claimed, status, JSON.stringify(body), PENDING]),
   );
   return { status, body, replayed: false };
 }

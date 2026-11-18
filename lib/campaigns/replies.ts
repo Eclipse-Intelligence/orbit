@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { connectedContext, mightHaveSent, providerError, type ProviderOptions } from "@/lib/campaigns/context";
 import { CAMPAIGN_AUDIT_EVENTS, leadRef, readProspectRef, type ProspectRef } from "@/lib/campaigns/manage";
 import { FILABLE_SQL, fileMessageActivity, saveThread, threadFetched, type FilableMessage } from "@/lib/campaigns/messages";
 import type { CampaignProvider, ProviderContext, ReplyTarget } from "@/lib/campaigns/providers";
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
@@ -18,7 +18,15 @@ const CLIENT_KEY = /^[A-Za-z0-9_:.-]{1,200}$/;
 
 export type SendState = "sending" | "sent" | "unknown" | "failed";
 
-export type ReplyResult = { messageId: string; sendState: SendState; repeated: boolean };
+export type ReplyResult = { messageId: string; sendState: SendState; repeated: boolean; note?: string };
+
+export function repeatedNote(at: Date, state: SendState = "sent", now = Date.now()) {
+  const minutes = Math.max(0, Math.round((now - at.getTime()) / 60_000));
+  const when = minutes === 0 ? "just now" : minutes === 1 ? "1 minute ago" : `${minutes.toLocaleString("en-GB")} minutes ago`;
+  if (state === "unknown") return `Already tried ${when} and it may not have gone. Not sent again; check the thread.`;
+  if (state === "sending") return `Started sending ${when}, not sent again.`;
+  return `Already sent ${when}, not sent again.`;
+}
 
 type StoredTarget = {
   conversation_id: string | null;
@@ -34,6 +42,28 @@ type SenderRow = { user_id: string | null; name: string | null; member: boolean 
 
 export function onlySenderMessage(name: string) {
   return `Only ${name} can reply from this LinkedIn account.`;
+}
+
+export const KEY_REUSED = "This client key was already used for a different reply.";
+export const KEY_ELSEWHERE = "This client key was already used for a reply to someone else.";
+const SAME_REPLY_MS = 10 * 60_000;
+
+function derivedKey(actor: UserActor, prospectId: string, text: string) {
+  const bucket = Math.floor(Date.now() / SAME_REPLY_MS);
+  return `auto-${createHash("sha256").update(`${actor.userId}|${prospectId}|${text}`).digest("hex").slice(0, 40)}-${bucket}`;
+}
+
+async function recentSameReply(actor: UserActor, prospectId: string, text: string) {
+  return withActor(actor, async (db) => {
+    const found = await db.query<{ id: string; send_state: SendState; created_at: Date }>(
+      `select id, send_state, created_at from crm.campaign_messages
+       where workspace_id = $1 and prospect_id = $2 and direction = 'outbound' and sent_by_user_id = $3 and body = $4
+         and send_state is not null and send_state <> 'failed' and created_at > now() - make_interval(secs => $5)
+       order by created_at desc limit 1`,
+      [actor.workspaceId, prospectId, actor.userId, text, SAME_REPLY_MS / 1000],
+    );
+    return found.rows[0] ?? null;
+  });
 }
 
 export const UNLINKED_SENDER = "Link this LinkedIn account to someone in Settings › Tools › HeyReach first.";
@@ -141,11 +171,16 @@ export async function replyToProspect(
 ): Promise<ReplyResult> {
   assertPerson(actor);
   assertScope(actor.scopes, "campaigns:write");
-  const clientKey = input.clientKey?.trim() || randomUUID();
-  if (!CLIENT_KEY.test(clientKey)) throw new CrmError("invalid_input", "Try sending again.", 400, { field: "clientKey" });
+  const given = input.clientKey?.trim() || null;
+  if (given && !CLIENT_KEY.test(given)) throw new CrmError("invalid_input", "Try sending again.", 400, { field: "clientKey" });
   const provenance = options.provenance ?? { operation: "reply_to_prospect", source: "web" };
   let read = await readTarget(actor, prospectId);
   const text = cleanText(input.text, read.prospect.channel);
+  if (!given) {
+    const recent = await recentSameReply(actor, read.prospect.id, text);
+    if (recent) return { messageId: recent.id, sendState: recent.send_state, repeated: true, note: repeatedNote(recent.created_at, recent.send_state) };
+  }
+  const clientKey = given ?? derivedKey(actor, read.prospect.id, text);
   if (read.permission && !read.permission.canReply) throw new CrmError("forbidden", read.permission.reason ?? "You can't reply from this account.", 403);
   if (read.prospect.state !== "pushed") throw new CrmError("conflict", "This person hasn't been added to the campaign yet.", 409);
   const { provider, context } = await connectedContext(actor.workspaceId, read.prospect.provider, options);
@@ -165,17 +200,27 @@ export async function replyToProspect(
     if (!target) throw new CrmError("conflict", `${provider.name} hasn't sent this person anything yet.`, 409);
   }
 
-  const begun = await query<{ message_id: string; send_state: SendState; created: boolean }>("select * from private.campaign_reply_begin($1, $2, $3, $4, $5, $6::jsonb)", [
-    actor.workspaceId,
-    read.prospect.id,
-    actor.userId,
-    text,
-    clientKey,
-    JSON.stringify({ conversationId: target.conversationId, senderId: target.senderId, statsId: target.statsId }),
-  ]);
+  let begun;
+  try {
+    begun = await query<{ message_id: string; send_state: SendState; created: boolean }>("select * from private.campaign_reply_begin($1, $2, $3, $4, $5, $6::jsonb)", [
+      actor.workspaceId,
+      read.prospect.id,
+      actor.userId,
+      text,
+      clientKey,
+      JSON.stringify({ conversationId: target.conversationId, senderId: target.senderId, statsId: target.statsId }),
+    ]);
+  } catch (error) {
+    if (isPgError(error) && error.code === "22023") throw new CrmError("conflict", KEY_ELSEWHERE, 409, { field: "clientKey" });
+    throw pgFailure(error) ?? error;
+  }
   const row = begun.rows[0];
   if (!row) throw new CrmError("internal_error", "Couldn't send. Try again.", 500);
-  if (!row.created) return { messageId: row.message_id, sendState: row.send_state, repeated: true };
+  if (!row.created) {
+    const stored = await withActor(actor, (db) => db.query<{ body: string; created_at: Date }>("select body, created_at from crm.campaign_messages where id = $1 and workspace_id = $2", [row.message_id, actor.workspaceId]));
+    if ((stored.rows[0]?.body ?? null) !== text) throw new CrmError("conflict", KEY_REUSED, 409, { field: "clientKey" });
+    return { messageId: row.message_id, sendState: row.send_state, repeated: true, note: repeatedNote(stored.rows[0]!.created_at, row.send_state) };
+  }
   try {
     return await sendBegun(actor, provider, context, read.prospect, target, text, row.message_id, provenance);
   } catch (error) {

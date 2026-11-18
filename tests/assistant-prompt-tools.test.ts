@@ -4,7 +4,7 @@ import { ALL_TOOLS_LOADED, decideActions, history, sendMessage, type AssistantEv
 import { cacheMarkersFor, complete, resetCacheMarkers, withCacheMarkers } from "@/lib/assistant/gateway";
 import { eclipseGuideText, GUIDE_TOPICS, LINEAR_GUIDE } from "@/lib/assistant/guides";
 import { stablePrompt, systemPrompt, turnContext, UNBRANDED } from "@/lib/assistant/prompt";
-import { CORE_TOOLS, describeAction, findTool, guideTopics, loadedDomains, runTool, TOOL_DOMAIN_NAMES, TOOL_DOMAINS, toolDefinitions, toolDomainNames } from "@/lib/assistant/tools";
+import { assistantTools, CORE_TOOLS, describeAction, findTool, guideTopics, loadedDomains, runTool, TOOL_DOMAIN_NAMES, TOOL_DOMAINS, toolDefinitions, toolDomainNames } from "@/lib/assistant/tools";
 import { fenceText, fenceUntrusted, untrustedToken, withoutMarkers } from "@/lib/assistant/untrusted";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -151,7 +151,7 @@ describe("assistant guides and the system prompt", () => {
 describe("tool loading", () => {
   it("covers every tool exactly once, between the core set and the areas", () => {
     const placed = [...CORE_TOOLS, ...TOOL_DOMAIN_NAMES.flatMap((domain) => TOOL_DOMAINS[domain].tools)];
-    const names = toolDefinitions({ multiWorkspace: true }).map((tool) => tool.function.name);
+    const names = assistantTools({ multiWorkspace: true }).map((tool) => tool.name);
     assert.deepEqual([...placed].sort(), [...names].sort());
     assert.equal(new Set(placed).size, placed.length);
   });

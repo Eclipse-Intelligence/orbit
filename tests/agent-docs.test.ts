@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { ASSISTANT_TOOLS, CORE_TOOLS, TOOL_DOMAIN_NAMES, TOOL_DOMAINS } from "@/lib/assistant/tools";
+import { ASSISTANT_TOOLS, CORE_TOOLS, PROVIDER_ADDED_TOOLS, REQUEST_TOOL_LIMIT, TOOL_DOMAIN_NAMES, TOOL_DOMAINS, toolDefinitions } from "@/lib/assistant/tools";
 import { SCOPES } from "@/lib/crm/scopes";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
 import { createCrmMcpServer } from "@/server/mcp/server";
@@ -80,9 +80,22 @@ describe("agent docs", () => {
       `The assistant sends ${CORE_TOOLS.length} core tools on every call. Keep it to 30 or fewer and put the rest in an area of TOOL_DOMAINS (see "Adding a tool" in docs/assistant.md).`,
     );
     assert.ok(
-      ASSISTANT_TOOLS.length <= 126,
-      `The assistant has ${ASSISTANT_TOOLS.length} tools. A conversation that loads every area sends them all, ChatGPT adds web_search and Orbit Agent adds continue_result, and some model APIs refuse requests with more than 128 tools. Merge overlapping tools to get back to 126 or fewer.`,
+      ASSISTANT_TOOLS.length <= REQUEST_TOOL_LIMIT,
+      `The assistant has ${ASSISTANT_TOOLS.length} tools. The cap is ${REQUEST_TOOL_LIMIT} (raised from 126 for the two campaign tools); a chat that loads every area stops at the per-chat area limit. Merge overlapping tools to stay at ${REQUEST_TOOL_LIMIT} or fewer.`,
     );
+    for (const multiWorkspace of [true, false]) {
+      for (const eclipse of [true, false]) {
+        for (const linear of [true, false]) {
+          const definitions = toolDefinitions({ multiWorkspace, eclipse, linear, domains: TOOL_DOMAIN_NAMES, used: TOOL_DOMAIN_NAMES });
+          const sent = definitions.length;
+          for (const name of ["check_web", "social_lookup", "remember"]) assert.ok(definitions.some((tool) => tool.function.name === name), `${name} is never dropped`);
+          assert.ok(
+            sent + PROVIDER_ADDED_TOOLS <= REQUEST_TOOL_LIMIT,
+            `A chat that loads every area sends ${sent} tools, and ChatGPT adds web_search and Orbit Agent continue_result. Some model APIs refuse more than ${REQUEST_TOOL_LIMIT}.`,
+          );
+        }
+      }
+    }
     const placed = [...CORE_TOOLS, ...TOOL_DOMAIN_NAMES.flatMap((domain) => TOOL_DOMAINS[domain].tools)];
     const names = ASSISTANT_TOOLS.map((tool) => tool.name);
     const unplaced = names.filter((name) => !placed.includes(name));
