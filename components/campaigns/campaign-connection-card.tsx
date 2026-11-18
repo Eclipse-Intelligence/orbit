@@ -82,7 +82,11 @@ export default function CampaignConnectionCard({ view, children }: { view: Conne
           )}
           {view.webhookUrl && (
             <div className="flex flex-col gap-1.5">
-              <p className="caption-style text-subtle">Add the reply webhook to each campaign in {name}.</p>
+              <p className="caption-style text-subtle">
+                {view.provider === "heyreach"
+                  ? "HeyReach didn't accept Orbit's webhooks. In HeyReach › Integrations › Webhooks, add one for each event, for all campaigns, with this address."
+                  : `Add the reply webhook to each campaign in ${name}.`}
+              </p>
               <div className="flex min-w-0 items-center gap-2">
                 <code className="ui-style text-soft min-w-0 flex-1 truncate">{view.webhookUrl}</code>
                 <CopyButton text={view.webhookUrl} ariaLabel="Copy the webhook URL" />

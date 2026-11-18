@@ -748,7 +748,7 @@ export const heyReachProvider: CampaignProvider = {
                 occurredAt: tag.at,
                 dedupeKey: `heyreach:${tag.campaignId}:${linkedin}:auto_tag:${tag.autoTag}`,
                 category,
-                payload: { autoTag: tag.autoTag, fromWebhook: true },
+                payload: { category, autoTag: tag.autoTag, fromWebhook: true },
               },
             ]
           : [],

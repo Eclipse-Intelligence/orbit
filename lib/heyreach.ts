@@ -760,7 +760,9 @@ export const HEYREACH_AUTO_TAG_EVENTS: Record<string, HeyReachAutoTag> = {
 
 export const HEYREACH_POSITIVE_TAG_EVENT = "LEAD_AUTO_TAGGED_POSITIVE";
 
-export const HEYREACH_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS), HEYREACH_TAG_EVENT, ...Object.keys(HEYREACH_AUTO_TAG_EVENTS)];
+export const HEYREACH_CORE_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS)];
+
+export const HEYREACH_WEBHOOK_EVENTS: string[] = [...HEYREACH_CORE_WEBHOOK_EVENTS, HEYREACH_TAG_EVENT, ...Object.keys(HEYREACH_AUTO_TAG_EVENTS)];
 
 export function heyReachWebhookName(eventType: string) {
   const what = eventType === HEYREACH_REPLY_EVENT ? "replies" : eventType.toLowerCase().replace(/_/g, " ");

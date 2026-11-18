@@ -458,6 +458,36 @@ describe("campaign integration upgrade", () => {
         [owner.workspaceId],
       );
       assert.equal((await getCampaign(owner, linkedinId)).leadFunnel?.interested, 1);
+
+      const waiting = await sql<{ id: string }>("select id from crm.campaign_events where prospect_id = $1 and kind = 'category' and fired_at is null", [fay.id]);
+      if (waiting.length > 0) await sql("select private.campaign_fire_events($1::uuid[])", [waiting.map((item) => item.id)]);
+      const fired = (await workflowEvents("category")).filter((item) => item.data.prospectId === fay.id);
+      assert.equal(fired.length, 1);
+      assert.equal((fired[0].data as Record<string, unknown>).category, "Interested");
+      assert.equal(campaignTriggerMatches({ type: "campaign_event", event: "positive", channel: "linkedin" }, fired[0].data as Record<string, unknown>), true);
+    });
+
+    it("saves a HeyReach auto-tag for someone Orbit hasn't seen in the campaign yet", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "heyreach"))!;
+      const shapes = mock.method(console, "info", () => undefined);
+      try {
+        const response = await handleCampaignWebhook(
+          new Request(`${ORIGIN}/api/webhooks/heyreach?w=${owner.workspaceId}&secret=${encodeURIComponent(secret)}`, {
+            method: "POST",
+            body: JSON.stringify({ event_type: "LEAD_AUTO_TAGGED_POSITIVE", campaign: { id: 9101 }, lead: { profile_url: "https://www.linkedin.com/in/gus-new" }, tags: ["Warm"], timestamp: minutesAgo(2) }),
+          }),
+          "heyreach",
+          { syncAfter: false },
+        );
+        assert.deepEqual(await response.json(), { saved: 1 });
+      } finally {
+        shapes.mock.restore();
+      }
+      const [gus] = await prospect(linkedinId, "linkedin.com/in/gus-new");
+      const row = (await sql<{ category: string | null; state: Record<string, unknown> }>("select category, provider_state as state from crm.campaign_prospects where id = $1", [gus.id]))[0];
+      assert.equal(row.category, "Interested");
+      assert.ok(row.state.positiveAt, "the tag lands on the person the event just added");
+      assert.deepEqual(row.state.tags, ["Warm"]);
     });
 
     it("matches the trigger on step, action, count, channel and campaign", () => {

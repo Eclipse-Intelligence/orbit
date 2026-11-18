@@ -53,6 +53,7 @@ async function saveWebhookActions(workspaceId: string, providerId: CampaignProvi
   if (!actions.campaignExternalId) return unrouted(payload, "no campaign id");
   const campaign = await knownCampaign(workspaceId, providerId, actions.campaignExternalId);
   if (!campaign) return unrouted(payload, "a campaign Orbit doesn't have");
+  const saved = await saveProviderEvents(campaign.campaign_id, actions.events, !campaign.backfilled);
   if (actions.tags && Object.keys(actions.tags.patch).length > 0) {
     await query("select private.campaign_prospect_tags($1, $2, $3, $4, $5::jsonb, $6)", [
       workspaceId,
@@ -63,7 +64,6 @@ async function saveWebhookActions(workspaceId: string, providerId: CampaignProvi
       actions.tags.positive,
     ]);
   }
-  const saved = await saveProviderEvents(campaign.campaign_id, actions.events, !campaign.backfilled);
   const key = createHash("sha256").update(receiptKey).digest("hex");
   const receipt = await query<{ fresh: boolean }>("select private.campaign_webhook_receipt($1, $2, $3) as fresh", [workspaceId, providerId, key]);
   if (saved.length > 0 && campaign.backfilled) syncSoon(workspaceId, providerId, options);

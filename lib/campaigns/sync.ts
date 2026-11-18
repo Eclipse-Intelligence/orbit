@@ -89,7 +89,7 @@ export type CampaignSyncReport = {
   stopped: number;
 };
 
-type Target = {
+export type Target = {
   connection_id: string;
   workspace_id: string;
   provider: string;
@@ -642,7 +642,7 @@ async function finish(target: Target, error: string | null, details?: Record<str
   ]);
 }
 
-async function syncConnection(target: Target, options: CampaignSyncOptions, report: CampaignSyncReport) {
+export async function syncConnection(target: Target, options: CampaignSyncOptions, report: CampaignSyncReport) {
   const provider = campaignProvider(target.provider);
   if (!provider) return;
   const actor = await syncActor(target.workspace_id, target.connected_by);
@@ -657,6 +657,10 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
   report.connections += 1;
   const outOfTime = AbortSignal.timeout(Math.max(1_000, options.deadline - Date.now() - STEP_RESERVE_MS));
   try {
+    const fresh = await query<Target>("select * from private.campaign_connection_targets($1)", [target.workspace_id]);
+    const current = fresh.rows.find((row) => row.connection_id === target.connection_id && row.key_fingerprint === target.key_fingerprint);
+    if (!current) return;
+    target = current;
     const context: ProviderContext = {
       key: decryptSecret(target.key_encrypted),
       workspaceId: target.workspace_id,

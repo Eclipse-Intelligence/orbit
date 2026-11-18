@@ -3,7 +3,9 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { campaignConnectionViews, keyFingerprint, KEY_TAKEN, removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
 import { campaignProvider, heyReachEvents } from "@/lib/campaigns/providers";
 import { linkCampaignSender, listCampaignSenders, SENDER_LINKED } from "@/lib/campaigns/senders";
-import { syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
+import { syncCampaigns, syncConnection, type SyncedEvent, type Target } from "@/lib/campaigns/sync";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { startCampaign } from "@/lib/campaigns/manage";
 import { urlSecrets } from "@/lib/upstream";
 import { getCampaign, importCampaignProspects, listCampaignProspects, listCampaigns } from "@/lib/crm/campaigns";
@@ -868,6 +870,59 @@ describe("campaigns through HeyReach", () => {
       } finally {
         founders.status = "IN_PROGRESS";
       }
+    });
+
+    it("reads the connection again after taking the sync lock, so a webhook accepted without an id is never added twice", async () => {
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = "https://orbit.test";
+      const creates = () => eclipse.calls.filter((call) => call.path === "/webhooks/CreateWebhook").length;
+      try {
+        await sql("update crm.campaign_connections set details = details - 'webhooks' where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]);
+        const stale = (await sql<Target>("select * from private.campaign_connection_targets($1)", [owner.workspaceId])).find((row) => row.provider === "heyreach")!;
+        eclipse.webhooks = [];
+        let listed = 0;
+        eclipse.fail = (path) => {
+          if (path === "/webhooks/CreateWebhook") return new Response(null, { status: 200 });
+          if (path === "/webhooks/GetAllWebhooks") return listed++ === 0 ? new Response(JSON.stringify({ totalCount: 0, items: [] }), { status: 200 }) : new Response("busy", { status: 500 });
+          return null;
+        };
+        eclipse.calls.length = 0;
+        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        assert.equal(creates(), HEYREACH_WEBHOOK_EVENTS.length);
+        eclipse.calls.length = 0;
+        const report = { connections: 0, campaigns: 0, prospects: 0, events: 0, backfilled: 0, busy: [], errors: [], threads: 0, stopped: 0 };
+        await syncConnection(stale, { workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl }, report);
+        assert.equal(report.connections, 1);
+        assert.equal(creates(), 0, "the sync that read the connection earlier sees what the other one saved");
+      } finally {
+        eclipse.fail = undefined;
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+    });
+
+    it("shows the manual webhook address only when the reply or action webhooks are missing, worded for HeyReach", async () => {
+      process.env.SITE_URL = "https://orbit.test";
+      const view = async () => (await campaignConnectionViews(owner)).find((item) => item.provider === "heyreach")!;
+      const setWebhooks = (state: unknown) =>
+        sql("update crm.campaign_connections set details = jsonb_set(details, '{webhooks}', $2::jsonb) where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId, JSON.stringify(state)]);
+      const all = Object.fromEntries(HEYREACH_WEBHOOK_EVENTS.map((event) => [event, "1"]));
+      const withoutTags = Object.fromEntries(HEYREACH_WEBHOOK_EVENTS.filter((event) => event.startsWith("LEAD_") === false).map((event) => [event, "1"]));
+      const withoutReply = Object.fromEntries(HEYREACH_WEBHOOK_EVENTS.slice(1).map((event) => [event, "1"]));
+      try {
+        await sql("update crm.campaigns set sync_state = sync_state - 'webhookFailedAt' where workspace_id = $1", [owner.workspaceId]);
+        await setWebhooks({ events: withoutTags, failedAt: new Date().toISOString() });
+        assert.equal((await view()).webhookUrl, null, "a refused tag event leaves no notice");
+        await setWebhooks({ events: withoutReply, failedAt: new Date().toISOString() });
+        assert.match((await view()).webhookUrl ?? "", /\/api\/webhooks\/heyreach\?w=.+&secret=/);
+        assert.equal((await campaignConnectionViews(member)).find((item) => item.provider === "heyreach")!.webhookUrl, null);
+        await setWebhooks({ events: all, failedAt: null });
+        assert.equal((await view()).webhookUrl, null);
+      } finally {
+        delete process.env.SITE_URL;
+      }
+      const card = readFileSync(path.join(process.cwd(), "components/campaigns/campaign-connection-card.tsx"), "utf8");
+      assert.ok(card.includes("HeyReach didn't accept Orbit's webhooks. In HeyReach › Integrations › Webhooks, add one for each event, for all campaigns, with this address."));
     });
 
     it("forgets the connection's webhooks on disconnect, so a reconnect registers all of them again", async () => {

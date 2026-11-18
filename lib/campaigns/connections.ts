@@ -1,3 +1,4 @@
+import { HEYREACH_CORE_WEBHOOK_EVENTS } from "@/lib/heyreach";
 import { createHash } from "node:crypto";
 import { ACCOUNT_KEY, campaignProvider, CAMPAIGN_PROVIDER_CLIENTS, type CampaignProvider } from "@/lib/campaigns/providers";
 import { listCampaignSenders, saveProviderSenders } from "@/lib/campaigns/senders";
@@ -131,11 +132,11 @@ export async function campaignConnectionViews(actor: Actor): Promise<ConnectionV
     const result = await db.query<{ provider: CampaignProviderId; details: Record<string, unknown>; last_synced_at: Date | null; last_error: string | null; campaigns: number; webhook_failed: boolean }>(
       `select c.provider, c.details, c.last_synced_at, c.last_error,
               (select count(*)::int from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider) as campaigns,
-              (c.details #>> '{webhooks,failedAt}' is not null
+              ((c.details #>> '{webhooks,failedAt}' is not null and not (coalesce(c.details #> '{webhooks,events}', '{}'::jsonb) ?& $2::text[]))
                 or exists (select 1 from crm.campaigns k where k.workspace_id = c.workspace_id and k.provider = c.provider and k.sync_state ? 'webhookFailedAt')) as webhook_failed
        from crm.campaign_connections c
        where c.workspace_id = $1`,
-      [actor.workspaceId],
+      [actor.workspaceId, HEYREACH_CORE_WEBHOOK_EVENTS],
     );
     return result.rows;
   });
