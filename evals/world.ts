@@ -140,6 +140,7 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
         notes: contact.notes ?? null,
         companyId: ref("company", contact.company),
         ownerId: contact.unowned ? null : actor.userId,
+        ...(contact.tags ? { tags: contact.tags } : {}),
       },
       { provenance: SEED },
     );
@@ -337,6 +338,7 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
       if (message.key) ids.set(`chat:${message.key}`, posted.message.id);
     }
   }
+  if ((seed.campaigns ?? []).length > 0) await seedCampaigns(world, key, seed.campaigns ?? [], now);
   if (seed.booking) {
     await saveBookingPage(actor, {
       slug: `mark-${world.tag}`,
@@ -348,6 +350,92 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
       weeklyHours: DEFAULT_WEEKLY_HOURS,
     });
     world.bookingUrl = bookingUrl(`mark-${world.tag}`);
+  }
+}
+
+async function seedCampaigns(world: World, key: WorkspaceKey, campaigns: NonNullable<WorkspaceSeed["campaigns"]>, now: Date) {
+  const actor = key === "eclipse" ? world.eclipse : world.ridgeon;
+  const admin = getAdminPool();
+  const providers = [...new Set(campaigns.map((campaign) => (campaign.channel === "email" ? "smartlead" : "heyreach")))];
+  for (const provider of providers) {
+    await admin.query(
+      `insert into crm.campaign_connections (workspace_id, provider, key_encrypted, key_fingerprint, connected_by, last_synced_at)
+       values ($1, $2, 'eval-fixture-key', $3, $4, now())`,
+      [actor.workspaceId, provider, `eval-${provider}-${key}-${world.tag}`, actor.userId],
+    );
+  }
+  for (const [index, campaign] of campaigns.entries()) {
+    const linkedin = campaign.channel === "linkedin";
+    const sender = linkedin ? `account-${world.tag}-${key}-${index}` : null;
+    if (sender) {
+      const member = campaign.sender === "colleague" ? world.colleague : actor;
+      await admin.query(
+        "insert into crm.campaign_senders (workspace_id, provider, external_id, name, email, user_id) values ($1, 'heyreach', $2, $3, $4, $5)",
+        [actor.workspaceId, sender, member.fullName, member.email, member.userId],
+      );
+    }
+    const sequence = linkedin
+      ? [
+          { step: 1, variant: null, subject: "Invite", body: "{connection_note}", delayDays: null },
+          { step: 2, variant: null, subject: "Message", body: "Thanks for connecting, {first_name}.", delayDays: 1 },
+        ]
+      : [{ step: 1, variant: null, subject: "{{subject}}", body: "{{body}}", delayDays: null }];
+    const row = await admin.query<{ id: string }>(
+      `insert into crm.campaigns (workspace_id, provider, channel, external_id, name, status, sequence, variables, sender_ids, backfilled_at, synced_at)
+       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, now(), now()) returning id`,
+      [
+        actor.workspaceId,
+        linkedin ? "heyreach" : "smartlead",
+        campaign.channel,
+        `${world.tag}-${key}-${index}`,
+        campaign.name,
+        campaign.status ?? "active",
+        JSON.stringify(sequence),
+        linkedin ? ["connection_note", "first_name"] : ["subject", "body"],
+        sender ? [sender] : [],
+      ],
+    );
+    const campaignId = row.rows[0].id;
+    world.ids.set(`campaign:${campaign.name}`, campaignId);
+    for (const [position, prospect] of (campaign.prospects ?? []).entries()) {
+      const contactId = world.id(`contact:${prospect.contact}`);
+      const contact = await admin.query<{ email: string | null; normalized_linkedin: string | null; company_id: string | null }>(
+        "select email, normalized_linkedin, company_id from crm.contacts where id = $1",
+        [contactId],
+      );
+      const person = contact.rows[0];
+      const lead = `lead-${world.tag}-${key}-${index}-${position}`;
+      const invited = prospect.invited ? londonInstant(prospect.invited, now) : prospect.accepted ? londonInstant(prospect.accepted, now) : null;
+      const accepted = prospect.accepted ? londonInstant(prospect.accepted, now) : null;
+      const replied = prospect.reply ? londonInstant(prospect.reply.at, now) : null;
+      const added = await admin.query<{ id: string }>(
+        `insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, company_id, email, linkedin, sender_id, state, external_lead_id, lead_status, pushed_at, replied_at, last_event_at, added_by_user_id)
+         values ($1, $2, $3, $4, $5, $6, $7, 'pushed', $8, 'in_progress', now() - interval '14 days', $9, coalesce($9, $10, $11, now()), $12) returning id`,
+        [actor.workspaceId, campaignId, contactId, person.company_id, linkedin ? null : person.email?.toLowerCase() ?? null, linkedin ? person.normalized_linkedin : null, sender, lead, replied, accepted, invited, actor.userId],
+      );
+      const prospectId = added.rows[0].id;
+      world.ids.set(`prospect:${campaign.name}:${prospect.contact}`, prospectId);
+      const event = (kind: string, at: string) =>
+        admin.query(
+          `insert into crm.campaign_events (workspace_id, campaign_id, prospect_id, kind, step, occurred_at, dedupe_key, handled_at)
+           values ($1, $2, $3, $4, $5, $6, $7, now())`,
+          [actor.workspaceId, campaignId, prospectId, kind, kind === "invite_sent" ? 1 : null, at, `${lead}:${kind}`],
+        );
+      if (invited) await event(linkedin ? "invite_sent" : "sent", invited);
+      if (accepted) await event("invite_accepted", accepted);
+      if (prospect.reply && replied) {
+        const conversation = linkedin ? `conversation-${lead}` : null;
+        const message = (direction: "inbound" | "outbound", body: string, at: string) =>
+          admin.query(
+            `insert into crm.campaign_messages (workspace_id, campaign_id, prospect_id, channel, direction, body, sent_at, external_id, conversation_id, sender_id, stats_id, provider_message_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+            [actor.workspaceId, campaignId, prospectId, campaign.channel, direction, body, at, `${lead}:${direction}`, conversation, sender, linkedin ? null : `stats-${lead}`, linkedin ? null : `<${lead}.${direction}@mail.eval.test>`],
+          );
+        await message("outbound", linkedin ? "Thanks for connecting." : "A quick question about your growth plans.", new Date(new Date(replied).getTime() - 86_400_000).toISOString());
+        await message("inbound", prospect.reply.text, replied);
+        await event("replied", replied);
+      }
+    }
   }
 }
 

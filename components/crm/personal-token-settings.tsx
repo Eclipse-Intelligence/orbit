@@ -72,7 +72,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
     <SettingsCard
       id="personal-tokens"
       title="Personal tokens"
-      description="Lets Claude or any MCP app use Orbit as you, including your mail. Only a token with Can send email can send. Keep it private."
+      description="Lets Claude or any MCP app use Orbit as you, including your mail. Only a token with Can send messages can send email or reply in campaigns. Keep it private."
     >
       <div className="flex flex-col gap-4">
         <form onSubmit={create} className="flex flex-wrap items-end gap-2">
@@ -83,7 +83,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
           <span className="flex h-9 items-center gap-2">
             <Checkbox id="token-can-send" checked={canSend} onCheckedChange={(value) => setCanSend(value === true)} />
             <label htmlFor="token-can-send" className="ui-style cursor-pointer">
-              Can send email
+              Can send messages
             </label>
           </span>
           <Button type="submit" variant="primary" disabled={pending}>
@@ -127,8 +127,8 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
                 </span>
                 <span className="flex items-center gap-3">
                   <label className="ui-style text-subtle flex cursor-pointer items-center gap-2">
-                    <Switch checked={token.canSend} onChange={(value) => allowSending(token.id, value)} label={`Can send email: ${token.name}`} />
-                    Can send email
+                    <Switch checked={token.canSend} onChange={(value) => allowSending(token.id, value)} label={`Can send messages: ${token.name}`} />
+                    Can send messages
                   </label>
                   <Button variant="ghost" size="sm" disabled={pending} onClick={() => revoke(token.id)} aria-label={`Revoke ${token.name}`}>
                     Revoke

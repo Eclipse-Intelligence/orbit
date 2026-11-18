@@ -28,6 +28,7 @@ import {
   toolDescription,
   toolJson,
   toolLabel,
+  TOOL_DOMAIN_NAMES,
   WORKSPACE_READ_TOOLS,
   hiddenToolRefusal,
   type ToolOptions,
@@ -709,9 +710,9 @@ async function runTurns(actor: UserActor, conversation: ConversationRow, emit: E
   }
 }
 
-function companionTools(options: ToolOptions) {
+function companionTools(options: ToolOptions, rows: MessageRow[]) {
   return [
-    ...assistantTools(options).filter((tool) => tool.name !== "find_tools").map((tool) => ({
+    ...assistantTools({ ...options, domains: [...historyDomains(rows), ...TOOL_DOMAIN_NAMES] }).filter((tool) => tool.name !== "find_tools").map((tool) => ({
       name: tool.name,
       description: toolDescription(tool),
       parameters: tool.parameters,
@@ -1000,9 +1001,12 @@ async function savedContext(actor: UserActor, conversation: ConversationRow, row
   });
 }
 
+function historyDomains(rows: MessageRow[]) {
+  return loadedDomains(rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments }))));
+}
+
 function toolsFor(rows: MessageRow[], options: ToolOptions) {
-  const calls = rows.flatMap((row) => (row.tool_calls ?? []).map((call) => ({ name: call.function.name, arguments: call.function.arguments })));
-  return toolDefinitions({ ...options, domains: loadedDomains(calls) });
+  return toolDefinitions({ ...options, domains: historyDomains(rows) });
 }
 
 function trailingSteers(rows: MessageRow[]) {
@@ -1036,7 +1040,7 @@ async function runCompanionTurn(
     webSearch: conversation.web_search,
     system: `${prompt.system}\n\n${ALL_TOOLS_LOADED}`,
     prompt: transcript,
-    tools: companionTools(prompt.tools),
+    tools: companionTools(prompt.tools, rows),
   }, { agentMailId: headless?.agentMailId ?? null, switches: { multiWorkspace: prompt.tools.multiWorkspace === true, eclipse: prompt.tools.eclipse === true, linear: prompt.tools.linear === true } });
   if (headless) {
     headless.queued?.({ jobId, online });
@@ -1290,7 +1294,7 @@ async function runRounds(actor: UserActor, conversation: ConversationRow, emit: 
       reads.map(async (call) => {
         const label = toolLabel(call.function.name);
         emit({ type: "tool", id: call.id, name: call.function.name, label, status: "running" });
-        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches });
+        const output = await runTool(actor, call.function.name, parseArgs(call.function.arguments), { deadline: deadline - 20_000, fence, ...switches, loaded: historyDomains(rows) });
         if (signal?.aborted) return;
         await insertMessage(actor, conversation.id, {
           role: "tool",

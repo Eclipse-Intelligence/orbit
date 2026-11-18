@@ -1,23 +1,26 @@
 import { campaignProvider } from "@/lib/campaigns/providers";
 import { addRefusal, readCampaignVariables } from "@/lib/campaigns/prospects";
-import type {
-  CampaignDetail,
-  CampaignOption,
-  CampaignEventKind,
-  CampaignProviderId,
-  CampaignStats,
-  CampaignStatus,
-  CampaignSummary,
-  DayStats,
-  Mailbox,
-  ProspectFilter,
-  ProspectPage,
-  ProspectState,
-  LinkedinStage,
-  ProviderDay,
-  SenderCapacity,
-  SequenceStep,
-  StepStats,
+import {
+  CAMPAIGN_CHANNELS,
+  EVENT_KINDS,
+  type CampaignChannel,
+  type CampaignDetail,
+  type CampaignOption,
+  type CampaignEventKind,
+  type CampaignProviderId,
+  type CampaignStats,
+  type CampaignStatus,
+  type CampaignSummary,
+  type DayStats,
+  type Mailbox,
+  type ProspectFilter,
+  type ProspectPage,
+  type ProspectState,
+  type LinkedinStage,
+  type ProviderDay,
+  type SenderCapacity,
+  type SequenceStep,
+  type StepStats,
 } from "@/lib/campaigns/types";
 import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -77,10 +80,20 @@ const SUMMARY_SQL = `select k.id, k.provider, k.channel, k.external_id, k.name, 
        (select count(*)::int from crm.campaign_prospects p where p.campaign_id = k.id) as prospects
      from crm.campaigns k`;
 
-export async function listCampaigns(actor: Actor): Promise<CampaignSummary[]> {
+export function campaignChannel(value: unknown, field = "channel"): CampaignChannel | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "string" && (CAMPAIGN_CHANNELS as readonly string[]).includes(value)) return value as CampaignChannel;
+  throw new CrmError("invalid_input", "channel is email or linkedin.", 400, { field });
+}
+
+export async function listCampaigns(actor: Actor, options: { channel?: CampaignChannel | null } = {}): Promise<CampaignSummary[]> {
   assertScope(actor.scopes, "crm:read");
+  const channel = campaignChannel(options.channel);
   return withActor(actor, async (db) => {
-    const result = await db.query<CampaignRow>(`${SUMMARY_SQL} where k.workspace_id = $1 order by lower(k.name), k.id`, [actor.workspaceId]);
+    const result = await db.query<CampaignRow>(`${SUMMARY_SQL} where k.workspace_id = $1 and ($2::text is null or k.channel = $2) order by lower(k.name), k.id`, [
+      actor.workspaceId,
+      channel,
+    ]);
     return result.rows.map(summary);
   });
 }
@@ -337,7 +350,126 @@ export async function listCampaignProspects(
   });
 }
 
-export type MailboxHealth = { mailboxes: Mailbox[]; error: string | null } | null;
+export const ACTIVITY_MAX = 500;
+
+export type CampaignActivity = {
+  kind: CampaignEventKind;
+  at: string;
+  step: number | null;
+  prospectId: string;
+  campaignId: string;
+  campaignName: string;
+  channel: CampaignChannel;
+  contactId: string | null;
+  name: string;
+  companyName: string | null;
+  category: string | null;
+};
+
+export type ActivityQuery = {
+  channel?: CampaignChannel | null;
+  campaignId?: string | null;
+  kinds?: string[] | null;
+  since?: Date | null;
+  until?: Date | null;
+  limit?: number;
+};
+
+function activityKinds(kinds: string[] | null | undefined) {
+  if (!kinds || kinds.length === 0) return null;
+  const unknown = kinds.filter((kind) => !(EVENT_KINDS as readonly string[]).includes(kind));
+  if (unknown.length > 0) throw new CrmError("invalid_input", `Unknown event: ${unknown.join(", ")}. Use ${EVENT_KINDS.join(", ")}.`, 400, { field: "kinds" });
+  return [...new Set(kinds)];
+}
+
+export async function listCampaignActivity(actor: Actor, input: ActivityQuery = {}): Promise<{ events: CampaignActivity[]; more: boolean }> {
+  assertScope(actor.scopes, "crm:read");
+  const channel = campaignChannel(input.channel);
+  const kinds = activityKinds(input.kinds);
+  const limit = Math.min(ACTIVITY_MAX, Math.max(1, Math.floor(input.limit ?? 100)));
+  if (input.campaignId && !isUuid(input.campaignId)) throw notFound("campaign");
+  const since = input.since ?? new Date(Date.now() - CHART_DAYS * 86_400_000);
+  const until = input.until ?? null;
+  if (until && until.getTime() < since.getTime()) throw new CrmError("invalid_input", "until is before since.", 400, { field: "until" });
+  return withActor(actor, async (db) => {
+    if (input.campaignId) await readCampaign(db, actor, input.campaignId);
+    const result = await db.query<{
+      kind: CampaignEventKind;
+      occurred_at: Date;
+      step: number | null;
+      prospect_id: string;
+      campaign_id: string;
+      campaign_name: string;
+      channel: CampaignChannel;
+      contact_id: string | null;
+      name: string;
+      company_name: string | null;
+      category: string | null;
+    }>(
+      `select e.kind, e.occurred_at, e.step, e.prospect_id, k.id as campaign_id, k.name as campaign_name, k.channel, p.contact_id,
+              coalesce(
+                nullif(btrim(concat_ws(' ', c.first_name, c.last_name)), ''),
+                nullif(btrim(concat_ws(' ', p.lead->>'firstName', p.lead->>'lastName')), ''),
+                c.email, p.email, p.linkedin, 'Unnamed'
+              ) as name,
+              coalesce(co.name, nullif(p.lead->>'companyName', '')) as company_name,
+              p.category
+       from crm.campaigns k
+       join crm.campaign_events e on e.campaign_id = k.id and e.workspace_id = k.workspace_id
+       join crm.campaign_prospects p on p.id = e.prospect_id
+       left join crm.contacts c on c.id = p.contact_id
+       left join crm.companies co on co.id = coalesce(p.company_id, c.company_id)
+       where k.workspace_id = $1
+         and ($2::text is null or k.channel = $2)
+         and ($3::uuid is null or k.id = $3)
+         and ($4::text[] is null or e.kind = any($4))
+         and e.occurred_at >= $5
+         and ($6::timestamptz is null or e.occurred_at < $6)
+       order by e.occurred_at desc, e.id
+       limit $7`,
+      [actor.workspaceId, channel, input.campaignId ?? null, kinds, since, until, limit + 1],
+    );
+    return {
+      events: result.rows.slice(0, limit).map((row) => ({
+        kind: row.kind,
+        at: row.occurred_at.toISOString(),
+        step: row.step,
+        prospectId: row.prospect_id,
+        campaignId: row.campaign_id,
+        campaignName: row.campaign_name,
+        channel: row.channel,
+        contactId: row.contact_id,
+        name: row.name,
+        companyName: row.company_name,
+        category: row.category,
+      })),
+      more: result.rows.length > limit,
+    };
+  });
+}
+
+export async function contactProspectId(actor: Actor, contactId: string, options: { channel?: CampaignChannel | null; campaignId?: string | null } = {}): Promise<string> {
+  assertScope(actor.scopes, "crm:read");
+  if (!isUuid(contactId)) throw notFound("contact");
+  if (options.campaignId && !isUuid(options.campaignId)) throw notFound("campaign");
+  const channel = campaignChannel(options.channel);
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string }>(
+      `select p.id from crm.campaign_prospects p
+       join crm.campaigns k on k.id = p.campaign_id
+       where p.workspace_id = $1 and p.contact_id = $2 and ($3::text is null or k.channel = $3) and ($4::uuid is null or k.id = $4)
+       order by (p.state = 'pushed') desc, coalesce(p.last_event_at, p.created_at) desc, p.id
+       limit 1`,
+      [actor.workspaceId, contactId, channel, options.campaignId ?? null],
+    );
+    const id = result.rows[0]?.id;
+    if (id) return id;
+    if (options.campaignId) throw new CrmError("not_found", "This person isn't in that campaign.", 404);
+    throw new CrmError("not_found", channel ? `This person isn't in a ${channel === "linkedin" ? "LinkedIn" : "email"} campaign.` : "This person isn't in a campaign.", 404);
+  });
+}
+
+export type MailboxHealth ={ mailboxes: Mailbox[]; error: string | null } | null;
 
 export async function campaignMailboxes(actor: Actor, campaignId: string, options: { fetchImpl?: typeof fetch } = {}): Promise<MailboxHealth> {
   assertScope(actor.scopes, "crm:read");

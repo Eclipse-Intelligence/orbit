@@ -28,7 +28,9 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | CSV export | `crm:read` |
 | CSV import | `companies:write` or `contacts:write` |
 | Webhook list and deliveries | `crm:read` |
-| Campaigns: importing prospects as contacts (the agent API has no campaign endpoints yet) | `campaigns:write` and `contacts:write` |
+| Campaign list and prospects | `crm:read` |
+| Adding people to a campaign | `campaigns:write` |
+| Campaigns: importing prospects as contacts (in Orbit and over MCP, not here) | `campaigns:write` and `contacts:write` |
 | Webhook create and archive | `admin` |
 | Docs list, search, read, folders | `docs:read` |
 | Docs create, change, archive | `docs:write` |
@@ -85,6 +87,9 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `POST` | `/webhooks` | Register an endpoint and get its secret once | `admin` |
 | `DELETE` | `/webhooks/:id` | Archive an endpoint | `admin` |
 | `GET` | `/webhooks/deliveries` | The 50 most recent delivery attempts | `crm:read` |
+| `GET` | `/campaigns` | Email and LinkedIn campaigns with their stats (`channel`) | `crm:read` |
+| `GET` | `/campaigns/:id/prospects` | A campaign's people, 100 a page (`filter`, `search`, `page`) | `crm:read` |
+| `POST` | `/campaigns/:id/prospects` | Add people to a campaign | `campaigns:write` |
 
 `GET /companies`, `/contacts`, `/opportunities`, `/activities` and `/tasks` take `limit` (1 to 100, default 50) and `offset` (up to 10,000). `limit` and `offset` must be whole numbers, and dates must be real calendar dates (no 30 February); anything else is a 400 `invalid_input` that usually names the field in `details.field`. `GET /docs` and `GET /docs/:id` follow the same rule: a `limit` or `offset` that isn't a whole number is a 400, not an empty page. `owner` (or `owner_id`) takes a member id, `unassigned`, or `all` for no filter.
 
@@ -253,6 +258,18 @@ On an existing task, `PATCH /api/v1/tasks/:id`, MCP `update_next_action` and the
 ## Bulk leads
 
 `POST /api/v1/leads/bulk` accepts `{ "leads": [ ... ], "provenance": {} }` with 1 to 50 leads. Each lead uses the single-lead rules and is saved on its own. The response is `{ "results": [ { "index": 0, "status": "created", "lead": {} } ] }`. `status` is `created` or `error`.
+
+## Campaigns
+
+Campaigns are shared with every member: email campaigns run in Smartlead and LinkedIn campaigns in HeyReach, and Orbit syncs them. The routes use `lib/campaigns/agent.ts` and `lib/crm/campaigns.ts`, the same code as the assistant and MCP.
+
+`GET /api/v1/campaigns` returns `{ "campaigns": [...] }`, each with `id`, `provider`, `channel` (`email` or `linkedin`), `name`, `status`, `stats`, `prospects`, `syncedAt` and `backfilled`. `channel=email` or `channel=linkedin` filters it; any other value is a 400.
+
+`GET /api/v1/campaigns/:id/prospects` returns `{ "rows": [...], "total", "page", "pageSize" }`, 100 a page. `filter` is `all` (default), `replied` or `skipped` (skipped and failed rows, with `skipReason`; LinkedIn campaigns always list all), `search` matches a name, email, LinkedIn profile or company, and `page` is a whole number. A campaign in another workspace is a 404.
+
+`POST /api/v1/campaigns/:id/prospects` takes `{ "contactIds": [...] }` or `{ "companyIds": [...] }` (the people at those companies), 1 to 1,000, and an optional `provenance`. It needs `campaigns:write`. Orbit adds each person as a prospect and checks them first: anyone on Do not contact, a customer, on an open opportunity, someone the workspace has written to or met, already replied, already in another campaign on the same channel, or without an email (or LinkedIn profile) is skipped with the reason. The response has `campaign`, `added`, `already`, `skipped`, `missing` (ids not found in the workspace), `reasons` (each reason with its count), `prospects` (each person's `contactId`, `prospectId`, `state`, `skipReason` and `outcome`) and `line` (the summary the app shows). Added prospects are audited as `campaign.prospect_added`, filled and pushed in the background. A LinkedIn campaign that isn't running in HeyReach, an ended email campaign and a tool that isn't connected are a 409. An `Idempotency-Key` replays the first answer.
+
+The agent API never replies to a prospect and never lifts Do not contact: replies come from a person, in Orbit, the assistant or MCP with a personal token that has Can send messages, and only a person in Orbit lifts Do not contact.
 
 ## Pipeline
 

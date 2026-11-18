@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Db } from "@/lib/db/pool";
-import { actorKey } from "@/lib/crm/context";
+import { actorKey, withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { stableStringify } from "@/lib/crm/normalize";
 import { enqueueWebhookDeliveries } from "@/lib/crm/webhooks";
@@ -156,6 +156,44 @@ export async function replayOrRun<T>(
     [actor.workspaceId, actorKey(actor), key, hash, status, JSON.stringify(body)],
   );
   return { status, body, replayed: false };
+}
+
+async function storedReply<T>(db: Db, actor: Actor, key: string, hash: string) {
+  const existing = await db.query<{ status_code: number; request_hash: string; response: T }>(
+    `select status_code, request_hash, response
+     from crm.idempotency_keys
+     where workspace_id = $1 and actor_key = $2 and idempotency_key = $3`,
+    [actor.workspaceId, actorKey(actor), key],
+  );
+  const row = existing.rows[0];
+  if (!row) return null;
+  if (row.request_hash !== hash) {
+    throw new CrmError("idempotency_conflict", "This idempotency key was already used for a different request.", 409);
+  }
+  return { status: row.status_code, body: row.response, replayed: true };
+}
+
+export async function replayOrRunOutside<T>(
+  actor: Actor,
+  key: string | null | undefined,
+  hash: string,
+  status: number,
+  run: () => Promise<T>,
+): Promise<MutationOutcome<T>> {
+  if (!key) return { status, body: await run(), replayed: false };
+  const earlier = await withActor(actor, (db) => storedReply<T>(db, actor, key, hash));
+  if (earlier) return earlier;
+  const body = await run();
+  return withActor(actor, async (db) => {
+    const stored = await db.query(
+      `insert into crm.idempotency_keys (workspace_id, actor_key, idempotency_key, request_hash, status_code, response)
+       values ($1, $2, $3, $4, $5, $6::jsonb)
+       on conflict (workspace_id, actor_key, idempotency_key) do nothing`,
+      [actor.workspaceId, actorKey(actor), key, hash, status, JSON.stringify(body)],
+    );
+    if ((stored.rowCount ?? 0) > 0) return { status, body, replayed: false };
+    return (await storedReply<T>(db, actor, key, hash)) ?? { status, body, replayed: false };
+  });
 }
 
 export function constraintError(

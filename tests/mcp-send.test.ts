@@ -233,7 +233,7 @@ describe("sending email over MCP", () => {
   });
 
   describe("who gets mail_send", () => {
-    it("lists it only for a personal token with Can send email on, never for agents or stdio", async () => {
+    it("lists it only for a personal token with Can send messages on, never for agents or stdio", async () => {
       const plain = await createPersonalToken(owner, "Reading only");
       assert.equal(plain.details.canSend, false);
       assert.ok(!(await listTools(plain.token)).some((tool) => tool.name === "mail_send"));
@@ -264,9 +264,11 @@ describe("sending email over MCP", () => {
       const stdio = await instructionsFor(createCrmMcpServer(owner));
       assert.ok(stdio.tools.includes("mail_save_draft"));
       assert.ok(!stdio.tools.includes("mail_send"));
-      assert.match(stdio.instructions, /This token can't send email/);
+      assert.match(stdio.instructions, /This token can't send messages, so no email and no campaign replies/);
+      assert.ok(!stdio.tools.includes("campaign_reply"));
       const sending = await instructionsFor(createCrmMcpServer(owner, { personal: { tokenId, canSend: true } }));
       assert.ok(sending.tools.includes("mail_send"));
+      assert.ok(sending.tools.includes("campaign_reply"));
       assert.match(sending.instructions, /mail_send really sends/);
     });
   });

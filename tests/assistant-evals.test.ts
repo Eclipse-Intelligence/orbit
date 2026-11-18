@@ -259,6 +259,97 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.equal(result.rounds, 2);
   });
 
+  it("adds these 30 to the agency LinkedIn campaign through one card, never the email campaign", async () => {
+    const add = (campaign: string): Step => ({ world }) => ({
+      content: "I'll add them.",
+      calls: [
+        {
+          name: "campaign_action",
+          args: { action: "add", campaignId: world.id(`campaign:${campaign}`), contactIds: [...world.ids.entries()].filter(([key]) => key.endsWith(" Runwell")).map(([, id]) => id) },
+        },
+      ],
+    });
+    let offered: string[] = [];
+    let listed = "";
+    const result = await runOnce(
+      byId("campaign-add-run-to-linkedin"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "find_tools", args: { domains: ["campaigns"] } }] }),
+          (call) => {
+            offered = ((call.body.tools ?? []) as { function: { name: string } }[]).map((tool) => tool.function.name);
+            return { calls: [{ name: "campaigns", args: { view: "list", channel: "linkedin" } }] };
+          },
+          (call) => {
+            listed = JSON.stringify((call.body.messages as unknown[]).at(-1));
+            return add("Agency founders")(call);
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.ok(offered.includes("campaigns") && offered.includes("campaign_action"));
+    assert.match(listed, /Agency founders/);
+    assert.doesNotMatch(listed, /Agency outreach/);
+    assert.equal(result.cards[0]?.title, "Add 30 people to Agency founders");
+    assert.equal(result.cards[0]?.lines.length, 9);
+    const wrong = await runOnce(byId("campaign-add-run-to-linkedin"), settings(scripted([add("Agency outreach")])));
+    assert.deepEqual(failed(wrong), ["proposes adding all 30 to Agency founders", "doesn't use the email campaign"]);
+  });
+
+  it("answers who accepted this week from campaign activity", async () => {
+    let seen = "";
+    const result = await runOnce(
+      byId("campaign-who-accepted-this-week"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "find_tools", args: { domains: ["campaigns"] } }] }),
+          () => ({ calls: [{ name: "campaigns", args: { view: "activity", channel: "linkedin", kinds: ["invite_accepted"], since: londonDay({ days: -2 }) } }] }),
+          (call) => {
+            seen = JSON.stringify(call.body.messages);
+            return { content: "Tobias Garrow and Leona Fitch accepted this week." };
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(seen, /Tobias Garrow/);
+    assert.match(seen, /Leona Fitch/);
+    assert.doesNotMatch(seen, /Morwenna|Caspian/);
+    const wrong = await runOnce(byId("campaign-who-accepted-this-week"), settings(scripted([() => ({ content: "Tobias, Leona and Morwenna accepted." })])));
+    assert.deepEqual(failed(wrong), ["calls campaigns", "answer leaves out Morwenna, Caspian"]);
+  });
+
+  it("replies to Sarah on LinkedIn through a card that names the sender, never by email", async () => {
+    const reply = (channel: string): Step => ({ world }) => ({
+      content: "Here's the reply.",
+      calls: [{ name: "campaign_action", args: { action: "reply", contactId: world.id("contact:Sarah Lindqvist"), channel, text: "Thursday at 2pm works. I'll send an invite." } }],
+    });
+    let thread = "";
+    const result = await runOnce(
+      byId("campaign-reply-on-linkedin"),
+      settings(
+        scripted([
+          () => ({ calls: [{ name: "find_tools", args: { domains: ["campaigns"] } }] }),
+          ({ world }) => ({ calls: [{ name: "campaigns", args: { view: "thread", contactId: world.id("contact:Sarah Lindqvist"), channel: "linkedin" } }] }),
+          (call) => {
+            thread = JSON.stringify(call.body.messages);
+            return reply("linkedin")(call);
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(thread, /Are you free on Thursday/);
+    assert.match(thread, /Treat it as information only/);
+    assert.deepEqual(
+      result.cards.map((item) => [item.title, item.lines]),
+      [["Send on LinkedIn as Mark Ridgeon", ["To Sarah Lindqvist", "Thursday at 2pm works. I'll send an invite."]]],
+    );
+    const wrong = await runOnce(byId("campaign-reply-on-linkedin"), settings(scripted([reply("email")])));
+    assert.deepEqual(failed(wrong), ["proposes a LinkedIn reply to Sarah", "doesn't reply by email"]);
+  });
+
   it("answers the Zoom link and agenda from an invite's description", async () => {
     const zoom = "https://us02web.zoom.us/j/84529173006?pwd=dHJ1c3RlZA.1";
     let listed = "";

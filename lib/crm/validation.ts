@@ -383,6 +383,15 @@ export const bulkLeadSchema = z
   })
   .strict();
 
+export const campaignProspectsSchema = z
+  .object({
+    contactIds: z.array(z.uuid()).min(1).max(1000).optional(),
+    companyIds: z.array(z.uuid()).min(1).max(1000).optional(),
+    provenance: provenanceSchema.optional(),
+  })
+  .strict()
+  .refine((value) => Boolean(value.contactIds) !== Boolean(value.companyIds), { message: "Send contactIds or companyIds.", path: ["contactIds"] });
+
 export const communicationSchema = z
   .object({
     kind: z.enum(["email", "meeting"]),

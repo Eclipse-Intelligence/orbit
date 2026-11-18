@@ -3,7 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import { bodyCore, checkColdEmail, COLD_EMAIL_PLAYBOOK, ECLIPSE_OUTREACH_BRIEF, evidenceFrom, figuresIn, lintColdEmail, playbookFor, proofListFor, senderFirstName, withProofList, type Evidence } from "@/lib/assistant/cold-email";
 import type { ProofEntry } from "@/lib/crm/proof-rules";
 import { systemPrompt } from "@/lib/assistant/prompt";
-import { findTool, toolDefinitions } from "@/lib/assistant/tools";
+import { assistantTools, findTool, toolDefinitions } from "@/lib/assistant/tools";
 import { coldEmailGuide, GUIDE_TOPICS } from "@/lib/assistant/guides";
 import { ECLIPSE_CONTEXT } from "@/lib/assistant/eclipse";
 import type { UserActor } from "@/lib/crm/types";
@@ -352,8 +352,8 @@ describe("cold email triggers, subjects and tailored offers", () => {
   });
 
   it("names only tools the assistant has, and the guide by its topic", () => {
-    const names = new Set(toolDefinitions().map((tool) => tool.function.name));
-    const text = `${playbookFor({ firstName: "Mark", bookingUrl: null }, COLD_EMAIL_PLAYBOOK)}\n${coldEmailGuide("Eclipse")}\n${ECLIPSE_CONTEXT}`;
+    const names = new Set(assistantTools({ multiWorkspace: true }).map((tool) => tool.name));
+    const text = `${playbookFor({ firstName: "Mark", bookingUrl: null }, COLD_EMAIL_PLAYBOOK)}\n${coldEmailGuide("Eclipse", { email: true, linkedin: true })}\n${ECLIPSE_CONTEXT}`;
     const mentioned = [...text.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g)].map((match) => match[0]);
     assert.ok(mentioned.length >= 10);
     for (const name of mentioned) assert.ok(names.has(name) || GUIDE_TOPICS.includes(name as never), name);

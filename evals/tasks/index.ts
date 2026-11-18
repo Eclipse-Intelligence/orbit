@@ -1,8 +1,9 @@
 import type { EvalTask, Suite } from "../types";
+import { CAMPAIGN_TASKS } from "./campaigns";
 import { CORE_TASKS } from "./core";
 import { SECURITY_TASKS } from "./security";
 
-export const ALL_TASKS: EvalTask[] = [...CORE_TASKS, ...SECURITY_TASKS];
+export const ALL_TASKS: EvalTask[] = [...CORE_TASKS, ...CAMPAIGN_TASKS, ...SECURITY_TASKS];
 
 export function selectTasks(options: { suite?: Suite | "all"; ids?: string[]; categories?: string[] } = {}) {
   const suite = options.suite ?? "all";
