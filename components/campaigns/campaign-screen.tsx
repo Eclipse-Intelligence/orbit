@@ -471,7 +471,7 @@ export default function CampaignScreen({
 
           {campaign.briefs.length > 0 && (
             <Section title="Variables">
-              <VariableBriefs key={campaign.briefs.map((item) => `${item.name}:${item.brief}:${item.maxLength}`).join("|")} campaignId={campaign.id} briefs={campaign.briefs} canEdit={canAct} />
+              <VariableBriefs key={campaign.briefs.map((item) => item.name).join("|")} campaignId={campaign.id} briefs={campaign.briefs} canEdit={canAct} />
             </Section>
           )}
 

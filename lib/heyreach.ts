@@ -491,7 +491,16 @@ export async function addHeyReachLeads(key: string, campaignId: string, leads: H
   return { taken };
 }
 
-export async function findHeyReachLead(key: string, profileUrl: string, options: HeyReachOptions = {}): Promise<{ id: string | null } | null> {
+function campaignIdsOf(row: Json) {
+  const ids = [
+    text(row.campaignId),
+    ...list(row.campaignIds).map(text),
+    ...list(row.campaigns).map((item) => text(record(item).id) ?? text(record(item).campaignId) ?? text(item)),
+  ];
+  return ids.filter((id): id is string => Boolean(id));
+}
+
+export async function findHeyReachLead(key: string, campaignId: string, profileUrl: string, options: HeyReachOptions = {}): Promise<{ id: string | null } | null> {
   let body: unknown;
   try {
     body = await call(key, "/lead/GetLead", { ...options, body: { profileUrl } });
@@ -504,6 +513,8 @@ export async function findHeyReachLead(key: string, profileUrl: string, options:
   const id = text(row.id) ?? text(row.leadId) ?? text(profile.id);
   const url = text(profile.profileUrl) ?? text(row.profileUrl);
   if (!id && !url) return null;
+  const campaigns = campaignIdsOf(row);
+  if (campaigns.length > 0 && !campaigns.includes(campaignId)) return null;
   return { id };
 }
 

@@ -262,7 +262,6 @@ const FINISHED_LEADS = new Set(["completed", "stopped", "blocked", "unsubscribed
 function emailStage(row: OutreachRow): EmailOutreach {
   const kinds = new Set(row.kinds ?? []);
   if (row.replied_at || kinds.has("replied")) return "replied";
-  if (row.state === "skipped" || row.state === "failed") return "none";
   if (row.lead_status === "bounced" || kinds.has("bounced")) return "bounced";
   if (kinds.has("clicked")) return "clicked";
   if (kinds.has("opened")) return "opened";
@@ -273,7 +272,6 @@ function emailStage(row: OutreachRow): EmailOutreach {
 function linkedinStage(row: OutreachRow): LinkedinOutreach {
   const kinds = new Set(row.kinds ?? []);
   if (row.replied_at || kinds.has("replied")) return "replied";
-  if (row.state === "skipped" || row.state === "failed") return "none";
   if (kinds.has("invite_accepted")) return "accepted";
   const ended = Boolean(row.stopped_at) || FINISHED_LEADS.has(row.lead_status ?? "") || ["completed", "stopped", "archived"].includes(row.campaign_status);
   if (row.state === "pushed" && ended) return "finished";
@@ -283,7 +281,7 @@ function linkedinStage(row: OutreachRow): LinkedinOutreach {
 
 function newest(rows: OutreachRow[], channel: CampaignChannel) {
   return rows
-    .filter((row) => row.channel === channel)
+    .filter((row) => row.channel === channel && row.state !== "skipped" && row.state !== "failed")
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
 }
 

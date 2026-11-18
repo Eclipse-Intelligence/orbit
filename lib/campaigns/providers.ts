@@ -625,10 +625,10 @@ export const heyReachProvider: CampaignProvider = {
     );
     return pushOutcome(ready, pushed.taken, new Set(), () => null);
   },
-  async findLead(context, _campaignExternalId, lead) {
+  async findLead(context, campaignExternalId, lead) {
     const url = profileUrl(lead.linkedin);
     if (!url) return null;
-    const found = await findHeyReachLead(context.key, url, context);
+    const found = await findHeyReachLead(context.key, campaignExternalId, url, context);
     return found ? { externalLeadId: found.id } : null;
   },
 };

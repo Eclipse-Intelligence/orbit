@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
@@ -18,7 +17,6 @@ function draftsOf(briefs: VariableBrief[]): Draft[] {
 }
 
 export default function VariableBriefs({ campaignId, briefs, canEdit }: { campaignId: string; briefs: VariableBrief[]; canEdit: boolean }) {
-  const router = useRouter();
   const [drafts, setDrafts] = useState(() => draftsOf(briefs));
   const [saved, setSaved] = useState(() => draftsOf(briefs));
   const [pending, setPending] = useState(false);
@@ -47,7 +45,6 @@ export default function VariableBriefs({ campaignId, briefs, canEdit }: { campai
     setDrafts(next);
     setSaved(next);
     setStatus({ text: "Saved", error: false });
-    router.refresh();
   }
 
   if (!canEdit) {

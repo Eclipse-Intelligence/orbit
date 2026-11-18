@@ -507,7 +507,7 @@ export async function findSmartleadLead(key: string, campaignId: string, email: 
   const id = text(row.id);
   if (!id) return null;
   const memberships = list(row.lead_campaign_data).map(record);
-  if (memberships.length > 0 && !memberships.some((item) => text(item.campaign_id) === campaignId)) return null;
+  if (!memberships.some((item) => text(item.campaign_id) === campaignId)) return null;
   return { id };
 }
 

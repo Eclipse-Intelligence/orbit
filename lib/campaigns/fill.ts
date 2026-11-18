@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { evidenceFrom, figuresIn, playbookFor, proofListFor, withProofList, type Evidence } from "@/lib/assistant/cold-email";
+import { figuresIn, playbookFor, proofListFor, withProofList, type Evidence } from "@/lib/assistant/cold-email";
 import type { CampaignVariable } from "@/lib/campaigns/prospects";
 import type { CampaignChannel, CampaignProviderId, SequenceStep } from "@/lib/campaigns/types";
 import type { BrandProfile } from "@/lib/crm/brand";
@@ -80,19 +80,25 @@ function normalise(text: string) {
     .replace(/(\d)\s+%/g, "$1%");
 }
 
-export function supported(value: string, sources: FillSource[], proof: ProofEntry[]) {
-  const evidence: Evidence[] = withProofList(
-    evidenceFrom(
-      sources.map((source) =>
-        source.proofId ? { kind: "proof", fact: source.fact, source: source.proofId } : { fact: source.fact, ...(source.url ? { source: source.url } : {}) },
-      ),
-    ),
-    proof,
-    { body: value },
-  );
-  if (evidence.some((item) => item.kind === "proof" && item.listed === false)) return false;
-  const evidenceText = normalise(evidence.map((item) => `${item.fact} ${item.source ?? ""} ${item.approvedWording ?? ""}`).join(" \n "));
-  return figuresIn(value).every((figure) => evidenceText.includes(normalise(figure)));
+function entryText(entry: ProofEntry) {
+  return [entry.client, entry.description, entry.usedFor, entry.result, entry.measured].filter(Boolean).join(" ");
+}
+
+export function supported(value: string, sources: FillSource[], proof: ProofEntry[], known: string) {
+  const held: string[] = [known];
+  for (const source of sources) {
+    if (source.proofId) {
+      const entry = proof.find((item) => item.id === source.proofId);
+      if (!entry) return false;
+      held.push(entryText(entry));
+    } else if (source.url) {
+      held.push(source.fact);
+    }
+  }
+  const mentioned: Evidence[] = withProofList([], proof, { body: value });
+  for (const item of mentioned) held.push(`${item.fact} ${item.approvedWording ?? ""}`);
+  const text = normalise(held.join(" \n "));
+  return figuresIn(value).every((figure) => text.includes(normalise(figure)));
 }
 
 function contactFacts(contact: Contact) {
@@ -192,7 +198,7 @@ export function judgeFill(input: FillInput, data: z.infer<typeof fillSchema>, ci
     const raw = data.values.find((item) => item.name.trim() === variable.name);
     const kept = usableSources(raw?.sources, cited, known);
     let value = cleanValue(raw?.value ?? "", notes.has(variable.name));
-    if (value && !supported(value, kept, input.proof)) value = "";
+    if (value && !supported(value, kept, input.proof, known)) value = "";
     const cap = Math.min(variable.maxLength ?? input.valueLimit, input.valueLimit);
     if (value.length > cap) {
       if (variable.required && !problem) problem = `${variable.name} was too long`;

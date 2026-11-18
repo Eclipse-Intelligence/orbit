@@ -188,6 +188,7 @@ declare
   v_campaign crm.campaigns%rowtype;
   v_contact record;
   v_existing crm.campaign_prospects%rowtype;
+  v_twin crm.campaign_prospects%rowtype;
   v_reason text;
   v_id uuid;
   v_requeue boolean;
@@ -211,6 +212,7 @@ begin
     order by w.n
   loop
     v_existing := null;
+    v_twin := null;
     select * into v_existing from crm.campaign_prospects p
     where p.campaign_id = p_campaign and p.contact_id = v_contact.id
     for update;
@@ -226,6 +228,29 @@ begin
         update crm.campaign_prospects p
         set contact_id = v_contact.id, company_id = coalesce(p.company_id, v_contact.company_id)
         where p.id = v_existing.id;
+      end if;
+    end if;
+    if v_existing.id is null then
+      select * into v_twin from crm.campaign_prospects p
+      where p.campaign_id = p_campaign and p.contact_id is not null and p.contact_id <> v_contact.id
+        and ((v_contact.normalized_email is not null and p.email = v_contact.normalized_email)
+          or (v_contact.normalized_linkedin is not null and p.linkedin = v_contact.normalized_linkedin))
+      order by (p.state in ('skipped', 'failed')), p.created_at
+      limit 1;
+      if v_twin.id is not null then
+        contact_id := v_contact.id;
+        prospect_id := v_twin.id;
+        state := v_twin.state;
+        if v_twin.state in ('skipped', 'failed') then
+          skip_reason := 'Already in this campaign';
+          outcome := 'skipped';
+        else
+          skip_reason := v_twin.skip_reason;
+          outcome := 'already';
+        end if;
+        mine := false;
+        return next;
+        continue;
       end if;
     end if;
     if v_existing.id is not null and v_existing.state not in ('skipped', 'failed') then
@@ -263,6 +288,8 @@ begin
           claimed_at = null,
           claimed_by = null,
           filled_at = null,
+          stop_requested_at = null,
+          stop_reason = null,
           "values" = '{}'::jsonb,
           sources = '{}'::jsonb,
           added_by_user_id = p_user,
@@ -389,7 +416,8 @@ begin
     where x.state in ('queued', 'filling')
     order by x.created_at
     limit 500
-  );
+  )
+    and p.state in ('queued', 'filling');
   select p.campaign_id into v_campaign
   from crm.campaign_prospects p
   where p.state in ('queued', 'filling', 'pushing') and private.campaign_fill_claimable(p)
@@ -481,7 +509,7 @@ begin
       claimed_by = null
   where p.id = p_prospect and p.workspace_id = p_workspace
     and p.state in ('queued', 'filling', 'pushing')
-    and (p.claimed_by = p_holder or p.claimed_by is null);
+    and p.claimed_by = p_holder;
   return found;
 end;
 $$;
@@ -608,6 +636,29 @@ begin
   end loop;
 end;
 $$;
+
+create or replace function private.campaign_push_undo(p_workspace uuid, p_prospects uuid[], p_holder text)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_count integer;
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_prospects p
+  set state = 'filling', claimed_at = now() - interval '9 minutes'
+  where p.id = any(p_prospects) and p.workspace_id = p_workspace and p.state = 'pushing' and p.claimed_by = p_holder;
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke all on function private.campaign_push_undo(uuid, uuid[], text) from public;
+grant execute on function private.campaign_push_undo(uuid, uuid[], text) to crm_app;
 
 revoke all on function private.workspace_knows_address(uuid, text) from public;
 revoke all on function private.campaign_person_block(uuid, text, uuid, uuid, uuid, text, text, boolean) from public;

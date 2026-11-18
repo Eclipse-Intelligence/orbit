@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { connectedContext, mightHaveSent } from "@/lib/campaigns/context";
 import { fireCampaignEvents } from "@/lib/campaigns/events";
+import { prospectEmail, prospectLinkedin } from "@/lib/campaigns/normalize";
 import { fillVariables, type FillSource } from "@/lib/campaigns/fill";
 import type { CampaignProvider, ProviderContext, PushLead } from "@/lib/campaigns/providers";
-import { readCampaignTarget, readCampaignVariables, type CampaignTarget, type CampaignVariable } from "@/lib/campaigns/prospects";
+import { addRefusal, readCampaignTarget, readCampaignVariables, type CampaignTarget, type CampaignVariable } from "@/lib/campaigns/prospects";
 import { syncActor } from "@/lib/campaigns/sync";
 import type { ProspectState, SequenceStep } from "@/lib/campaigns/types";
 import { senderFirstName } from "@/lib/assistant/cold-email";
@@ -19,6 +20,7 @@ import { listProof, type ProofEntry } from "@/lib/crm/proof";
 import type { Contact, Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { enrichContact } from "@/lib/enrichment/contacts";
+import { enrichmentAvailability } from "@/lib/enrichment/settings";
 import { verifyContactEmail } from "@/lib/enrichment/email-check";
 import { ProviderFailure, type ProviderGate } from "@/lib/enrichment/providers";
 import { LlmError } from "@/lib/llm";
@@ -59,10 +61,13 @@ type Job = {
   fetchImpl?: typeof fetch;
   deadline: number;
   runSteps?: unknown;
+  halted?: boolean;
   writing?: Promise<{ brand: BrandProfile; proof: ProofEntry[]; sender: { firstName: string; bookingUrl: string | null } }>;
 };
 
 type Ready = { prospect: ProspectRow; lead: PushLead };
+
+type Begun = { ok: boolean; reason: string | null; email: string | null; linkedin: string | null };
 
 class Ended extends Error {
   readonly state: "skipped" | "failed";
@@ -102,12 +107,28 @@ function end(job: Job, prospectId: string, state: "skipped" | "failed" | null, r
   return finish(job.actor.workspaceId, job.holder, prospectId, state, reason);
 }
 
-function retryLater(error: unknown) {
-  return error instanceof ServiceBusy || (error instanceof LlmError && error.retryable) || (error instanceof CrmError && (error.details?.retry === true || error.status === 429));
+async function unsend(job: Job, ids: string[]) {
+  if (ids.length === 0) return;
+  await query("select private.campaign_push_undo($1, $2::uuid[], $3)", [job.actor.workspaceId, ids, job.holder]);
+}
+
+function rejectedKey(job: Job, error: unknown) {
+  return Boolean(job.provider.failure(error)?.rejectedKey);
+}
+
+export function transient(provider: CampaignProvider, error: unknown) {
+  if (error instanceof Ended) return false;
+  if (error instanceof ServiceBusy) return true;
+  if (error instanceof LlmError) return error.retryable;
+  if (error instanceof CrmError) return error.status >= 500 || error.status === 429 || error.details?.retry === true;
+  const failure = provider.failure(error);
+  if (failure) return failure.rejectedKey || failure.status === null || failure.status >= 500 || failure.status === 429;
+  return true;
 }
 
 function failureText(error: unknown) {
   if (error instanceof CrmError || error instanceof LlmError) return error.message;
+  if (error instanceof Error && error.message) return error.message;
   return "Couldn't add this person. Try again.";
 }
 
@@ -126,7 +147,7 @@ async function readyEmail(job: Job, contact: Contact) {
   try {
     check = await verifyContactEmail(job.actor, contact.id, { fetchImpl: job.fetchImpl, deadline: job.deadline, workflowLimits: serviceGate });
   } catch (error) {
-    if (error instanceof CrmError && error.status < 500 && error.status !== 429) throw new Ended("failed", error.message);
+    if (error instanceof CrmError && error.status < 500 && error.status !== 429 && error.details?.retry !== true) throw new Ended("failed", error.message);
     throw error;
   }
   if (check.verdict === "invalid") throw new Ended("skipped", "Email invalid");
@@ -137,9 +158,10 @@ async function readyEmail(job: Job, contact: Contact) {
 async function readyLinkedin(job: Job, contact: Contact) {
   if (!contact.firstName?.trim() || !contact.lastName?.trim()) throw new Ended("skipped", "No first or last name");
   if (contact.linkedinUrl) return contact;
+  if (!enrichmentAvailability().linkedin) throw new Ended("failed", "No LinkedIn finder is set up.");
   const found = await enrichContact(job.actor, contact.id, "linkedin", { fetchImpl: job.fetchImpl, workflowLimits: serviceGate });
   if (found.status === "found") return getContact(job.actor, contact.id);
-  if (found.status === "failed" && !found.duplicate) throw new Ended("failed", found.message);
+  if (found.status === "failed" && !found.duplicate) throw new CrmError("upstream_error", found.message, 502, { retry: true });
   throw new Ended("skipped", found.clash ?? "No LinkedIn profile");
 }
 
@@ -206,20 +228,14 @@ async function prepare(job: Job, prospect: ProspectRow): Promise<Ready> {
       JSON.stringify(values),
       JSON.stringify(storedSources(filled.sources)),
     ]);
-    if (!saved.rows[0]?.ok) throw new Ended("failed", "Someone else is adding this person.");
+    if (!saved.rows[0]?.ok) throw new CrmError("conflict", "Someone else is adding this person.", 409, { retry: true });
   }
-  const begun = await query<{ ok: boolean; reason: string | null; email: string | null; linkedin: string | null }>(
-    "select * from private.campaign_push_begin($1, $2, $3)",
-    [job.actor.workspaceId, prospect.id, job.holder],
-  );
-  const row = begun.rows[0];
-  if (!row?.ok) throw new Ended("skipped", row?.reason ?? "Someone else is adding this person.");
   return {
     prospect,
     lead: {
       key: prospect.id,
-      email: row.email,
-      linkedin: row.linkedin,
+      email: prospectEmail(contact.email),
+      linkedin: prospectLinkedin(contact.linkedinUrl),
       firstName: contact.firstName,
       lastName: contact.lastName,
       companyName: company?.name ?? contact.companyName,
@@ -274,34 +290,57 @@ async function lookUp(job: Job, lead: { email: string | null; linkedin: string |
 }
 
 function lastingFailure(job: Job, error: unknown) {
-  if (error instanceof ServiceBusy) return null;
-  if (mightHaveSent(job.provider, error)) return null;
-  const failure = job.provider.failure(error);
-  if (failure?.rejectedKey) return `${job.provider.name} rejected the key. Save a new one in Settings › Tools.`;
-  if (failure) return failure.message;
-  if (error instanceof CrmError) return error.message;
-  return null;
+  if (transient(job.provider, error) || mightHaveSent(job.provider, error)) return null;
+  return failureText(error);
 }
 
-async function push(job: Job, ready: Ready[]): Promise<ProspectOutcome[]> {
-  if (ready.length === 0) return [];
+function stillFilling(items: Ready[]): ProspectOutcome[] {
+  return items.map((item) => ({ prospectId: item.prospect.id, state: "filling", reason: null }));
+}
+
+async function sendOneByOne(job: Job, items: Ready[]) {
+  const outcomes: ProspectOutcome[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const rest = items.slice(index + 1);
+    try {
+      outcomes.push(...(await send(job, [items[index]])));
+    } catch (error) {
+      await unsend(job, rest.map((item) => item.prospect.id));
+      throw error;
+    }
+    if (job.halted) {
+      await unsend(job, rest.map((item) => item.prospect.id));
+      outcomes.push(...stillFilling(rest));
+      break;
+    }
+  }
+  return outcomes;
+}
+
+async function send(job: Job, items: Ready[]): Promise<ProspectOutcome[]> {
+  if (items.length === 0) return [];
   const outcomes: ProspectOutcome[] = [];
   let pushed;
   try {
-    pushed = await job.provider.pushLeads(job.context, job.campaign.external_id, ready.map((item) => item.lead));
+    pushed = await job.provider.pushLeads(job.context, job.campaign.external_id, items.map((item) => item.lead));
   } catch (error) {
+    if (error instanceof ServiceBusy || rejectedKey(job, error)) {
+      await unsend(job, items.map((item) => item.prospect.id));
+      if (error instanceof ServiceBusy) throw error;
+      job.halted = true;
+      return stillFilling(items);
+    }
     const lasting = lastingFailure(job, error);
-    for (const item of ready) {
-      if (lasting) await end(job, item.prospect.id, "failed", lasting);
-      else await end(job, item.prospect.id, null, null);
+    if (lasting && items.length > 1) return sendOneByOne(job, items);
+    for (const item of items) {
+      await end(job, item.prospect.id, lasting ? "failed" : null, lasting);
       outcomes.push({ prospectId: item.prospect.id, state: lasting ? "failed" : "pushing", reason: lasting });
     }
-    if (error instanceof ServiceBusy) throw error;
     if (!lasting) console.error(`Couldn't add prospects to ${job.provider.name}`, redactedError(error));
     return outcomes;
   }
   const done: { id: string; externalLeadId: string | null; senderId: string | null }[] = [];
-  for (const item of ready) {
+  for (const item of items) {
     if (pushed.taken.has(item.lead.key)) {
       done.push({ id: item.prospect.id, externalLeadId: null, senderId: item.lead.senderId });
       continue;
@@ -328,16 +367,27 @@ async function push(job: Job, ready: Ready[]): Promise<ProspectOutcome[]> {
   return outcomes;
 }
 
+async function push(job: Job, ready: Ready[]): Promise<ProspectOutcome[]> {
+  const outcomes: ProspectOutcome[] = [];
+  const begun: Ready[] = [];
+  for (const item of ready) {
+    const result = await query<Begun>("select * from private.campaign_push_begin($1, $2, $3)", [job.actor.workspaceId, item.prospect.id, job.holder]);
+    const row = result.rows[0];
+    if (!row?.ok) {
+      outcomes.push({ prospectId: item.prospect.id, state: row?.reason ? "skipped" : item.prospect.state, reason: row?.reason ?? null });
+      continue;
+    }
+    begun.push({ ...item, lead: { ...item.lead, email: row.email, linkedin: row.linkedin } });
+  }
+  outcomes.push(...(await send(job, begun)));
+  return outcomes;
+}
+
 async function resumePushing(job: Job, prospect: ProspectRow): Promise<"pushed" | "again"> {
   const found = await lookUp(job, { email: prospect.email, linkedin: prospect.linkedin });
   if (!found) return "again";
   await markPushed(job, [{ id: prospect.id, externalLeadId: found.externalLeadId, senderId: prospect.sender_id }]);
   return "pushed";
-}
-
-function providerHiccup(job: Job, error: unknown) {
-  const failure = job.provider.failure(error);
-  return Boolean(failure) && (failure!.status === null || failure!.status >= 500 || failure!.status === 429);
 }
 
 async function prepareOne(job: Job, prospect: ProspectRow): Promise<Ready | ProspectOutcome> {
@@ -352,12 +402,13 @@ async function prepareOne(job: Job, prospect: ProspectRow): Promise<Ready | Pros
       await end(job, prospect.id, error.state, error.message);
       return { prospectId: prospect.id, state: error.state, reason: error.message };
     }
-    if (retryLater(error) || providerHiccup(job, error)) {
+    if (transient(job.provider, error)) {
       await end(job, prospect.id, null, null);
-      if (retryLater(error)) throw error;
-      return { prospectId: prospect.id, state: prospect.state, reason: null };
+      if (!(error instanceof ServiceBusy) && !(error instanceof CrmError) && !(error instanceof LlmError) && !job.provider.failure(error)) {
+        console.error("Couldn't fill a campaign prospect", redactedError(error));
+      }
+      throw error;
     }
-    if (!(error instanceof CrmError) && !(error instanceof LlmError)) console.error("Couldn't fill a campaign prospect", redactedError(error));
     const reason = failureText(error);
     await end(job, prospect.id, "failed", reason);
     return { prospectId: prospect.id, state: "failed", reason };
@@ -369,8 +420,14 @@ async function jobFor(actor: UserActor, campaignId: string, holder: string, opti
     const campaign = await readCampaignTarget(db, actor.workspaceId, campaignId);
     return { campaign, variables: await readCampaignVariables(db, campaign) };
   });
+  const refusal = addRefusal(campaign);
+  if (refusal) throw new CrmError("conflict", refusal, 409);
   const { provider, context } = await connectedContext(actor.workspaceId, campaign.provider, { fetchImpl: options.fetchImpl });
   return { actor, campaign, variables, provider, context, holder, fetchImpl: options.fetchImpl, deadline: options.deadline, runSteps: options.runSteps };
+}
+
+function lastingSetup(error: unknown) {
+  return error instanceof CrmError && error.status < 500 && error.status !== 429 && error.details?.retry !== true ? error.message : null;
 }
 
 export async function addOneNow(
@@ -392,17 +449,20 @@ export async function addOneNow(
   try {
     job = await jobFor(actor, prospect.campaign_id, holder, options);
   } catch (error) {
-    if (error instanceof CrmError && error.status < 500 && error.status !== 429) {
-      await finish(actor.workspaceId, holder, prospectId, "failed", error.message);
-      return { prospectId, state: "failed", reason: error.message };
-    }
-    await finish(actor.workspaceId, holder, prospectId, null, null);
+    const lasting = lastingSetup(error);
+    await finish(actor.workspaceId, holder, prospectId, lasting ? "failed" : null, lasting);
+    if (lasting) return { prospectId, state: "failed", reason: lasting };
     throw error;
   }
-  const prepared = await prepareOne(job, prospect);
-  if (!("lead" in prepared)) return prepared;
-  const [outcome] = await push(job, [prepared]);
-  return outcome;
+  try {
+    const prepared = await prepareOne(job, prospect);
+    if (!("lead" in prepared)) return prepared;
+    const [outcome] = await push(job, [prepared]);
+    return outcome;
+  } catch (error) {
+    if (error instanceof ServiceBusy || (error instanceof CrmError && error.details?.retry === true) || (error instanceof LlmError && error.retryable)) throw error;
+    throw new CrmError("upstream_error", failureText(error), 502, { retry: true });
+  }
 }
 
 export async function fillActor(workspaceId: string, provider: string, addedBy: string | null) {
@@ -435,21 +495,19 @@ async function runGroup(rows: BatchRow[], holder: string, options: { fetchImpl?:
   try {
     job = await jobFor(actor, first.campaign_id, holder, options);
   } catch (error) {
-    const lasting = error instanceof CrmError && error.status < 500 && error.status !== 429 ? error.message : null;
-    for (const id of ids) {
-      await query("select private.campaign_fill_end($1, $2, $3, $4, $5)", [first.workspace_id, id, holder, lasting ? "failed" : null, lasting]);
-    }
+    const lasting = lastingSetup(error);
+    for (const id of ids) await finish(first.workspace_id, holder, id, lasting ? "failed" : null, lasting);
     if (!lasting) throw error;
     return ids.map((id): ProspectOutcome => ({ prospectId: id, state: "failed", reason: lasting }));
   }
   const outcomes: ProspectOutcome[] = [];
   const ready: Ready[] = [];
   let next = 0;
-  let stopped: unknown = null;
+  let stopped = false;
   const work = async () => {
     while (next < rows.length) {
       const row = rows[next++];
-      if (stopped || !timeLeft(options.deadline, FILL_RESERVE_MS)) {
+      if (stopped || job.halted || !timeLeft(options.deadline, FILL_RESERVE_MS)) {
         await end(job, row.prospect_id, null, null);
         continue;
       }
@@ -459,19 +517,24 @@ async function runGroup(rows: BatchRow[], holder: string, options: { fetchImpl?:
         const prepared = await prepareOne(job, prospect);
         if ("lead" in prepared) ready.push(prepared);
         else outcomes.push(prepared);
-      } catch (error) {
-        if (retryLater(error)) stopped ??= error;
-        else console.error("Couldn't fill a campaign prospect", redactedError(error));
+      } catch {
+        stopped = true;
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(FILLS_AT_ONCE, rows.length) }, work));
   for (let start = 0; start < ready.length; start += job.provider.pushBatch) {
+    const batch = ready.slice(start, start + job.provider.pushBatch);
+    const untried = ready.slice(start + job.provider.pushBatch).map((item) => item.prospect.id);
     try {
-      outcomes.push(...(await push(job, ready.slice(start, start + job.provider.pushBatch))));
+      outcomes.push(...(await push(job, batch)));
     } catch (error) {
+      await releaseAll(first.workspace_id, holder, untried);
       if (!(error instanceof ServiceBusy)) throw error;
-      await releaseAll(first.workspace_id, holder, ready.slice(start + job.provider.pushBatch).map((item) => item.prospect.id));
+      break;
+    }
+    if (job.halted) {
+      await releaseAll(first.workspace_id, holder, untried);
       break;
     }
   }

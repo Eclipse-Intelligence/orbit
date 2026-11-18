@@ -5,7 +5,10 @@ import { saveCampaignConnection } from "@/lib/campaigns/connections";
 import { judgeFill, type FillInput } from "@/lib/campaigns/fill";
 import { addedLine, emailCapacityLine, linkedinCapacityLine, overflowLine } from "@/lib/campaigns/format";
 import { addCompanyContacts, addProspects, contactOutreach, outreachOf, saveCampaignVariables } from "@/lib/campaigns/prospects";
-import { claimFillBatch, fillActor, runFillBatch } from "@/lib/campaigns/push";
+import { smartleadProvider } from "@/lib/campaigns/providers";
+import { claimFillBatch, fillActor, runFillBatch, transient } from "@/lib/campaigns/push";
+import { findHeyReachLead } from "@/lib/heyreach";
+import { SmartleadError } from "@/lib/smartlead";
 import { getCampaign } from "@/lib/crm/campaigns";
 import { createCompany, updateCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -44,6 +47,9 @@ const state = {
   smartleadFails: null as number | null,
   smartleadShort: false,
   found: new Set<string>(),
+  foundElsewhere: new Set<string>(),
+  badEmail: null as string | null,
+  llmStatus: null as number | null,
 };
 
 function json(body: unknown, status = 200) {
@@ -74,6 +80,7 @@ function router(accounts: FakeAccount[], heyreach: FakeHeyReachAccount[]): typeo
       const user = String((body?.messages as { content: string }[] | undefined)?.[1]?.content ?? "");
       state.llm.push(user);
       state.webSearch.push(Boolean(body?.web_search_options));
+      if (state.llmStatus) return json({ error: { message: "Down" } }, state.llmStatus);
       return json({ model: "test", choices: [{ message: { content: JSON.stringify(fillReply(user)) }, finish_reason: "stop" }] });
     }
     if (url.hostname === "server.smartlead.ai") {
@@ -81,11 +88,13 @@ function router(accounts: FakeAccount[], heyreach: FakeHeyReachAccount[]): typeo
       if (method === "POST" && /^\/campaigns\/\d+\/leads$/.test(path)) {
         state.pushes.push({ provider: "smartlead", body: body ?? {} });
         if (state.smartleadFails) return json({ message: "Down" }, state.smartleadFails);
-        const leads = (body?.lead_list as unknown[]) ?? [];
+        const leads = (body?.lead_list as { email: string }[]) ?? [];
+        if (state.badEmail && leads.some((lead) => lead.email === state.badEmail)) return json({ message: "Invalid lead" }, 400);
         return json({ ok: true, upload_count: state.smartleadShort ? 0 : leads.length, already_added_to_campaign: 0 });
       }
       if (method === "GET" && path === "/leads/") {
         const email = url.searchParams.get("email") ?? "";
+        if (state.foundElsewhere.has(email)) return json({ id: `sl-${email}`, lead_campaign_data: [] });
         return state.found.has(email) ? json({ id: `sl-${email}`, lead_campaign_data: [{ campaign_id: 701 }] }) : json({ message: "Not found" }, 404);
       }
       return smartlead(input, init);
@@ -250,6 +259,8 @@ describe("adding prospects", () => {
     process.env.LLM_API_KEY = "test-llm-key";
     state.smartleadFails = null;
     state.smartleadShort = false;
+    state.badEmail = null;
+    state.llmStatus = null;
     await sql("delete from private.rate_limit_buckets where bucket_key like 'workflow-service:%'");
   });
 
@@ -386,8 +397,10 @@ describe("adding prospects", () => {
     await drainFills();
     assert.deepEqual([(await row(sue.prospectId)).state, (await row(sue.prospectId)).skip_reason], ["failed", "Smartlead didn't take this lead"]);
     state.smartleadShort = false;
+    await sql("update crm.campaign_prospects set stop_requested_at = now(), stop_reason = 'removed' where id = $1", [sue.prospectId]);
     const again = (await addProspects(owner, emailCampaign, [people.sue.id, people.fay.id], { operation: "test" })).prospects;
     assert.equal(again[0].outcome, "requeued");
+    assert.deepEqual(await sql("select stop_requested_at, stop_reason from crm.campaign_prospects where id = $1", [sue.prospectId]), [{ stop_requested_at: null, stop_reason: null }]);
     assert.equal(again[0].prospectId, sue.prospectId);
     assert.equal(again[1].outcome, "skipped", "Do not contact is checked again");
     await drainFills();
@@ -437,10 +450,17 @@ describe("adding prospects", () => {
       outreachOf([
         { channel: "email", state: "pushed", replied_at: null, stopped_at: null, lead_status: null, campaign_status: "active", kinds: ["sent", "opened"], created_at: "2026-11-01T00:00:00Z" },
         { channel: "email", state: "skipped", replied_at: null, stopped_at: null, lead_status: null, campaign_status: "active", kinds: [], created_at: "2026-11-10T00:00:00Z" },
-        { channel: "linkedin", state: "pushed", replied_at: "2026-11-05T00:00:00Z", stopped_at: null, lead_status: null, campaign_status: "active", kinds: ["invite_sent"], created_at: "2026-11-02T00:00:00Z" },
+        { channel: "linkedin", state: "pushed", replied_at: null, stopped_at: null, lead_status: null, campaign_status: "active", kinds: ["invite_sent", "invite_accepted"], created_at: "2026-11-02T00:00:00Z" },
+        { channel: "linkedin", state: "failed", replied_at: null, stopped_at: null, lead_status: null, campaign_status: "active", kinds: [], created_at: "2026-11-12T00:00:00Z" },
       ]),
-      { email: "none", linkedin: "replied", replied: true },
+      { email: "opened", linkedin: "accepted", replied: false },
+      "a row that never went out isn't outreach",
     );
+    await sql(
+      "insert into crm.campaign_prospects (workspace_id, campaign_id, contact_id, linkedin, state, skip_reason, created_at) values ($1, $2, $3, 'linkedin.com/in/jonreid', 'skipped', 'In another campaign', now() + interval '1 minute')",
+      [owner.workspaceId, pausedCampaign, people.jon.id],
+    );
+    assert.equal((await contactOutreach(owner, people.jon.id)).linkedin, "accepted", "a later skip in another campaign doesn't hide the acceptance");
   });
 
   async function workflow(definition: WorkflowDefinition) {
@@ -528,6 +548,117 @@ describe("adding prospects", () => {
     assert.equal((await fillActor(owner.workspaceId, "heyreach", null))?.userId, owner.userId, "a demoted member falls back to an owner");
     assert.equal((await fillActor(owner.workspaceId, "heyreach", ann.userId))?.userId, ann.userId, "a person's own adds run as them");
     await sql("update crm.campaign_connections set connected_by = $2 where workspace_id = $1", [owner.workspaceId, owner.userId]);
+  });
+
+  it("only counts figures that Orbit holds or a page the AI read", () => {
+    const proof = [{ id: "proof-1", client: "Acme", description: "a logistics firm", product: "SEO", usedFor: "organic growth", result: "cut acquisition costs by 30%", measured: "2025", permission: "named" }];
+    const input = {
+      variables: [{ name: "hook", brief: "", required: true, maxLength: null }],
+      valueLimit: 2000,
+      token: (name: string) => `{{${name}}}`,
+      campaign: { name: "x", channel: "email", provider: "smartlead", sequence: [] },
+      contact: { name: "A", firstName: "A", notes: "Their revenue grew 12% last year." },
+      company: null,
+      proof,
+    } as unknown as FillInput;
+    const judge = (value: string, sources: { fact: string; url?: string; proofId?: string }[]) => judgeFill(input, { values: [{ name: "hook", value, sources }] }, []).problem;
+    assert.equal(judge("Your revenue grew 45%", [{ fact: "revenue grew 45%" }]), "Nothing found for hook", "the AI can't vouch for its own figure");
+    assert.equal(judge("Your revenue grew 12%", [{ fact: "revenue grew 12%" }]), null, "a figure in Orbit's own records passes");
+    assert.equal(judge("Acme cut costs by 70%", [{ fact: "cut costs by 70%", proofId: "proof-1" }]), "Nothing found for hook", "a proof entry's own wording decides");
+    assert.equal(judge("Acme cut acquisition costs by 30%", [{ fact: "cut costs by 70%", proofId: "proof-1" }]), null);
+    assert.equal(judge("Beta cut costs by 30%", [{ fact: "cut costs by 30%", proofId: "proof-unknown" }]), "Nothing found for hook");
+  });
+
+  it("puts a row back to filling when nothing was sent, and trusts a lookup only for this campaign", async () => {
+    await contact(owner, "abe", { firstName: "Abe", lastName: "Ross", email: "abe@ross.test" });
+    const abe = (await addProspects(owner, emailCampaign, [people.abe.id], { operation: "test" })).prospects[0];
+    state.smartleadFails = 429;
+    await drainFills();
+    const waiting = await row(abe.prospectId);
+    assert.equal(waiting.state, "filling", "a busy push sent nothing, so the row isn't pushing");
+    assert.equal(waiting.values.news_hook, "the Abe launch", "the filled values are kept");
+    assert.equal((await sql("select 1 from crm.campaign_events where prospect_id = $1", [abe.prospectId])).length, 0);
+    state.smartleadFails = null;
+    const asked = state.llm.filter((text) => text.includes('"firstName":"Abe"')).length;
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [abe.prospectId]);
+    await drainFills();
+    assert.equal((await row(abe.prospectId)).state, "pushed");
+    assert.equal(state.llm.filter((text) => text.includes('"firstName":"Abe"')).length, asked, "it isn't filled again");
+
+    await contact(owner, "bea", { firstName: "Bea", lastName: "Lyle", email: "bea@lyle.test" });
+    const bea = (await addProspects(owner, emailCampaign, [people.bea.id], { operation: "test" })).prospects[0];
+    state.smartleadFails = 502;
+    await drainFills();
+    assert.equal((await row(bea.prospectId)).state, "pushing");
+    state.smartleadFails = null;
+    state.foundElsewhere.add("bea@lyle.test");
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [bea.prospectId]);
+    await drainFills();
+    assert.equal(pushesFor("bea@lyle.test").length, 2, "a lead found in another campaign doesn't count, so it's pushed again");
+    assert.equal((await row(bea.prospectId)).state, "pushed");
+
+    const other = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1", campaignId: 999 }) });
+    assert.equal(other, null, "a HeyReach lead in another campaign isn't this one");
+    const here = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1", campaignId: 801 }) });
+    assert.deepEqual(here, { id: "lead-1" });
+  });
+
+  it("never adds two contacts with the same email to one campaign", async () => {
+    await contact(owner, "wes", { firstName: "Wes", lastName: "Long", email: "wes@long.test" });
+    const wes = (await addProspects(owner, otherCampaign, [people.wes.id], { operation: "test" })).prospects[0];
+    await sql("update crm.contacts set email = 'wes@new.test', normalized_email = 'wes@new.test' where id = $1", [people.wes.id]);
+    await contact(owner, "xan", { firstName: "Xan", lastName: "Long", email: "wes@long.test" });
+    const twin = (await addProspects(owner, otherCampaign, [people.xan.id], { operation: "test" })).prospects[0];
+    assert.equal(twin.outcome, "already");
+    assert.equal(twin.prospectId, wes.prospectId);
+    await sql("update crm.campaign_prospects set state = 'failed', skip_reason = 'x' where id = $1", [wes.prospectId]);
+    const skipped = (await addProspects(owner, otherCampaign, [people.xan.id], { operation: "test" })).prospects[0];
+    assert.deepEqual([skipped.outcome, skipped.skipReason], ["skipped", "Already in this campaign"]);
+    assert.equal((await sql("select 1 from crm.campaign_prospects where contact_id = $1", [people.xan.id])).length, 0);
+  });
+
+  it("an outage releases prospects instead of failing them", async () => {
+    await contact(owner, "cal", { firstName: "Cal", lastName: "Dunn", email: "cal@dunn.test" });
+    const cal = (await addProspects(owner, emailCampaign, [people.cal.id], { operation: "test" })).prospects[0];
+    state.llmStatus = 503;
+    await drainFills();
+    assert.equal((await row(cal.prospectId)).state, "filling");
+    const provider = smartleadProvider;
+    assert.equal(transient(provider, new Error("timeout exceeded when trying to connect")), true, "an unknown error waits");
+    assert.equal(transient(provider, new CrmError("upstream_error", "Couldn't check.", 502)), true);
+    assert.equal(transient(provider, new CrmError("invalid_input", "Bad.", 400)), false);
+    assert.equal(transient(provider, new SmartleadError("Rejected", 401)), true, "a rejected key waits for a new key");
+    state.llmStatus = null;
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [cal.prospectId]);
+    await drainFills();
+    assert.equal((await row(cal.prospectId)).state, "pushed");
+  });
+
+  it("one bad lead fails alone, and a rejected key fails nobody", async () => {
+    await contact(owner, "dee2", { firstName: "Dot", lastName: "Hale", email: "dot@hale.test" });
+    await contact(owner, "eli", { firstName: "Eli", lastName: "Hale", email: "eli@hale.test" });
+    const added = (await addProspects(owner, emailCampaign, [people.dee2.id, people.eli.id], { operation: "test" })).prospects;
+    state.badEmail = "dot@hale.test";
+    await drainFills();
+    assert.equal((await row(added[0].prospectId)).state, "failed");
+    assert.equal((await row(added[1].prospectId)).state, "pushed");
+
+    await contact(owner, "fin", { firstName: "Fin", lastName: "Gray", email: "fin@gray.test" });
+    const fin = (await addProspects(owner, emailCampaign, [people.fin.id], { operation: "test" })).prospects[0];
+    state.badEmail = null;
+    state.smartleadFails = 401;
+    await drainFills();
+    assert.equal((await row(fin.prospectId)).state, "filling", "rows wait for the key to be replaced");
+  });
+
+  it("re-checks the campaign is still running when it pushes", async () => {
+    await contact(owner, "gil", { firstName: "Gil", lastName: "Moor", email: "gil@moor.test" });
+    const gil = (await addProspects(owner, otherCampaign, [people.gil.id], { operation: "test" })).prospects[0];
+    await sql("update crm.campaigns set status = 'completed' where id = $1", [otherCampaign]);
+    await drainFills();
+    assert.deepEqual([(await row(gil.prospectId)).state, (await row(gil.prospectId)).skip_reason], ["failed", "This campaign has ended."]);
+    await sql("update crm.campaigns set status = 'active' where id = $1", [otherCampaign]);
+    assert.equal((await addProspects(owner, otherCampaign, [people.gil.id], { operation: "test" })).prospects[0].outcome, "requeued");
   });
 
   it("keeps a value only when its figures come from a source", () => {
