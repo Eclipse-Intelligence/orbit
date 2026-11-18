@@ -1,3 +1,4 @@
+import { HEYREACH_POSITIVE_TAG_EVENT } from "@/lib/heyreach";
 import { campaignProvider } from "@/lib/campaigns/providers";
 import { addRefusal, readCampaignVariables } from "@/lib/campaigns/prospects";
 import {
@@ -169,15 +170,23 @@ async function senderCapacity(db: Db, workspaceId: string, senderIds: string[]):
 }
 
 async function heyReachFunnel(db: Db, workspaceId: string, campaignId: string): Promise<LeadFunnel> {
-  const result = await db.query<LeadFunnel>(
+  const result = await db.query<LeadFunnel & { tagged: boolean }>(
     `select count(*) filter (where p.provider_state->>'connection' in ('sent', 'accepted') or p.provider_state->>'messaging' in ('sent', 'replied'))::int as contacted,
             count(*) filter (where p.provider_state->>'connection' = 'accepted')::int as accepted,
-            count(*) filter (where p.provider_state->>'messaging' = 'replied')::int as replied
+            count(*) filter (where p.provider_state->>'messaging' = 'replied')::int as replied,
+            count(*) filter (where p.provider_state ? 'positiveAt')::int as interested,
+            exists (
+              select 1 from crm.campaign_connections c
+              where c.workspace_id = $2 and c.provider = 'heyreach' and c.details #> '{webhooks,events}' ? $3
+            ) as tagged
      from crm.campaign_prospects p
      where p.campaign_id = $1 and p.workspace_id = $2`,
-    [campaignId, workspaceId],
+    [campaignId, workspaceId, HEYREACH_POSITIVE_TAG_EVENT],
   );
-  return result.rows[0] ?? { contacted: 0, accepted: 0, replied: 0 };
+  const row = result.rows[0];
+  if (!row) return { contacted: 0, accepted: 0, replied: 0 };
+  const { tagged, interested, ...counts } = row;
+  return tagged ? { ...counts, interested } : counts;
 }
 
 export async function getCampaign(actor: Actor, id: string): Promise<CampaignDetail> {

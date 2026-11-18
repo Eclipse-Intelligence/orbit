@@ -3263,12 +3263,12 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Updating a campaign",
     write: true,
     description:
-      "Change a campaign or a person in one. add puts contactIds (or the people at companyIds) into campaignId, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact (Do not contact, customers, open opportunities, people the workspace has written to or met, already in another campaign on that channel) with the reason. pause and resume take campaignId alone for the whole campaign, or a person (prospectId, or contactId with campaignId) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (category null clears it). reply sends text to a person in their campaign thread, by email or on LinkedIn (channel); a LinkedIn reply goes out as the LinkedIn account's own member, so only they can send it. A reply result with repeated true was sent before and not sent again (its note says when): tell the user that, never report it as a new send. Nothing here lifts Do not contact: only a person can, in Orbit.",
+      "Change a campaign or a person in one. add puts contactIds (or the people at companyIds) into campaignId, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact (Do not contact, customers, open opportunities, people the workspace has written to or met, already in another campaign on that channel) with the reason. start takes campaignId alone and starts a campaign that has never run. pause and resume take campaignId alone for the whole campaign, or a person (prospectId, or contactId with campaignId) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (category null clears it). reply sends text to a person in their campaign thread, by email or on LinkedIn (channel); a LinkedIn reply goes out as the LinkedIn account's own member, so only they can send it. A reply result with repeated true was sent before and not sent again (its note says when): tell the user that, never report it as a new send. Nothing here lifts Do not contact: only a person can, in Orbit.",
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: [...CAMPAIGN_ACTIONS], description: "add, pause, resume, remove, set_category or reply." },
-        campaignId: idParam("A campaign id from campaigns view list. Needed for add, and for pause or resume of a whole campaign."),
+        action: { type: "string", enum: [...CAMPAIGN_ACTIONS], description: "add, start, pause, resume, remove, set_category or reply." },
+        campaignId: idParam("A campaign id from campaigns view list. Needed for add and start, and for pause or resume of a whole campaign."),
         contactIds: { type: "array", items: { type: "string" }, maxItems: 1000, description: "For add: contact ids to add, up to 1,000." },
         companyIds: { type: "array", items: { type: "string" }, maxItems: 1000, description: "For add, instead of contactIds: add the people at these companies." },
         prospectId: idParam("The person in a campaign, from campaigns view prospects, thread or activity."),
@@ -3304,6 +3304,7 @@ const TOOL_LIST: AssistantTool[] = [
             : `Add ${people.length} ${people.length === 1 ? "person" : "people"} to ${campaign}`;
         return { title, lines: [chatTargetName(name, "add:senders", ""), ...shown, ...more] };
       }
+      if (action === "start") return { title: `Start ${campaign}`, lines: [] };
       if (action === "pause" || action === "resume") {
         const verb = action === "pause" ? "Pause" : "Resume";
         if (str(args.campaignId) && !str(args.prospectId) && !str(args.contactId)) return { title: `${verb} ${campaign}`, lines: [] };

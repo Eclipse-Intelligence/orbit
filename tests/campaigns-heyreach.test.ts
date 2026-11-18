@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { campaignConnectionViews, keyFingerprint, KEY_TAKEN, saveCampaignConnection } from "@/lib/campaigns/connections";
-import { heyReachEvents } from "@/lib/campaigns/providers";
+import { campaignConnectionViews, keyFingerprint, KEY_TAKEN, removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
+import { campaignProvider, heyReachEvents } from "@/lib/campaigns/providers";
 import { linkCampaignSender, listCampaignSenders, SENDER_LINKED } from "@/lib/campaigns/senders";
-import { syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
+import { syncCampaigns, syncConnection, type SyncedEvent, type Target } from "@/lib/campaigns/sync";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { startCampaign } from "@/lib/campaigns/manage";
+import { urlSecrets } from "@/lib/upstream";
 import { getCampaign, importCampaignProspects, listCampaignProspects, listCampaigns } from "@/lib/crm/campaigns";
 import { createContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -23,7 +27,9 @@ import {
   heyReachSteps,
   listHeyReachAccounts,
   listHeyReachLeads,
+  startHeyReachCampaign,
   stopHeyReachLead,
+  validationDetail,
   variablesIn,
 } from "@/lib/heyreach";
 import { fakeHeyReach, HEYREACH_WEBHOOK_TYPES, type FakeHeyReachAccount, type FakeHeyReachCampaign, type FakeHeyReachLead } from "./campaigns-fake";
@@ -176,7 +182,11 @@ describe("campaigns through HeyReach", () => {
   describe("the parser", () => {
     it("reads statuses, single-brace variables and lead events", async () => {
       assert.equal(campaignStatus("IN_PROGRESS"), "active");
-      assert.equal(campaignStatus("SCHEDULED"), "drafted");
+      assert.equal(campaignStatus("DRAFT"), "drafted");
+      for (const started of ["IN_PROGRESS", "STARTING", "SCHEDULED"]) assert.equal(campaignStatus(started), "active", started);
+      assert.equal(campaignStatus("CANCELED"), "stopped");
+      assert.equal(campaignStatus("SOMETHING_NEW"), null);
+      assert.equal(campaignStatus(null), null);
       assert.equal(campaignStatus("FINISHED"), "completed");
       assert.equal(campaignStatus("FAILED"), "stopped");
       assert.deepEqual(variablesIn([{ step: 1, variant: null, subject: "Message", body: "Hi {first_name}, {{not_this}} { opener }", delayDays: null }]), ["first_name", "opener"]);
@@ -334,8 +344,9 @@ describe("campaigns through HeyReach", () => {
       assert.deepEqual(calls, [{ method: "POST", path: "/api/public/campaign/StopLeadInCampaign", query: "", body: { campaignId: 123, leadMemberId: null, leadUrl: "https://www.linkedin.com/in/john-doe" } }]);
     });
 
-    it("sends CreateWebhook exactly as documented and logs HeyReach's validation errors", async () => {
-      assert.ok(HEYREACH_WEBHOOK_EVENTS.every((event) => HEYREACH_WEBHOOK_TYPES.includes(event)), "every event Orbit registers is a documented eventType");
+    it("sends CreateWebhook for all campaigns exactly as documented and logs HeyReach's validation errors", async () => {
+      const autoTag = (event: string) => event.startsWith("LEAD_AUTO_TAGGED_");
+      assert.ok(HEYREACH_WEBHOOK_EVENTS.filter((event) => !autoTag(event)).every((event) => HEYREACH_WEBHOOK_TYPES.includes(event)), "every event Orbit registers is a documented eventType");
       const { calls, impl } = recorder((_path, body) => {
         const row = body as Record<string, unknown>;
         if (row.eventType === "VIEWED_PROFILE") {
@@ -344,18 +355,18 @@ describe("campaigns through HeyReach", () => {
         return reply({ id: 98 });
       });
       const url = "https://orbit.test/api/webhooks/heyreach?w=workspace&secret=s3cret-value";
-      assert.equal(await createHeyReachWebhook("key", "744784", url, { fetchImpl: impl, eventType: "CONNECTION_REQUEST_SENT" }), "98");
+      assert.equal(await createHeyReachWebhook("key", url, { fetchImpl: impl, eventType: "CONNECTION_REQUEST_SENT" }), "98");
       assert.deepEqual(calls[0], {
         method: "POST",
         path: "/api/public/webhooks/CreateWebhook",
         query: "",
-        body: { webhookName: "Orbit connection request sent", webhookUrl: url, eventType: "CONNECTION_REQUEST_SENT", campaignIds: [744784] },
+        body: { webhookName: "Orbit connection request sent, all campaigns", webhookUrl: url, eventType: "CONNECTION_REQUEST_SENT", campaignIds: [] },
       });
       const logged: unknown[][] = [];
       const original = console.error;
       console.error = (...args: unknown[]) => void logged.push(args);
       try {
-        await assert.rejects(createHeyReachWebhook("key", "744784", url, { fetchImpl: impl, eventType: "VIEWED_PROFILE" }), (error: unknown) => {
+        await assert.rejects(createHeyReachWebhook("key", url, { fetchImpl: impl, eventType: "VIEWED_PROFILE" }), (error: unknown) => {
           assert.ok(error instanceof HeyReachError);
           assert.equal(error.message, "HeyReach returned an error (400) on CreateWebhook: One or more validation errors occurred: $.eventType: The JSON value could not be converted to WebhookEventType.");
           return true;
@@ -363,8 +374,72 @@ describe("campaigns through HeyReach", () => {
       } finally {
         console.error = original;
       }
-      assert.deepEqual(logged, [["HeyReach request failed", 400, "/webhooks/CreateWebhook", "One or more validation errors occurred: $.eventType: The JSON value could not be converted to WebhookEventType"]]);
+      assert.deepEqual(logged, [["HeyReach request failed", 400, "/webhooks/CreateWebhook", "One or more validation errors occurred. Fields $.eventType: The JSON value could not be converted to WebhookEventType."]]);
       assert.ok(!JSON.stringify(logged).includes("s3cret-value"));
+    });
+    it("logs every field HeyReach names on a 400, without keys, addresses or the webhook secret", () => {
+      const url = "https://orbit.test/api/webhooks/heyreach?w=workspace&secret=s3cret-value";
+      const body = JSON.stringify({
+        title: "One or more validation errors occurred.",
+        status: 400,
+        errors: {
+          webhookName: ["A webhook with this name already exists."],
+          webhookUrl: [`The url ${url} is taken by mark@eclipse.test.`],
+          "$.campaignIds[0]": ["The JSON value could not be converted to System.Int64."],
+          eventType: ["Not a valid key hr_key_eclipse_0001."],
+        },
+      });
+      const detail = validationDetail(body, [KEY, ...urlSecrets(url)]) ?? "";
+      for (const field of ["webhookName: A webhook with this name already exists.", "webhookUrl:", "$.campaignIds[0]: The JSON value could not be converted to System.Int64.", "eventType:"]) {
+        assert.ok(detail.includes(field), `${field} in ${detail}`);
+      }
+      for (const secret of ["s3cret-value", KEY, "mark@eclipse.test", "orbit.test"]) assert.ok(!detail.includes(secret), `${secret} in ${detail}`);
+      assert.equal(validationDetail(JSON.stringify({ errorMessage: "Campaign not found" }), []), null);
+    });
+
+    it("reuses only HeyReach webhooks for every campaign with this URL, and finds one added without an id", async () => {
+      const url = "https://orbit.test/api/webhooks/heyreach?w=workspace&secret=s3cret-value";
+      const listed = { totalCount: 7, items: [
+        { id: 123, webhookName: "Other tool", webhookUrl: "https://elsewhere.test/hook", eventType: "MESSAGE_SENT", campaignIds: [], isActive: true },
+        { id: 124, webhookName: "Orbit message sent, all campaigns", webhookUrl: url, eventType: "MESSAGE_SENT", campaignIds: [], isActive: true },
+        { id: 125, webhookName: "Orbit replies 744784", webhookUrl: url, eventType: "EVERY_MESSAGE_REPLY_RECEIVED", campaignIds: [744784], isActive: true },
+        { id: 201, webhookUrl: url, eventType: "FOLLOW_SENT", isActive: true },
+        { id: 202, webhookUrl: url, eventType: "LIKED_POST", campaignIds: null, isActive: true },
+        { id: 203, webhookUrl: url, eventType: "VIEWED_PROFILE", campaignIds: [{ id: 1 }], isActive: true },
+        { id: 204, webhookUrl: url, eventType: "INMAIL_SENT", campaignIds: [], isActive: false },
+      ] };
+      const { calls, impl } = recorder((path) => (path.endsWith("/GetAllWebhooks") ? reply(listed) : new Response(null, { status: 200 })));
+      const provider = campaignProvider("heyreach")!;
+      const context = { key: KEY, workspaceId: "webhook-test", fetchImpl: impl };
+      assert.deepEqual(await provider.findConnectionWebhooks!(context, url), { MESSAGE_SENT: "124" }, "a campaign's own webhook, an unclear campaign list or an inactive one isn't reused");
+      calls.length = 0;
+      assert.equal(await provider.createConnectionWebhook!(context, url, "MESSAGE_SENT"), "124");
+      assert.deepEqual(calls.map((call) => [call.method, call.path, call.body]), [
+        ["POST", "/api/public/webhooks/CreateWebhook", { webhookName: "Orbit message sent, all campaigns", webhookUrl: url, eventType: "MESSAGE_SENT", campaignIds: [] }],
+        ["POST", "/api/public/webhooks/GetAllWebhooks", { offset: 0, limit: 100, includeCustomHeaders: false }],
+      ]);
+      assert.equal(await provider.createConnectionWebhook!(context, url, "FOLLOW_SENT"), null);
+      assert.deepEqual(provider.webhookEvents, [], "HeyReach registers nothing per campaign");
+    });
+
+    it("reads auto-tags and tag changes into categories and tags", () => {
+      const provider = campaignProvider("heyreach")!;
+      const lead = { profile_url: "https://www.linkedin.com/in/jane-doe" };
+      const positive = provider.webhookActions!({ event_type: "LEAD_AUTO_TAGGED_POSITIVE", campaign: { id: 9001 }, lead, timestamp: "2026-11-18T10:00:00Z" })!;
+      assert.equal(positive.campaignExternalId, "9001");
+      assert.deepEqual(positive.events.map((event) => [event.kind, event.category, event.dedupeKey]), [["category", "Interested", "heyreach:9001:linkedin.com/in/jane-doe:auto_tag:positive"]]);
+      assert.deepEqual(positive.tags, { linkedin: "linkedin.com/in/jane-doe", patch: { autoTag: "positive", autoTagAt: "2026-11-18T10:00:00.000Z" }, positive: true });
+      const negative = provider.webhookActions!({ eventType: "LEAD_AUTO_TAGGED_NEGATIVE", campaignId: 9001, correspondentProfile: { profileUrl: "https://www.linkedin.com/in/jane-doe" } })!;
+      assert.deepEqual(negative.events.map((event) => event.category), ["Not interested"]);
+      const generic = provider.webhookActions!({ event_type: "LEAD_AUTO_TAGGED_GENERIC", campaign_id: 9001, lead, tags: ["Question"] })!;
+      assert.deepEqual([generic.events, generic.tags?.patch.tags, generic.tags?.positive], [[], ["Question"], false]);
+      const updated = provider.webhookActions!({ event_type: "LEAD_TAG_UPDATED", campaign: { id: 9001 }, profile: { linkedin_url: "https://www.linkedin.com/in/jane-doe" }, tags: [{ name: "Hot" }] })!;
+      assert.deepEqual([updated.events, updated.tags?.patch], [[], { tags: ["Hot"] }]);
+    });
+    it("starts a campaign with StartCampaign and its id in the query", async () => {
+      const { calls, impl } = recorder(() => new Response(null, { status: 200 }));
+      await startHeyReachCampaign(KEY, "744784", { fetchImpl: impl });
+      assert.deepEqual(calls, [{ method: "POST", path: "/api/public/campaign/StartCampaign", query: "?campaignId=744784", body: null }]);
     });
 
     it("words the status and last action like HeyReach", () => {
@@ -389,7 +464,8 @@ describe("campaigns through HeyReach", () => {
         importError: null,
       };
       assert.equal(linkedinStatus(base), "Not enrolled yet");
-      assert.equal(linkedinStatus({ ...base, leadStatus: "not_started", providerStatus: "pending" }), "Not enrolled yet");
+      assert.equal(linkedinStatus({ ...base, leadStatus: "not_started", providerStatus: "pending" }), "Pending");
+      assert.equal(linkedinStatus({ ...base, leadStatus: "not_started" }), "Pending");
       assert.equal(linkedinStatus({ ...base, leadStatus: "in_progress", providerStatus: "in_sequence" }), "In progress");
       assert.equal(linkedinStatus({ ...base, leadStatus: "stopped", providerStatus: "excluded" }), "Excluded");
       assert.equal(linkedinStatus({ ...base, leadStatus: "stopped", providerStatus: "failed" }), "Failed");
@@ -681,31 +757,209 @@ describe("campaigns through HeyReach", () => {
       assert.equal(eclipse.calls.filter((call) => call.path === "/campaign/GetCampaignSequence").length, 1, "only a campaign whose steps were parsed by the old reader reads them again");
     });
 
-    it("keeps registering the other HeyReach webhooks when one is refused", async () => {
+    it("registers one webhook per event for every campaign on the connection, and a new campaign needs none", async () => {
       const savedSite = process.env.SITE_URL;
       process.env.SITE_URL = "https://orbit.test";
-      let refusedOnce = false;
-      eclipse.fail = (path) => {
-        if (path !== "/webhooks/CreateWebhook" || refusedOnce) return null;
-        refusedOnce = true;
-        return new Response(JSON.stringify({ title: "One or more validation errors occurred.", status: 400, errors: { webhookName: ["Too long."] } }), { status: 400 });
-      };
-      const original = console.error;
+      const hookCalls = () => eclipse.calls.filter((call) => call.path.startsWith("/webhooks/"));
+      const details = async () => (await sql<{ details: { webhooks?: { events?: Record<string, string | null> } } }>("select details from crm.campaign_connections where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]))[0].details;
+      try {
+        eclipse.webhooks = [];
+        eclipse.calls.length = 0;
+        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        const created = hookCalls().filter((call) => call.path === "/webhooks/CreateWebhook");
+        assert.deepEqual(created.map((call) => String(call.body?.eventType)).sort(), [...HEYREACH_WEBHOOK_EVENTS].sort());
+        assert.ok(created.every((call) => Array.isArray(call.body?.campaignIds) && (call.body!.campaignIds as unknown[]).length === 0), "every webhook covers every campaign");
+        assert.equal(hookCalls().filter((call) => call.path === "/webhooks/GetAllWebhooks").length, 1);
+        assert.deepEqual(Object.keys((await details()).webhooks?.events ?? {}).sort(), [...HEYREACH_WEBHOOK_EVENTS].sort());
+        const campaignStates = await sql<{ hooked: boolean }>("select (sync_state ? 'webhooks' or sync_state ? 'webhookId') as hooked from crm.campaigns where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]);
+        assert.ok(campaignStates.every((row) => !row.hooked), "nothing is kept per campaign");
+
+        eclipse.campaigns.push({ ...draftCampaign(), id: 9003, name: "Brand new", status: "IN_PROGRESS" });
+        eclipse.calls.length = 0;
+        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        assert.equal((await sql("select 1 from crm.campaigns where workspace_id = $1 and external_id = '9003'", [owner.workspaceId])).length, 1);
+        assert.deepEqual(hookCalls(), [], "a new campaign needs no new webhooks");
+      } finally {
+        eclipse.campaigns = eclipse.campaigns.filter((item) => item.id !== 9003);
+        await sql("delete from crm.campaigns where workspace_id = $1 and external_id = '9003'", [owner.workspaceId]);
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+    });
+
+    it("reuses the webhooks HeyReach already has, adds nothing when the list can't be read, retries an hour after a refusal and never adds one twice", async () => {
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = "https://orbit.test";
+      const creates = () => eclipse.calls.filter((call) => call.path === "/webhooks/CreateWebhook").map((call) => String(call.body?.eventType));
+      const forget = () => sql("update crm.campaign_connections set details = details - 'webhooks' where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]);
+      const failedAgo = (minutes: number) =>
+        sql("update crm.campaign_connections set details = jsonb_set(details, '{webhooks,failedAt}', to_jsonb((now() - make_interval(mins => $2::int))::text)) where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId, minutes]);
+      const sync = () => syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
       const logged: string[] = [];
+      const original = console.error;
       console.error = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
       try {
-        await sql("update crm.campaigns set sync_state = sync_state - 'webhooks' - 'webhookId' - 'webhookFailedAt' where id = $1", [foundersId]);
-        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        await forget();
+        eclipse.calls.length = 0;
+        await sync();
+        assert.deepEqual(creates(), [], "every webhook HeyReach already has is reused");
+
+        await forget();
+        eclipse.fail = (path) => (path === "/webhooks/GetAllWebhooks" ? new Response(JSON.stringify({ errorMessage: "Bad request" }), { status: 400 }) : null);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.deepEqual(creates(), [], "a 400 on the list adds nothing");
+        eclipse.fail = (path) => (path === "/webhooks/GetAllWebhooks" ? new Response("not json", { status: 200 }) : null);
+        await failedAgo(61);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.deepEqual(creates(), [], "an unreadable list adds nothing");
+
+        eclipse.webhooks = [];
+        let refused = false;
+        eclipse.fail = (path) => {
+          if (path !== "/webhooks/CreateWebhook" || refused) return null;
+          refused = true;
+          return new Response(JSON.stringify({ title: "One or more validation errors occurred.", status: 400, errors: { webhookName: ["Too long."] } }), { status: 400 });
+        };
+        await failedAgo(61);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.equal(creates().length, HEYREACH_WEBHOOK_EVENTS.length, "the others are still added after one is refused");
+        assert.ok(logged.some((line) => line.includes("Couldn't add the HeyReach webhook EVERY_MESSAGE_REPLY_RECEIVED") && line.includes("webhookName: Too long")));
+        await failedAgo(30);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.deepEqual(creates(), [], "nothing is tried within the hour");
+        await failedAgo(61);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.deepEqual(creates(), [HEYREACH_WEBHOOK_EVENTS[0]], "only the refused one is tried again");
+
+        await forget();
+        eclipse.webhooks = [];
+        let listed = 0;
+        eclipse.fail = (path) => {
+          if (path === "/webhooks/CreateWebhook") return new Response(null, { status: 200 });
+          if (path === "/webhooks/GetAllWebhooks") return listed++ === 0 ? new Response(JSON.stringify({ totalCount: 0, items: [] }), { status: 200 }) : new Response("busy", { status: 500 });
+          return null;
+        };
+        eclipse.calls.length = 0;
+        await sync();
+        assert.equal(creates().length, HEYREACH_WEBHOOK_EVENTS.length);
+        await failedAgo(120);
+        eclipse.calls.length = 0;
+        await sync();
+        assert.deepEqual(creates(), [], "a webhook HeyReach accepted without an id isn't added again");
       } finally {
         console.error = original;
         eclipse.fail = undefined;
         if (savedSite === undefined) delete process.env.SITE_URL;
         else process.env.SITE_URL = savedSite;
       }
-      const state = (await sql<{ state: { webhooks?: string[]; webhookFailedAt?: string } }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
-      assert.deepEqual(state.webhooks, HEYREACH_WEBHOOK_EVENTS.slice(1));
-      assert.ok(state.webhookFailedAt);
-      assert.ok(logged.some((line) => line.includes("Couldn't add the HeyReach webhook EVERY_MESSAGE_REPLY_RECEIVED") && line.includes("webhookName: Too long")));
+    });
+    it("keeps a started campaign started when HeyReach reports STARTING or a status Orbit doesn't know", async () => {
+      const founders = eclipse.campaigns.find((item) => item.id === 9001)!;
+      const status = async () => (await sql<{ status: string }>("select status from crm.campaigns where id = $1", [foundersId]))[0].status;
+      try {
+        for (const reported of ["STARTING", "SCHEDULED", "SOMETHING_NEW"]) {
+          founders.status = reported;
+          await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+          assert.equal(await status(), "active", reported);
+        }
+      } finally {
+        founders.status = "IN_PROGRESS";
+      }
+    });
+
+    it("reads the connection again after taking the sync lock, so a webhook accepted without an id is never added twice", async () => {
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = "https://orbit.test";
+      const creates = () => eclipse.calls.filter((call) => call.path === "/webhooks/CreateWebhook").length;
+      try {
+        await sql("update crm.campaign_connections set details = details - 'webhooks' where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]);
+        const stale = (await sql<Target>("select * from private.campaign_connection_targets($1)", [owner.workspaceId])).find((row) => row.provider === "heyreach")!;
+        eclipse.webhooks = [];
+        let listed = 0;
+        eclipse.fail = (path) => {
+          if (path === "/webhooks/CreateWebhook") return new Response(null, { status: 200 });
+          if (path === "/webhooks/GetAllWebhooks") return listed++ === 0 ? new Response(JSON.stringify({ totalCount: 0, items: [] }), { status: 200 }) : new Response("busy", { status: 500 });
+          return null;
+        };
+        eclipse.calls.length = 0;
+        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        assert.equal(creates(), HEYREACH_WEBHOOK_EVENTS.length);
+        eclipse.calls.length = 0;
+        const report = { connections: 0, campaigns: 0, prospects: 0, events: 0, backfilled: 0, busy: [], errors: [], threads: 0, stopped: 0 };
+        await syncConnection(stale, { workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl }, report);
+        assert.equal(report.connections, 1);
+        assert.equal(creates(), 0, "the sync that read the connection earlier sees what the other one saved");
+      } finally {
+        eclipse.fail = undefined;
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+    });
+
+    it("shows the manual webhook address only when the reply or action webhooks are missing, worded for HeyReach", async () => {
+      process.env.SITE_URL = "https://orbit.test";
+      const view = async () => (await campaignConnectionViews(owner)).find((item) => item.provider === "heyreach")!;
+      const setWebhooks = (state: unknown) =>
+        sql("update crm.campaign_connections set details = jsonb_set(details, '{webhooks}', $2::jsonb) where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId, JSON.stringify(state)]);
+      const all = Object.fromEntries(HEYREACH_WEBHOOK_EVENTS.map((event) => [event, "1"]));
+      const withoutTags = Object.fromEntries(HEYREACH_WEBHOOK_EVENTS.filter((event) => event.startsWith("LEAD_") === false).map((event) => [event, "1"]));
+      const withoutReply = Object.fromEntries(HEYREACH_WEBHOOK_EVENTS.slice(1).map((event) => [event, "1"]));
+      try {
+        await sql("update crm.campaigns set sync_state = sync_state - 'webhookFailedAt' where workspace_id = $1", [owner.workspaceId]);
+        await setWebhooks({ events: withoutTags, failedAt: new Date().toISOString() });
+        assert.equal((await view()).webhookUrl, null, "a refused tag event leaves no notice");
+        await setWebhooks({ events: withoutReply, failedAt: new Date().toISOString() });
+        assert.match((await view()).webhookUrl ?? "", /\/api\/webhooks\/heyreach\?w=.+&secret=/);
+        assert.equal((await campaignConnectionViews(member)).find((item) => item.provider === "heyreach")!.webhookUrl, null);
+        await setWebhooks({ events: all, failedAt: null });
+        assert.equal((await view()).webhookUrl, null);
+      } finally {
+        delete process.env.SITE_URL;
+      }
+      const card = readFileSync(path.join(process.cwd(), "components/campaigns/campaign-connection-card.tsx"), "utf8");
+      assert.ok(card.includes("HeyReach didn't accept Orbit's webhooks. In HeyReach › Integrations › Webhooks, add one for each event, for all campaigns, with this address."));
+    });
+
+    it("forgets the connection's webhooks on disconnect, so a reconnect registers all of them again", async () => {
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = "https://orbit.test";
+      try {
+        await sql("update crm.campaigns set sync_state = sync_state || jsonb_build_object('webhooks', $2::jsonb, 'webhookId', '77', 'webhookFailedAt', now()::text) where id = $1", [foundersId, JSON.stringify(HEYREACH_WEBHOOK_EVENTS)]);
+        assert.equal(await removeCampaignConnection(owner, "heyreach"), true);
+        const forgotten = (await sql<{ state: Record<string, unknown> }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+        assert.deepEqual([forgotten.webhooks, forgotten.webhookId, forgotten.webhookFailedAt], [undefined, undefined, undefined]);
+        await saveCampaignConnection(owner, "heyreach", KEY, { fetchImpl });
+        eclipse.calls.length = 0;
+        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        assert.equal(eclipse.calls.filter((call) => call.path === "/webhooks/GetAllWebhooks").length, 1, "a reconnect checks every webhook again");
+        const details = (await sql<{ details: { webhooks?: { events?: Record<string, unknown> } } }>("select details from crm.campaign_connections where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]))[0].details;
+        assert.deepEqual(Object.keys(details.webhooks?.events ?? {}).sort(), [...HEYREACH_WEBHOOK_EVENTS].sort());
+      } finally {
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+    });
+    it("starts a campaign that has never run, audits it once, and refuses one that has", async () => {
+      const draft = (await sql<{ id: string; status: string }>("select id, status from crm.campaigns where workspace_id = $1 and external_id = '9002'", [owner.workspaceId]))[0];
+      assert.equal(draft.status, "drafted");
+      eclipse.calls.length = 0;
+      assert.deepEqual(await startCampaign(member, draft.id, { fetchImpl }), { status: "active" });
+      assert.deepEqual(eclipse.calls.map((call) => call.path), ["/campaign/StartCampaign"]);
+      assert.equal((await sql<{ status: string }>("select status from crm.campaigns where id = $1", [draft.id]))[0].status, "active");
+      assert.deepEqual(await startCampaign(member, draft.id, { fetchImpl }), { status: "active" });
+      assert.equal(eclipse.calls.length, 1, "a started campaign isn't started again");
+      const audits = await sql<{ actor_user_id: string }>("select actor_user_id from crm.audit_events where workspace_id = $1 and event_type = 'campaign.started' and entity_id = $2", [owner.workspaceId, draft.id]);
+      assert.deepEqual(audits.map((row) => row.actor_user_id), [member.userId]);
+      await sql("update crm.campaigns set status = 'paused' where id = $1", [draft.id]);
+      await assert.rejects(startCampaign(member, draft.id, { fetchImpl }), refused("conflict", /Only a campaign that hasn't started can be started/));
+      await assert.rejects(startCampaign(outsider, draft.id, { fetchImpl }), refused("not_found"));
+      eclipse.campaigns.find((item) => item.id === 9002)!.status = "DRAFT";
+      await sql("update crm.campaigns set status = 'drafted' where id = $1", [draft.id]);
     });
 
     it("imports the people who aren't in Orbit yet with their LinkedIn profiles", async () => {

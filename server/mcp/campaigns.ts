@@ -9,7 +9,7 @@ import { agentSource } from "@/lib/crm/validation";
 
 type CampaignToolOptions = { canReply?: boolean; fetchImpl?: typeof fetch };
 
-const MCP_ACTIONS = ["add", "pause", "resume", "remove", "set_category"] as const;
+const MCP_ACTIONS = ["add", "start", "pause", "resume", "remove", "set_category"] as const;
 
 function toolResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -82,7 +82,7 @@ export function registerCampaignTools(server: McpServer, actor: Actor, options: 
     "campaign_action",
     {
       description:
-        "Change a campaign or a person in one. add puts contact_ids (or the people at company_ids) into campaign_id, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact with the reason. pause and resume take campaign_id alone for the whole campaign, or a person (prospect_id, or contact_id with campaign_id) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (null clears it). Nothing here lifts Do not contact: only a person can, in Orbit. Audited.",
+        "Change a campaign or a person in one. add puts contact_ids (or the people at company_ids) into campaign_id, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact with the reason. start takes campaign_id alone and starts a campaign that has never run. pause and resume take campaign_id alone for the whole campaign, or a person (prospect_id, or contact_id with campaign_id) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (null clears it). Nothing here lifts Do not contact: only a person can, in Orbit. Audited.",
       inputSchema: {
         action: z.enum(MCP_ACTIONS),
         campaign_id: z.uuid().optional(),

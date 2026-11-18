@@ -9,7 +9,7 @@ import { handleCampaignEvents } from "@/lib/campaigns/events";
 import { addedLine, campaignThreadPath } from "@/lib/campaigns/format";
 import { addCompanyContacts, addProspects, saveCampaignVariables } from "@/lib/campaigns/prospects";
 import type { VariableBrief } from "@/lib/campaigns/types";
-import { removeProspect, setCampaignAutoAdd, setCampaignPaused, setProspectCategory, setProspectPaused, type RemoveResult } from "@/lib/campaigns/manage";
+import { removeProspect, setCampaignAutoAdd, setCampaignPaused, setProspectCategory, setProspectPaused, startCampaign, type RemoveResult } from "@/lib/campaigns/manage";
 import { replyToProspect, type ReplyResult } from "@/lib/campaigns/replies";
 import { linkCampaignSender } from "@/lib/campaigns/senders";
 import { liftDoNotContact, setDoNotContact, type DoNotContactTarget } from "@/lib/campaigns/suppression";
@@ -148,6 +148,17 @@ export async function setCampaignPausedAction(campaignId: string, paused: boolea
     return {};
   } catch (error) {
     return { error: errorText(error, paused ? "Couldn't pause the campaign. Try again." : "Couldn't resume the campaign. Try again.") };
+  }
+}
+
+export async function startCampaignAction(campaignId: string): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await startCampaign(user, campaignId);
+    revalidateCampaign(campaignId);
+    return {};
+  } catch (error) {
+    return { error: errorText(error, "Couldn't start the campaign. Try again.") };
   }
 }
 

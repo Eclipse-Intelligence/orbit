@@ -400,6 +400,96 @@ describe("campaign integration upgrade", () => {
       assert.deepEqual(fired.map((row) => row.data.step).sort(), [1, 2]);
     });
 
+    it("routes HeyReach webhooks by campaign id, stores one event for two deliveries, and ignores campaigns Orbit doesn't have", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "heyreach"))!;
+      const post = (body: unknown) =>
+        handleCampaignWebhook(new Request(`${ORIGIN}/api/webhooks/heyreach?w=${owner.workspaceId}&secret=${encodeURIComponent(secret)}`, { method: "POST", body: JSON.stringify(body) }), "heyreach", { syncAfter: false });
+      const viewedAt = minutesAgo(30);
+      const viewed = (extra: Record<string, unknown>) => ({ event_type: "VIEWED_PROFILE", campaign: { id: 9101 }, lead: { profile_url: "https://www.linkedin.com/in/fay-fox" }, timestamp: viewedAt, ...extra });
+      const shapes = mock.method(console, "info", () => undefined);
+      try {
+        assert.deepEqual(await (await post(viewed({ webhook_name: "Orbit viewed profile, all campaigns" }))).json(), { saved: 1 });
+        assert.deepEqual(await (await post(viewed({ webhook_name: "Orbit viewed profile 9101" }))).json(), { saved: 0 }, "the same view from a campaign's own webhook isn't stored again");
+        assert.deepEqual(await (await post({ ...viewed({}), campaign: undefined, campaignId: "9101", timestamp: minutesAgo(29) })).json(), { saved: 0 }, "campaignId at the top level routes the same way");
+        assert.deepEqual(await (await post({ event_type: "VIEWED_PROFILE", campaign: { id: 777777 }, lead: { profile_url: "https://www.linkedin.com/in/fay-fox" }, timestamp: viewedAt })).json(), { ignored: true });
+        assert.deepEqual(await (await post({ event_type: "VIEWED_PROFILE", lead: { profile_url: "https://www.linkedin.com/in/fay-fox" }, timestamp: viewedAt })).json(), { ignored: true });
+        assert.deepEqual(await (await post({ event_type: "EVERY_MESSAGE_REPLY_RECEIVED", campaign_id: 777777, lead: { profile_url: "https://www.linkedin.com/in/fay-fox" }, recent_messages: [{ creation_time: viewedAt, message: "Hi" }] })).json(), { ignored: true });
+      } finally {
+        shapes.mock.restore();
+      }
+      const logged = shapes.mock.calls.map((call) => call.arguments.map(String).join(" ")).join("\n");
+      assert.match(logged, /Campaign webhook ignored: a campaign Orbit doesn't have/);
+      assert.match(logged, /Campaign webhook ignored: no campaign id/);
+      assert.doesNotMatch(logged.split("\n").filter((line) => line.startsWith("Campaign webhook ignored")).join("\n"), /fay-fox|777777|Hi\b/);
+      const [fay] = await prospect(linkedinId, "linkedin.com/in/fay-fox");
+      const views = await sql<{ count: number }>("select count(*)::int as count from crm.campaign_events where prospect_id = $1 and kind = 'profile_viewed'", [fay.id]);
+      assert.equal(views[0].count, 1);
+      assert.equal((await sql("select 1 from crm.campaigns where workspace_id = $1 and external_id = '777777'", [owner.workspaceId])).length, 0);
+    });
+
+    it("counts a HeyReach positive auto-tag towards Interested once, sets the category, and stores other tags", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "heyreach"))!;
+      const post = (body: unknown) =>
+        handleCampaignWebhook(new Request(`${ORIGIN}/api/webhooks/heyreach?w=${owner.workspaceId}&secret=${encodeURIComponent(secret)}`, { method: "POST", body: JSON.stringify(body) }), "heyreach", { syncAfter: false });
+      const tag = (event: string, profile: string, extra: Record<string, unknown> = {}) => ({ event_type: event, campaign: { id: 9101 }, lead: { profile_url: `https://www.linkedin.com/in/${profile}` }, timestamp: minutesAgo(5), ...extra });
+      const [fay] = await prospect(linkedinId, "linkedin.com/in/fay-fox");
+      await sql("update crm.campaign_prospects set category = null where id = $1", [fay.id]);
+      await sql("update crm.campaigns set sync_state = sync_state || '{\"leadStateAt\": \"2026-11-18T00:00:00Z\"}'::jsonb where id = $1", [linkedinId]);
+      await sql("update crm.campaign_connections set details = details - 'webhooks' where workspace_id = $1 and provider = 'heyreach'", [owner.workspaceId]);
+      assert.equal((await getCampaign(owner, linkedinId)).leadFunnel?.interested, undefined, "Interested stays hidden until the positive auto-tag webhook is registered");
+      const shapes = mock.method(console, "info", () => undefined);
+      try {
+        assert.deepEqual(await (await post(tag("LEAD_AUTO_TAGGED_POSITIVE", "fay-fox"))).json(), { saved: 1 });
+        assert.deepEqual(await (await post(tag("LEAD_AUTO_TAGGED_POSITIVE", "fay-fox", { timestamp: minutesAgo(1) }))).json(), { saved: 0 });
+        await post(tag("LEAD_TAG_UPDATED", "fay-fox", { tags: [{ name: "Hot" }, "Founder"] }));
+        await post(tag("LEAD_AUTO_TAGGED_GENERIC", "fay-fox", { tags: ["Question"] }));
+      } finally {
+        shapes.mock.restore();
+      }
+      const row = (await sql<{ category: string | null; state: Record<string, unknown> }>("select category, provider_state as state from crm.campaign_prospects where id = $1", [fay.id]))[0];
+      assert.equal(row.category, "Interested");
+      assert.ok(row.state.positiveAt);
+      assert.deepEqual(row.state.tags, ["Question"]);
+      assert.equal(row.state.autoTag, "generic");
+      const categories = await sql<{ count: number }>("select count(*)::int as count from crm.campaign_events where prospect_id = $1 and kind = 'category'", [fay.id]);
+      assert.equal(categories[0].count, 1);
+      await sql(
+        "update crm.campaign_connections set details = jsonb_set(details, '{webhooks}', '{\"events\": {\"LEAD_AUTO_TAGGED_POSITIVE\": \"1\"}}'::jsonb) where workspace_id = $1 and provider = 'heyreach'",
+        [owner.workspaceId],
+      );
+      assert.equal((await getCampaign(owner, linkedinId)).leadFunnel?.interested, 1);
+
+      const waiting = await sql<{ id: string }>("select id from crm.campaign_events where prospect_id = $1 and kind = 'category' and fired_at is null", [fay.id]);
+      if (waiting.length > 0) await sql("select private.campaign_fire_events($1::uuid[])", [waiting.map((item) => item.id)]);
+      const fired = (await workflowEvents("category")).filter((item) => item.data.prospectId === fay.id);
+      assert.equal(fired.length, 1);
+      assert.equal((fired[0].data as Record<string, unknown>).category, "Interested");
+      assert.equal(campaignTriggerMatches({ type: "campaign_event", event: "positive", channel: "linkedin" }, fired[0].data as Record<string, unknown>), true);
+    });
+
+    it("saves a HeyReach auto-tag for someone Orbit hasn't seen in the campaign yet", async () => {
+      const secret = (await ensureWebhookSecret(owner.workspaceId, "heyreach"))!;
+      const shapes = mock.method(console, "info", () => undefined);
+      try {
+        const response = await handleCampaignWebhook(
+          new Request(`${ORIGIN}/api/webhooks/heyreach?w=${owner.workspaceId}&secret=${encodeURIComponent(secret)}`, {
+            method: "POST",
+            body: JSON.stringify({ event_type: "LEAD_AUTO_TAGGED_POSITIVE", campaign: { id: 9101 }, lead: { profile_url: "https://www.linkedin.com/in/gus-new" }, tags: ["Warm"], timestamp: minutesAgo(2) }),
+          }),
+          "heyreach",
+          { syncAfter: false },
+        );
+        assert.deepEqual(await response.json(), { saved: 1 });
+      } finally {
+        shapes.mock.restore();
+      }
+      const [gus] = await prospect(linkedinId, "linkedin.com/in/gus-new");
+      const row = (await sql<{ category: string | null; state: Record<string, unknown> }>("select category, provider_state as state from crm.campaign_prospects where id = $1", [gus.id]))[0];
+      assert.equal(row.category, "Interested");
+      assert.ok(row.state.positiveAt, "the tag lands on the person the event just added");
+      assert.deepEqual(row.state.tags, ["Warm"]);
+    });
+
     it("matches the trigger on step, action, count, channel and campaign", () => {
       const email = { kind: "sent", step: 2, channel: "email", campaignId: "c1" };
       const step = (trigger: Partial<Extract<Trigger, { type: "campaign_event" }>>) => ({ type: "campaign_event" as const, event: "step" as const, ...trigger });

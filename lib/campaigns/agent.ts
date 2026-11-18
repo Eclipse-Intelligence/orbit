@@ -1,6 +1,6 @@
 import type { ProviderOptions } from "@/lib/campaigns/context";
 import { addedLine } from "@/lib/campaigns/format";
-import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused } from "@/lib/campaigns/manage";
+import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused, startCampaign } from "@/lib/campaigns/manage";
 import { addCompanyContacts, addProspects, type AddResult } from "@/lib/campaigns/prospects";
 import { replyToProspect } from "@/lib/campaigns/replies";
 import { campaignSenderNames } from "@/lib/campaigns/senders";
@@ -17,7 +17,7 @@ import { readDateTime } from "@/lib/time";
 export const CAMPAIGN_READS = ["list", "campaign", "prospects", "thread", "activity"] as const;
 export type CampaignRead = (typeof CAMPAIGN_READS)[number];
 
-export const CAMPAIGN_ACTIONS = ["add", "pause", "resume", "remove", "set_category", "reply"] as const;
+export const CAMPAIGN_ACTIONS = ["add", "start", "pause", "resume", "remove", "set_category", "reply"] as const;
 export type CampaignActionName = (typeof CAMPAIGN_ACTIONS)[number];
 
 export const NO_LIFT = "Only a person can lift Do not contact, from the person's page or thread in Orbit.";
@@ -149,6 +149,11 @@ export async function runCampaignAction(actor: Actor, input: CampaignActionInput
       if (contacts.length > 0 && companies.length > 0) throw new CrmError("invalid_input", "Send contactIds or companyIds, not both.", 400, { field: "companyIds" });
       if (companies.length > 0) return addSummary(await addCompanyContacts(actor, campaignId, companies, provenance));
       return addSummary(await addProspects(actor, campaignId, contacts, provenance));
+    }
+    case "start": {
+      const campaignId = needed(input.campaignId, "campaignId", "Pass campaignId from the list.");
+      const result = await startCampaign(actor, campaignId, { ...provider, provenance });
+      return { ...result, campaign: await campaignSummaryOf(actor, campaignId) };
     }
     case "pause":
     case "resume": {

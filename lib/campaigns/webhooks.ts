@@ -39,15 +39,31 @@ function syncSoon(workspaceId: string, provider: CampaignProviderId, options: We
   } catch {}
 }
 
-async function saveWebhookActions(workspaceId: string, providerId: CampaignProviderId, actions: WebhookActions, receiptKey: string, options: WebhookOptions) {
-  const found = await query<{ campaign_id: string; backfilled: boolean }>("select * from private.campaign_webhook_campaign($1, $2, $3)", [
-    workspaceId,
-    providerId,
-    actions.campaignExternalId,
-  ]);
-  const campaign = found.rows[0];
-  if (!campaign) return json({ ignored: true });
+async function knownCampaign(workspaceId: string, providerId: CampaignProviderId, externalId: string) {
+  const found = await query<{ campaign_id: string; backfilled: boolean }>("select * from private.campaign_webhook_campaign($1, $2, $3)", [workspaceId, providerId, externalId]);
+  return found.rows[0] ?? null;
+}
+
+function unrouted(payload: unknown, why: string) {
+  console.info(`Campaign webhook ignored: ${why}`, webhookShape(payload).map((field) => field.split(/[=:]/)[0]).join(" ").slice(0, 2000));
+  return json({ ignored: true });
+}
+
+async function saveWebhookActions(workspaceId: string, providerId: CampaignProviderId, actions: WebhookActions, payload: unknown, receiptKey: string, options: WebhookOptions) {
+  if (!actions.campaignExternalId) return unrouted(payload, "no campaign id");
+  const campaign = await knownCampaign(workspaceId, providerId, actions.campaignExternalId);
+  if (!campaign) return unrouted(payload, "a campaign Orbit doesn't have");
   const saved = await saveProviderEvents(campaign.campaign_id, actions.events, !campaign.backfilled);
+  if (actions.tags && Object.keys(actions.tags.patch).length > 0) {
+    await query("select private.campaign_prospect_tags($1, $2, $3, $4, $5::jsonb, $6)", [
+      workspaceId,
+      providerId,
+      actions.campaignExternalId,
+      actions.tags.linkedin,
+      JSON.stringify(actions.tags.patch),
+      actions.tags.positive,
+    ]);
+  }
   const key = createHash("sha256").update(receiptKey).digest("hex");
   const receipt = await query<{ fresh: boolean }>("select private.campaign_webhook_receipt($1, $2, $3) as fresh", [workspaceId, providerId, key]);
   if (saved.length > 0 && campaign.backfilled) syncSoon(workspaceId, providerId, options);
@@ -75,8 +91,9 @@ export async function handleCampaignWebhook(request: Request, providerId: Campai
   if (provider.id === "heyreach") console.info("HeyReach webhook fields", webhookShape(payload).join(" ").slice(0, 2000));
   const hint = provider.webhookHint(payload, request.headers);
   const actions = provider.webhookActions?.(payload) ?? null;
-  if (actions) return saveWebhookActions(workspaceId, provider.id, actions, `${provider.id}-action|${raw}`, options);
+  if (actions) return saveWebhookActions(workspaceId, provider.id, actions, payload, `${provider.id}-action|${raw}`, options);
   if (!hint) return json({ ignored: true });
+  if (provider.id === "heyreach" && hint.campaignId && !(await knownCampaign(workspaceId, provider.id, hint.campaignId))) return unrouted(payload, "a campaign Orbit doesn't have");
   const flagged = await query<{ count: number }>("select private.campaign_request_sync($1, $2, $3, $4, $5, $6) as count", [
     workspaceId,
     provider.id,

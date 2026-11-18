@@ -318,6 +318,7 @@ describe("campaigns for the assistant, MCP and the API", () => {
       }
       for (const args of [
         { action: "add", campaignId: email, contactIds: [people.olu] },
+        { action: "start", campaignId: email },
         { action: "pause", campaignId: email },
         { action: "remove", prospectId: nina },
         { action: "set_category", prospectId: nina, category: "Interested" },
@@ -557,6 +558,38 @@ describe("campaigns for the assistant, MCP and the API", () => {
   });
 
   describe("rules every route keeps", () => {
+    it("starts a Smartlead campaign that has never run through the assistant's action and MCP, audited, and refuses one that has", async () => {
+      await sql("update crm.campaigns set status = 'drafted' where id = $1", [email]);
+      alpha.campaigns[0].status = "DRAFTED";
+      const writes = () => (alpha.writes ?? []).filter((write) => write.path === "/campaigns/801/status");
+      const before = writes().length;
+      try {
+        const started = (await runCampaignAction(owner, { action: "start", campaignId: email }, { provenance: { operation: "campaign_start" }, allowReply: true, fetchImpl })) as { status: string; campaign: { id: string; name: string } };
+        assert.equal(started.status, "active");
+        assert.deepEqual([started.campaign.id, started.campaign.name], [email, "Agency outreach"]);
+        assert.deepEqual(writes().slice(before).map((write) => write.body), [{ status: "START" }]);
+        assert.equal((await sql<{ status: string }>("select status from crm.campaigns where id = $1", [email]))[0].status, "active");
+        const audits = await sql<{ operation: string }>("select operation from crm.audit_events where workspace_id = $1 and event_type = 'campaign.started' and entity_id = $2", [owner.workspaceId, email]);
+        assert.deepEqual(audits.map((row) => row.operation), ["campaign_start"]);
+        const client = await campaignMcp(owner, { fetchImpl });
+        try {
+          const again = await client.call("campaign_action", { action: "start", campaign_id: email });
+          assert.equal(again.json?.status, "active");
+          assert.equal(writes().length, before + 1, "a live campaign isn't started again");
+          await sql("update crm.campaigns set status = 'paused' where id = $1", [email]);
+          const paused = await client.call("campaign_action", { action: "start", campaign_id: email });
+          assert.match(paused.text, /^conflict: Only a campaign that hasn't started can be started\./);
+          const missing = await client.call("campaign_action", { action: "start" });
+          assert.match(missing.text, /^invalid_input: Pass campaignId/);
+        } finally {
+          await client.close();
+        }
+      } finally {
+        alpha.campaigns[0].status = "ACTIVE";
+        await sql("update crm.campaigns set status = 'active' where id = $1", [email]);
+      }
+    });
+
     it("refuses every change without campaigns:write", async () => {
       const reader = (await createAgent(owner.workspaceId, ["crm:read"], "Read only")).actor;
       const client = await campaignMcp(reader, { fetchImpl });
@@ -569,6 +602,9 @@ describe("campaigns for the assistant, MCP and the API", () => {
         }
         const paused = await client.call("campaign_action", { action: "pause", campaign_id: email });
         assert.match(paused.text, /^forbidden: .*campaigns:write/);
+        const started = await client.call("campaign_action", { action: "start", campaign_id: email });
+        assert.match(started.text, /^forbidden: .*campaigns:write/);
+        await assert.rejects(runCampaignAction(reader, { action: "start", campaignId: email }, { provenance: { operation: "test" }, allowReply: false, fetchImpl }), refused("forbidden", /campaigns:write/));
       } finally {
         await client.close();
       }
@@ -619,6 +655,8 @@ describe("campaigns for the assistant, MCP and the API", () => {
 
     it("shows a card for every change", async () => {
       const card = async (args: Record<string, unknown>) => describeAction("campaign_action", args, await recordNames(owner, [args], ["campaign_action"]));
+      assert.deepEqual(await card({ action: "start", campaignId: email }), { title: "Start Agency outreach", lines: [] });
+      assert.deepEqual(await card({ action: "start", campaignId: linkedin }), { title: "Start Agency founders", lines: [] });
       assert.deepEqual(await card({ action: "pause", campaignId: email }), { title: "Pause Agency outreach", lines: [] });
       assert.deepEqual(await card({ action: "resume", campaignId: linkedin }), { title: "Resume Agency founders", lines: [] });
       assert.deepEqual(await card({ action: "pause", prospectId: nina }), { title: "Pause Nina Shah in Agency outreach", lines: [] });
