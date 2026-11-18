@@ -228,7 +228,10 @@ export type FakeHeyReachAccount = {
   campaigns: FakeHeyReachCampaign[];
   calls: { path: string; body: Record<string, unknown> | null }[];
   fail?: (path: string) => Response | null;
+  webhooks?: FakeHeyReachWebhook[];
 };
+
+export type FakeHeyReachWebhook = { id: number; webhookName: string; webhookUrl: string; eventType: string; campaignIds: number[]; isActive: boolean };
 
 function page<T>(items: T[], body: Record<string, unknown> | null) {
   const offset = Number(body?.offset ?? 0);
@@ -270,6 +273,13 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
     if (path === "/campaign/StopLeadInCampaign" && (typeof body?.leadUrl !== "string" || (body.leadMemberId !== null && body.leadMemberId !== undefined))) {
       return json({ errorMessage: "Lead not found" }, 404);
     }
+    if (path === "/campaign/StartCampaign") {
+      const campaign = account.campaigns.find((item) => String(item.id) === url.searchParams.get("campaignId"));
+      if (!campaign) return json({ errorMessage: "Campaign not found" }, 404);
+      if (campaign.status !== "DRAFT") return json({ errorMessage: "Campaign is in an invalid status" }, 400);
+      campaign.status = "IN_PROGRESS";
+      return new Response(null, { status: 200 });
+    }
     if (path === "/inbox/SendMessage" || path === "/campaign/Pause" || path === "/campaign/Resume" || path === "/campaign/StopLeadInCampaign") {
       if (path === "/campaign/Pause" || path === "/campaign/Resume") {
         const campaign = account.campaigns.find((item) => String(item.id) === url.searchParams.get("campaignId"));
@@ -280,7 +290,13 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
     if (path === "/webhooks/CreateWebhook") {
       const errors = webhookErrors(body);
       if (errors) return json({ type: "https://tools.ietf.org/html/rfc9110#section-15.5.1", title: "One or more validation errors occurred.", status: 400, errors }, 400);
-      return json({ id: 55 });
+      const hooks = (account.webhooks ??= []);
+      const hook = { id: 55 + hooks.length, webhookName: String(body!.webhookName), webhookUrl: String(body!.webhookUrl), eventType: String(body!.eventType), campaignIds: body!.campaignIds as number[], isActive: true };
+      hooks.push(hook);
+      return json(hook);
+    }
+    if (path === "/webhooks/GetAllWebhooks") {
+      return json(page(account.webhooks ?? [], body));
     }
     if (path === "/campaign/GetCampaignsForLead") {
       const wanted = String(body?.profileUrl ?? "").toLowerCase().replace(/\/$/, "");

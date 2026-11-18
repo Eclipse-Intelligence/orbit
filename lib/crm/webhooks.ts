@@ -72,6 +72,7 @@ export const WEBHOOK_EVENTS = [
   "page_folder.restored",
   "campaign.connection_changed",
   "campaign.sender_linked",
+  "campaign.started",
   "campaign.paused",
   "campaign.resumed",
   "campaign.prospect_paused",

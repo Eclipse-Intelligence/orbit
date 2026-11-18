@@ -33,7 +33,10 @@ import {
   readHeyReachSequence,
   readHeyReachStats,
   sendHeyReachMessage,
+  listHeyReachWebhooks,
+  matchingHeyReachWebhook,
   setHeyReachCampaignStatus,
+  startHeyReachCampaign,
   stopHeyReachLead,
   variablesIn as heyReachVariables,
   type HeyReachConversation,
@@ -228,6 +231,7 @@ export type CampaignProvider = {
   readReplies?(context: ProviderContext, externalId: string, offset: number): Promise<ProviderPage<ProviderThread>>;
   sendReply(context: ProviderContext, campaignExternalId: string, target: ReplyTarget, text: string): Promise<{ providerMessageId: string | null }>;
   setCampaignStatus(context: ProviderContext, externalId: string, status: "paused" | "active"): Promise<void>;
+  startCampaign(context: ProviderContext, externalId: string): Promise<void>;
   pauseLead?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
   resumeLead?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
   stopLead(context: ProviderContext, campaignExternalId: string, lead: LeadRef, reason: StopReason): Promise<LeadStatus>;
@@ -238,6 +242,7 @@ export type CampaignProvider = {
   categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
   webhookEvents: string[];
   registerWebhook(context: ProviderContext, campaignExternalId: string, url: string, event: string): Promise<string>;
+  findWebhooks?(context: ProviderContext, campaignExternalId: string, url: string, events: string[]): Promise<Record<string, string>>;
   webhookHint(payload: unknown, headers: Headers): WebhookHint | null;
   webhookActions?(payload: unknown): WebhookActions | null;
   pushBatch: number;
@@ -435,6 +440,7 @@ export const smartleadProvider: CampaignProvider = {
     return { providerMessageId: sent.messageId };
   },
   setCampaignStatus: (context, externalId, status) => setSmartleadCampaignStatus(context.key, externalId, status === "paused" ? "PAUSED" : "START", context),
+  startCampaign: (context, externalId) => setSmartleadCampaignStatus(context.key, externalId, "START", context),
   pauseLead: (context, campaignExternalId, lead) => pauseSmartleadLead(context.key, campaignExternalId, leadIdOf(lead), context),
   resumeLead: (context, campaignExternalId, lead) => resumeSmartleadLead(context.key, campaignExternalId, leadIdOf(lead), context),
   async stopLead(context, campaignExternalId, lead, reason) {
@@ -687,6 +693,7 @@ export const heyReachProvider: CampaignProvider = {
     return { providerMessageId: null };
   },
   setCampaignStatus: (context, externalId, status) => setHeyReachCampaignStatus(context.key, externalId, status, context),
+  startCampaign: (context, externalId) => startHeyReachCampaign(context.key, externalId, context),
   async stopLead(context, campaignExternalId, lead) {
     const url = profileUrl(lead.linkedin);
     if (!url) throw new LeadNotReady();
@@ -695,7 +702,23 @@ export const heyReachProvider: CampaignProvider = {
   },
   categoryKey: (campaignExternalId, lead, category) => heyReachCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.linkedin ?? "", category),
   webhookEvents: HEYREACH_WEBHOOK_EVENTS,
-  registerWebhook: (context, campaignExternalId, url, event) => createHeyReachWebhook(context.key, campaignExternalId, url, { ...context, eventType: event || HEYREACH_REPLY_EVENT }),
+  async registerWebhook(context, campaignExternalId, url, event) {
+    const eventType = event || HEYREACH_REPLY_EVENT;
+    const id = await createHeyReachWebhook(context.key, campaignExternalId, url, { ...context, eventType });
+    if (id) return id;
+    const found = matchingHeyReachWebhook(await listHeyReachWebhooks(context.key, url, context), campaignExternalId, url, eventType);
+    if (found) return found;
+    throw new HeyReachError("HeyReach added the webhook without saying its id.", 200);
+  },
+  async findWebhooks(context, campaignExternalId, url, events) {
+    const hooks = await listHeyReachWebhooks(context.key, url, context);
+    const found: Record<string, string> = {};
+    for (const event of events) {
+      const id = matchingHeyReachWebhook(hooks, campaignExternalId, url, event);
+      if (id) found[event] = id;
+    }
+    return found;
+  },
   webhookActions(payload) {
     const action = heyReachWebhookAction(payload);
     const linkedin = action ? prospectLinkedin(action.profileUrl) : null;

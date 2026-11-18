@@ -25,7 +25,8 @@ const LOCK_SECONDS = 330;
 const HAND_OVER_BATCH = 500;
 const REPLY_PAGES = 20;
 const REQUESTED_BATCH = 25;
-const WEBHOOK_RETRY_MS = 24 * 60 * 60_000;
+const WEBHOOK_RETRY_MS = 60 * 60_000;
+const UNCONFIRMED_WEBHOOK = "registered";
 const SEQUENCE_FORMAT = 2;
 const STRAY_KEPT = 1_000;
 const PROBE_EVERY_MS = 24 * 60 * 60_000;
@@ -251,9 +252,10 @@ async function syncReplies(pass: Pass, row: CampaignRow, handled: boolean) {
   return true;
 }
 
-export function registeredWebhooks(provider: Pick<CampaignProvider, "webhookEvents">, state: SyncState) {
+export function registeredWebhooks(provider: Pick<CampaignProvider, "id" | "webhookEvents">, state: SyncState) {
   const done = new Set(state.webhooks ?? []);
-  if (state.webhookId && provider.webhookEvents[0]) done.add(provider.webhookEvents[0]);
+  const confirmed = state.webhookId && !(provider.id === "heyreach" && state.webhookId === UNCONFIRMED_WEBHOOK);
+  if (confirmed && provider.webhookEvents[0]) done.add(provider.webhookEvents[0]);
   return provider.webhookEvents.filter((event) => done.has(event));
 }
 
@@ -266,19 +268,37 @@ async function registerWebhook(pass: Pass, row: CampaignRow) {
   const url = secret ? campaignWebhookUrl(pass.workspaceId, pass.provider.id, secret) : null;
   if (!url) return;
   let failed = false;
-  for (const event of missing) {
+  const refusedHook = async (error: unknown, event: string) => {
+    if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return "stop";
+    const failure = pass.provider.failure(error);
+    console.error(`Couldn't add the ${pass.provider.name} webhook`, event.slice(0, 200), failure ? failure.message : redactedError(error));
+    await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
+    failed = true;
+    return !failure || failure.status === null || failure.status >= 500 || failure.status === 429 || failure.rejectedKey ? "stop" : "next";
+  };
+  const firstEvent = pass.provider.webhookEvents[0];
+  const remember = (ids: Record<string, string>) => {
+    done.push(...Object.keys(ids));
+    return saveCampaign(row.id, { syncState: { webhooks: done, ...(ids[firstEvent] ? { webhookId: ids[firstEvent] } : {}), ...(failed ? {} : { webhookFailedAt: null }) } });
+  };
+  if (pass.provider.findWebhooks) {
     if (!timeLeft(pass.options.deadline, STEP_RESERVE_MS)) return;
     try {
-      const id = await pass.provider.registerWebhook(pass.context, row.external_id, url, event);
-      done.push(event);
-      await saveCampaign(row.id, { syncState: { webhooks: done, ...(event === pass.provider.webhookEvents[0] ? { webhookId: id } : {}), ...(failed ? {} : { webhookFailedAt: null }) } });
+      const found = await pass.provider.findWebhooks(pass.context, row.external_id, url, missing);
+      if (Object.keys(found).length > 0) await remember(found);
     } catch (error) {
       if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return;
       const failure = pass.provider.failure(error);
-      console.error(`Couldn't add the ${pass.provider.name} webhook`, event.slice(0, 200), failure ? failure.message : redactedError(error));
-      await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
-      failed = true;
+      console.error(`Couldn't read the ${pass.provider.name} webhooks`, failure ? failure.message : redactedError(error));
       if (!failure || failure.status === null || failure.status >= 500 || failure.status === 429 || failure.rejectedKey) return;
+    }
+  }
+  for (const event of missing.filter((item) => !done.includes(item))) {
+    if (!timeLeft(pass.options.deadline, STEP_RESERVE_MS)) return;
+    try {
+      await remember({ [event]: await pass.provider.registerWebhook(pass.context, row.external_id, url, event) });
+    } catch (error) {
+      if ((await refusedHook(error, event)) === "stop") return;
     }
   }
 }

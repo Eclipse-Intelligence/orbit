@@ -36,7 +36,7 @@ export const PROVIDER_STATS: Record<CampaignProviderId, { funnel: FunnelLabel[];
     statuses: [
       { key: "leads", label: "Total leads" },
       { key: "enrolled", label: "Enrolled in sequence" },
-      { key: "notEnrolled", label: "Not enrolled yet" },
+      { key: "notEnrolled", label: "Pending" },
       { key: "finished", label: "Finished" },
       { key: "pausedLeads", label: "Paused" },
       { key: "failed", label: "Failed leads" },
@@ -73,7 +73,7 @@ export function providerFigure(campaign: Pick<CampaignDetail, "provider" | "stat
 
 export const HEYREACH_STATUS_LABELS: Record<string, string> = {
   in_sequence: "In progress",
-  pending: "Not enrolled yet",
+  pending: "Pending",
   finished: "Finished",
   paused: "Paused",
   failed: "Failed",
@@ -82,7 +82,7 @@ export const HEYREACH_STATUS_LABELS: Record<string, string> = {
 
 const LEAD_STATUS_WORDS: Record<string, string> = {
   in_progress: "In progress",
-  not_started: "Not enrolled yet",
+  not_started: "Pending",
   completed: "Finished",
   paused: "Paused",
   stopped: "Failed",

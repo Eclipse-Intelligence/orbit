@@ -13,7 +13,7 @@ import VariableBriefs from "@/components/campaigns/variable-briefs";
 import { QuietTabs } from "@/components/crm/contact-activities";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
-import { importCampaignProspectAction, importCampaignProspectsAction, setCampaignAutoAddAction, setCampaignPausedAction } from "@/app/(crm)/campaigns/actions";
+import { importCampaignProspectAction, importCampaignProspectsAction, setCampaignAutoAddAction, setCampaignPausedAction, startCampaignAction } from "@/app/(crm)/campaigns/actions";
 import {
   AUTO_ADD_LABELS,
   autoAddChoices,
@@ -536,6 +536,29 @@ function PauseButton({ campaignId, paused, onError }: { campaignId: string; paus
   );
 }
 
+function StartButton({ campaignId, onError }: { campaignId: string; onError: (error: string | null) => void }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+
+  async function start() {
+    setPending(true);
+    onError(null);
+    const outcome = await startCampaignAction(campaignId).catch(() => ({ error: "Couldn't start the campaign. Try again." }));
+    setPending(false);
+    if (outcome.error) {
+      onError(outcome.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <Button variant="secondary" size="sm" disabled={pending} onClick={() => void start()} className="hit">
+      {pending ? "Starting…" : "Start"}
+    </Button>
+  );
+}
+
 export default function CampaignScreen({
   viewer,
   campaign,
@@ -563,6 +586,7 @@ export default function CampaignScreen({
   const [draft, setDraft] = useState(search);
   const [pauseError, setPauseError] = useState<string | null>(null);
   const pausable = canAct && (campaign.status === "active" || campaign.status === "paused");
+  const startable = canAct && campaign.status === "drafted";
   const linkedin = campaign.channel === "linkedin";
   const pages = Math.ceil(prospects.total / prospects.pageSize);
 
@@ -604,9 +628,10 @@ export default function CampaignScreen({
           </span>
         }
         action={
-          pausable || campaign.url ? (
+          pausable || startable || campaign.url ? (
             <span className="flex items-center gap-2">
               {pausable && <PauseButton campaignId={campaign.id} paused={campaign.status === "paused"} onError={setPauseError} />}
+              {startable && <StartButton campaignId={campaign.id} onError={setPauseError} />}
               {campaign.url && (
                 <Button
                   variant="ghost"

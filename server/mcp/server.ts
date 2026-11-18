@@ -90,7 +90,7 @@ const SEND_LINE =
 const DRAFT_LINE =
   "The mail_ tools reach their own email: read, search, ask and save drafts for them to send. This token can't send messages, so no email and no campaign replies; the person can allow it with Can send messages in Settings › API tokens.";
 const CAMPAIGNS_LINE =
-  "Campaigns (email through Smartlead, LinkedIn through HeyReach) are shared with every member. read_campaigns reads campaigns, their people, threads and events; campaign_action adds people, pauses, resumes, removes and sets categories. Orbit skips anyone it shouldn't contact, and only a person in Orbit can lift Do not contact.";
+  "Campaigns (email through Smartlead, LinkedIn through HeyReach) are shared with every member. read_campaigns reads campaigns, their people, threads and events; campaign_action adds people, starts, pauses, resumes, removes and sets categories. Orbit skips anyone it shouldn't contact, and only a person in Orbit can lift Do not contact.";
 
 export function createCrmMcpServer(actor: Actor, options: { workspaces?: { id: string; name: string }[]; personal?: { tokenId: string; canSend: boolean } } = {}) {
   if (actor.type === "agent" && actor.scopes.length > 0 && actor.scopes.every((scope) => scope === "market:write")) {

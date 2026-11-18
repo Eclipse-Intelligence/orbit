@@ -14,6 +14,7 @@ import { query, type Db } from "@/lib/db/pool";
 import { ServiceBusy } from "@/lib/workflows/limits";
 
 export const CAMPAIGN_AUDIT_EVENTS = {
+  started: "campaign.started",
   paused: "campaign.paused",
   resumed: "campaign.resumed",
   prospectPaused: "campaign.prospect_paused",
@@ -106,6 +107,27 @@ export async function setCampaignPaused(actor: Actor, campaignId: string, paused
   const changed = await query<{ changed: boolean }>("select private.campaign_status_set($1, $2, $3, $4::jsonb) as changed", [actor.workspaceId, campaign.id, want, audit]);
   if (changed.rows[0]?.changed) scheduleWebhooks();
   return { status: want };
+}
+
+export async function startCampaign(actor: Actor, campaignId: string, options: ManageOptions = {}) {
+  assertScope(actor.scopes, "campaigns:write");
+  const campaign = await withActor(actor, (db) => readCampaignRef(db, actor, campaignId));
+  if (campaign.status === "active") return { status: campaign.status };
+  if (campaign.status !== "drafted") throw new CrmError("conflict", "Only a campaign that hasn't started can be started.", 409);
+  const { provider, context } = await connectedContext(actor.workspaceId, campaign.provider, options);
+  try {
+    await provider.startCampaign(context, campaign.external_id);
+  } catch (error) {
+    throw providerError(provider, error, "Couldn't start the campaign. Try again.");
+  }
+  const audit = auditJson(actor, CAMPAIGN_AUDIT_EVENTS.started, "campaign", campaign.id, web("start_campaign", options), {
+    provider: campaign.provider,
+    channel: campaign.channel,
+    name: campaign.name,
+  });
+  const changed = await query<{ changed: boolean }>("select private.campaign_status_set($1, $2, $3, $4::jsonb) as changed", [actor.workspaceId, campaign.id, "active", audit]);
+  if (changed.rows[0]?.changed) scheduleWebhooks();
+  return { status: "active" as CampaignStatus };
 }
 
 export function notAtProvider(provider: Pick<CampaignProvider, "name">) {

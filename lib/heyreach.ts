@@ -1,5 +1,5 @@
 import type { CampaignStats, CampaignStatus, LeadStatus, SequenceStep } from "@/lib/campaigns/types";
-import { logRefusal, logUpstream, providerReason, refusedMessage, requestPath, unreachable, urlSecrets } from "@/lib/upstream";
+import { logRefusal, logUpstream, providerReason, redactSecrets, refusedMessage, requestPath, scrubPersonal, unreachable, urlSecrets } from "@/lib/upstream";
 import { withService } from "@/lib/workflows/limits";
 
 export const HEYREACH_API = "https://api.heyreach.io/api/public";
@@ -92,6 +92,37 @@ function refusalReason(body: string, secrets: string[]) {
   return reason ? `${reason}: ${fields}` : fields;
 }
 
+const DETAIL_MAX = 800;
+
+function titleOf(body: string, secrets: string[]) {
+  try {
+    const parsed = record(JSON.parse(body));
+    const title = text(parsed.title) ?? text(parsed.errorMessage) ?? text(parsed.message);
+    return title ? scrubPersonal(redactSecrets(title, secrets)).replace(/[.\s]+$/, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+export function validationDetail(body: string, secrets: string[]) {
+  let errors: unknown;
+  try {
+    errors = record(JSON.parse(body)).errors;
+  } catch {
+    return null;
+  }
+  if (!errors || typeof errors !== "object") return null;
+  const entries = Array.isArray(errors) ? errors.map((item, index) => [String(index), item] as const) : Object.entries(errors as Json);
+  const parts = entries.flatMap(([name, value]) => {
+    const messages = (Array.isArray(value) ? value : [value]).map((item) => (typeof item === "string" ? item : text(record(item).message) ?? text(record(item).errorMessage))).filter((item): item is string => Boolean(item));
+    const line = scrubPersonal(redactSecrets(`${name}: ${messages.join(" ") || "invalid"}`.replace(/\s+/g, " ").trim(), secrets));
+    return line ? [line] : [];
+  });
+  if (parts.length === 0) return null;
+  const joined = parts.join("; ");
+  return joined.length > DETAIL_MAX ? `${joined.slice(0, DETAIL_MAX - 1).trimEnd()}…` : joined;
+}
+
 export function heyReachEndpoint(url: URL) {
   return requestPath(url).replace(/^\/api\/public/, "").split("/").slice(0, 3).join("/");
 }
@@ -122,9 +153,11 @@ async function call(
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      const reason = refusalReason(body, [key, ...(options.secrets ?? [])]);
+      const secrets = [key, ...(options.secrets ?? [])];
+      const reason = refusalReason(body, secrets);
       const endpoint = heyReachEndpoint(url);
-      logRefusal("HeyReach", response.status, endpoint, reason);
+      const detail = validationDetail(body, secrets);
+      logRefusal("HeyReach", response.status, endpoint, detail ? `${titleOf(body, secrets) ?? "Refused"}. Fields ${detail}` : reason);
       const refused = (response.status === 401 || response.status === 403) && !keyCheck;
       throw new HeyReachError(
         refused ? `HeyReach refused this request (${response.status}).` : refusedMessage("HeyReach", response.status, reason, endpoint.split("/").pop()),
@@ -146,7 +179,7 @@ async function call(
   return withService("heyreach", run, { scope: options.workspaceId, statusOf });
 }
 
-async function allPages(key: string, path: string, options: HeyReachOptions & { keyCheck?: boolean }, extra: Json = {}) {
+async function allPages(key: string, path: string, options: HeyReachOptions & { keyCheck?: boolean; secrets?: string[] }, extra: Json = {}) {
   const rows: Json[] = [];
   for (let offset = 0; ; offset += HEYREACH_PAGE_SIZE) {
     const body = await call(key, path, { ...options, body: { offset, limit: HEYREACH_PAGE_SIZE, ...extra } });
@@ -622,6 +655,10 @@ export async function setHeyReachCampaignStatus(key: string, campaignId: string,
   await call(key, status === "paused" ? "/campaign/Pause" : "/campaign/Resume", { ...options, method: "POST", query: { campaignId } });
 }
 
+export async function startHeyReachCampaign(key: string, campaignId: string, options: HeyReachOptions = {}) {
+  await call(key, "/campaign/StartCampaign", { ...options, method: "POST", query: { campaignId } });
+}
+
 export async function stopHeyReachLead(key: string, campaignId: string, profileUrl: string, options: HeyReachOptions = {}) {
   await call(key, "/campaign/StopLeadInCampaign", {
     ...options,
@@ -701,17 +738,38 @@ export type HeyReachActionEvent = keyof typeof HEYREACH_ACTION_EVENTS;
 
 export const HEYREACH_WEBHOOK_EVENTS: string[] = [HEYREACH_REPLY_EVENT, ...Object.keys(HEYREACH_ACTION_EVENTS)];
 
+export function heyReachWebhookName(campaignId: string, eventType: string) {
+  const what = eventType === HEYREACH_REPLY_EVENT ? "replies" : eventType.toLowerCase().replace(/_/g, " ");
+  return `Orbit ${what} ${campaignId}`;
+}
+
+export type HeyReachWebhook = { id: string; eventType: string; url: string; campaignIds: string[]; active: boolean };
+
+export async function listHeyReachWebhooks(key: string, url: string, options: HeyReachOptions = {}): Promise<HeyReachWebhook[]> {
+  const rows = await allPages(key, "/webhooks/GetAllWebhooks", { ...options, secrets: urlSecrets(url) }, { includeCustomHeaders: false });
+  return rows.flatMap((row) => {
+    const id = text(row.id);
+    const eventType = text(row.eventType);
+    const webhookUrl = text(row.webhookUrl);
+    if (!id || !eventType || !webhookUrl) return [];
+    return [{ id, eventType: eventType.toUpperCase(), url: webhookUrl, campaignIds: list(row.campaignIds).map(text).filter((item): item is string => Boolean(item)), active: row.isActive !== false }];
+  });
+}
+
+export function matchingHeyReachWebhook(hooks: HeyReachWebhook[], campaignId: string, url: string, eventType: string) {
+  return hooks.find((hook) => hook.active && hook.url === url && hook.eventType === eventType && (hook.campaignIds.length === 0 || hook.campaignIds.includes(campaignId)))?.id ?? null;
+}
+
 export async function createHeyReachWebhook(key: string, campaignId: string, url: string, options: HeyReachOptions & { eventType?: string } = {}) {
   const eventType = options.eventType ?? HEYREACH_REPLY_EVENT;
-  const name = eventType === HEYREACH_REPLY_EVENT ? "Orbit replies" : `Orbit ${eventType.toLowerCase().replace(/_/g, " ")}`;
   const body = record(
     await call(key, "/webhooks/CreateWebhook", {
       ...options,
       secrets: urlSecrets(url),
-      body: { webhookName: name, webhookUrl: url, eventType, campaignIds: [campaignNumber(campaignId)] },
+      body: { webhookName: heyReachWebhookName(campaignId, eventType), webhookUrl: url, eventType, campaignIds: [campaignNumber(campaignId)] },
     }),
   );
-  return text(body.id) ?? "registered";
+  return text(body.id) ?? text(record(body.data).id) ?? null;
 }
 
 export type HeyReachWebhookAction = {
