@@ -4,7 +4,7 @@ import CampaignScreen from "@/components/campaigns/campaign-screen";
 import MailboxHealth from "@/components/campaigns/mailbox-health";
 import { getUserActor } from "@/lib/auth/user";
 import { connectionStates } from "@/lib/campaigns/connections";
-import { campaignSyncLine } from "@/lib/campaigns/format";
+import { campaignSyncLine, sequenceSteps } from "@/lib/campaigns/format";
 import { PROSPECT_FILTERS, type ProspectFilter } from "@/lib/campaigns/types";
 import { campaignMailboxes, getCampaign, listCampaignProspects } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
@@ -18,12 +18,12 @@ function param(value: string | string[] | undefined) {
   return typeof value === "string" ? value : "";
 }
 
-async function Mailboxes({ load }: { load: () => ReturnType<typeof campaignMailboxes> }) {
+async function Mailboxes({ load, steps, addedToday }: { load: () => ReturnType<typeof campaignMailboxes>; steps: number; addedToday: number }) {
   const health = await load().catch((error) => {
     console.error("Couldn't read campaign mailboxes", error);
     return { mailboxes: [], error: "Couldn't read the mailboxes. Try again." };
   });
-  return <MailboxHealth health={health} />;
+  return <MailboxHealth health={health} steps={steps} addedToday={addedToday} />;
 }
 
 export default async function CampaignPage({
@@ -60,7 +60,7 @@ export default async function CampaignPage({
       mailboxes={
         campaign.channel === "email" ? (
           <Suspense fallback={<p className="ui-style text-subtle">Checking…</p>}>
-            <Mailboxes load={() => campaignMailboxes(user, campaign.id)} />
+            <Mailboxes load={() => campaignMailboxes(user, campaign.id)} steps={sequenceSteps(campaign.sequence)} addedToday={campaign.addedToday} />
           </Suspense>
         ) : null
       }

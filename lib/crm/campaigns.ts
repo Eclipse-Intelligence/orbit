@@ -1,6 +1,8 @@
 import { campaignProvider } from "@/lib/campaigns/providers";
+import { addRefusal, readCampaignVariables } from "@/lib/campaigns/prospects";
 import type {
   CampaignDetail,
+  CampaignOption,
   CampaignEventKind,
   CampaignProviderId,
   CampaignStats,
@@ -125,15 +127,16 @@ function providerDays(rows: ProviderDay[]): DayStats[] {
 
 async function senderCapacity(db: Db, workspaceId: string, senderIds: string[]): Promise<SenderCapacity | null> {
   if (senderIds.length === 0) return null;
-  const result = await db.query<{ senders: number; invites: number | null }>(
+  const result = await db.query<{ senders: number; invites: number | null; messages: number | null }>(
     `select count(*)::int as senders,
-            case when count(*) = count(s.invite_limit) then sum(s.invite_limit)::int end as invites
+            case when count(*) = count(s.invite_limit) then sum(s.invite_limit)::int end as invites,
+            case when count(*) = count(s.message_limit) then sum(s.message_limit)::int end as messages
      from crm.campaign_senders s
      where s.workspace_id = $1 and s.provider = 'heyreach' and s.external_id = any($2::text[])`,
     [workspaceId, senderIds],
   );
   const row = result.rows[0];
-  return row && row.senders > 0 ? { senders: row.senders, invites: row.invites } : null;
+  return row && row.senders > 0 ? { senders: row.senders, invites: row.invites, messages: row.messages } : null;
 }
 
 export async function getCampaign(actor: Actor, id: string): Promise<CampaignDetail> {
@@ -141,7 +144,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
   return withActor(actor, async (db) => {
     const row = await readCampaign(db, actor, id);
     const linkedin = row.channel === "linkedin";
-    const [steps, days, unlinked, kinds, capacity] = await Promise.all([
+    const [steps, days, unlinked, kinds, capacity, briefs, today] = await Promise.all([
       db.query<{ step: number; variant: string | null; sent: number; opened: number; replied: number }>(
         `select e.step, e.variant,
                 count(*) filter (where e.kind = 'sent')::int as sent,
@@ -178,6 +181,13 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
           )
         : null,
       linkedin ? senderCapacity(db, actor.workspaceId, row.sender_ids ?? []) : null,
+      readCampaignVariables(db, { id: row.id, provider: row.provider, variables: row.variables ?? [] }),
+      db.query<{ count: number }>(
+        `select count(*)::int as count from crm.campaign_prospects p
+         where p.campaign_id = $1 and p.workspace_id = $2 and p.added_by_run_id is not null and p.state not in ('skipped', 'failed')
+           and (p.created_at at time zone 'Europe/London')::date = (now() at time zone 'Europe/London')::date`,
+        [row.id, actor.workspaceId],
+      ),
     ]);
     const provider = campaignProvider(row.provider);
     const sequence = row.sequence ?? [];
@@ -197,7 +207,23 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
       capacity,
       syncError: row.sync_error,
       strayConversations: row.stray ?? 0,
+      briefs,
+      addedToday: today.rows[0]?.count ?? 0,
     };
+  });
+}
+
+export async function campaignOptions(actor: Actor): Promise<CampaignOption[]> {
+  assertScope(actor.scopes, "crm:read");
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ id: string; name: string; channel: CampaignOption["channel"]; status: CampaignStatus; provider: CampaignProviderId }>(
+      `select k.id, k.name, k.channel, k.status, k.provider from crm.campaigns k
+       where k.workspace_id = $1
+         and exists (select 1 from crm.campaign_connections c where c.workspace_id = k.workspace_id and c.provider = k.provider)
+       order by k.channel, lower(k.name), k.id`,
+      [actor.workspaceId],
+    );
+    return result.rows.filter((row) => !addRefusal(row)).map((row) => ({ id: row.id, name: row.name, channel: row.channel }));
   });
 }
 

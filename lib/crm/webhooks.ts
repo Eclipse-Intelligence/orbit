@@ -83,6 +83,8 @@ export const WEBHOOK_EVENTS = [
   "campaign.do_not_contact_lifted",
   "campaign.unsubscribed",
   "campaign.bounced",
+  "campaign.prospect_added",
+  "campaign.variables_saved",
 ] as const;
 
 const BACKOFF_SECONDS = [60, 300, 1800, 7200];

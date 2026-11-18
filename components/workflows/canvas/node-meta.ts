@@ -22,6 +22,7 @@ import RepeatIcon from "@/public/assets/images/workflows/repeat.svg";
 import ChatIcon from "@/public/assets/images/chat/chat.svg";
 import ProposalIcon from "@/public/assets/images/companies/sidebar/file-signature.svg";
 import AtSignIcon from "@/public/assets/images/workflows/at-sign.svg";
+import SendIcon from "@/public/assets/images/campaigns/send.svg";
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -53,6 +54,7 @@ export const STEP_META: Record<StepType, { icon: Icon; group: NodeGroup }> = {
   find_records: { icon: SearchIcon, group: "logic" },
   upsert_record: { icon: BuildingIcon, group: "action" },
   find_email: { icon: AtSignIcon, group: "action" },
+  add_to_campaign: { icon: SendIcon, group: "action" },
   webhook: { icon: BracesIcon, group: "action" },
   create_proposal: { icon: ProposalIcon, group: "action" },
 };
@@ -63,7 +65,7 @@ export const PALETTE: { label: string; types: StepType[] }[] = [
   { label: "AI", types: ["ai", "decide"] },
   { label: "Logic", types: ["if", "filter", "loop", "delay", "approval"] },
   { label: "Records", types: ["find_records", "upsert_record", "update_record", "find_email"] },
-  { label: "Actions", types: ["create_task", "add_note", "board", "notify", "post_to_chat", "send_email", "create_proposal", "linear_issue", "webhook"] },
+  { label: "Actions", types: ["create_task", "add_note", "board", "notify", "post_to_chat", "send_email", "add_to_campaign", "create_proposal", "linear_issue", "webhook"] },
 ];
 
 function text(value: unknown) {
@@ -96,6 +98,7 @@ export function triggerSummary(trigger: Trigger) {
   if (trigger.type === "schedule") {
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     if (trigger.frequency === "monthly") return `Day ${trigger.dayOfMonth ?? 1} of each month at ${trigger.time}`;
+    if (trigger.frequency === "weekdays") return `Weekdays at ${trigger.time}`;
     return trigger.frequency === "daily" ? `Every day at ${trigger.time}` : `${days[trigger.weekday ?? 1]}s at ${trigger.time}`;
   }
   if (trigger.type === "email_received") return EMAIL_KIND_LABELS[trigger.kind];
@@ -135,6 +138,8 @@ export function nodeSummary(node: WorkflowNode) {
     }
     case "find_email":
       return "Skip if not valid";
+    case "add_to_campaign":
+      return text(c.campaignName) ? short(text(c.campaignName)) : "Choose a campaign";
     case "webhook": {
       const url = text(c.url);
       try {

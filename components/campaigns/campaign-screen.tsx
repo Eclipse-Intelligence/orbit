@@ -8,11 +8,12 @@ import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import Tag from "@/components/_ui/tag";
 import ChannelIcon from "@/components/campaigns/channel-icon";
+import VariableBriefs from "@/components/campaigns/variable-briefs";
 import { QuietTabs } from "@/components/crm/contact-activities";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { importCampaignProspectsAction, setCampaignPausedAction } from "@/app/(crm)/campaigns/actions";
-import { campaignRates, campaignThreadPath, number, prospectLine, prospectTag, STATUS_LABELS } from "@/lib/campaigns/format";
+import { campaignRates, campaignThreadPath, linkedinCapacityLine, number, prospectLine, prospectTag, STATUS_LABELS } from "@/lib/campaigns/format";
 import {
   PROVIDER_NAMES,
   type CampaignChannel,
@@ -20,7 +21,6 @@ import {
   type DayStats,
   type ProspectFilter,
   type ProspectPage,
-  type SenderCapacity,
   type SequenceStep,
   type StepStats,
 } from "@/lib/campaigns/types";
@@ -263,12 +263,6 @@ function strayLine(count: number) {
   return count === 1 ? "1 conversation not from this campaign's prospects" : `${count.toLocaleString("en-GB")} conversations not from this campaign's prospects`;
 }
 
-function capacityLine(capacity: SenderCapacity) {
-  const senders = capacity.senders === 1 ? "1 sender" : `${capacity.senders.toLocaleString("en-GB")} senders`;
-  if (capacity.invites === null) return `${senders}.`;
-  return `${senders} ${capacity.senders === 1 ? "sends" : "send"} ${capacity.invites.toLocaleString("en-GB")} invites a day.`;
-}
-
 function ImportLine({ campaignId, unlinked }: { campaignId: string; unlinked: number }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -364,7 +358,6 @@ export default function CampaignScreen({
   const pausable = canAct && (campaign.status === "active" || campaign.status === "paused");
   const rates = campaignRates(campaign);
   const linkedin = campaign.channel === "linkedin";
-  const custom = campaign.variables.filter((name) => !campaign.standardVariables.includes(name));
   const pages = Math.ceil(prospects.total / prospects.pageSize);
 
   function go(changes: Record<string, string | null>) {
@@ -471,20 +464,14 @@ export default function CampaignScreen({
 
           <Section title="Steps" className={linkedin ? "max-sm:hidden" : undefined}>
             <Steps campaign={campaign} />
-            {linkedin && campaign.capacity && <p className="ui-style text-soft">{capacityLine(campaign.capacity)}</p>}
+            {linkedin && campaign.capacity && (
+              <p className="ui-style text-soft">{linkedinCapacityLine(campaign.capacity, campaign.sequence.filter((step) => step.subject !== "Invite").length)}</p>
+            )}
           </Section>
 
-          {custom.length > 0 && (
+          {campaign.briefs.length > 0 && (
             <Section title="Variables">
-              <ul className="flex flex-wrap gap-1.5">
-                {custom.map((name) => (
-                  <li key={name}>
-                    <Tag tone="purple" size="sm" className="caption-style font-mono">
-                      {name}
-                    </Tag>
-                  </li>
-                ))}
-              </ul>
+              <VariableBriefs key={campaign.briefs.map((item) => `${item.name}:${item.brief}:${item.maxLength}`).join("|")} campaignId={campaign.id} briefs={campaign.briefs} canEdit={canAct} />
             </Section>
           )}
 

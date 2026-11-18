@@ -35,6 +35,7 @@ export const STEP_TYPES = [
   "find_records",
   "upsert_record",
   "find_email",
+  "add_to_campaign",
   "webhook",
   "create_proposal",
 ] as const;
@@ -160,7 +161,7 @@ const triggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("manual"), object: z.enum(RECORD_OBJECTS) }),
   z.object({
     type: z.literal("schedule"),
-    frequency: z.enum(["daily", "weekly", "monthly"]),
+    frequency: z.enum(["daily", "weekdays", "weekly", "monthly"]),
     weekday: z.number().int().min(0).max(6).nullable().optional(),
     dayOfMonth: z.number().int().min(1).max(28).nullable().optional(),
     time: z.string().regex(/^\d{2}:\d{2}$/),
@@ -469,6 +470,7 @@ export const STEP_LABELS: Record<StepType, string> = {
   find_records: "Find records",
   upsert_record: "Find or create record",
   find_email: "Find and check email",
+  add_to_campaign: "Add to campaign",
   webhook: "Send to a webhook",
   create_proposal: "New proposal",
 };
@@ -482,6 +484,7 @@ export const STEP_HINTS: Partial<Record<StepType, string>> = {
   post_to_chat: "Posts in a Chat room as you.",
   find_records: "Lists matching records for For each item.",
   find_email: "Stops here when no valid email is found.",
+  add_to_campaign: "Skips customers, open opportunities, people you've written to or met, and Do not contact.",
   webhook: "Posts the run's data to another app.",
   create_proposal: "Drafts a proposal. Nothing is sent.",
 };
@@ -526,6 +529,7 @@ export function nextScheduleRun(trigger: Extract<Trigger, { type: "schedule" }>,
     );
     const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday);
     if (trigger.frequency === "weekly" && weekday !== (trigger.weekday ?? 1)) continue;
+    if (trigger.frequency === "weekdays" && (weekday === 0 || weekday === 6)) continue;
     if (trigger.frequency === "monthly" && Number(parts.day) !== (trigger.dayOfMonth ?? 1)) continue;
     const candidate = zonedTime(Number(parts.year), Number(parts.month), Number(parts.day), hour, minute, timeZone);
     if (candidate > after) return candidate;
