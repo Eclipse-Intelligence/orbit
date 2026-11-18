@@ -623,12 +623,22 @@ describe("adding prospects", () => {
     assert.equal(pushesFor("bea@lyle.test").length, 2, "a lead found in another campaign doesn't count, so it's pushed again");
     assert.equal((await row(bea.prospectId)).state, "pushed");
 
-    const other = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1", campaignId: 999 }) });
+    const lookups: { path: string; body: unknown }[] = [];
+    const campaignsForLead = (items: unknown[]): typeof fetch => async (input, init) => {
+      lookups.push({ path: new URL(String(input)).pathname, body: JSON.parse(String(init?.body)) });
+      return json({ leadFullName: "John Doe", totalCount: items.length, items });
+    };
+    const other = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", {
+      fetchImpl: campaignsForLead([{ campaignId: 999, campaignName: "Other", campaignStatus: "IN_PROGRESS", creationTime: "2026-11-12T13:22:29.96342Z", leadStatus: "InSequence" }]),
+    });
     assert.equal(other, null, "a HeyReach lead in another campaign isn't this one");
-    const here = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1", campaignId: 801 }) });
-    assert.deepEqual(here, { id: "lead-1" });
-    const unsure = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1" }) });
-    assert.equal(unsure, null, "a reply that doesn't name the campaign doesn't count");
+    assert.deepEqual(lookups[0], { path: "/api/public/campaign/GetCampaignsForLead", body: { profileUrl: "https://www.linkedin.com/in/x", offset: 0, limit: 100 } });
+    const here = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", {
+      fetchImpl: campaignsForLead([{ campaignId: 801, campaignName: "This", campaignStatus: "IN_PROGRESS", creationTime: "2026-11-12T13:22:29.96342Z", leadStatus: "Pending" }]),
+    });
+    assert.deepEqual(here, { id: null });
+    const unsure = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1" }) }).catch((error: Error) => error.message);
+    assert.equal(unsure, "HeyReach sent a reply Orbit couldn't read.", "a reply without campaigns isn't read as not found");
   });
 
   it("never adds two contacts with the same email to one campaign", async () => {

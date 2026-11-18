@@ -18,14 +18,19 @@ import {
   AUTO_ADD_LABELS,
   autoAddChoices,
   campaignThreadPath,
+  lastActionLine,
   linkedinCapacityLine,
+  linkedinStatus,
+  linkedinTag,
   number,
+  percent,
   PROVIDER_STATS,
+  providerFigure,
   prospectLine,
   prospectTag,
   STATUS_LABELS,
-  type StatLabel,
 } from "@/lib/campaigns/format";
+import { contactHref } from "@/lib/crm/hrefs";
 import {
   PROVIDER_NAMES,
   type AutoAdd,
@@ -216,15 +221,46 @@ function Steps({ campaign }: { campaign: CampaignDetail }) {
   );
 }
 
-function StatRow({ items, campaign, label }: { items: StatLabel[]; campaign: CampaignDetail; label: string }) {
-  const shown = items.filter((item) => campaign.stats[item.key] !== undefined);
-  if (shown.length === 0) return null;
+function Figure({ value, share }: { value: number | undefined; share: string | null }) {
+  if (value === undefined) return <span className="ui-style text-faint leading-6">Not available</span>;
   return (
-    <dl aria-label={label} className="grid grid-cols-2 gap-x-6 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-8">
-      {shown.map((item) => (
-        <div key={item.key} className="flex flex-col-reverse gap-1">
-          <dt className="caption-style text-subtle">{item.label}</dt>
-          <dd className="text-[18px] leading-6 font-medium tabular-nums">{number(campaign.stats[item.key]) ?? "·"}</dd>
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-[18px] leading-6 font-medium tabular-nums">{number(value)}</span>
+      {share && <span className="caption-style text-subtle tabular-nums">{share}</span>}
+    </span>
+  );
+}
+
+function Funnel({ campaign }: { campaign: CampaignDetail }) {
+  const items = PROVIDER_STATS[campaign.provider].funnel;
+  const unread = campaign.provider === "heyreach" && !campaign.leadFunnel;
+  return (
+    <dl aria-label="Lead funnel" className="grid grid-cols-2 gap-x-4 gap-y-4 sm:grid-cols-4">
+      {items.map((item) => {
+        const value = providerFigure(campaign, item.key);
+        const waiting = value === undefined && unread && item.key !== "interested";
+        return (
+          <div key={item.key} className="flex min-w-0 flex-col-reverse gap-1">
+            <dt className="caption-style text-subtle truncate">{item.label}</dt>
+            <dd className="min-w-0">
+              {waiting ? <span className="ui-style text-faint leading-6">Not synced yet</span> : <Figure value={value} share={value === undefined ? null : percent(value, providerFigure(campaign, item.of))} />}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
+function LeadStatuses({ campaign }: { campaign: CampaignDetail }) {
+  const items = PROVIDER_STATS[campaign.provider].statuses.filter((item) => campaign.stats[item.key] !== undefined);
+  if (items.length === 0) return null;
+  return (
+    <dl aria-label="Lead statuses" className="ui-style flex flex-col">
+      {items.map((item) => (
+        <div key={item.key} className="border-border flex items-baseline justify-between gap-4 border-b py-1.5 last:border-b-0">
+          <dt className="text-soft min-w-0 truncate">{item.label}</dt>
+          <dd className="tabular-nums">{number(campaign.stats[item.key])}</dd>
         </div>
       ))}
     </dl>
@@ -306,29 +342,16 @@ function AutoAddSetting({ campaignId, channel, value }: { campaignId: string; ch
   );
 }
 
-function ProspectsList({ prospects, linkedin, campaignId, canImport }: { prospects: ProspectPage; linkedin: boolean; campaignId: string; canImport: boolean }) {
-  if (prospects.rows.length === 0) return <p className="ui-style text-subtle">No prospects</p>;
+function EmailProspects({ prospects }: { prospects: ProspectPage }) {
   return (
     <ul className="-mx-4 flex flex-col sm:-mx-5">
-      {linkedin && (
-        <li aria-hidden className="caption-style text-subtle hidden grid-cols-[minmax(0,1.3fr)_8rem_minmax(0,0.8fr)_minmax(0,1fr)] gap-3 px-5 pb-1.5 md:grid">
-          <span>Person</span>
-          <span />
-          <span>Sender</span>
-          <span />
-        </li>
-      )}
       {prospects.rows.map((row) => {
-        const tag = prospectTag(row, linkedin ? "linkedin" : "email");
-        const importable = canImport && row.importable === true;
-        const line = linkedin && row.sender ? `${row.sender} · ${lowerFirst(prospectLine(row))}` : prospectLine(row);
+        const tag = prospectTag(row, "email");
+        const line = prospectLine(row);
         return (
           <li
             key={row.id}
-            className={cn(
-              "border-border relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t px-4 py-2 transition-colors duration-150 hover:bg-white/3 sm:px-5",
-              linkedin ? "md:grid-cols-[minmax(0,1.3fr)_8rem_minmax(0,0.8fr)_minmax(0,1fr)]" : "md:grid-cols-[minmax(0,1.3fr)_8rem_minmax(0,1fr)]",
-            )}
+            className="border-border relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t px-4 py-2 transition-colors duration-150 hover:bg-white/3 sm:px-5 md:grid-cols-[minmax(0,1.3fr)_8rem_minmax(0,1fr)]"
           >
             <span className="flex min-w-0 items-center gap-2.5">
               <Monogram name={row.name} />
@@ -341,7 +364,6 @@ function ProspectsList({ prospects, linkedin, campaignId, canImport }: { prospec
               </span>
             </span>
             <span className="flex items-center justify-end gap-2 md:justify-start">
-              {importable && <ImportOne campaignId={campaignId} prospectId={row.id} name={row.name} />}
               {tag ? (
                 <Tag tone={tag.tone} size="sm" className="caption-style">
                   {tag.label}
@@ -353,8 +375,7 @@ function ProspectsList({ prospects, linkedin, campaignId, canImport }: { prospec
                 </span>
               )}
             </span>
-            {linkedin && <span className="ui-style hidden truncate md:block">{row.sender ?? ""}</span>}
-            <span className="caption-style text-subtle hidden truncate md:block">{prospectLine(row)}</span>
+            <span className="caption-style text-subtle hidden truncate md:block">{line}</span>
           </li>
         );
       })}
@@ -362,8 +383,81 @@ function ProspectsList({ prospects, linkedin, campaignId, canImport }: { prospec
   );
 }
 
-function lowerFirst(text: string) {
-  return text.charAt(0).toLowerCase() + text.slice(1);
+const LINKEDIN_GRID = "md:grid-cols-[minmax(0,1.3fr)_8.5rem_minmax(0,0.8fr)_minmax(0,1.1fr)_5.5rem]";
+
+function LinkedinProspects({ prospects, campaignId, canImport }: { prospects: ProspectPage; campaignId: string; canImport: boolean }) {
+  return (
+    <ul className="-mx-4 flex flex-col sm:-mx-5">
+      <li aria-hidden className={cn("caption-style text-subtle hidden gap-3 px-5 pb-1.5 md:grid", LINKEDIN_GRID)}>
+        <span>Lead</span>
+        <span>Status</span>
+        <span>Sender</span>
+        <span>Last action</span>
+        <span />
+      </li>
+      {prospects.rows.map((row) => {
+        const tag = linkedinTag(row);
+        const status = row.state === "pushed" ? linkedinStatus(row) : null;
+        const action = lastActionLine(row);
+        const phoneLine = [status, row.sender, action].filter(Boolean).join(" · ");
+        return (
+          <li
+            key={row.id}
+            className={cn(
+              "border-border relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t px-4 py-2 transition-colors duration-150 hover:bg-white/3 sm:px-5",
+              LINKEDIN_GRID,
+            )}
+          >
+            <span className="flex min-w-0 items-center gap-2.5">
+              <Monogram name={row.name} />
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <Link href={campaignThreadPath(row.id)} className="truncate text-[14px] leading-5 after:absolute after:inset-0">
+                  {row.name}
+                </Link>
+                {phoneLine && (
+                  <span className="caption-style text-subtle line-clamp-2 md:hidden" suppressHydrationWarning>
+                    {phoneLine}
+                  </span>
+                )}
+                {row.companyName && <span className="caption-style text-subtle hidden truncate md:block">{row.companyName}</span>}
+              </span>
+            </span>
+            <span className="hidden min-w-0 flex-wrap items-center gap-1.5 md:flex">
+              {status && <span className="ui-style truncate">{status}</span>}
+              {tag && (
+                <Tag tone={tag.tone} size="sm" className="caption-style">
+                  {tag.label}
+                </Tag>
+              )}
+            </span>
+            <span className="ui-style hidden truncate md:block">{row.sender ?? ""}</span>
+            <span className="caption-style text-subtle hidden truncate md:block" suppressHydrationWarning>
+              {action ?? ""}
+            </span>
+            <span className="flex items-center justify-end gap-2">
+              {tag && (
+                <Tag tone={tag.tone} size="sm" className="caption-style md:hidden">
+                  {tag.label}
+                </Tag>
+              )}
+              {canImport && row.importable === true ? (
+                <ImportOne campaignId={campaignId} prospectId={row.id} name={row.name} />
+              ) : row.contactId ? (
+                <Button variant="ghost" size="sm" href={contactHref(row.contactId)} aria-label={`Open ${row.name} in Orbit`} className="hit relative z-10">
+                  In Orbit
+                </Button>
+              ) : null}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ProspectsList({ prospects, linkedin, campaignId, canImport }: { prospects: ProspectPage; linkedin: boolean; campaignId: string; canImport: boolean }) {
+  if (prospects.rows.length === 0) return <p className="ui-style text-subtle">No prospects</p>;
+  return linkedin ? <LinkedinProspects prospects={prospects} campaignId={campaignId} canImport={canImport} /> : <EmailProspects prospects={prospects} />;
 }
 
 function strayLine(count: number) {
@@ -481,7 +575,7 @@ export default function CampaignScreen({
     go({ q: draft.trim() || null, page: null });
   }
 
-  const labels = PROVIDER_STATS[campaign.provider];
+  const synced = Object.keys(campaign.stats).length > 0;
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -532,19 +626,29 @@ export default function CampaignScreen({
                 {pauseError}
               </p>
             )}
-            <StatRow items={labels.leads} campaign={campaign} label="Leads" />
-            <StatRow items={labels.activity} campaign={campaign} label="Activity" />
-            <Chart days={campaign.days} channel={campaign.channel} />
-            <div className="caption-style text-subtle flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="flex items-center gap-1.5">
-                <span aria-hidden className="bg-foreground/25 size-2 rounded-[2px]" />
-                {CHART_WORDS[campaign.channel].bar}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span aria-hidden className="bg-primary size-2 rounded-[2px]" />
-                {CHART_WORDS[campaign.channel].overlay}
-              </span>
-            </div>
+            {synced ? (
+              <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_16rem] lg:gap-10">
+                <div className="flex min-w-0 flex-col gap-5">
+                  <Funnel campaign={campaign} />
+                  <div className="flex flex-col gap-2">
+                    <Chart days={campaign.days} channel={campaign.channel} />
+                    <div className="caption-style text-subtle flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="flex items-center gap-1.5">
+                        <span aria-hidden className="bg-foreground/25 size-2 rounded-[2px]" />
+                        {CHART_WORDS[campaign.channel].bar}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span aria-hidden className="bg-primary size-2 rounded-[2px]" />
+                        {CHART_WORDS[campaign.channel].overlay}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <LeadStatuses campaign={campaign} />
+              </div>
+            ) : (
+              <p className="ui-style text-subtle">Not synced yet</p>
+            )}
             <p className="caption-style text-subtle">{syncLine}</p>
             {campaign.strayConversations > 0 && <p className="caption-style text-subtle">{strayLine(campaign.strayConversations)}</p>}
           </Section>

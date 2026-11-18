@@ -153,6 +153,8 @@ export type FakeHeyReachLead = {
   status?: string;
   connection?: "None" | "ConnectionSent" | "ConnectionAccepted";
   messages?: number;
+  replied?: boolean;
+  senderName?: string;
   lastActionTime?: string;
   created?: string;
 };
@@ -182,6 +184,30 @@ export type FakeHeyReachCampaign = {
   listLeads?: { profileUrl: string; firstName: string; lastName: string; companyName?: string; position?: string }[];
   progress?: Record<string, number>;
 };
+
+export const HEYREACH_WEBHOOK_TYPES = [
+  "CONNECTION_REQUEST_SENT",
+  "CONNECTION_REQUEST_ACCEPTED",
+  "MESSAGE_SENT",
+  "MESSAGE_REPLY_RECEIVED",
+  "INMAIL_SENT",
+  "INMAIL_REPLY_RECEIVED",
+  "EVERY_MESSAGE_REPLY_RECEIVED",
+  "FOLLOW_SENT",
+  "LIKED_POST",
+  "VIEWED_PROFILE",
+  "CAMPAIGN_COMPLETED",
+  "LEAD_TAG_UPDATED",
+];
+
+function webhookErrors(body: Record<string, unknown> | null) {
+  const errors: Record<string, string[]> = {};
+  if (typeof body?.webhookName !== "string" || !body.webhookName) errors.webhookName = ["The webhookName field is required."];
+  if (typeof body?.webhookUrl !== "string" || !body.webhookUrl) errors.webhookUrl = ["The webhookUrl field is required."];
+  if (!HEYREACH_WEBHOOK_TYPES.includes(String(body?.eventType))) errors["$.eventType"] = ["The JSON value could not be converted to WebhookEventType."];
+  if (!Array.isArray(body?.campaignIds) || !(body.campaignIds as unknown[]).every((id) => typeof id === "number")) errors["$.campaignIds"] = ["The JSON value could not be converted to System.Int64[]."];
+  return Object.keys(errors).length > 0 ? errors : null;
+}
 
 const HEYREACH_TIME_FILTERS = ["CreationTime", "Everywhere", "LastActionTakenTime", "FailedTime", "LastActionTakenOrFailedTime"];
 
@@ -236,11 +262,13 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
           id: conversation.id,
           linkedInAccountId: conversation.accountId,
           lastMessageAt: conversation.messages[conversation.messages.length - 1]?.createdAt ?? null,
-          correspondentProfile: { profileUrl: conversation.profileUrl, id: conversation.leadId ?? null },
-          leadTags: conversation.tags ?? [],
+          correspondentProfile: { profileUrl: conversation.profileUrl, id: conversation.leadId ?? null, tags: conversation.tags ?? [] },
           messages: conversation.messages,
         }));
       return json(page(conversations, body));
+    }
+    if (path === "/campaign/StopLeadInCampaign" && (typeof body?.leadUrl !== "string" || (body.leadMemberId !== null && body.leadMemberId !== undefined))) {
+      return json({ errorMessage: "Lead not found" }, 404);
     }
     if (path === "/inbox/SendMessage" || path === "/campaign/Pause" || path === "/campaign/Resume" || path === "/campaign/StopLeadInCampaign") {
       if (path === "/campaign/Pause" || path === "/campaign/Resume") {
@@ -249,11 +277,37 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
       }
       return new Response(null, { status: 200 });
     }
-    if (path === "/webhooks/CreateWebhook") return json({ id: 55 });
+    if (path === "/webhooks/CreateWebhook") {
+      const errors = webhookErrors(body);
+      if (errors) return json({ type: "https://tools.ietf.org/html/rfc9110#section-15.5.1", title: "One or more validation errors occurred.", status: 400, errors }, 400);
+      return json({ id: 55 });
+    }
+    if (path === "/campaign/GetCampaignsForLead") {
+      const wanted = String(body?.profileUrl ?? "").toLowerCase().replace(/\/$/, "");
+      const items = account.campaigns
+        .filter((campaign) => campaign.leads.some((lead) => lead.profileUrl.toLowerCase().replace(/\/$/, "") === wanted))
+        .map((campaign) => ({ campaignId: campaign.id, campaignName: campaign.name, campaignStatus: campaign.status, leadStatus: "InSequence" }));
+      return json({ leadFullName: null, ...page(items, body) });
+    }
     if (path === "/campaign/GetAll") {
       return json(page(account.campaigns.map((campaign) => ({ id: campaign.id, name: campaign.name, status: campaign.status, campaignAccountIds: campaign.accountIds })), body));
     }
-    if (path === "/li_account/GetAll") return json(page(account.accounts, body));
+    if (path === "/li_account/GetAll") {
+      return json(
+        page(
+          account.accounts.map((item) => ({
+            id: item.id,
+            emailAddress: item.emailAddress,
+            firstName: item.firstName,
+            lastName: item.lastName,
+            profileUrl: item.profileUrl,
+            isActive: true,
+            accountLimits: { connectioRequestLimit: item.connectionRequestsDailyLimit ?? null, messageLimit: null },
+          })),
+          body,
+        ),
+      );
+    }
     if (path === "/campaign/GetById") {
       const campaign = account.campaigns.find((item) => String(item.id) === url.searchParams.get("campaignId"));
       return campaign
@@ -298,11 +352,23 @@ export function fakeHeyReach(accounts: FakeHeyReachAccount[]): typeof fetch {
             linkedInSenderId: lead.accountId ?? null,
             leadCampaignStatus: lead.status ?? "InSequence",
             leadConnectionStatus: lead.connection ?? "None",
-            leadMessageStatus: (lead.messages ?? 0) > 0 ? "MessageSent" : "None",
+            leadMessageStatus: lead.replied ? "MessageReply" : (lead.messages ?? 0) > 0 ? "MessageSent" : "None",
             messagesSent: lead.messages ?? 0,
             lastActionTime: lead.lastActionTime ?? null,
+            failedTime: null,
             creationTime: lead.created ?? "2026-11-01T09:00:00.000Z",
-            linkedInUserProfile: { firstName: lead.first, lastName: lead.last, profileUrl: lead.profileUrl, companyName: lead.company ?? null, position: lead.position ?? null },
+            errorCode: null,
+            leadCampaignStatusMessage: null,
+            linkedInSenderFullName: lead.senderName ?? null,
+            linkedInUserProfile: {
+              linkedin_id: `li-${lead.id}`,
+              firstName: lead.first,
+              lastName: lead.last,
+              profileUrl: lead.profileUrl,
+              companyName: lead.company ?? null,
+              position: lead.position ?? null,
+              emailAddress: null,
+            },
           })),
           body,
         ),

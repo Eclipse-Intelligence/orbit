@@ -26,11 +26,14 @@ const HAND_OVER_BATCH = 500;
 const REPLY_PAGES = 20;
 const REQUESTED_BATCH = 25;
 const WEBHOOK_RETRY_MS = 24 * 60 * 60_000;
+const SEQUENCE_FORMAT = 2;
 const STRAY_KEPT = 1_000;
 const PROBE_EVERY_MS = 24 * 60 * 60_000;
 
 export type SyncState = {
   sequenceAt?: string;
+  sequenceFormat?: number;
+  leadStateAt?: string;
   statsAt?: string;
   leadsAt?: string;
   leadsOffset?: number | null;
@@ -141,6 +144,7 @@ function leadJson(lead: ProviderLead) {
     category: lead.category,
     added_at: lead.addedAt,
     sender_id: lead.senderId ?? null,
+    provider_state: lead.providerState ?? {},
   };
 }
 
@@ -260,18 +264,20 @@ async function registerWebhook(pass: Pass, row: CampaignRow) {
   const secret = await ensureWebhookSecret(pass.workspaceId, pass.provider.id);
   const url = secret ? campaignWebhookUrl(pass.workspaceId, pass.provider.id, secret) : null;
   if (!url) return;
+  let failed = false;
   for (const event of missing) {
     if (!timeLeft(pass.options.deadline, STEP_RESERVE_MS)) return;
     try {
       const id = await pass.provider.registerWebhook(pass.context, row.external_id, url, event);
       done.push(event);
-      await saveCampaign(row.id, { syncState: { webhooks: done, ...(event === pass.provider.webhookEvents[0] ? { webhookId: id } : {}), webhookFailedAt: null } });
+      await saveCampaign(row.id, { syncState: { webhooks: done, ...(event === pass.provider.webhookEvents[0] ? { webhookId: id } : {}), ...(failed ? {} : { webhookFailedAt: null }) } });
     } catch (error) {
       if (error instanceof ServiceBusy || pass.context.signal?.aborted || !timeLeft(pass.options.deadline, 0)) return;
       const failure = pass.provider.failure(error);
-      if (!failure) console.error(`Couldn't add the ${pass.provider.name} webhook`, redactedError(error));
+      console.error(`Couldn't add the ${pass.provider.name} webhook`, event.slice(0, 200), failure ? failure.message : redactedError(error));
       await saveCampaign(row.id, { syncState: { webhookFailedAt: new Date().toISOString() } });
-      return;
+      failed = true;
+      if (!failure || failure.status === null || failure.status >= 500 || failure.status === 429 || failure.rejectedKey) return;
     }
   }
 }
@@ -356,10 +362,10 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
   if (!backfilling) await handOverEvents(pass, campaign);
   if (live && !backfilling) await registerWebhook(pass, row);
 
-  if ((backfilling && !state.sequenceAt) || due(state.sequenceAt, live ? SEQUENCE_EVERY_MS : IDLE_EVERY_MS, now)) {
+  if ((backfilling && !state.sequenceAt) || state.sequenceFormat !== SEQUENCE_FORMAT || due(state.sequenceAt, live ? SEQUENCE_EVERY_MS : IDLE_EVERY_MS, now)) {
     if (!room()) return;
     const steps = await provider.readSequence(context, row.external_id);
-    await saveCampaign(row.id, { sequence: steps, variables: provider.variables(steps), syncState: { sequenceAt: new Date().toISOString() } });
+    await saveCampaign(row.id, { sequence: steps, variables: provider.variables(steps), syncState: { sequenceAt: new Date().toISOString(), sequenceFormat: SEQUENCE_FORMAT } });
   }
 
   if (backfilling || live || due(state.statsAt, IDLE_EVERY_MS, now)) {
@@ -383,7 +389,8 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
       const page = await provider.readLeads(context, row.external_id, offset);
       report.prospects += await saveProviderLeads(row.id, page.items, backfilling || !options.onEvents);
       if (page.next === null) {
-        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: new Date().toISOString() } });
+        const finishedAt = new Date().toISOString();
+        await saveCampaign(row.id, { syncState: { leadsOffset: null, leadsAt: finishedAt, leadStateAt: finishedAt } });
         leadsComplete = true;
         leadsReadNow = true;
         await query("select private.campaign_link_contacts($1, null)", [row.id]).catch((error) =>

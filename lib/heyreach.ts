@@ -79,6 +79,19 @@ function itemsOf(body: unknown) {
   return items.map(record);
 }
 
+function refusalReason(body: string, secrets: string[]) {
+  const reason = providerReason(body, secrets);
+  let fields: string | null = null;
+  try {
+    const parsed = record(JSON.parse(body));
+    if (parsed.errors && typeof parsed.errors === "object") fields = providerReason(JSON.stringify({ errors: parsed.errors }), secrets);
+  } catch {
+    fields = null;
+  }
+  if (!fields || reason?.includes(fields)) return reason;
+  return reason ? `${reason}: ${fields}` : fields;
+}
+
 export function heyReachEndpoint(url: URL) {
   return requestPath(url).replace(/^\/api\/public/, "").split("/").slice(0, 3).join("/");
 }
@@ -109,7 +122,7 @@ async function call(
     }
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      const reason = providerReason(body, [key, ...(options.secrets ?? [])]);
+      const reason = refusalReason(body, [key, ...(options.secrets ?? [])]);
       const endpoint = heyReachEndpoint(url);
       logRefusal("HeyReach", response.status, endpoint, reason);
       const refused = (response.status === 401 || response.status === 403) && !keyCheck;
@@ -156,6 +169,23 @@ export function campaignStatus(value: unknown): CampaignStatus {
   if (status === "FAILED" || status === "CANCELED" || status === "CANCELLED" || status === "STOPPED") return "stopped";
   if (status === "ARCHIVED") return "archived";
   return "drafted";
+}
+
+export const HEYREACH_LEAD_STATES = ["pending", "in_sequence", "finished", "paused", "failed", "excluded"] as const;
+export type HeyReachLeadState = (typeof HEYREACH_LEAD_STATES)[number];
+
+const LEAD_STATES: Record<string, HeyReachLeadState> = {
+  PENDING: "pending",
+  INSEQUENCE: "in_sequence",
+  FINISHED: "finished",
+  PAUSED: "paused",
+  FAILED: "failed",
+  EXCLUDED: "excluded",
+  PENDINGOREXCLUDEDTOBECALCULATED: "pending",
+};
+
+export function heyReachLeadState(value: unknown): HeyReachLeadState | null {
+  return LEAD_STATES[(text(value) ?? "").toUpperCase().replace(/[\s_-]/g, "")] ?? null;
 }
 
 export function leadStatus(value: unknown): LeadStatus | null {
@@ -247,15 +277,16 @@ export async function listHeyReachAccounts(key: string, options: HeyReachOptions
   return rows.flatMap((row): HeyReachAccount[] => {
     const id = text(row.id);
     if (!id) return [];
-    const name = [text(row.firstName), text(row.lastName)].filter(Boolean).join(" ") || text(row.name) || "";
+    const name = [text(row.firstName), text(row.lastName)].filter(Boolean).join(" ");
+    const limits = record(row.accountLimits);
     return [
       {
         id,
         name,
-        email: text(row.emailAddress) ?? text(row.email),
-        profileUrl: text(row.profileUrl) ?? text(row.linkedInProfileUrl),
-        inviteLimit: first(count(row.connectionRequestsDailyLimit), count(row.dailyConnectionRequestLimit), count(row.connectionLimit)),
-        messageLimit: first(count(row.messagesDailyLimit), count(row.dailyMessageLimit), count(row.messageLimit)),
+        email: text(row.emailAddress),
+        profileUrl: text(row.profileUrl),
+        inviteLimit: count(limits.connectioRequestLimit) ?? null,
+        messageLimit: count(limits.messageLimit) ?? null,
       },
     ];
   });
@@ -270,48 +301,48 @@ export function variablesIn(steps: SequenceStep[]) {
 }
 
 const STEP_KINDS: Record<string, string> = {
-  CONNECTIONREQUEST: "Invite",
-  SENDCONNECTIONREQUEST: "Invite",
-  INVITE: "Invite",
+  CONNECTION_REQUEST: "Invite",
   MESSAGE: "Message",
-  SENDMESSAGE: "Message",
   INMAIL: "InMail",
-  SENDINMAIL: "InMail",
-  VIEWPROFILE: "View profile",
+  VIEW_PROFILE: "View profile",
   FOLLOW: "Follow",
-  LIKEPOST: "Like post",
+  LIKE_POST: "Like post",
+  FIND_EMAIL: "Find email",
+  SEND_LEAD_TO_SMARTLEAD: "Send to Smartlead",
+  SEND_LEAD_TO_INSTANTLY: "Send to Instantly",
+  SEND_LEAD_TO_BISON: "Send to EmailBison",
 };
 
-function stepKind(node: Json) {
-  return STEP_KINDS[(text(node.nodeType) ?? text(node.actionType) ?? text(node.type) ?? "").toUpperCase().replace(/[\s_-]/g, "")];
+function nodeType(node: Json) {
+  return (text(node.nodeType) ?? "").toUpperCase();
 }
 
-function sequenceNodes(row: Json): Json[] {
-  const direct = list(row.sequence ?? row.steps ?? row.sequenceSteps).map(record);
-  if (direct.length > 0) return direct;
-  const nodes: Json[] = [];
-  let node = record(row.nodeType ? row : (row.sequenceRootNode ?? record(row.sequence).rootNode ?? row.sequence));
-  for (let guard = 0; Object.keys(node).length > 0 && guard < 100; guard += 1) {
-    if ((text(node.nodeType) ?? "").toUpperCase() === "END") break;
-    nodes.push(node);
-    node = record(node.conditionalNode ?? node.unconditionalNode ?? node.nextNode ?? node.next ?? list(node.children)[0]);
-  }
-  return nodes;
+function stepKind(node: Json) {
+  return STEP_KINDS[nodeType(node)];
+}
+
+const SEQUENCE_DEPTH = 100;
+
+function longestPath(node: Json, depth = 0): Json[] {
+  if (depth > SEQUENCE_DEPTH || Object.keys(node).length === 0 || nodeType(node) === "END" || !nodeType(node)) return [];
+  const branches = [node.conditionalNode, node.unconditionalNode].map((next) => longestPath(record(next), depth + 1));
+  const longest = branches.reduce((best, branch) => (branch.filter(stepKind).length > best.filter(stepKind).length ? branch : best), branches[0]);
+  return [node, ...longest];
 }
 
 function delayDays(node: Json) {
   const amount = count(node.actionDelay);
-  if (amount !== undefined) return (text(node.actionDelayUnit) ?? "DAY").toUpperCase() === "HOUR" ? Math.round(amount / 24) : amount;
-  return count(node.delayInDays) ?? count(node.delay) ?? (count(node.delayInHours) !== undefined ? Math.round(count(node.delayInHours)! / 24) : undefined);
+  if (amount === undefined) return undefined;
+  return (text(node.actionDelayUnit) ?? "DAY").toUpperCase() === "HOUR" ? Math.round(amount / 24) : amount;
 }
 
 export function heyReachSteps(body: unknown): SequenceStep[] {
   const steps: SequenceStep[] = [];
-  for (const node of sequenceNodes(record(body))) {
+  for (const node of longestPath(record(body))) {
     const kind = stepKind(node);
     if (!kind) continue;
     const payload = record(node.payload);
-    const message = text(list(payload.messages)[0]) ?? text(payload.message) ?? text(node.message) ?? text(node.messageText) ?? text(node.connectionNote) ?? text(node.body) ?? "";
+    const message = text(list(payload.messages)[0]) ?? text(payload.fallbackMessage) ?? "";
     steps.push({ step: steps.length + 1, variant: null, subject: kind, body: message, delayDays: delayDays(node) ?? null });
   }
   return steps;
@@ -361,8 +392,16 @@ export async function readHeyReachStats(
   return { stats, days, listId: campaign?.listId ?? null, leadCounts: campaign?.leadCounts ?? null };
 }
 
+export type HeyReachConnection = "none" | "sent" | "accepted";
+export type HeyReachMessaging = "none" | "sent" | "replied";
+
 export type HeyReachLead = {
   id: string | null;
+  state: HeyReachLeadState | null;
+  connection: HeyReachConnection | null;
+  messaging: HeyReachMessaging | null;
+  lastActionAt: string | null;
+  senderName: string | null;
   profileUrl: string | null;
   firstName: string | null;
   lastName: string | null;
@@ -380,16 +419,20 @@ export type HeyReachLead = {
   tags: string[];
 };
 
-function connection(value: unknown) {
-  const status = (text(value) ?? "").toUpperCase().replace(/[\s_-]/g, "");
-  if (status === "CONNECTIONACCEPTED" || status === "ACCEPTED" || status === "CONNECTED") return "accepted";
-  if (status === "CONNECTIONSENT" || status === "SENT" || status === "PENDING" || status === "INVITED") return "sent";
+function connection(value: unknown): HeyReachConnection | null {
+  const status = (text(value) ?? "").toUpperCase();
+  if (status === "CONNECTIONACCEPTED") return "accepted";
+  if (status === "CONNECTIONSENT") return "sent";
+  if (status === "NONE") return "none";
   return null;
 }
 
-function messaged(value: unknown) {
-  const status = (text(value) ?? "").toUpperCase().replace(/[\s_-]/g, "");
-  return status === "MESSAGESENT" || status === "SENT" || status === "MESSAGEREPLY" || status === "REPLIED" || status === "INMAILSENT";
+function messaging(value: unknown): HeyReachMessaging | null {
+  const status = (text(value) ?? "").toUpperCase();
+  if (status === "MESSAGEREPLY") return "replied";
+  if (status === "MESSAGESENT") return "sent";
+  if (status === "NONE") return "none";
+  return null;
 }
 
 export const HEYREACH_SINCE_FILTER = "LastActionTakenOrFailedTime";
@@ -413,28 +456,33 @@ export async function listHeyReachLeads(
   );
   const rows = itemsOf(body);
   const leads = rows.map((row): HeyReachLead => {
-    const profile = record(row.linkedInUserProfile ?? row.lead ?? row.profile);
+    const profile = record(row.linkedInUserProfile);
     const lastAction = time(row.lastActionTime);
     const connected = connection(row.leadConnectionStatus);
-    const sentMessages = first(count(row.messagesSent), count(row.messagesSentCount), count(row.sentMessagesCount));
-    const anyMessage = sentMessages !== null ? sentMessages : messaged(row.leadMessageStatus) ? 1 : 0;
+    const messages = messaging(row.leadMessageStatus);
+    const anyMessage = count(row.messagesSent) ?? (messages === "sent" || messages === "replied" ? 1 : 0);
     return {
-      id: text(row.id) ?? text(row.leadId) ?? text(profile.id),
-      profileUrl: text(profile.profileUrl) ?? text(row.profileUrl),
+      id: text(row.id),
+      state: heyReachLeadState(row.leadCampaignStatus),
+      connection: connected,
+      messaging: messages,
+      lastActionAt: lastAction,
+      senderName: text(row.linkedInSenderFullName),
+      profileUrl: text(profile.profileUrl),
       firstName: text(profile.firstName),
       lastName: text(profile.lastName),
       companyName: text(profile.companyName),
       title: text(profile.position) ?? text(profile.headline),
-      email: text(profile.emailAddress) ?? text(profile.email),
-      accountId: text(row.linkedInSenderId) ?? text(row.linkedInAccountId) ?? text(row.accountId) ?? text(record(row.linkedInAccount).id),
-      status: leadStatus(row.leadCampaignStatus ?? row.status),
-      rawStatus: text(row.leadCampaignStatus ?? row.status),
-      addedAt: time(row.creationTime) ?? time(row.addedTime),
-      invitedAt: connected ? (time(row.connectionSentTime) ?? lastAction) : null,
-      acceptedAt: connected === "accepted" ? (time(row.connectionAcceptedTime) ?? lastAction) : null,
+      email: text(profile.emailAddress),
+      accountId: text(row.linkedInSenderId),
+      status: leadStatus(row.leadCampaignStatus),
+      rawStatus: text(row.leadCampaignStatus),
+      addedAt: time(row.creationTime),
+      invitedAt: connected === "sent" || connected === "accepted" ? lastAction : null,
+      acceptedAt: connected === "accepted" ? lastAction : null,
       messagesSent: anyMessage,
-      lastMessageAt: anyMessage > 0 ? (time(row.lastMessageSentTime) ?? lastAction) : null,
-      tags: tagsOf(row.leadTags ?? row.tags),
+      lastMessageAt: anyMessage > 0 ? lastAction : null,
+      tags: tagsOf(row.leadTags ?? profile.tags),
     };
   });
   const total = count(body.totalCount);
@@ -522,15 +570,15 @@ function tagsOf(value: unknown) {
 function conversationOf(row: Json): HeyReachConversation | null {
   const id = text(row.id) ?? text(row.conversationId);
   if (!id) return null;
-  const profile = record(row.correspondentProfile ?? row.correspondent ?? row.lead);
+  const profile = record(row.correspondentProfile);
   return {
     id,
     accountId: text(row.linkedInAccountId) ?? text(record(row.linkedInAccount).id),
-    profileUrl: text(profile.profileUrl) ?? text(row.leadProfileUrl),
-    leadId: text(row.leadId) ?? text(profile.id),
+    profileUrl: text(profile.profileUrl),
+    leadId: null,
     lastMessageAt: time(row.lastMessageAt),
     messages: messagesOf(row),
-    tags: tagsOf(row.leadTags ?? row.tags),
+    tags: tagsOf(profile.tags ?? row.leadTags),
   };
 }
 
@@ -574,10 +622,10 @@ export async function setHeyReachCampaignStatus(key: string, campaignId: string,
   await call(key, status === "paused" ? "/campaign/Pause" : "/campaign/Resume", { ...options, method: "POST", query: { campaignId } });
 }
 
-export async function stopHeyReachLead(key: string, campaignId: string, lead: { leadId: string | null; profileUrl: string | null }, options: HeyReachOptions = {}) {
+export async function stopHeyReachLead(key: string, campaignId: string, profileUrl: string, options: HeyReachOptions = {}) {
   await call(key, "/campaign/StopLeadInCampaign", {
     ...options,
-    body: { campaignId: campaignNumber(campaignId), ...(lead.leadId ? { leadMemberId: lead.leadId } : {}), ...(lead.profileUrl ? { leadUrl: lead.profileUrl } : {}) },
+    body: { campaignId: campaignNumber(campaignId), leadMemberId: null, leadUrl: profileUrl },
   });
 }
 
@@ -620,31 +668,21 @@ export async function addHeyReachLeads(key: string, campaignId: string, leads: H
   return { taken };
 }
 
-function campaignIdsOf(row: Json) {
-  const ids = [
-    text(row.campaignId),
-    ...list(row.campaignIds).map(text),
-    ...list(row.campaigns).map((item) => text(record(item).id) ?? text(record(item).campaignId) ?? text(item)),
-  ];
-  return ids.filter((id): id is string => Boolean(id));
-}
-
 export async function findHeyReachLead(key: string, campaignId: string, profileUrl: string, options: HeyReachOptions = {}): Promise<{ id: string | null } | null> {
-  let body: unknown;
-  try {
-    body = await call(key, "/lead/GetLead", { ...options, body: { profileUrl } });
-  } catch (error) {
-    if (error instanceof HeyReachError && error.status === 404) return null;
-    throw error;
+  for (let offset = 0; ; offset += HEYREACH_PAGE_SIZE) {
+    let body: unknown;
+    try {
+      body = await call(key, "/campaign/GetCampaignsForLead", { ...options, body: { profileUrl, offset, limit: HEYREACH_PAGE_SIZE } });
+    } catch (error) {
+      if (error instanceof HeyReachError && error.status === 404) return null;
+      throw error;
+    }
+    if (body === null) return null;
+    const rows = itemsOf(body);
+    if (rows.some((row) => text(row.campaignId) === campaignId)) return { id: null };
+    const total = count(record(body).totalCount);
+    if (rows.length < HEYREACH_PAGE_SIZE || (total !== undefined && offset + rows.length >= total)) return null;
   }
-  const row = record(body);
-  const profile = record(row.linkedInUserProfile ?? row.lead ?? row);
-  const id = text(row.id) ?? text(row.leadId) ?? text(profile.id);
-  const url = text(profile.profileUrl) ?? text(row.profileUrl);
-  if (!id && !url) return null;
-  const campaigns = campaignIdsOf(row);
-  if (!campaigns.includes(campaignId)) return null;
-  return { id };
 }
 
 export const HEYREACH_REPLY_EVENT = "EVERY_MESSAGE_REPLY_RECEIVED";
