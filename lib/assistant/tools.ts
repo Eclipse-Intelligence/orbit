@@ -1711,7 +1711,7 @@ export const TOOL_DOMAINS = {
     ],
   },
   campaigns: {
-    summary: "email and LinkedIn campaigns: stats, prospects, threads and who accepted or replied, adding people, pausing, removing, categories and replies",
+    summary: "email and LinkedIn campaigns: stats, prospects, conversations waiting on a reply, threads and who accepted or replied, adding people, pausing, removing, categories and replies",
     tools: ["campaigns", "campaign_action"],
   },
   pipeline: {
@@ -3219,17 +3219,18 @@ const TOOL_LIST: AssistantTool[] = [
     name: "campaigns",
     label: "Checking campaigns",
     description:
-      "Read the workspace's outreach campaigns, email (Smartlead) and LinkedIn (HeyReach), shared with every member. view list gives every campaign with its stats (channel filters it). view campaign gives one campaign with its steps, step stats, 30 days by day and its variables. view prospects gives a campaign's people a page of 100 at a time, with each one's state, last event, LinkedIn stage and sender. view thread gives one person's whole conversation across every campaign, with replyOptions saying who can reply on each channel; pass prospectId, or contactId (with channel to pick their LinkedIn or email campaign). view activity lists events newest first across campaigns (channel, campaignId, kinds, since and until filter it): for example kinds [\"invite_accepted\"] with since this Monday answers who accepted this week.",
+      "Read the workspace's outreach campaigns, email (Smartlead) and LinkedIn (HeyReach), shared with every member. view list gives every campaign with its stats (channel filters it). view campaign gives one campaign with its steps, step stats, 30 days by day and its variables. view prospects gives a campaign's people a page of 100 at a time, with each one's state, last event, LinkedIn stage and sender. view thread gives one person's whole conversation across every campaign, with replyOptions saying who can reply on each channel; pass prospectId, or contactId (with channel to pick their LinkedIn or email campaign). view activity lists events newest first across campaigns (channel, campaignId, kinds, since and until filter it): for example kinds [\"invite_accepted\"] with since this Monday answers who accepted this week. view conversations lists the people who have written or been written to, one row per person across campaigns and channels, newest first, with their prospectId, category, channels, campaigns, last message (direction, text, at), unread (no one in the workspace has opened their reply) and needsReply (their last message is newer than ours, not Not interested or Out of office, not Do not contact). It shows only those needing a reply unless needsReply is false; channel, campaignId and search narrow it. For \"who's replied that I haven't answered?\" read view conversations; to answer someone, read their view thread, draft the reply, then propose campaign_action reply. Reading never marks anything read.",
     parameters: {
       type: "object",
       properties: {
-        view: { type: "string", enum: [...CAMPAIGN_READS], description: "What to read: list, campaign, prospects, thread or activity." },
-        channel: { type: "string", enum: ["email", "linkedin"], description: "email or linkedin. Filters list and activity, and picks the campaign for thread with contactId." },
-        campaignId: idParam("A campaign id from view list. Needed for campaign and prospects; filters activity."),
+        view: { type: "string", enum: [...CAMPAIGN_READS], description: "What to read: list, campaign, prospects, thread, activity or conversations." },
+        channel: { type: "string", enum: ["email", "linkedin"], description: "email or linkedin. Filters list, activity and conversations, and picks the campaign for thread with contactId." },
+        campaignId: idParam("A campaign id from view list. Needed for campaign and prospects; filters activity and conversations."),
+        needsReply: { type: "boolean", description: "For conversations: true (default) lists only people waiting on a reply; false lists everyone." },
         prospectId: idParam("For thread: a prospect id from view prospects or activity."),
         contactId: idParam("For thread: the person's contact id, instead of prospectId."),
         filter: { type: "string", enum: ["all", "replied", "skipped"], description: "For prospects on an email campaign: all (default), replied, or skipped (skipped and failed, with the reason)." },
-        search: { type: "string", description: "For prospects: a name, email, LinkedIn profile or company to search for." },
+        search: { type: "string", description: "For prospects and conversations: a name, email, LinkedIn profile or company to search for." },
         page: { type: "integer", minimum: 1, description: "For prospects: the page of 100 to read. Defaults to 1." },
         kinds: {
           type: "array",
@@ -3238,7 +3239,7 @@ const TOOL_LIST: AssistantTool[] = [
         },
         since: { type: "string", description: "For activity: from this day or time, YYYY-MM-DD or YYYY-MM-DDTHH:mm London time. Defaults to 30 days ago." },
         until: { type: "string", description: "For activity: before this day or time, YYYY-MM-DD or YYYY-MM-DDTHH:mm London time." },
-        limit: { type: "integer", minimum: 1, maximum: 500, description: "For activity: how many events, up to 500. Defaults to 100." },
+        limit: { type: "integer", minimum: 1, maximum: 500, description: "For activity: how many events, up to 500, default 100. For conversations: how many people, up to 200, default 50." },
       },
       required: ["view"],
     },
@@ -3256,6 +3257,7 @@ const TOOL_LIST: AssistantTool[] = [
         since: optionalStr(args.since) ?? null,
         until: optionalStr(args.until) ?? null,
         limit: typeof args.limit === "number" ? args.limit : null,
+        needsReply: typeof args.needsReply === "boolean" ? args.needsReply : null,
       }),
   },
   {
@@ -3263,7 +3265,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Updating a campaign",
     write: true,
     description:
-      "Change a campaign or a person in one. add puts contactIds (or the people at companyIds) into campaignId, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact (Do not contact, customers, open opportunities, people the workspace has written to or met, already in another campaign on that channel) with the reason. start takes campaignId alone and starts a campaign that has never run. pause and resume take campaignId alone for the whole campaign, or a person (prospectId, or contactId with campaignId) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (category null clears it). reply sends text to a person in their campaign thread, by email or on LinkedIn (channel); a LinkedIn reply goes out as the LinkedIn account's own member, so only they can send it. A reply result with repeated true was sent before and not sent again (its note says when): tell the user that, never report it as a new send. Nothing here lifts Do not contact: only a person can, in Orbit.",
+      "Change a campaign or a person in one. add puts contactIds (or the people at companyIds) into campaignId, up to 1,000; Orbit fills the campaign's variables and pushes them, and skips anyone it shouldn't contact (Do not contact, customers, open opportunities, people the workspace has written to or met, already in another campaign on that channel) with the reason. start takes campaignId alone and starts a campaign that has never run. pause and resume take campaignId alone for the whole campaign, or a person (prospectId, or contactId with campaignId) on an email campaign. remove takes a person out of a campaign. set_category sets a person's category (category null clears it). reply sends text to a person in their campaign thread, by email or on LinkedIn (channel); read their campaigns view thread first and write the reply to what they last said. A LinkedIn reply goes out as the LinkedIn account's own member, so only they can send it. A reply result with repeated true was sent before and not sent again (its note says when): tell the user that, never report it as a new send. Nothing here lifts Do not contact: only a person can, in Orbit.",
     parameters: {
       type: "object",
       properties: {

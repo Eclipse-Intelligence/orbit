@@ -10,6 +10,7 @@ import { suppressedAddresses, suppressedLine, suppressedNames } from "@/lib/crm/
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import { redactedError } from "@/lib/upstream";
+import { signalCampaigns } from "@/lib/sync-signals";
 import { ServiceBusy } from "@/lib/workflows/limits";
 
 export const SUPPRESSION_AUDIT_EVENTS = {
@@ -272,7 +273,10 @@ export async function setDoNotContact(actor: Actor, target: DoNotContactTarget, 
     JSON.stringify(auditOf(actor, SUPPRESSION_AUDIT_EVENTS.set, person, provenance, { emails: person.emails, linkedins: person.linkedins })),
   ]);
   const outcome = saved.rows[0].result;
-  if (outcome.changed) scheduleWebhooks();
+  if (outcome.changed) {
+    scheduleWebhooks();
+    await signalCampaigns(actor.workspaceId);
+  }
   const stopped = await stopNow(actor.workspaceId, outcome.stopping, options);
   await pushBlockListNow(actor.workspaceId, options).catch(() => 0);
   return { changed: outcome.changed, stopping: outcome.stopping.length, stopped, skipped: outcome.skipped };
@@ -292,6 +296,7 @@ export async function liftDoNotContact(actor: Actor, target: DoNotContactTarget,
   const lifted = gone.rows[0]?.lifted ?? [];
   if (lifted.length === 0) return { lifted: 0 };
   scheduleWebhooks();
+  await signalCampaigns(actor.workspaceId);
   if (lifted.some((item) => item.kind === "email")) await liftBlocksNow(actor.workspaceId, options).catch(() => 0);
   return { lifted: lifted.length };
 }

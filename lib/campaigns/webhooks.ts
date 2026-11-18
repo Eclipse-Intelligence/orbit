@@ -9,6 +9,7 @@ import { storedWebhookSecret } from "@/lib/campaigns/webhook-urls";
 import { isUuid } from "@/lib/crm/mutate";
 import { query } from "@/lib/db/pool";
 import { webhookShape } from "@/lib/heyreach";
+import { signalCampaigns } from "@/lib/sync-signals";
 import { redactedError } from "@/lib/upstream";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -54,7 +55,8 @@ async function saveWebhookActions(workspaceId: string, providerId: CampaignProvi
   const campaign = await knownCampaign(workspaceId, providerId, actions.campaignExternalId);
   if (!campaign) return unrouted(payload, "a campaign Orbit doesn't have");
   const saved = await saveProviderEvents(campaign.campaign_id, actions.events, !campaign.backfilled);
-  if (actions.tags && Object.keys(actions.tags.patch).length > 0) {
+  const tagged = Boolean(actions.tags && Object.keys(actions.tags.patch).length > 0);
+  if (actions.tags && tagged) {
     await query("select private.campaign_prospect_tags($1, $2, $3, $4, $5::jsonb, $6)", [
       workspaceId,
       providerId,
@@ -66,6 +68,7 @@ async function saveWebhookActions(workspaceId: string, providerId: CampaignProvi
   }
   const key = createHash("sha256").update(receiptKey).digest("hex");
   const receipt = await query<{ fresh: boolean }>("select private.campaign_webhook_receipt($1, $2, $3) as fresh", [workspaceId, providerId, key]);
+  if (saved.length > 0 || tagged) await signalCampaigns(workspaceId);
   if (saved.length > 0 && campaign.backfilled) syncSoon(workspaceId, providerId, options);
   if (saved.length === 0 && !receipt.rows[0]?.fresh) return json({ duplicate: true });
   return json({ saved: saved.length });

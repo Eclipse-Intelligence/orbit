@@ -1,4 +1,5 @@
 import type { ProviderOptions } from "@/lib/campaigns/context";
+import { AGENT_CONVERSATION_LIMIT, listConversations } from "@/lib/campaigns/conversations";
 import { addedLine } from "@/lib/campaigns/format";
 import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused, startCampaign } from "@/lib/campaigns/manage";
 import { addCompanyContacts, addProspects, type AddResult } from "@/lib/campaigns/prospects";
@@ -14,7 +15,7 @@ import { suppressedRefusal } from "@/lib/crm/suppressions";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { readDateTime } from "@/lib/time";
 
-export const CAMPAIGN_READS = ["list", "campaign", "prospects", "thread", "activity"] as const;
+export const CAMPAIGN_READS = ["list", "campaign", "prospects", "thread", "activity", "conversations"] as const;
 export type CampaignRead = (typeof CAMPAIGN_READS)[number];
 
 export const CAMPAIGN_ACTIONS = ["add", "start", "pause", "resume", "remove", "set_category", "reply"] as const;
@@ -35,6 +36,7 @@ export type CampaignReadInput = {
   since?: string | null;
   until?: string | null;
   limit?: number | null;
+  needsReply?: boolean | null;
 };
 
 export type ProspectTarget = { prospectId?: string | null; contactId?: string | null; campaignId?: string | null; channel?: string | null };
@@ -101,6 +103,18 @@ export async function readCampaigns(actor: Actor, input: CampaignReadInput) {
         until: when(input.until, "until"),
         limit: input.limit ?? undefined,
       });
+    case "conversations":
+      return listConversations(
+        actor,
+        {
+          needsReply: input.needsReply ?? true,
+          channel,
+          campaignId: input.campaignId ?? null,
+          search: input.search ?? null,
+          limit: input.limit ?? null,
+        },
+        AGENT_CONVERSATION_LIMIT,
+      );
     default:
       throw new CrmError("invalid_input", `view is ${CAMPAIGN_READS.join(", ")}.`, 400, { field: "view" });
   }

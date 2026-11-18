@@ -10,6 +10,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
+import { signalCampaigns } from "@/lib/sync-signals";
 
 const REFRESH_EVERY_MS = 60_000;
 export const SENDING_STALE_MS = 5 * 60_000;
@@ -169,6 +170,10 @@ async function personRows(db: Db, actor: Actor, prospectId: string) {
   const rows = await db.query<PersonRow>(PERSON_SQL, [prospectId, actor.workspaceId]);
   if (!rows.rows.some((row) => row.id === prospectId)) throw notFound("prospect");
   return rows.rows;
+}
+
+export async function personProspectIds(db: Db, actor: Actor, prospectId: string) {
+  return (await personRows(db, actor, prospectId)).map((row) => row.id);
 }
 
 type MessageRow = {
@@ -365,6 +370,7 @@ export async function refreshProspectThread(actor: Actor, prospectId: string, op
       failure ??= providerError(provider, error, "Couldn't read the conversation. Try again.");
     }
   }
+  if (saved > 0) await signalCampaigns(actor.workspaceId);
   if (failure && read === 0) throw failure;
   return { saved, failed: failure ? true : false };
 }

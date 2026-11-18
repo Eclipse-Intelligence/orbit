@@ -11,6 +11,7 @@ import type { Actor, Provenance, UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 import { redactedError } from "@/lib/upstream";
 import { ServiceBusy } from "@/lib/workflows/limits";
+import { signalCampaigns } from "@/lib/sync-signals";
 
 const EMAIL_MAX = 20_000;
 const LINKEDIN_MAX = 8_000;
@@ -270,6 +271,7 @@ async function sendBegun(
     failure?.message ?? (state === "unknown" ? "May not have gone." : null),
     audit,
   ]);
+  await signalCampaigns(actor.workspaceId);
   if (failure) throw new CrmError(failure.code, failure.message, failure.status, { ...(failure.details ?? {}), messageId });
   if (finished.rows[0]?.audited) scheduleWebhooks();
 

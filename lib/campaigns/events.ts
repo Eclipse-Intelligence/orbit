@@ -15,6 +15,7 @@ import { query } from "@/lib/db/pool";
 import { automaticReply } from "@/lib/smartlead";
 import { redactedError } from "@/lib/upstream";
 import { kickWorkflows } from "@/lib/workflows/events";
+import { signalCampaigns } from "@/lib/sync-signals";
 import { ServiceBusy } from "@/lib/workflows/limits";
 
 const REPLY_PROVENANCE: Provenance = { operation: "campaign_reply", source: "campaign" };
@@ -78,8 +79,9 @@ async function refreshForReply(provider: CampaignProvider, context: ProviderCont
       linkedin: event.linkedin,
       senderId: event.sender_id,
     });
-    await saveThread(event.prospect_id, messages, { replyEvents: provider.repliesFromThreads, handled: false });
+    const saved = await saveThread(event.prospect_id, messages, { replyEvents: provider.repliesFromThreads, handled: false });
     await threadFetched(event.prospect_id);
+    if (saved.length > 0) await signalCampaigns(context.workspaceId);
     return null;
   } catch (error) {
     if (error instanceof ServiceBusy) throw error;

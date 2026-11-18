@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import FilterMenu from "@/components/_common/filter-menu";
 import Tag from "@/components/_ui/tag";
+import CampaignsHeading from "@/components/campaigns/campaigns-heading";
 import ChannelIcon from "@/components/campaigns/channel-icon";
 import { QuietTabs } from "@/components/crm/contact-activities";
 import SectionHeader from "@/components/crm/section-header";
@@ -64,7 +65,7 @@ export default function CampaignsScreen({
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <SectionHeader title="Campaigns" viewer={viewer} />
+      <SectionHeader title="Campaigns" viewer={viewer} heading={<CampaignsHeading current="campaigns" />} />
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
         <QuietTabs label="Campaign status" items={VIEW_TABS} value={view} onChange={setView} />
         {bothChannels && (

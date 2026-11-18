@@ -303,6 +303,7 @@ type ProspectSqlRow = {
   stop_error: string | null;
   not_enrolled: boolean;
   importable: boolean;
+  messages: number;
 };
 
 function validTime(value: string | null) {
@@ -355,7 +356,8 @@ export async function listCampaignProspects(
                 p.provider_state->>'status' as provider_status,
                 p.provider_state->>'lastActionAt' as last_action_at,
                 ($6 and p.state = 'pushed' and p.lead_status is null and p.external_lead_id is null) as not_enrolled,
-                (p.contact_id is null and p.state = 'pushed' and (p.email is not null or p.linkedin is not null)) as importable
+                (p.contact_id is null and p.state = 'pushed' and (p.email is not null or p.linkedin is not null)) as importable,
+                (select count(*)::int from crm.campaign_messages m where m.prospect_id = p.id) as messages
          ${from}
          left join lateral (
            select coalesce(nullif(btrim(pr.full_name), ''), pr.email, nullif(s.name, '')) as name
@@ -400,6 +402,7 @@ export async function listCampaignProspects(
         stopError: row.stop_requested_at && !row.stopped_at ? row.stop_error : null,
         notEnrolled: row.not_enrolled,
         importable: row.importable,
+        messages: row.messages,
       })),
       total: total.rows[0]?.count ?? 0,
       page,
