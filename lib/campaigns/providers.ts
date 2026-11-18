@@ -116,6 +116,15 @@ export type ProviderLead = {
   category: string | null;
   addedAt: string | null;
   senderId?: string | null;
+  providerState?: ProviderLeadState;
+};
+
+export type ProviderLeadState = {
+  status?: string | null;
+  connection?: string | null;
+  messaging?: string | null;
+  lastActionAt?: string | null;
+  senderName?: string | null;
 };
 
 export type ProviderEvent = {
@@ -561,6 +570,7 @@ function heyReachProviderLeads(leads: HeyReachLead[]): ProviderLead[] {
         category: null,
         addedAt: lead.addedAt,
         senderId: lead.accountId,
+        providerState: { status: lead.state, connection: lead.connection, messaging: lead.messaging, lastActionAt: lead.lastActionAt, senderName: lead.senderName },
       },
     ];
   });
@@ -658,7 +668,6 @@ export const heyReachProvider: CampaignProvider = {
     for (let offset: number | null = 0, pages = 0; offset !== null && pages < 5; pages += 1) {
       const page = await listHeyReachConversations(context.key, { campaignId: campaign.externalId, profileUrl: url }, offset, context);
       for (const conversation of page.conversations) {
-        if (lead.externalLeadId && conversation.leadId && conversation.leadId !== lead.externalLeadId) continue;
         if (conversation.profileUrl && prospectLinkedin(conversation.profileUrl) !== lead.linkedin) continue;
         messages.push(...(await conversationThread(context, campaign.externalId, conversation)).messages);
       }
@@ -679,8 +688,9 @@ export const heyReachProvider: CampaignProvider = {
   },
   setCampaignStatus: (context, externalId, status) => setHeyReachCampaignStatus(context.key, externalId, status, context),
   async stopLead(context, campaignExternalId, lead) {
-    if (!lead.externalLeadId && !lead.linkedin) throw new LeadNotReady();
-    await stopHeyReachLead(context.key, campaignExternalId, { leadId: lead.externalLeadId, profileUrl: profileUrl(lead.linkedin) }, context);
+    const url = profileUrl(lead.linkedin);
+    if (!url) throw new LeadNotReady();
+    await stopHeyReachLead(context.key, campaignExternalId, url, context);
     return "stopped";
   },
   categoryKey: (campaignExternalId, lead, category) => heyReachCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.linkedin ?? "", category),

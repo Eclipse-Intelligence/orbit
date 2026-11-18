@@ -1,4 +1,3 @@
-import { positiveCategory } from "@/lib/campaigns/format";
 import { campaignProvider } from "@/lib/campaigns/providers";
 import { addRefusal, readCampaignVariables } from "@/lib/campaigns/prospects";
 import {
@@ -13,6 +12,7 @@ import {
   type CampaignStatus,
   type CampaignSummary,
   type DayStats,
+  type LeadFunnel,
   type Mailbox,
   type ProspectFilter,
   type ProspectPage,
@@ -103,11 +103,20 @@ export async function listCampaigns(actor: Actor, options: { channel?: CampaignC
 async function readCampaign(db: Db, actor: Actor, id: string) {
   if (!isUuid(id)) throw notFound("campaign");
   const result = await db.query<
-    CampaignRow & { sequence: SequenceStep[]; variables: string[]; day_stats: ProviderDay[]; sender_ids: string[]; sync_error: string | null; stray: number | null; auto_add: AutoAdd }
+    CampaignRow & {
+      sequence: SequenceStep[];
+      variables: string[];
+      day_stats: ProviderDay[];
+      sender_ids: string[];
+      sync_error: string | null;
+      stray: number | null;
+      auto_add: AutoAdd;
+      lead_state_read: boolean;
+    }
   >(
     SUMMARY_SQL.replace(
       "select k.id,",
-      "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.sync_error, k.auto_add, (k.sync_state->>'strayConversations')::int as stray, k.id,",
+      "select k.sequence, k.variables, k.day_stats, k.sender_ids, k.sync_error, k.auto_add, (k.sync_state->>'strayConversations')::int as stray, k.sync_state ? 'leadStateAt' as lead_state_read, k.id,",
     ) + " where k.id = $1 and k.workspace_id = $2",
     [id, actor.workspaceId],
   );
@@ -159,43 +168,16 @@ async function senderCapacity(db: Db, workspaceId: string, senderIds: string[]):
   return row && row.senders > 0 ? { senders: row.senders, invites: row.invites, messages: row.messages } : null;
 }
 
-async function countedLinkedinStats(db: Db, workspaceId: string, campaignId: string): Promise<CampaignStats> {
-  const result = await db.query<{
-    leads: number;
-    enrolled: number;
-    not_enrolled: number;
-    finished: number;
-    paused: number;
-    failed: number;
-    contacted: number;
-    categories: string[] | null;
-  }>(
-    `select count(*) filter (where p.state = 'pushed')::int as leads,
-            count(*) filter (where p.state = 'pushed' and p.lead_status = 'in_progress')::int as enrolled,
-            count(*) filter (where p.state = 'pushed' and (p.lead_status is null or p.lead_status = 'not_started'))::int as not_enrolled,
-            count(*) filter (where p.state = 'pushed' and p.lead_status = 'completed')::int as finished,
-            count(*) filter (where p.state = 'pushed' and p.lead_status = 'paused')::int as paused,
-            count(*) filter (where p.state = 'pushed' and p.lead_status = 'stopped')::int as failed,
-            count(*) filter (where exists (
-              select 1 from crm.campaign_events e where e.prospect_id = p.id and e.kind in ('invite_sent', 'message_sent', 'inmail_sent')
-            ))::int as contacted,
-            array_agg(p.category) filter (where p.category is not null) as categories
+async function heyReachFunnel(db: Db, workspaceId: string, campaignId: string): Promise<LeadFunnel> {
+  const result = await db.query<LeadFunnel>(
+    `select count(*) filter (where p.provider_state->>'connection' in ('sent', 'accepted') or p.provider_state->>'messaging' in ('sent', 'replied'))::int as contacted,
+            count(*) filter (where p.provider_state->>'connection' = 'accepted')::int as accepted,
+            count(*) filter (where p.provider_state->>'messaging' = 'replied')::int as replied
      from crm.campaign_prospects p
      where p.campaign_id = $1 and p.workspace_id = $2`,
     [campaignId, workspaceId],
   );
-  const row = result.rows[0];
-  if (!row) return {};
-  return {
-    leads: row.leads,
-    enrolled: row.enrolled,
-    notEnrolled: row.not_enrolled,
-    finished: row.finished,
-    pausedLeads: row.paused,
-    failed: row.failed,
-    contacted: row.contacted,
-    interested: (row.categories ?? []).filter((category) => positiveCategory(category)).length,
-  };
+  return result.rows[0] ?? { contacted: 0, accepted: 0, replied: 0 };
 }
 
 export async function getCampaign(actor: Actor, id: string): Promise<CampaignDetail> {
@@ -246,7 +228,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
          and (p.created_at at time zone 'Europe/London')::date = (now() at time zone 'Europe/London')::date`,
       [row.id, actor.workspaceId],
     );
-    const counted = linkedin ? await countedLinkedinStats(db, actor.workspaceId, row.id) : null;
+    const funnel = row.provider === "heyreach" && row.lead_state_read ? await heyReachFunnel(db, actor.workspaceId, row.id) : null;
     const provider = campaignProvider(row.provider);
     const sequence = row.sequence ?? [];
     const eventDays: DayStats[] = days.rows.map((day) =>
@@ -255,7 +237,7 @@ export async function getCampaign(actor: Actor, id: string): Promise<CampaignDet
     const storedDays = linkedin && Array.isArray(row.day_stats) && row.day_stats.length > 0 ? providerDays(row.day_stats) : null;
     return {
       ...summary(row),
-      stats: counted ? { ...counted, ...(row.stats ?? {}) } : (row.stats ?? {}),
+      leadFunnel: funnel,
       autoAdd: row.auto_add ?? "off",
       sequence,
       variables: row.variables ?? [],
@@ -306,11 +288,19 @@ type ProspectSqlRow = {
   last_at: Date | null;
   stage: LinkedinStage | null;
   sender: string | null;
+  provider_status: string | null;
+  last_action_at: string | null;
   import_error: string | null;
   stop_error: string | null;
   not_enrolled: boolean;
   importable: boolean;
 };
+
+function validTime(value: string | null) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+}
 
 const FILTER_SQL: Record<ProspectFilter, string> = {
   all: "true",
@@ -352,7 +342,9 @@ export async function listCampaignProspects(
                   when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_accepted') then 'accepted'
                   when $6 and exists (select 1 from crm.campaign_events a where a.prospect_id = p.id and a.kind = 'invite_sent') then 'invited'
                 end as stage,
-                sender.name as sender,
+                coalesce(nullif(btrim(p.provider_state->>'senderName'), ''), sender.name) as sender,
+                p.provider_state->>'status' as provider_status,
+                p.provider_state->>'lastActionAt' as last_action_at,
                 ($6 and p.state = 'pushed' and p.lead_status is null and p.external_lead_id is null) as not_enrolled,
                 (p.contact_id is null and p.state = 'pushed' and (p.email is not null or p.linkedin is not null)) as importable
          ${from}
@@ -393,6 +385,8 @@ export async function listCampaignProspects(
         lastEvent: row.last_kind && row.last_at ? { kind: row.last_kind, step: row.last_step, at: row.last_at.toISOString() } : null,
         stage: row.stage,
         sender: row.sender,
+        providerStatus: row.provider_status,
+        lastActionAt: validTime(row.last_action_at),
         importError: row.contact_id ? null : row.import_error,
         stopError: row.stop_requested_at && !row.stopped_at ? row.stop_error : null,
         notEnrolled: row.not_enrolled,

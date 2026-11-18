@@ -13,8 +13,20 @@ import { removeMember } from "@/lib/crm/team";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { campaignStatus, listHeyReachLeads, variablesIn } from "@/lib/heyreach";
-import { fakeHeyReach, type FakeHeyReachAccount, type FakeHeyReachCampaign, type FakeHeyReachLead } from "./campaigns-fake";
+import { lastActionLine, linkedinStatus } from "@/lib/campaigns/format";
+import type { ProspectRow } from "@/lib/campaigns/types";
+import {
+  campaignStatus,
+  createHeyReachWebhook,
+  HEYREACH_WEBHOOK_EVENTS,
+  HeyReachError,
+  heyReachSteps,
+  listHeyReachAccounts,
+  listHeyReachLeads,
+  stopHeyReachLead,
+  variablesIn,
+} from "@/lib/heyreach";
+import { fakeHeyReach, HEYREACH_WEBHOOK_TYPES, type FakeHeyReachAccount, type FakeHeyReachCampaign, type FakeHeyReachLead } from "./campaigns-fake";
 import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
 
 const KEY = "hr_key_eclipse_0001";
@@ -182,6 +194,213 @@ describe("campaigns through HeyReach", () => {
         ],
       );
       eclipse.calls.length = 0;
+    });
+  });
+
+  describe("the documented requests", () => {
+    const recorder = (respond: (path: string, body: unknown) => Response) => {
+      const calls: { method: string; path: string; query: string; body: unknown }[] = [];
+      const impl: typeof fetch = async (input, init) => {
+        const url = new URL(String(input));
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+        calls.push({ method: init?.method ?? "GET", path: url.pathname, query: url.search, body });
+        return respond(url.pathname, body);
+      };
+      return { calls, impl };
+    };
+    const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+    it("lists the steps of the collection's GetCampaignSequence example, following the longest branch", async () => {
+      const example = {
+        nodeType: "CONNECTION_REQUEST",
+        actionDelay: 0,
+        actionDelayUnit: "DAY",
+        payload: { messages: ["Hi {FIRST_NAME}, I'd love to connect!"], fallbackMessage: "Hi there, I'd love to connect!", toBeWithdrawnAfterDays: 30 },
+        conditionalNode: {
+          nodeType: "MESSAGE",
+          actionDelay: 2,
+          actionDelayUnit: "DAY",
+          payload: { messages: ["Thanks for connecting, {FIRST_NAME}!"], fallbackMessage: "Thanks for connecting!" },
+          unconditionalNode: { nodeType: "END", actionDelay: 3, actionDelayUnit: "HOUR" },
+        },
+        unconditionalNode: { nodeType: "END", actionDelay: 3, actionDelayUnit: "HOUR" },
+      };
+      assert.deepEqual(heyReachSteps(example), [
+        { step: 1, variant: null, subject: "Invite", body: "Hi {FIRST_NAME}, I'd love to connect!", delayDays: 0 },
+        { step: 2, variant: null, subject: "Message", body: "Thanks for connecting, {FIRST_NAME}!", delayDays: 2 },
+      ]);
+      const checked = {
+        nodeType: "VIEW_PROFILE",
+        actionDelay: 0,
+        actionDelayUnit: "DAY",
+        unconditionalNode: {
+          nodeType: "CHECK_IS_CONNECTION",
+          actionDelay: 3,
+          actionDelayUnit: "HOUR",
+          conditionalNode: { nodeType: "MESSAGE", actionDelay: 1, actionDelayUnit: "DAY", payload: { messages: ["Hello again"] }, unconditionalNode: { nodeType: "END" } },
+          unconditionalNode: { ...example, actionDelay: 1 },
+        },
+      };
+      assert.deepEqual(
+        heyReachSteps(checked).map((step) => [step.step, step.subject, step.delayDays]),
+        [
+          [1, "View profile", 0],
+          [2, "Invite", 1],
+          [3, "Message", 2],
+        ],
+      );
+      assert.deepEqual(heyReachSteps(null), [], "an empty 200 means no sequence");
+    });
+
+    it("reads the collection's GetLeadsFromCampaign example, with the sender and last action", async () => {
+      const { calls, impl } = recorder(() =>
+        reply({
+          totalCount: 152,
+          items: [
+            {
+              id: 62658,
+              linkedInUserProfileId: "AC9sANasasasX0Ia-q6DQxyS35UD7a8716G5c8",
+              linkedInUserProfile: {
+                linkedin_id: "58344979",
+                profileUrl: "https://www.linkedin.com/in/johndoe",
+                firstName: "John",
+                lastName: "Doe",
+                headline: "Communications and Marketing Professional",
+                companyName: "ACME",
+                companyUrl: null,
+                position: "",
+                emailAddress: null,
+              },
+              lastActionTime: "2024-10-01T03:28:22.414791Z",
+              failedTime: null,
+              creationTime: "2024-09-30T21:28:06.933349Z",
+              leadCampaignStatus: "Finished",
+              leadConnectionStatus: "None",
+              leadMessageStatus: "None",
+              errorCode: null,
+              leadCampaignStatusMessage: null,
+              linkedInSenderId: 1108,
+              linkedInSenderFullName: "Jane Doe",
+            },
+          ],
+        }),
+      );
+      const page = await listHeyReachLeads("key", "1805", 0, { fetchImpl: impl, since: "2024-10-06T15:34:00.000Z", now: new Date("2024-10-07T15:36:00.000Z") });
+      assert.deepEqual(calls[0], {
+        method: "POST",
+        path: "/api/public/campaign/GetLeadsFromCampaign",
+        query: "",
+        body: { campaignId: 1805, offset: 0, limit: 100, timeFrom: "2024-10-06T15:34:00.000Z", timeTo: "2024-10-07T15:36:00.000Z", timeFilter: "LastActionTakenOrFailedTime" },
+      });
+      const lead = page.leads[0];
+      assert.equal(lead.id, "62658");
+      assert.equal(lead.state, "finished");
+      assert.equal(lead.status, "completed");
+      assert.equal(lead.connection, "none");
+      assert.equal(lead.messaging, "none");
+      assert.equal(lead.lastActionAt, "2024-10-01T03:28:22.414Z");
+      assert.equal(lead.senderName, "Jane Doe");
+      assert.equal(lead.accountId, "1108");
+      assert.equal(lead.title, "Communications and Marketing Professional");
+      assert.equal(lead.invitedAt, null);
+      assert.equal(page.next, null);
+    });
+
+    it("reads sender limits from accountLimits on li_account/GetAll", async () => {
+      const { calls, impl } = recorder(() =>
+        reply({
+          totalCount: 1,
+          items: [
+            {
+              id: 113298,
+              emailAddress: "mark@accounts.test",
+              firstName: "Mark",
+              lastName: "Ridgeon",
+              isActive: true,
+              profileUrl: "https://www.linkedin.com/in/markridgeon",
+              accountLimits: { messageLimit: 80, connectioRequestLimit: 25, followLimit: 30 },
+            },
+          ],
+        }),
+      );
+      const accounts = await listHeyReachAccounts("key", { fetchImpl: impl });
+      assert.deepEqual(calls[0].body, { offset: 0, limit: 100 });
+      assert.deepEqual(accounts, [{ id: "113298", name: "Mark Ridgeon", email: "mark@accounts.test", profileUrl: "https://www.linkedin.com/in/markridgeon", inviteLimit: 25, messageLimit: 80 }]);
+    });
+
+    it("stops a lead by profile URL, since leadMemberId is the LinkedIn id Orbit doesn't keep", async () => {
+      const { calls, impl } = recorder(() => new Response(null, { status: 200 }));
+      await stopHeyReachLead("key", "123", "https://www.linkedin.com/in/john-doe", { fetchImpl: impl });
+      assert.deepEqual(calls, [{ method: "POST", path: "/api/public/campaign/StopLeadInCampaign", query: "", body: { campaignId: 123, leadMemberId: null, leadUrl: "https://www.linkedin.com/in/john-doe" } }]);
+    });
+
+    it("sends CreateWebhook exactly as documented and logs HeyReach's validation errors", async () => {
+      assert.ok(HEYREACH_WEBHOOK_EVENTS.every((event) => HEYREACH_WEBHOOK_TYPES.includes(event)), "every event Orbit registers is a documented eventType");
+      const { calls, impl } = recorder((_path, body) => {
+        const row = body as Record<string, unknown>;
+        if (row.eventType === "VIEWED_PROFILE") {
+          return reply({ type: "https://tools.ietf.org/html/rfc9110#section-15.5.1", title: "One or more validation errors occurred.", status: 400, errors: { "$.eventType": ["The JSON value could not be converted to WebhookEventType."] } }, 400);
+        }
+        return reply({ id: 98 });
+      });
+      const url = "https://orbit.test/api/webhooks/heyreach?w=workspace&secret=s3cret-value";
+      assert.equal(await createHeyReachWebhook("key", "744784", url, { fetchImpl: impl, eventType: "CONNECTION_REQUEST_SENT" }), "98");
+      assert.deepEqual(calls[0], {
+        method: "POST",
+        path: "/api/public/webhooks/CreateWebhook",
+        query: "",
+        body: { webhookName: "Orbit connection request sent", webhookUrl: url, eventType: "CONNECTION_REQUEST_SENT", campaignIds: [744784] },
+      });
+      const logged: unknown[][] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => void logged.push(args);
+      try {
+        await assert.rejects(createHeyReachWebhook("key", "744784", url, { fetchImpl: impl, eventType: "VIEWED_PROFILE" }), (error: unknown) => {
+          assert.ok(error instanceof HeyReachError);
+          assert.equal(error.message, "HeyReach returned an error (400) on CreateWebhook: One or more validation errors occurred: $.eventType: The JSON value could not be converted to WebhookEventType.");
+          return true;
+        });
+      } finally {
+        console.error = original;
+      }
+      assert.deepEqual(logged, [["HeyReach request failed", 400, "/webhooks/CreateWebhook", "One or more validation errors occurred: $.eventType: The JSON value could not be converted to WebhookEventType"]]);
+      assert.ok(!JSON.stringify(logged).includes("s3cret-value"));
+    });
+
+    it("words the status and last action like HeyReach", () => {
+      const now = Date.parse("2026-11-18T19:00:00.000Z");
+      const base: ProspectRow = {
+        id: "p",
+        contactId: null,
+        companyId: null,
+        name: "Ann",
+        companyName: null,
+        email: null,
+        state: "pushed",
+        skipReason: null,
+        leadStatus: null,
+        category: null,
+        repliedAt: null,
+        stopRequestedAt: null,
+        stoppedAt: null,
+        lastEvent: null,
+        stage: null,
+        sender: null,
+        importError: null,
+      };
+      assert.equal(linkedinStatus(base), "Not enrolled yet");
+      assert.equal(linkedinStatus({ ...base, leadStatus: "not_started", providerStatus: "pending" }), "Not enrolled yet");
+      assert.equal(linkedinStatus({ ...base, leadStatus: "in_progress", providerStatus: "in_sequence" }), "In progress");
+      assert.equal(linkedinStatus({ ...base, leadStatus: "stopped", providerStatus: "excluded" }), "Excluded");
+      assert.equal(linkedinStatus({ ...base, leadStatus: "stopped", providerStatus: "failed" }), "Failed");
+      assert.equal(linkedinStatus({ ...base, leadStatus: "completed" }), "Finished");
+      assert.equal(lastActionLine(base, now), null);
+      const viewed = { ...base, lastEvent: { kind: "profile_viewed" as const, step: null, at: "2026-11-18T18:30:00.000Z" }, lastActionAt: "2026-11-18T18:30:20.000Z" };
+      assert.equal(lastActionLine(viewed, now), "Viewed profile, 30 minutes ago");
+      assert.equal(lastActionLine({ ...viewed, lastActionAt: "2026-11-18T18:55:00.000Z" }, now), "Last action, 5 minutes ago", "a later action HeyReach didn't name isn't given an older action's name");
+      assert.equal(lastActionLine({ ...viewed, repliedAt: "2026-11-18T16:00:00.000Z" }, now), "Viewed profile, 30 minutes ago");
+      assert.equal(lastActionLine({ ...base, lastEvent: { kind: "invite_sent", step: null, at: "2026-11-16T18:00:00.000Z" } }, now), "Sent connection request, 2 days ago");
+      assert.equal(lastActionLine({ ...base, lastEvent: { kind: "added", step: null, at: "2026-11-16T18:00:00.000Z" } }, now), null, "Orbit's own push isn't a HeyReach action");
     });
   });
 
@@ -399,6 +618,94 @@ describe("campaigns through HeyReach", () => {
       assert.equal(bulkThree.rows.length, 1);
       assert.equal(bulkThree.rows[0]?.stage, "invited");
       assert.equal(bulkThree.rows[0]?.sender, "Mark Ridgeon");
+    });
+
+    it("shows only HeyReach's own figures, and each lead's HeyReach status, sender and last action", async () => {
+      const detail = await getCampaign(member, foundersId);
+      assert.deepEqual(detail.stats, { invites: 130, accepted: 1, messages: 2, replied: 0 }, "no lead counts are made up from Orbit's rows when HeyReach gives none");
+      assert.deepEqual(detail.leadFunnel, { contacted: 130, accepted: 2, replied: 0 });
+      await sql("update crm.campaigns set sync_state = sync_state - 'leadStateAt' where id = $1", [foundersId]);
+      assert.equal((await getCampaign(member, foundersId)).leadFunnel, null, "the funnel waits for a full lead read");
+
+      const lead = eclipse.campaigns[0].leads.find((item) => item.id === "bulk-9")!;
+      lead.senderName = "Jess Cole (HeyReach)";
+      lead.replied = true;
+      lead.status = "Paused";
+      lead.lastActionTime = new Date().toISOString();
+      await sql("update crm.campaigns set sync_state = sync_state - 'leadsAt' where id = $1", [foundersId]);
+      const report = await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      assert.deepEqual(report.errors, []);
+      const after = await getCampaign(member, foundersId);
+      assert.deepEqual(after.leadFunnel, { contacted: 130, accepted: 2, replied: 1 });
+      const rows = await listCampaignProspects(member, foundersId, { search: "Bulk9" });
+      const row = rows.rows.find((item) => item.name === "Bulk9 Person")!;
+      assert.equal(row.providerStatus, "paused");
+      assert.equal(row.sender, "Jess Cole (HeyReach)");
+      assert.equal(row.lastActionAt, lead.lastActionTime);
+      assert.equal(linkedinStatus(row), "Paused");
+    });
+
+    it("starts a lead read already part-way through again from the first page before counting the funnel", async () => {
+      await sql(
+        `update crm.campaigns set sync_state = (sync_state - 'leadStateAt' - 'leadStateStarted') || '{"leadsOffset": 100}'::jsonb, status = 'completed' where id = $1`,
+        [foundersId],
+      );
+      await sql("update crm.campaign_prospects set provider_state = '{}'::jsonb where campaign_id = $1", [foundersId]);
+      assert.equal((await getCampaign(member, foundersId)).leadFunnel, null);
+      eclipse.calls.length = 0;
+      const report = await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      assert.deepEqual(report.errors, []);
+      const reads = eclipse.calls.filter((call) => call.path === "/campaign/GetLeadsFromCampaign" && call.body?.timeFilter === undefined);
+      assert.deepEqual(
+        reads.map((call) => call.body?.offset),
+        [0, 100],
+        "an ended campaign reads every page from the start, not only the rest",
+      );
+      const state = (await sql<{ state: Record<string, unknown> }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+      assert.ok(state.leadStateAt);
+      assert.equal(state.leadStateStarted, undefined);
+      assert.equal(state.leadsOffset, undefined);
+      assert.deepEqual((await getCampaign(member, foundersId)).leadFunnel, { contacted: 130, accepted: 2, replied: 1 });
+      await sql("update crm.campaigns set status = 'active' where id = $1", [foundersId]);
+    });
+
+    it("reads the steps once after the parser change, not on every sync", async () => {
+      const state = (await sql<{ state: Record<string, unknown> }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+      assert.equal(state.sequenceFormat, 2);
+      eclipse.calls.length = 0;
+      await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      assert.equal(eclipse.calls.filter((call) => call.path === "/campaign/GetCampaignSequence").length, 0, "a second sync doesn't read the steps again");
+      await sql("update crm.campaigns set sync_state = sync_state - 'sequenceFormat' where id = $1", [foundersId]);
+      eclipse.calls.length = 0;
+      await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      assert.equal(eclipse.calls.filter((call) => call.path === "/campaign/GetCampaignSequence").length, 1, "only a campaign whose steps were parsed by the old reader reads them again");
+    });
+
+    it("keeps registering the other HeyReach webhooks when one is refused", async () => {
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = "https://orbit.test";
+      let refusedOnce = false;
+      eclipse.fail = (path) => {
+        if (path !== "/webhooks/CreateWebhook" || refusedOnce) return null;
+        refusedOnce = true;
+        return new Response(JSON.stringify({ title: "One or more validation errors occurred.", status: 400, errors: { webhookName: ["Too long."] } }), { status: 400 });
+      };
+      const original = console.error;
+      const logged: string[] = [];
+      console.error = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
+      try {
+        await sql("update crm.campaigns set sync_state = sync_state - 'webhooks' - 'webhookId' - 'webhookFailedAt' where id = $1", [foundersId]);
+        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+      } finally {
+        console.error = original;
+        eclipse.fail = undefined;
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
+      const state = (await sql<{ state: { webhooks?: string[]; webhookFailedAt?: string } }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+      assert.deepEqual(state.webhooks, HEYREACH_WEBHOOK_EVENTS.slice(1));
+      assert.ok(state.webhookFailedAt);
+      assert.ok(logged.some((line) => line.includes("Couldn't add the HeyReach webhook EVERY_MESSAGE_REPLY_RECEIVED") && line.includes("webhookName: Too long")));
     });
 
     it("imports the people who aren't in Orbit yet with their LinkedIn profiles", async () => {

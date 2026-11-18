@@ -118,8 +118,11 @@ export type CampaignSummary = {
 export const AUTO_ADD = ["off", "accepted", "replied"] as const;
 export type AutoAdd = (typeof AUTO_ADD)[number];
 
+export type LeadFunnel = { contacted: number; accepted: number; replied: number };
+
 export type CampaignDetail = CampaignSummary & {
   autoAdd: AutoAdd;
+  leadFunnel: LeadFunnel | null;
   sequence: SequenceStep[];
   variables: string[];
   standardVariables: string[];
@@ -160,6 +163,8 @@ export type ProspectRow = {
   lastEvent: { kind: CampaignEventKind; step: number | null; at: string } | null;
   stage: LinkedinStage | null;
   sender: string | null;
+  providerStatus?: string | null;
+  lastActionAt?: string | null;
   importError: string | null;
   stopError?: string | null;
   notEnrolled?: boolean;

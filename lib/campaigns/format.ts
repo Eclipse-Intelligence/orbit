@@ -4,9 +4,9 @@ import {
   type CampaignChannel,
   type CampaignEventKind,
   type CampaignProviderId,
-  type CampaignStats,
   type CampaignStatus,
   type CampaignSummary,
+  type CampaignDetail,
   type ProspectRow,
   type StatKey,
 } from "@/lib/campaigns/types";
@@ -23,26 +23,34 @@ export const STATUS_LABELS: Record<CampaignStatus, string> = {
 
 export type StatLabel = { key: StatKey; label: string };
 
-export const PROVIDER_STATS: Record<CampaignProviderId, { leads: StatLabel[]; activity: StatLabel[] }> = {
+export type FunnelLabel = StatLabel & { of: StatKey };
+
+export const PROVIDER_STATS: Record<CampaignProviderId, { funnel: FunnelLabel[]; statuses: StatLabel[] }> = {
   heyreach: {
-    leads: [
+    funnel: [
+      { key: "contacted", label: "Contacted", of: "leads" },
+      { key: "accepted", label: "Accepted", of: "leads" },
+      { key: "replied", label: "Replied", of: "leads" },
+      { key: "interested", label: "Interested", of: "leads" },
+    ],
+    statuses: [
       { key: "leads", label: "Total leads" },
       { key: "enrolled", label: "Enrolled in sequence" },
-      { key: "notEnrolled", label: "Not enrolled" },
+      { key: "notEnrolled", label: "Not enrolled yet" },
       { key: "finished", label: "Finished" },
       { key: "pausedLeads", label: "Paused" },
-      { key: "failed", label: "Failed" },
-      { key: "excluded", label: "Excluded" },
-    ],
-    activity: [
-      { key: "contacted", label: "Contacted" },
-      { key: "accepted", label: "Accepted" },
-      { key: "replied", label: "Replied" },
-      { key: "interested", label: "Interested" },
+      { key: "failed", label: "Failed leads" },
+      { key: "excluded", label: "Excluded leads" },
     ],
   },
   smartlead: {
-    leads: [
+    funnel: [
+      { key: "contacted", label: "Sequence started", of: "leads" },
+      { key: "opened", label: "Opened", of: "contacted" },
+      { key: "replied", label: "Replied", of: "contacted" },
+      { key: "positive", label: "Positive reply", of: "contacted" },
+    ],
+    statuses: [
       { key: "leads", label: "Total" },
       { key: "notStarted", label: "Not started" },
       { key: "inProgress", label: "In progress" },
@@ -50,18 +58,91 @@ export const PROVIDER_STATS: Record<CampaignProviderId, { leads: StatLabel[]; ac
       { key: "blocked", label: "Blocked" },
       { key: "pausedLeads", label: "Paused" },
       { key: "stopped", label: "Stopped" },
-    ],
-    activity: [
-      { key: "contacted", label: "Sequence started" },
-      { key: "opened", label: "Opened" },
       { key: "clicked", label: "Clicked" },
-      { key: "replied", label: "Replied" },
-      { key: "positive", label: "Positive reply" },
       { key: "bounced", label: "Bounced" },
       { key: "unsubscribed", label: "Unsubscribed" },
     ],
   },
 };
+
+export function providerFigure(campaign: Pick<CampaignDetail, "provider" | "stats" | "leadFunnel">, key: StatKey): number | undefined {
+  if (campaign.provider === "heyreach" && (key === "contacted" || key === "accepted" || key === "replied")) return campaign.leadFunnel?.[key];
+  if (campaign.provider === "heyreach" && key === "interested") return undefined;
+  return campaign.stats[key];
+}
+
+export const HEYREACH_STATUS_LABELS: Record<string, string> = {
+  in_sequence: "In progress",
+  pending: "Not enrolled yet",
+  finished: "Finished",
+  paused: "Paused",
+  failed: "Failed",
+  excluded: "Excluded",
+};
+
+const LEAD_STATUS_WORDS: Record<string, string> = {
+  in_progress: "In progress",
+  not_started: "Not enrolled yet",
+  completed: "Finished",
+  paused: "Paused",
+  stopped: "Failed",
+};
+
+export function linkedinStatus(row: ProspectRow) {
+  if (row.providerStatus && HEYREACH_STATUS_LABELS[row.providerStatus]) return HEYREACH_STATUS_LABELS[row.providerStatus];
+  if (row.leadStatus && LEAD_STATUS_WORDS[row.leadStatus]) return LEAD_STATUS_WORDS[row.leadStatus];
+  return "Not enrolled yet";
+}
+
+export function linkedinTag(row: ProspectRow): { label: string; tone: TagTone } | null {
+  if (row.stopRequestedAt && !row.stoppedAt) return { label: "Stopping", tone: "amber" };
+  if (row.state === "skipped") return { label: "Skipped", tone: "neutral" };
+  if (row.state === "failed") return { label: "Couldn't add", tone: "red" };
+  if (row.state === "queued" || row.state === "filling" || row.state === "pushing") return { label: "Queued", tone: "neutral" };
+  if (row.category) return { label: row.category, tone: categoryTone(row.category) };
+  return null;
+}
+
+const ACTION_WORDS: Partial<Record<CampaignEventKind, string>> = {
+  invite_sent: "Sent connection request",
+  invite_accepted: "Connection accepted",
+  message_sent: "Sent message",
+  inmail_sent: "Sent InMail",
+  profile_viewed: "Viewed profile",
+  post_liked: "Liked post",
+  followed: "Followed",
+  replied: "Replied",
+  finished: "Finished",
+};
+
+const SAME_ACTION_MS = 2 * 60_000;
+
+export function actionAgo(iso: string, now = Date.now()) {
+  const minutes = Math.floor((now - Date.parse(iso)) / 60_000);
+  if (!Number.isFinite(minutes)) return "";
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return days === 1 ? "1 day ago" : `${days} days ago`;
+  return relativeWhen(iso, now).replace(/^about /, "");
+}
+
+export function lastActionLine(row: ProspectRow, now = Date.now()) {
+  if (row.state === "skipped" || row.state === "failed") return row.skipReason ?? null;
+  if (row.importError) return row.importError;
+  if (row.stopError) return row.stopError;
+  const known: { word: string; at: string }[] = [];
+  if (row.repliedAt) known.push({ word: "Replied", at: row.repliedAt });
+  const word = row.lastEvent ? ACTION_WORDS[row.lastEvent.kind] : undefined;
+  if (row.lastEvent && word) known.push({ word, at: row.lastEvent.at });
+  const latest = known.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0] ?? null;
+  const provider = row.lastActionAt ? Date.parse(row.lastActionAt) : NaN;
+  if (latest && (Number.isNaN(provider) || Date.parse(latest.at) >= provider - SAME_ACTION_MS)) return `${latest.word}, ${actionAgo(latest.at, now)}`;
+  if (!Number.isNaN(provider)) return `Last action, ${actionAgo(row.lastActionAt!, now)}`;
+  return null;
+}
 
 export const AUTO_ADD_LABELS: Record<AutoAdd, string> = {
   off: "Off",
@@ -91,12 +172,8 @@ export function percent(part: number | undefined, whole: number | undefined) {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)}%`;
 }
 
-export function contactedOf(stats: CampaignStats, prospects: number) {
-  return stats.contacted ?? stats.prospects ?? prospects;
-}
-
-export function campaignRates(campaign: Pick<CampaignSummary, "stats" | "prospects" | "channel">) {
-  const contacted = campaign.channel === "linkedin" ? (campaign.stats.contacted ?? campaign.stats.invites ?? campaign.prospects) : contactedOf(campaign.stats, campaign.prospects);
+export function campaignRates(campaign: Pick<CampaignSummary, "stats" | "channel">) {
+  const contacted = campaign.channel === "linkedin" ? (campaign.stats.contacted ?? campaign.stats.invites) : (campaign.stats.contacted ?? campaign.stats.prospects);
   return {
     replied: percent(campaign.stats.replied, contacted),
     positive: percent(campaign.stats.positive, contacted),
