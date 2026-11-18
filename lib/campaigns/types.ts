@@ -110,9 +110,15 @@ export type CampaignDetail = CampaignSummary & {
   capacity: SenderCapacity | null;
   syncError: string | null;
   strayConversations: number;
+  briefs: VariableBrief[];
+  addedToday: number;
 };
 
-export type SenderCapacity = { senders: number; invites: number | null };
+export type VariableBrief = { name: string; brief: string; required: boolean; maxLength: number | null };
+
+export type CampaignOption = { id: string; name: string; channel: CampaignChannel };
+
+export type SenderCapacity = { senders: number; invites: number | null; messages: number | null };
 
 export const PROSPECT_FILTERS = ["all", "replied", "skipped"] as const;
 export type ProspectFilter = (typeof PROSPECT_FILTERS)[number];

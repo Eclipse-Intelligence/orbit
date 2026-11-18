@@ -12,9 +12,12 @@ import type {
   StopReason,
 } from "@/lib/campaigns/types";
 import {
+  addHeyReachLeads,
   checkHeyReachKey,
   createHeyReachWebhook,
+  findHeyReachLead,
   HEYREACH_APP,
+  HEYREACH_PUSH_BATCH,
   HeyReachError,
   heyReachWebhookHint,
   listHeyReachAccounts,
@@ -32,8 +35,10 @@ import {
   type HeyReachLead,
 } from "@/lib/heyreach";
 import {
+  addSmartleadLeads,
   blockSmartleadAddresses,
   createSmartleadWebhook,
+  findSmartleadLead,
   listSmartleadCampaigns,
   listSmartleadCategories,
   listSmartleadLeads,
@@ -50,6 +55,7 @@ import {
   setSmartleadCampaignStatus,
   setSmartleadCategory,
   SMARTLEAD_APP,
+  SMARTLEAD_PUSH_BATCH,
   SmartleadError,
   smartleadWebhookHint,
   type SmartleadStatRow,
@@ -154,6 +160,23 @@ export type ProviderFailure = { message: string; rejectedKey: boolean; missing: 
 
 export type { WebhookHint };
 
+export type PushLead = {
+  key: string;
+  email: string | null;
+  linkedin: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  companyName: string | null;
+  website: string | null;
+  title: string | null;
+  senderId: string | null;
+  values: Record<string, string>;
+};
+
+export type PushOutcome = { taken: Set<string>; unsure: Set<string> };
+
+export type FoundLead = { externalLeadId: string | null };
+
 export type CampaignProvider = {
   id: CampaignProviderId;
   channel: CampaignChannel;
@@ -184,6 +207,11 @@ export type CampaignProvider = {
   categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
   registerWebhook(context: ProviderContext, campaignExternalId: string, url: string): Promise<string>;
   webhookHint(payload: unknown, headers: Headers): WebhookHint | null;
+  pushBatch: number;
+  valueLimit: number;
+  variableToken(name: string): string;
+  pushLeads(context: ProviderContext, campaignExternalId: string, leads: PushLead[]): Promise<PushOutcome>;
+  findLead(context: ProviderContext, campaignExternalId: string, lead: { email: string | null; linkedin: string | null }): Promise<FoundLead | null>;
 };
 
 export class LeadNotReady extends Error {
@@ -251,6 +279,22 @@ export function smartleadEvents(campaignId: string, rows: SmartleadStatRow[]): P
     }
   }
   return events;
+}
+
+function pushOutcome(leads: PushLead[], taken: number, refused: Set<string>, refusedKey: (lead: PushLead) => string | null): PushOutcome {
+  const outcome: PushOutcome = { taken: new Set(), unsure: new Set() };
+  const accepted = leads.filter((lead) => {
+    const key = refusedKey(lead);
+    return !key || !refused.has(key);
+  });
+  const all = taken >= accepted.length && accepted.length === leads.length;
+  for (const lead of leads) {
+    const key = refusedKey(lead);
+    if (key && refused.has(key)) continue;
+    if (all) outcome.taken.add(lead.key);
+    else outcome.unsure.add(lead.key);
+  }
+  return outcome;
 }
 
 export const smartleadProvider: CampaignProvider = {
@@ -365,6 +409,32 @@ export const smartleadProvider: CampaignProvider = {
   blockAddresses: (context, addresses) => blockSmartleadAddresses(context.key, addresses, context),
   registerWebhook: (context, campaignExternalId, url) => createSmartleadWebhook(context.key, campaignExternalId, url, context),
   webhookHint: (payload, headers) => smartleadWebhookHint(payload, headers.get("x-request-id")),
+  pushBatch: SMARTLEAD_PUSH_BATCH,
+  valueLimit: 2000,
+  variableToken: (name) => `{{${name}}}`,
+  async pushLeads(context, campaignExternalId, leads) {
+    const ready = leads.filter((lead) => lead.email);
+    const pushed = await addSmartleadLeads(
+      context.key,
+      campaignExternalId,
+      ready.map((lead) => ({
+        email: lead.email!,
+        firstName: lead.firstName,
+        lastName: lead.lastName,
+        companyName: lead.companyName,
+        website: lead.website,
+        linkedin: profileUrl(lead.linkedin),
+        customFields: lead.values,
+      })),
+      context,
+    );
+    return pushOutcome(ready, pushed.taken, new Set(pushed.refused), (lead) => lead.email);
+  },
+  async findLead(context, campaignExternalId, lead) {
+    if (!lead.email) return null;
+    const found = await findSmartleadLead(context.key, campaignExternalId, lead.email, context);
+    return found ? { externalLeadId: found.id } : null;
+  },
 };
 
 function heyReachProfile(lead: HeyReachLead): LeadProfile {
@@ -532,6 +602,34 @@ export const heyReachProvider: CampaignProvider = {
   webhookHint(payload) {
     const hint = heyReachWebhookHint(payload);
     return hint ? { campaignId: hint.campaignId, leadId: hint.leadId, email: null, linkedin: prospectLinkedin(hint.profileUrl), receiptKey: hint.receiptKey } : null;
+  },
+  pushBatch: HEYREACH_PUSH_BATCH,
+  valueLimit: 1000,
+  variableToken: (name) => `{${name}}`,
+  async pushLeads(context, campaignExternalId, leads) {
+    const ready = leads.filter((lead) => lead.linkedin && lead.firstName && lead.lastName);
+    const pushed = await addHeyReachLeads(
+      context.key,
+      campaignExternalId,
+      ready.map((lead) => ({
+        profileUrl: profileUrl(lead.linkedin)!,
+        firstName: lead.firstName!,
+        lastName: lead.lastName!,
+        companyName: lead.companyName,
+        position: lead.title,
+        email: lead.email,
+        accountId: lead.senderId,
+        customFields: lead.values,
+      })),
+      context,
+    );
+    return pushOutcome(ready, pushed.taken, new Set(), () => null);
+  },
+  async findLead(context, campaignExternalId, lead) {
+    const url = profileUrl(lead.linkedin);
+    if (!url) return null;
+    const found = await findHeyReachLead(context.key, campaignExternalId, url, context);
+    return found ? { externalLeadId: found.id } : null;
   },
 };
 

@@ -15,6 +15,10 @@ export async function connectedContext(workspaceId: string, providerId: string, 
   return { provider, context: { key: decryptSecret(encrypted), workspaceId, fetchImpl: options.fetchImpl, signal: options.signal } };
 }
 
+export function rejectedKeyLine(provider: Pick<CampaignProvider, "name">) {
+  return `${provider.name} rejected the key. Save a new one.`;
+}
+
 export function providerError(provider: CampaignProvider, error: unknown, fallback: string): CrmError {
   if (error instanceof CrmError) return error;
   if (error instanceof ServiceBusy) return new CrmError("rate_limited", `${provider.name} is busy. Try again in a minute.`, 429);

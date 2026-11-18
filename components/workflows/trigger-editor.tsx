@@ -230,10 +230,11 @@ export default function TriggerEditor({
             <select
               id="trigger-frequency"
               value={trigger.frequency}
-              onChange={(event) => onChange({ ...trigger, frequency: event.target.value as "daily" | "weekly" | "monthly" })}
+              onChange={(event) => onChange({ ...trigger, frequency: event.target.value as "daily" | "weekdays" | "weekly" | "monthly" })}
               className={recordSelectClass}
             >
               <option value="daily">Day</option>
+              <option value="weekdays">Weekday</option>
               <option value="weekly">Week</option>
               <option value="monthly">Month</option>
             </select>

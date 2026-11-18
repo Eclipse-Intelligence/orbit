@@ -23,7 +23,9 @@ export async function startWorkers(options: { fetchImpl?: typeof fetch } = {}) {
   const origin = siteOrigin();
   const secret = process.env.CRON_SECRET?.trim();
   if (!origin || !secret) return 0;
-  const backlog = (await query<{ count: number }>("select private.workflow_backlog(true) as count")).rows[0]?.count ?? 0;
+  const runs = (await query<{ count: number }>("select private.workflow_backlog(true) as count")).rows[0]?.count ?? 0;
+  const fills = (await query<{ count: number }>("select private.campaign_fill_backlog() as count")).rows[0]?.count ?? 0;
+  const backlog = runs + fills;
   if (backlog === 0) return 0;
   const live = (await query<{ count: number }>("select private.live_workflow_workers() as count")).rows[0]?.count ?? 0;
   const wanted = workersWanted(backlog, live);

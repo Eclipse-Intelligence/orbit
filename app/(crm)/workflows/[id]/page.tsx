@@ -14,6 +14,7 @@ import { getWorkflow, listRuns } from "@/lib/workflows/store";
 import { listAiFields } from "@/lib/ai-fields/fields";
 import { listConversations } from "@/lib/crm/chat";
 import { listSenders } from "@/lib/crm/inbox";
+import { campaignOptions } from "@/lib/crm/campaigns";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -46,7 +47,7 @@ export default async function WorkflowPage({
   if (!user) redirect("/login");
   if (!workflow) notFound();
   const query = await searchParams;
-  const [runs, boards, pipeline, members, companies, contacts, lifecycles, proposalTemplates, products, aiFields, chat, senders] = await Promise.all([
+  const [runs, boards, pipeline, members, companies, contacts, lifecycles, proposalTemplates, products, aiFields, chat, senders, campaigns] = await Promise.all([
     workflow.mine ? listRuns(user, workflow.id) : Promise.resolve([]),
     listBoards(user),
     listPipeline(user),
@@ -59,6 +60,7 @@ export default async function WorkflowPage({
     listAiFields(user).catch(() => []),
     workflow.mine ? listConversations(user).catch(() => null) : Promise.resolve(null),
     workflow.mine ? listSenders(user).catch(() => []) : Promise.resolve([]),
+    campaignOptions(user).catch(() => []),
   ]);
   const fullBoards = await Promise.all(boards.map((board) => getBoard(user, board.id)));
   return (
@@ -82,6 +84,7 @@ export default async function WorkflowPage({
         aiFields: aiFields.map((field) => ({ id: field.id, label: field.label })),
         chatRooms: (chat?.conversations ?? []).filter((conversation) => conversation.kind === "room").map((room) => ({ id: room.id, name: room.name })),
         senders: senders.map((sender) => ({ email: sender.email, primary: sender.primary })),
+        campaigns,
       }}
       records={{
         companies: companies.data.map((company) => ({ id: company.id, name: company.name })),

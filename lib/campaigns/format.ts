@@ -145,3 +145,62 @@ export function campaignSyncLine(
   if (state && !error && !campaign.backfilled) return `Reading from ${PROVIDER_NAMES[campaign.provider]}…`;
   return syncLine({ connected: Boolean(state), error, syncedAt: campaign.syncedAt }, now);
 }
+
+function count(value: number) {
+  return value.toLocaleString("en-GB");
+}
+
+function lowerStart(text: string) {
+  return /^[A-Z][a-z]/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text;
+}
+
+export type AddSummary = {
+  campaign: { name: string };
+  added: number;
+  already: number;
+  skipped: number;
+  missing: number;
+  reasons: { reason: string; count: number }[];
+};
+
+export function addedLine(result: AddSummary) {
+  const parts = [`${count(result.added)} added to ${result.campaign.name || "the campaign"}.`];
+  if (result.skipped > 0) parts.push(`${count(result.skipped)} skipped: ${result.reasons.map((item) => `${count(item.count)} ${lowerStart(item.reason)}`).join(", ")}.`);
+  if (result.already > 0) parts.push(`${count(result.already)} already in it.`);
+  if (result.missing > 0) parts.push(`${count(result.missing)} not found.`);
+  return parts.join(" ");
+}
+
+export function sequenceSteps(sequence: { step: number }[]) {
+  return new Set(sequence.map((item) => item.step)).size;
+}
+
+export function emailFit(daily: number, steps: number) {
+  return Math.floor(daily / Math.max(1, steps));
+}
+
+export function emailCapacityLine(mailboxes: number, daily: number | null, steps: number) {
+  const boxes = mailboxes === 1 ? "1 mailbox" : `${count(mailboxes)} mailboxes`;
+  if (daily === null) return `${boxes}.`;
+  const sends = `${boxes} ${mailboxes === 1 ? "sends" : "send"} ${count(daily)} a day.`;
+  if (steps < 1) return sends;
+  return `${sends} At ${steps === 1 ? "1 step" : `${count(steps)} steps`}, about ${count(emailFit(daily, steps))} new prospects a day fit.`;
+}
+
+export function overflowLine(addedToday: number, fit: number | null) {
+  if (fit === null || addedToday <= fit) return null;
+  return `Today's workflow added ${count(addedToday)}. The extra ${count(addedToday - fit)} wait for tomorrow.`;
+}
+
+export function linkedinFit(invites: number | null, messages: number | null, messageSteps: number) {
+  if (invites === null) return null;
+  if (messages === null || messageSteps < 1) return invites;
+  return Math.min(invites, Math.floor(messages / messageSteps));
+}
+
+export function linkedinCapacityLine(capacity: { senders: number; invites: number | null; messages: number | null }, messageSteps: number) {
+  const senders = capacity.senders === 1 ? "1 sender" : `${count(capacity.senders)} senders`;
+  if (capacity.invites === null) return `${senders}.`;
+  const fit = linkedinFit(capacity.invites, capacity.messages, messageSteps) ?? capacity.invites;
+  return `${senders} ${capacity.senders === 1 ? "sends" : "send"} ${count(capacity.invites)} invites a day. About ${count(fit)} new prospects a day fit.`;
+}

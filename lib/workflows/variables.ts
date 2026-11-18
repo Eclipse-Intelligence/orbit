@@ -99,6 +99,10 @@ export function conditionsPass(config: Record<string, unknown>, vars: Vars) {
 
 export type VariableOption = { path: string; label: string; group: string };
 
+export function mentionsOutreach(config: Record<string, unknown>) {
+  return /contact\.outreach/.test(JSON.stringify(config));
+}
+
 const WEB_CHECK_FIELDS: Record<string, string[]> = {
   company: ["name", "domain", "website", "industry", "sizeCategory", "lifecycle"],
   contact: ["name", "firstName", "lastName", "jobTitle", "linkedinUrl"],
@@ -145,6 +149,9 @@ const CONTACT: VariableOption[] = [
   { path: "contact.linkedinUrl", label: "LinkedIn", group: "Contact" },
   { path: "contact.id", label: "Id", group: "Contact" },
   { path: "contact.url", label: "Link in Orbit", group: "Contact" },
+  { path: "contact.outreach.email", label: "Email outreach", group: "Contact" },
+  { path: "contact.outreach.linkedin", label: "LinkedIn outreach", group: "Contact" },
+  { path: "contact.outreach.replied", label: "Replied to a campaign", group: "Contact" },
 ];
 
 const BASE: VariableOption[] = [
@@ -276,6 +283,13 @@ export function variableOptions(definition: WorkflowDefinition | null, nodeId?: 
     }
     if (step.type === "find_email") {
       options.push({ path: `steps.${step.id}.status`, label: "Check result", group }, { path: `steps.${step.id}.address`, label: "Email address", group });
+    }
+    if (step.type === "add_to_campaign") {
+      options.push(
+        { path: `steps.${step.id}.state`, label: "Result", group },
+        { path: `steps.${step.id}.campaign`, label: "Campaign", group },
+        { path: `steps.${step.id}.threadUrl`, label: "Link to the conversation", group },
+      );
     }
     if (step.type === "webhook") {
       options.push({ path: `steps.${step.id}.status`, label: "Status", group }, { path: `steps.${step.id}.response`, label: "Response", group });

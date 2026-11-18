@@ -11,6 +11,7 @@ import { companyQueryFromSearchParams } from "@/lib/crm/validation";
 import { enrichmentAvailability, getEnrichmentSettings } from "@/lib/enrichment/settings";
 import { hiddenAiFields, listAiFields, publicField } from "@/lib/ai-fields/fields";
 import { listCompanyViews } from "@/lib/crm/company-views";
+import { campaignOptions } from "@/lib/crm/campaigns";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -39,7 +40,7 @@ export default async function CompaniesPage({
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
 
-  const [listed, members, mailbox, tags, lifecycles, settings, aiFields, hidden, views, moveTargets] = await Promise.all([
+  const [listed, members, mailbox, tags, lifecycles, settings, aiFields, hidden, views, moveTargets, campaigns] = await Promise.all([
     listCompanies(user, { ...filters, relationships: true, aiFields: true }),
     listMembers(user),
     getMailbox(user),
@@ -50,6 +51,7 @@ export default async function CompaniesPage({
     hiddenAiFields(user),
     listCompanyViews(user),
     getMoveTargets(user),
+    user.scopes.includes("campaigns:write") ? campaignOptions(user).catch(() => []) : [],
   ]);
 
   const available = enrichmentAvailability();
@@ -76,6 +78,7 @@ export default async function CompaniesPage({
       hiddenAiFields={hidden}
       views={views}
       moveTargets={moveTargets}
+      campaigns={campaigns}
       viewer={{
         id: user.userId,
         name: user.fullName || user.email,

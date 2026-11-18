@@ -452,6 +452,72 @@ export async function stopHeyReachLead(key: string, campaignId: string, lead: { 
   });
 }
 
+export const HEYREACH_PUSH_BATCH = 100;
+
+export type HeyReachNewLead = {
+  profileUrl: string;
+  firstName: string;
+  lastName: string;
+  companyName: string | null;
+  position: string | null;
+  email: string | null;
+  accountId: string | null;
+  customFields: Record<string, string>;
+};
+
+export async function addHeyReachLeads(key: string, campaignId: string, leads: HeyReachNewLead[], options: HeyReachOptions = {}) {
+  if (leads.length === 0) return { taken: 0 };
+  const body = record(
+    await call(key, "/campaign/AddLeadsToCampaignV2", {
+      ...options,
+      body: {
+        campaignId: campaignNumber(campaignId),
+        accountLeadPairs: leads.slice(0, HEYREACH_PUSH_BATCH).map((lead) => ({
+          ...(lead.accountId ? { linkedInAccountId: Number.isFinite(Number(lead.accountId)) ? Number(lead.accountId) : lead.accountId } : {}),
+          lead: {
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            profileUrl: lead.profileUrl,
+            ...(lead.companyName ? { companyName: lead.companyName } : {}),
+            ...(lead.position ? { position: lead.position } : {}),
+            ...(lead.email ? { emailAddress: lead.email } : {}),
+            customUserFields: Object.entries(lead.customFields).map(([name, value]) => ({ name, value })),
+          },
+        })),
+      },
+    }),
+  );
+  const taken = (count(body.addedLeadsCount) ?? count(body.added) ?? 0) + (count(body.updatedLeadsCount) ?? count(body.updated) ?? 0);
+  return { taken };
+}
+
+function campaignIdsOf(row: Json) {
+  const ids = [
+    text(row.campaignId),
+    ...list(row.campaignIds).map(text),
+    ...list(row.campaigns).map((item) => text(record(item).id) ?? text(record(item).campaignId) ?? text(item)),
+  ];
+  return ids.filter((id): id is string => Boolean(id));
+}
+
+export async function findHeyReachLead(key: string, campaignId: string, profileUrl: string, options: HeyReachOptions = {}): Promise<{ id: string | null } | null> {
+  let body: unknown;
+  try {
+    body = await call(key, "/lead/GetLead", { ...options, body: { profileUrl } });
+  } catch (error) {
+    if (error instanceof HeyReachError && error.status === 404) return null;
+    throw error;
+  }
+  const row = record(body);
+  const profile = record(row.linkedInUserProfile ?? row.lead ?? row);
+  const id = text(row.id) ?? text(row.leadId) ?? text(profile.id);
+  const url = text(profile.profileUrl) ?? text(row.profileUrl);
+  if (!id && !url) return null;
+  const campaigns = campaignIdsOf(row);
+  if (!campaigns.includes(campaignId)) return null;
+  return { id };
+}
+
 export const HEYREACH_REPLY_EVENT = "EVERY_MESSAGE_REPLY_RECEIVED";
 
 export async function createHeyReachWebhook(key: string, campaignId: string, url: string, options: HeyReachOptions = {}) {

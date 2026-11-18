@@ -387,7 +387,7 @@ describe("campaigns through HeyReach", () => {
         ["Message", "{follow_up}"],
       ]);
       assert.deepEqual(detail.stepStats.map((row) => [row.sent, row.accepted ?? null]), [[130, 2], [1, null], [1, null]]);
-      assert.deepEqual(detail.capacity, { senders: 2, invites: 40 });
+      assert.deepEqual(detail.capacity, { senders: 2, invites: 40, messages: null });
       assert.match(detail.url ?? "", /app\.heyreach\.io\/app\/campaigns\/9001/);
       const charted = detail.days.find((day) => day.sent === 20);
       assert.equal(charted?.accepted, 8);

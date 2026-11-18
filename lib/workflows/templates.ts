@@ -210,6 +210,159 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
       [{ source: "trigger", handle: "out", target: "ai_1" }, ...moveCheckEdges()],
     ),
   },
+  {
+    key: "daily-prospecting",
+    name: "Daily prospecting",
+    description: "Find, research and add to a campaign every weekday.",
+    definition: graph(
+      { type: "schedule", frequency: "weekdays", time: "07:00" },
+      [
+        {
+          id: "ai_1",
+          type: "ai",
+          label: "Find companies",
+          config: {
+            model: "claude-sonnet-5-5",
+            webSearch: true,
+            prompt:
+              "Find 20 companies that fit our ideal customer and that we haven't written to before. Limited companies only: no sole traders or partnerships. Give each company's web domain.",
+            outputs: [{ key: "domains", type: "list", description: "Each company's web domain, such as acme.com." }],
+          },
+        },
+        { id: "loop_1", type: "loop", label: "Each company", config: { items: "{{steps.ai_1.domains}}", parallel: true, atOnce: 20 } },
+        {
+          id: "ai_2",
+          type: "ai",
+          label: "Who to write to",
+          config: {
+            model: "claude-haiku-5-5",
+            webSearch: true,
+            prompt: "Find the founder, managing director or head of the team that would buy from us at {{loop.item}}. Only name someone a public source names.",
+            outputs: [
+              { key: "companyName", type: "text", description: "The company's name." },
+              { key: "firstName", type: "text", description: "Their first name." },
+              { key: "lastName", type: "text", description: "Their last name." },
+              { key: "jobTitle", type: "text", description: "Their job title." },
+            ],
+          },
+        },
+        {
+          id: "upsert_record_1",
+          type: "upsert_record",
+          label: "Company",
+          config: { object: "company", name: "{{steps.ai_2.companyName}}", domain: "{{loop.item}}", create: true, useInRun: true },
+        },
+        {
+          id: "upsert_record_2",
+          type: "upsert_record",
+          label: "Contact",
+          config: {
+            object: "contact",
+            firstName: "{{steps.ai_2.firstName}}",
+            lastName: "{{steps.ai_2.lastName}}",
+            jobTitle: "{{steps.ai_2.jobTitle}}",
+            companyId: "{{steps.upsert_record_1.id}}",
+            tags: "Prospecting run {{today}}",
+            create: true,
+            useInRun: true,
+          },
+        },
+        { id: "find_email_1", type: "find_email", config: {} },
+        {
+          id: "ai_3",
+          type: "ai",
+          label: "Research",
+          config: {
+            model: "claude-sonnet-5-5",
+            webSearch: true,
+            prompt:
+              "Research {{company.name}} ({{company.domain}}) for a first email to {{contact.name}}, {{contact.jobTitle}}: news from the last three months, launches, hires, client wins, what they publish and who they compete with.",
+            outputs: [{ key: "research", type: "text", description: "What you found, with dates." }],
+          },
+        },
+        { id: "add_to_campaign_1", type: "add_to_campaign", config: { campaignId: "", campaignName: "", channel: "" } },
+      ],
+      [
+        { source: "trigger", handle: "out", target: "ai_1" },
+        { source: "ai_1", handle: "out", target: "loop_1" },
+        { source: "loop_1", handle: "each", target: "ai_2" },
+        { source: "ai_2", handle: "out", target: "upsert_record_1" },
+        { source: "upsert_record_1", handle: "out", target: "upsert_record_2" },
+        { source: "upsert_record_2", handle: "out", target: "find_email_1" },
+        { source: "find_email_1", handle: "out", target: "ai_3" },
+        { source: "ai_3", handle: "out", target: "add_to_campaign_1" },
+      ],
+    ),
+  },
+  {
+    key: "linkedin-then-email",
+    name: "LinkedIn, then email",
+    description: "No acceptance or reply in 7 days: add to an email campaign.",
+    definition: graph(
+      { type: "campaign_event", event: "added", channel: "linkedin" },
+      [
+        { id: "delay_1", type: "delay", label: "A week", config: { amount: 7, unit: "days" } },
+        {
+          id: "if_1",
+          type: "if",
+          label: "No acceptance or reply?",
+          config: {
+            match: "all",
+            conditions: [
+              { left: "{{contact.outreach.linkedin}}", op: "is_not", right: "accepted" },
+              { left: "{{contact.outreach.replied}}", op: "is", right: "false" },
+            ],
+          },
+        },
+        { id: "find_email_1", type: "find_email", config: {} },
+        { id: "add_to_campaign_1", type: "add_to_campaign", label: "Email campaign", config: { campaignId: "", campaignName: "", channel: "" } },
+      ],
+      [
+        { source: "trigger", handle: "out", target: "delay_1" },
+        { source: "delay_1", handle: "out", target: "if_1" },
+        { source: "if_1", handle: "true", target: "find_email_1" },
+        { source: "find_email_1", handle: "out", target: "add_to_campaign_1" },
+      ],
+    ),
+  },
+  {
+    key: "email-then-linkedin",
+    name: "Email, then LinkedIn",
+    description: "Opened twice or clicked: add to a LinkedIn campaign.",
+    definition: graph(
+      { type: "campaign_event", event: "engaged", channel: "email" },
+      [{ id: "add_to_campaign_1", type: "add_to_campaign", label: "LinkedIn campaign", config: { campaignId: "", campaignName: "", channel: "" } }],
+      [{ source: "trigger", handle: "out", target: "add_to_campaign_1" }],
+    ),
+  },
+  {
+    key: "positive-reply",
+    name: "Positive reply",
+    description: "Add to the sales board and make a task.",
+    definition: graph(
+      { type: "campaign_event", event: "positive" },
+      [
+        { id: "board_1", type: "board", label: "Sales board", config: { boardId: "", stageId: "" } },
+        {
+          id: "create_task_1",
+          type: "create_task",
+          label: "Follow up",
+          config: {
+            title: "Reply to {{contact.name}}",
+            notes: "{{campaign.category}} in {{campaign.name}}. {{campaign.threadUrl}}",
+            dueInDays: 0,
+            assignee: "owner",
+            link: "contact",
+            clickup: false,
+          },
+        },
+      ],
+      [
+        { source: "trigger", handle: "out", target: "board_1" },
+        { source: "board_1", handle: "out", target: "create_task_1" },
+      ],
+    ),
+  },
 ];
 
 function moveCheckNodes(label: string): Omit<WorkflowNode, "position">[] {

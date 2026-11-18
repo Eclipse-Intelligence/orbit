@@ -40,6 +40,8 @@ import { activeFilterCount } from "@/lib/companies";
 import { DEFAULT_COMPANY_SORT, defaultCompanyOrder, nextSort } from "@/lib/sorting";
 import { cn } from "@/lib/utils";
 import type { WorkspaceRef } from "@/lib/crm/workspaces";
+import type { CampaignOption } from "@/lib/campaigns/types";
+import { addToCampaignAction } from "@/app/(crm)/campaigns/actions";
 
 const SORTABLE: Record<string, CompanySort | undefined> = {
   name: "name",
@@ -60,6 +62,7 @@ export default function CompaniesTable({
   mailboxConnected,
   moveTargets = [],
   workspaceName = "",
+  campaigns = [],
   tags,
   filters,
   enrichment,
@@ -79,6 +82,7 @@ export default function CompaniesTable({
   mailboxConnected: boolean;
   moveTargets?: WorkspaceRef[];
   workspaceName?: string;
+  campaigns?: CampaignOption[];
   tags: TagCount[];
   filters: CompanyListQuery;
   enrichment: { company: boolean; logoClientId: string | null; fit?: boolean };
@@ -217,6 +221,7 @@ export default function CompaniesTable({
         mailboxConnected={mailboxConnected}
         extraActions={enrichment.company ? [findDetails] : []}
         move={{ kind: "company", workspaces: moveTargets, currentWorkspace: workspaceName }}
+        campaigns={{ options: campaigns, add: (campaignId, ids) => addToCampaignAction(campaignId, "company", ids) }}
         tagging={{
           tags,
           selectedTags: (ids) => [

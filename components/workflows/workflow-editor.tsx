@@ -66,6 +66,7 @@ const DEFAULTS: Record<StepType, Record<string, unknown>> = {
   find_records: { object: "contact", lifecycles: [], tag: "", owner: "", openOpportunity: "any", quietDays: "", search: "", order: "least_contacted", limit: 25, skipDays: "" },
   upsert_record: { object: "company", name: "", domain: "", website: "", tags: "", create: true, useInRun: false },
   find_email: {},
+  add_to_campaign: { campaignId: "", campaignName: "", channel: "" },
   webhook: { url: "", body: "" },
   create_proposal: { templateId: "", currency: "GBP", products: "ai", productIds: [], guidance: "", title: "" },
 };

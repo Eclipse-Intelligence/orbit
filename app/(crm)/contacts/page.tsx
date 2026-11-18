@@ -10,6 +10,7 @@ import { contactQueryFromSearchParams } from "@/lib/crm/validation";
 import { contactLookups } from "@/lib/enrichment/contacts";
 import { DEFAULT_CONTACT_SORT, defaultContactOrder } from "@/lib/sorting";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
+import { campaignOptions } from "@/lib/crm/campaigns";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -32,11 +33,12 @@ export default async function ContactsPage({
   const page = pageFromParams(params);
   filters.limit = PAGE_SIZE;
   filters.offset = pageOffset(page);
-  const [listed, mailbox, tags, moveTargets] = await Promise.all([
+  const [listed, mailbox, tags, moveTargets, campaigns] = await Promise.all([
     listContacts(user, filters),
     getMailbox(user),
     listTags(user),
     getMoveTargets(user),
+    user.scopes.includes("campaigns:write") ? campaignOptions(user).catch(() => []) : [],
   ]);
   const available = enrichmentAvailability();
   const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, listed.data.map((contact) => contact.id)) : {};
@@ -58,6 +60,7 @@ export default async function ContactsPage({
       tags={tags}
       mailboxConnected={mailbox?.status === "connected"}
       moveTargets={moveTargets}
+      campaigns={campaigns}
       enrichment={{ available, lookups }}
       view={{
         sort: filters.sort ?? DEFAULT_CONTACT_SORT,

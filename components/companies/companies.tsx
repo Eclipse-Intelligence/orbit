@@ -14,6 +14,7 @@ import { activeFilterCount } from "@/lib/companies";
 import type { Viewer } from "@/components/crm/viewer";
 import type { Company, CompanyListQuery, LifecycleCount, Member, TagCount } from "@/lib/crm/types";
 import type { WorkspaceRef } from "@/lib/crm/workspaces";
+import type { CampaignOption } from "@/lib/campaigns/types";
 
 
 type CompaniesProps = {
@@ -32,6 +33,7 @@ type CompaniesProps = {
   hiddenAiFields?: string[];
   views?: CompanyView[];
   moveTargets?: WorkspaceRef[];
+  campaigns?: CampaignOption[];
 };
 
 export default function Companies({
@@ -50,6 +52,7 @@ export default function Companies({
   hiddenAiFields = [],
   views = [],
   moveTargets = [],
+  campaigns = [],
 }: CompaniesProps) {
   const selection = useBulkSelection(
     companies.map((company) => company.id),
@@ -94,6 +97,7 @@ export default function Companies({
         selection={selection}
         mailboxConnected={mailboxConnected}
         moveTargets={moveTargets}
+        campaigns={campaigns}
         workspaceName={viewer.workspaceName}
         tags={tags}
         enrichment={enrichment}

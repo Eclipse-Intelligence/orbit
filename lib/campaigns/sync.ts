@@ -1,3 +1,4 @@
+import { rejectedKeyLine } from "@/lib/campaigns/context";
 import { randomUUID } from "node:crypto";
 import { saveThread, threadFetched } from "@/lib/campaigns/messages";
 import { campaignProvider, type CampaignProvider, type ProviderCampaign, type ProviderContext, type ProviderEvent, type ProviderLead } from "@/lib/campaigns/providers";
@@ -498,7 +499,7 @@ async function syncConnection(target: Target, options: CampaignSyncOptions, repo
     }
     if (outOfTime.aborted) return;
     const failure = provider.failure(error);
-    const message = failure?.rejectedKey ? `${provider.name} rejected the key. Save a new one.` : (failure?.message ?? `Couldn't sync ${provider.name}. Try again.`);
+    const message = failure?.rejectedKey ? rejectedKeyLine(provider) : (failure?.message ?? `Couldn't sync ${provider.name}. Try again.`);
     if (!failure) console.error(`${provider.name} sync failed`, redactedError(error));
     report.errors.push(message);
     await finish(target, message);

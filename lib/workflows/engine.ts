@@ -58,9 +58,9 @@ import {
   type Trigger,
   type WorkflowDefinition,
 } from "@/lib/workflows/definition";
-import { conditionsPass, display, render, resolve, webCheckVars, type Vars } from "@/lib/workflows/variables";
+import { conditionsPass, display, mentionsOutreach, render, resolve, webCheckVars, type Vars } from "@/lib/workflows/variables";
 import { findRecords, isRecordItem, readFindConfig, tagsFrom, upsertRecord } from "@/lib/workflows/records";
-import { ServiceBusy, withService, type Service } from "@/lib/workflows/limits";
+import { ENRICHMENT_SERVICES, ServiceBusy, withService, type Service } from "@/lib/workflows/limits";
 import { addTags, removeTags } from "@/lib/crm/tags";
 import { enrichContact, type FindProgress } from "@/lib/enrichment/contacts";
 import { verifyContactEmail } from "@/lib/enrichment/email-check";
@@ -663,7 +663,7 @@ const LONG_AI_MS = 180_000;
 export const LONG_TICK_MS = 280_000;
 
 function needsLongTime(step: Step, test: boolean) {
-  return (step.type === "ai" && step.config.webSearch === true) || (step.type === "find_email" && !test);
+  return (step.type === "ai" && step.config.webSearch === true) || ((step.type === "find_email" || step.type === "add_to_campaign") && !test);
 }
 
 function stepName(step: Step) {
@@ -999,7 +999,7 @@ async function assigneeFor(ctx: Ctx, value: unknown) {
   return isUuid(choice) ? choice : ctx.actor.userId;
 }
 
-const SIDE_EFFECTS = new Set(["create_task", "add_note", "update_record", "board", "notify", "post_to_chat", "send_email", "linear_issue", "upsert_record", "find_email", "webhook"]);
+const SIDE_EFFECTS = new Set(["create_task", "add_note", "update_record", "board", "notify", "post_to_chat", "send_email", "linear_issue", "upsert_record", "find_email", "webhook", "add_to_campaign"]);
 
 export function effectKey(stepId: string, frames: Pick<LoopFrame, "id" | "index">[] = []) {
   return [stepId, ...frames.map((frame) => `${frame.id}.${frame.index}`)].join(":");
@@ -1150,7 +1150,6 @@ async function tagStep(ctx: Ctx, step: Step, object: "company" | "contact", id: 
   return { kind: "next", output: { field: "tags", [action === "remove" ? "removed" : "added"]: tags } };
 }
 
-const PROVIDER_SERVICES: Record<ProviderId, Service> = { context: "context_dev", hunter: "hunter", enrow: "enrow", icypeas: "icypeas" };
 const BUSY_WAITS_PER_PROVIDER = 3;
 
 function providerLimits(lookup: Lookup): ProviderGate {
@@ -1158,7 +1157,7 @@ function providerLimits(lookup: Lookup): ProviderGate {
     let called = false;
     try {
       return await withService(
-        PROVIDER_SERVICES[provider],
+        ENRICHMENT_SERVICES[provider],
         () => {
           called = true;
           return run();
@@ -1242,6 +1241,40 @@ async function findEmailStep(ctx: Ctx, step: Step): Promise<StepResult> {
   if (check.verdict === "invalid") throw new ItemSkipped(`${check.email} is invalid.`, output);
   if (check.verdict !== "valid") throw new ItemSkipped(`Couldn't confirm ${check.email}.`, output);
   return { kind: "next", output };
+}
+
+async function addToCampaignStep(ctx: Ctx, step: Step): Promise<StepResult> {
+  const campaignId = str(step.config.campaignId);
+  if (!campaignId) throw new CrmError("invalid_input", "Choose a campaign.", 400);
+  const contactId = (ctx.vars.contact as { id?: string } | undefined)?.id;
+  if (!contactId) throw new ItemSkipped("This run has no contact to add.", { state: "skipped", reason: "No contact" });
+  const { addProspects } = await import("@/lib/campaigns/prospects");
+  const { addOneNow } = await import("@/lib/campaigns/push");
+  const added = await addProspects(ctx.actor, campaignId, [contactId], provenance(ctx, step), { runId: ctx.run.id });
+  const row = added.prospects[0];
+  if (!row) throw new ItemSkipped("This contact isn't in this workspace.", { state: "skipped", reason: "Not in this workspace" });
+  const output = (state: string, reason: string | null) => ({
+    state,
+    reason,
+    campaign: added.campaign.name,
+    channel: added.campaign.channel,
+    prospectId: row.prospectId,
+    threadUrl: link(campaignThreadPath(row.prospectId)),
+  });
+  if (row.outcome === "skipped") throw new ItemSkipped(row.skipReason ?? "Skipped", output("skipped", row.skipReason));
+  if (row.outcome === "already" && !row.mine) throw new ItemSkipped("Already in this campaign", output(row.state, "Already in this campaign"));
+  const done = await addOneNow(ctx.actor, row.prospectId, `run:${ctx.run.id}`, { fetchImpl: ctx.fetchImpl, deadline: ctx.deadline, runSteps: ctx.vars.steps });
+  if (done.state === "pushed") return { kind: "next", output: output("pushed", null) };
+  if (done.state === "skipped") throw new ItemSkipped(done.reason ?? "Skipped", output("skipped", done.reason));
+  if (done.state === "failed") throw new CrmError("upstream_error", done.reason ?? "Couldn't add this person. Try again.", 502);
+  throw new CrmError("upstream_error", "Couldn't finish adding this person. Try again.", 502, { retry: true });
+}
+
+async function loadOutreach(ctx: Ctx) {
+  const contact = ctx.vars.contact as Record<string, unknown> | undefined;
+  if (!contact || typeof contact.id !== "string") return;
+  const { contactOutreach } = await import("@/lib/campaigns/prospects");
+  contact.outreach = await contactOutreach(ctx.actor, contact.id);
 }
 
 async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
@@ -1439,6 +1472,8 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
     }
     case "find_email":
       return findEmailStep(ctx, step);
+    case "add_to_campaign":
+      return addToCampaignStep(ctx, step);
     case "webhook":
       return postWebhook(ctx, step);
     case "create_proposal":
@@ -1956,6 +1991,7 @@ async function runOnce(runId: string, ownerId: string, workspaceId: string, opti
     let done: Effect | null = null;
     try {
       await applyLoopRecord(ctx, state);
+      if (mentionsOutreach(step.config)) await loadOutreach(ctx);
       input = renderedInput(step, step.type === "decide" ? webCheckVars(vars) : vars);
       result = await runStepAction(ctx, step);
       if (state.retried) state.retried = null;
@@ -2110,6 +2146,7 @@ export async function runWorkflowTick(options: TickOptions = {}) {
   const running = new Set<Promise<void>>();
   let processed = 0;
   let drained = false;
+  let fillsDrained = options.long !== true;
   for (;;) {
     if (!drained && running.size < most && Date.now() < deadline - STEP_RESERVE_MS) {
       const wanted = most - running.size;
@@ -2133,9 +2170,28 @@ export async function runWorkflowTick(options: TickOptions = {}) {
       }
       if (claimed.rows.length > 0) continue;
     }
+    if (!fillsDrained && running.size < most && deadline - Date.now() >= LONG_AI_MS + STEP_RESERVE_MS) {
+      const { claimFillBatch, runFillBatch } = await import("@/lib/campaigns/push");
+      const batch = await claimFillBatch();
+      if (batch) {
+        const task: Promise<void> = runFillBatch(batch, { deadline, fetchImpl: options.fetchImpl })
+          .then(
+            () => undefined,
+            (error) => console.error("Campaign fill failed", error),
+          )
+          .finally(() => {
+            running.delete(task);
+            processed += 1;
+          });
+        running.add(task);
+        continue;
+      }
+      fillsDrained = true;
+    }
     if (running.size === 0) break;
     await Promise.race(running);
     drained = false;
+    fillsDrained = options.long !== true;
   }
   return { dispatched, scheduled, processed };
 }

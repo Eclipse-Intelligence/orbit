@@ -35,6 +35,7 @@ export type BuilderOptions = {
   aiFields?: { id: string; label: string }[];
   chatRooms?: { id: string; name: string }[];
   senders?: { email: string; primary: boolean }[];
+  campaigns?: { id: string; name: string; channel: "email" | "linkedin" }[];
 };
 
 export function matchLifecycleOption(options: BuilderOptions["lifecycles"], value: string) {
@@ -778,6 +779,43 @@ export default function StepConfig({
     }
     case "find_email":
       return <p className="caption-style text-subtle leading-[1.4]">Stops here when no valid email is found.</p>;
+    case "add_to_campaign": {
+      const campaigns = options.campaigns ?? [];
+      const chosen = str(c.campaignId);
+      const missing = chosen && !campaigns.some((item) => item.id === chosen);
+      const group = (channel: "email" | "linkedin", label: string) => {
+        const items = campaigns.filter((item) => item.channel === channel);
+        return items.length > 0 ? (
+          <optgroup label={label}>
+            {items.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name || "Untitled campaign"}
+              </option>
+            ))}
+          </optgroup>
+        ) : null;
+      };
+      return (
+        <div className="flex flex-col gap-3">
+          <Select
+            id={`${step.id}-campaign`}
+            label="Campaign"
+            value={chosen}
+            onChange={(value) => {
+              const picked = campaigns.find((item) => item.id === value);
+              update({ ...c, campaignId: value, campaignName: picked?.name ?? "", channel: picked?.channel ?? "" });
+            }}
+            className="sm:w-72"
+          >
+            <option value="">Choose a campaign</option>
+            {missing && <option value={chosen}>{str(c.campaignName) || "Campaign not found"}</option>}
+            {group("email", "Email")}
+            {group("linkedin", "LinkedIn")}
+          </Select>
+          <p className="caption-style text-subtle leading-[1.4]">Skips customers, open opportunities, people you&apos;ve written to or met, and Do not contact.</p>
+        </div>
+      );
+    }
     case "webhook":
       return (
         <div className="flex flex-col gap-3">

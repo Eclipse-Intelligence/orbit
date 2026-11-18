@@ -441,6 +441,76 @@ export async function setSmartleadCategory(key: string, campaignId: string, lead
   });
 }
 
+export const SMARTLEAD_PUSH_BATCH = 400;
+
+export type SmartleadNewLead = {
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  companyName: string | null;
+  website: string | null;
+  linkedin: string | null;
+  customFields: Record<string, string>;
+};
+
+export type SmartleadPush = { taken: number; refused: string[] };
+
+const REFUSED_LISTS = ["invalid_emails", "unsubscribed_leads", "blocked_leads", "duplicate_leads", "bounced_leads", "skipped_leads"];
+
+function refusedAddresses(body: Json) {
+  const found = new Set<string>();
+  for (const name of REFUSED_LISTS) {
+    for (const item of list(body[name])) {
+      const address = text(item) ?? text(record(item).email);
+      if (address) found.add(address.toLowerCase());
+    }
+  }
+  return [...found];
+}
+
+export async function addSmartleadLeads(key: string, campaignId: string, leads: SmartleadNewLead[], options: SmartleadOptions = {}): Promise<SmartleadPush> {
+  if (leads.length === 0) return { taken: 0, refused: [] };
+  const body = record(
+    await call(key, `/campaigns/${encodeURIComponent(campaignId)}/leads`, {
+      ...options,
+      body: {
+        lead_list: leads.slice(0, SMARTLEAD_PUSH_BATCH).map((lead) => ({
+          email: lead.email,
+          first_name: lead.firstName ?? "",
+          last_name: lead.lastName ?? "",
+          company_name: lead.companyName ?? "",
+          website: lead.website ?? "",
+          linkedin_profile: lead.linkedin ?? "",
+          custom_fields: lead.customFields,
+        })),
+        settings: {
+          ignore_global_block_list: false,
+          ignore_unsubscribe_list: false,
+          ignore_duplicate_leads_in_other_campaign: false,
+        },
+      },
+    }),
+  );
+  const taken = (count(body.upload_count) ?? 0) + (count(body.already_added_to_campaign) ?? 0);
+  return { taken, refused: refusedAddresses(body) };
+}
+
+export async function findSmartleadLead(key: string, campaignId: string, email: string, options: SmartleadOptions = {}): Promise<{ id: string } | null> {
+  let body: unknown;
+  try {
+    body = await call(key, "/leads/", { ...options, query: { email } });
+  } catch (error) {
+    if (error instanceof SmartleadError && error.status === 404) return null;
+    throw error;
+  }
+  const row = record(Array.isArray(body) ? body[0] : body);
+  const id = text(row.id);
+  if (!id) return null;
+  const memberships = list(row.lead_campaign_data).map(record);
+  if (!memberships.some((item) => text(item.campaign_id) === campaignId)) return null;
+  return { id };
+}
+
 export const SMARTLEAD_BLOCK_BATCH = 100;
 
 export async function blockSmartleadAddresses(key: string, addresses: string[], options: SmartleadOptions = {}) {

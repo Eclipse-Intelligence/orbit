@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { query } from "@/lib/db/pool";
+import type { ProviderId } from "@/lib/enrichment/providers";
 
 export const SERVICES = ["llm", "web_search", "parallel", "context_dev", "mindcase", "enrow", "icypeas", "hunter", "smartlead", "smartlead_stats", "heyreach"] as const;
 export type Service = (typeof SERVICES)[number];
+
+export const ENRICHMENT_SERVICES: Record<ProviderId, Service> = { context: "context_dev", hunter: "hunter", enrow: "enrow", icypeas: "icypeas" };
 
 type Window = { limit: number; seconds: number };
 type ServiceLimit = { windows: Window[]; atOnce: number | null };

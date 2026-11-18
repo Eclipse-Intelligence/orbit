@@ -5,6 +5,14 @@ import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Checkbox } from "@/components/_ui/checkbox";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/_ui/dropdown-menu";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -17,6 +25,7 @@ import MoveWorkspaceDialog, { type MoveKind } from "@/components/crm/move-worksp
 import { TagOptions, TagPopover } from "@/components/crm/tags";
 import type { BulkActionResult } from "@/app/(crm)/bulk";
 import type { BulkSelection } from "@/hooks/use-bulk-selection";
+import type { CampaignOption } from "@/lib/campaigns/types";
 import { downloadCsv, type CsvCell } from "@/lib/csv";
 import type { Recipient } from "@/lib/crm/personalise";
 import type { TagCount } from "@/lib/crm/types";
@@ -126,6 +135,16 @@ type BulkTagging = {
   remove: (ids: string[], tag: string) => Promise<BulkActionResult>;
 };
 
+export type BulkCampaigns = {
+  options: CampaignOption[];
+  add: (campaignId: string, ids: string[]) => Promise<{ error?: string; message?: string }>;
+};
+
+const CAMPAIGN_GROUPS: { channel: CampaignOption["channel"]; label: string }[] = [
+  { channel: "email", label: "Email" },
+  { channel: "linkedin", label: "LinkedIn" },
+];
+
 export type BulkExtraAction = {
   key: string;
   label: string;
@@ -147,6 +166,7 @@ export default function BulkActions({
   tagging,
   extraActions = [],
   move,
+  campaigns,
 }: {
   selection: BulkSelection;
   noun: [string, string];
@@ -160,6 +180,7 @@ export default function BulkActions({
   tagging?: BulkTagging;
   extraActions?: BulkExtraAction[];
   move?: { kind: MoveKind; workspaces: WorkspaceRef[]; currentWorkspace: string };
+  campaigns?: BulkCampaigns;
 }) {
   const router = useRouter();
   const [extraBusy, setExtraBusy] = useState<{ key: string; text: string } | null>(null);
@@ -167,7 +188,7 @@ export default function BulkActions({
   const [confirmExtra, setConfirmExtra] = useState<{ action: BulkExtraAction; ids: string[] } | null>(null);
   const [tagMenu, setTagMenu] = useState(false);
   const [moving, setMoving] = useState(false);
-  const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | "extra" | null>(
+  const [busy, setBusy] = useState<"archive" | "undo" | "export" | "email" | "tag" | "extra" | "campaign" | null>(
     null,
   );
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -274,6 +295,26 @@ export default function BulkActions({
     } finally {
       setBusy(null);
       setExtraBusy(null);
+    }
+  }
+
+  async function runCampaign(campaignId: string) {
+    const chosen = ids;
+    if (!campaigns || chosen.length === 0) return;
+    setBusy("campaign");
+    try {
+      const result = await campaigns.add(campaignId, chosen);
+      if (result.error || !result.message) {
+        show(result.error ?? "Couldn't add to the campaign. Try again.", "error");
+        return;
+      }
+      selection.clear();
+      show(result.message, "status");
+      router.refresh();
+    } catch {
+      show("Couldn't add to the campaign. Try again.", "error");
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -402,6 +443,30 @@ export default function BulkActions({
                         placeholder="Add or remove a tag"
                       />
                     </TagPopover>
+                  )}
+                  {campaigns && campaigns.options.length > 0 && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="secondary" size="sm" disabled={busy !== null}>
+                          {busy === "campaign" ? "Adding…" : "Add to campaign"}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-64">
+                        {CAMPAIGN_GROUPS.filter((group) => campaigns.options.some((item) => item.channel === group.channel)).map((group, index) => (
+                          <div key={group.channel}>
+                            {index > 0 && <DropdownMenuSeparator />}
+                            <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
+                            {campaigns.options
+                              .filter((item) => item.channel === group.channel)
+                              .map((item) => (
+                                <DropdownMenuItem key={item.id} onSelect={() => void runCampaign(item.id)}>
+                                  <span className="truncate">{item.name || "Untitled campaign"}</span>
+                                </DropdownMenuItem>
+                              ))}
+                          </div>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   )}
                   {extraActions.map((action) => (
                     <Button

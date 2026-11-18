@@ -6,7 +6,9 @@ import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
 import { handleCampaignEvents } from "@/lib/campaigns/events";
-import { campaignThreadPath } from "@/lib/campaigns/format";
+import { addedLine, campaignThreadPath } from "@/lib/campaigns/format";
+import { addCompanyContacts, addProspects, saveCampaignVariables } from "@/lib/campaigns/prospects";
+import type { VariableBrief } from "@/lib/campaigns/types";
 import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused, type RemoveResult } from "@/lib/campaigns/manage";
 import { replyToProspect, type ReplyResult } from "@/lib/campaigns/replies";
 import { linkCampaignSender } from "@/lib/campaigns/senders";
@@ -196,5 +198,32 @@ export async function liftDoNotContactAction(target: DoNotContactTarget): Promis
     return {};
   } catch (error) {
     return { error: errorText(error, "Couldn't lift. Try again.") };
+  }
+}
+
+export async function addToCampaignAction(
+  campaignId: string,
+  kind: "contact" | "company",
+  ids: string[],
+): Promise<{ error?: string; message?: string }> {
+  const user = await requireUser();
+  try {
+    const provenance = { operation: "add_to_campaign", source: "web" };
+    const result = kind === "company" ? await addCompanyContacts(user, campaignId, ids, provenance) : await addProspects(user, campaignId, ids, provenance);
+    revalidateCampaign(campaignId);
+    return { message: addedLine(result) };
+  } catch (error) {
+    return { error: errorText(error, "Couldn't add to the campaign. Try again.") };
+  }
+}
+
+export async function saveCampaignVariablesAction(campaignId: string, variables: VariableBrief[]): Promise<{ error?: string; briefs?: VariableBrief[] }> {
+  const user = await requireUser();
+  try {
+    const briefs = await saveCampaignVariables(user, campaignId, variables, { operation: "save_campaign_variables", source: "web" });
+    revalidateCampaign(campaignId);
+    return { briefs };
+  } catch (error) {
+    return { error: errorText(error, "Couldn't save. Try again.") };
   }
 }

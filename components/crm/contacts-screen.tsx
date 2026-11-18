@@ -39,6 +39,8 @@ import type { ContactLookups } from "@/lib/enrichment/contacts";
 import type { ContactField } from "@/lib/enrichment/providers";
 import type { EnrichmentAvailability } from "@/lib/enrichment/settings";
 import type { WorkspaceRef } from "@/lib/crm/workspaces";
+import type { CampaignOption } from "@/lib/campaigns/types";
+import { addToCampaignAction } from "@/app/(crm)/campaigns/actions";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
@@ -86,6 +88,7 @@ export default function ContactsScreen({
   enrichment,
   view,
   moveTargets = [],
+  campaigns = [],
 }: {
   viewer: Viewer;
   contacts: Contact[];
@@ -98,6 +101,7 @@ export default function ContactsScreen({
   enrichment: { available: EnrichmentAvailability; lookups: ContactLookups };
   view: ContactListView;
   moveTargets?: WorkspaceRef[];
+  campaigns?: CampaignOption[];
 }) {
   const router = useRouter();
   const tagHref = useTagHref();
@@ -265,6 +269,7 @@ export default function ContactsScreen({
         mailboxConnected={mailboxConnected}
         extraActions={finders}
         move={{ kind: "contact", workspaces: moveTargets, currentWorkspace: viewer.workspaceName }}
+        campaigns={{ options: campaigns, add: (campaignId, ids) => addToCampaignAction(campaignId, "contact", ids) }}
         tagging={{
           tags,
           selectedTags: (ids) => [
