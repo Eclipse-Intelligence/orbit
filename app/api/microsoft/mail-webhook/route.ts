@@ -1,5 +1,7 @@
 import { after } from "next/server";
 import { memberActor } from "@/lib/crm/conversations";
+import { withActor } from "@/lib/crm/context";
+import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { classifyCapture } from "@/lib/mail/capture-filter";
 import { prepareMail } from "@/lib/mail/prepare";
@@ -11,27 +13,60 @@ export const maxDuration = 60;
 
 type Notice = { subscriptionId?: unknown; clientState?: unknown };
 
+type Target = { actor: UserActor; sourceIds: string[] };
+
+const BUDGET_MS = 55_000;
+const SYNC_MS = 15_000;
+const SHORTEST_SYNC_MS = 3_000;
 const RETRIES = 3;
 const RETRY_MS = 4_000;
 
-async function syncOwner(subscriptionId: string, clientState: string) {
-  const owners = await query<Parameters<typeof memberActor>[0]>("select * from private.mail_subscription_owner($1, $2)", [subscriptionId, clientState]);
-  const owner = owners.rows[0];
-  if (!owner) return;
-  const actor = memberActor(owner);
-  for (let attempt = 0; attempt < RETRIES; attempt += 1) {
-    const report = await syncMail(actor, { budgetMs: 15_000, backfill: false });
-    if (report.sources > 0) {
-      if (report.workflowEvents > 0) await runWorkflowTick({ budgetMs: 15_000 }).catch((error) => console.error("Workflow tick failed", error));
-      if (report.stored > 0) await prepareMail(actor, { deadline: Date.now() + 30_000 }).catch((error) => console.error("Preparing mail failed", error));
-      if (report.stored > 0) {
-        await classifyCapture(actor, { deadline: Date.now() + 10_000 }).catch((error) =>
-          console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
-        );
-      }
-      return;
+function left(deadline: number) {
+  return deadline - Date.now();
+}
+
+async function targetsFor(pairs: [string, string][]) {
+  const targets = new Map<string, Target>();
+  for (const [subscriptionId, clientState] of pairs) {
+    const owners = await query<Parameters<typeof memberActor>[0]>("select * from private.mail_subscription_owner($1, $2)", [subscriptionId, clientState]);
+    const owner = owners.rows[0];
+    if (!owner) continue;
+    const actor = memberActor(owner);
+    const sources = await withActor(actor, (db) =>
+      db.query<{ id: string }>("select id from crm.mail_sources where graph_subscription_id = $1 and user_id = $2", [subscriptionId, actor.userId]),
+    );
+    const key = `${actor.userId}:${actor.workspaceId}`;
+    const target = targets.get(key) ?? { actor, sourceIds: [] };
+    for (const row of sources.rows) if (!target.sourceIds.includes(row.id)) target.sourceIds.push(row.id);
+    targets.set(key, target);
+  }
+  return [...targets.values()].filter((target) => target.sourceIds.length > 0);
+}
+
+async function syncTarget({ actor, sourceIds }: Target, deadline: number) {
+  let pending = sourceIds;
+  let stored = 0;
+  let workflowEvents = 0;
+  for (let attempt = 0; pending.length > 0 && attempt < RETRIES; attempt += 1) {
+    if (attempt > 0) {
+      if (left(deadline) < RETRY_MS + SHORTEST_SYNC_MS) break;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
     }
-    await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+    const report = await syncMail(actor, { deadline: Math.min(deadline, Date.now() + SYNC_MS), backfill: false, sourceIds: pending });
+    stored += report.stored;
+    workflowEvents += report.workflowEvents;
+    pending = pending.filter((id) => report.busy.includes(id));
+  }
+  if (workflowEvents > 0 && left(deadline) > SHORTEST_SYNC_MS) {
+    await runWorkflowTick({ budgetMs: Math.min(15_000, left(deadline)) }).catch((error) => console.error("Workflow tick failed", error));
+  }
+  if (stored > 0 && left(deadline) > SHORTEST_SYNC_MS) {
+    await prepareMail(actor, { deadline: Math.min(deadline, Date.now() + 30_000) }).catch((error) => console.error("Preparing mail failed", error));
+  }
+  if (stored > 0 && left(deadline) > SHORTEST_SYNC_MS) {
+    await classifyCapture(actor, { deadline: Math.min(deadline, Date.now() + 10_000) }).catch((error) =>
+      console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
+    );
   }
 }
 
@@ -46,13 +81,19 @@ export async function POST(request: Request) {
     }
   }
   if (pairs.size > 0) {
+    const deadline = Date.now() + BUDGET_MS;
     after(async () => {
-      for (const [subscriptionId, clientState] of [...pairs].slice(0, 10)) {
-        try {
-          await syncOwner(subscriptionId, clientState);
-        } catch (error) {
-          console.error("Mail webhook sync failed", error);
+      try {
+        for (const target of await targetsFor([...pairs].slice(0, 10))) {
+          if (left(deadline) < SHORTEST_SYNC_MS) break;
+          try {
+            await syncTarget(target, deadline);
+          } catch (error) {
+            console.error("Mail webhook sync failed", error);
+          }
         }
+      } catch (error) {
+        console.error("Mail webhook sync failed", error);
       }
     });
   }

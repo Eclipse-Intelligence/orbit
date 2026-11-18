@@ -79,8 +79,15 @@ export class GraphMailError extends Error {
     message: string,
     readonly status: number,
     readonly code: string = "",
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
+  }
+}
+
+export class GraphOutOfTime extends Error {
+  constructor() {
+    super("Ran out of time waiting for Microsoft.");
   }
 }
 
@@ -130,12 +137,35 @@ export function sendOutcomeUnknown(error: unknown) {
 
 const GRAPH_RETRIES = 2;
 const RETRY_WAIT_MAX_MS = 5_000;
+const CALL_TIMEOUT_MS = 30_000;
+const SHORTEST_CALL_MS = 1_000;
+const RETRIED_READ_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+export type GraphLimit = { deadline?: number };
+
+function retryAfterHeaderMs(response: Pick<Response, "headers">) {
+  const header = response.headers.get("retry-after")?.trim();
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : null;
+  const date = Date.parse(header);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
 
 export function retryWaitMs(response: Pick<Response, "headers">, attempt: number) {
-  const header = response.headers.get("retry-after");
-  const seconds = header === null || header.trim() === "" ? Number.NaN : Number(header);
-  const wanted = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 1000 * 2 ** attempt;
+  const wanted = retryAfterHeaderMs(response) ?? 1000 * 2 ** attempt;
   return wanted <= RETRY_WAIT_MAX_MS ? wanted : null;
+}
+
+function fitsBefore(deadline: number | undefined, wait: number) {
+  return deadline === undefined || Date.now() + wait + SHORTEST_CALL_MS < deadline;
+}
+
+function callTimeout(deadline: number | undefined) {
+  if (deadline === undefined) return CALL_TIMEOUT_MS;
+  const left = deadline - Date.now();
+  if (left < SHORTEST_CALL_MS) throw new GraphOutOfTime();
+  return Math.min(CALL_TIMEOUT_MS, left);
 }
 
 function graphUrl(url: string) {
@@ -152,22 +182,33 @@ async function graphJson<T>(
   fetchImpl: typeof fetch,
   prefer?: string,
   write?: { method: "PATCH" | "POST" | "DELETE"; body?: unknown },
+  limit: GraphLimit = {},
 ): Promise<T> {
+  const target = graphUrl(url);
   let response: Response;
   for (let attempt = 0; ; attempt += 1) {
-    response = await fetchImpl(graphUrl(url), {
-      method: write?.method ?? "GET",
-      headers: {
-        authorization: `Bearer ${token}`,
-        prefer: [prefer, 'IdType="ImmutableId"'].filter(Boolean).join(", "),
-        ...(write ? { "content-type": "application/json" } : {}),
-      },
-      body: write && write.body !== undefined ? JSON.stringify(write.body) : undefined,
-      signal: AbortSignal.timeout(30_000),
-    });
-    const throttled = response.status === 429 || (response.status === 503 && !write);
-    const wait = throttled && attempt < GRAPH_RETRIES ? retryWaitMs(response, attempt) : null;
-    if (wait === null) break;
+    const timeout = callTimeout(limit.deadline);
+    try {
+      response = await fetchImpl(target, {
+        method: write?.method ?? "GET",
+        headers: {
+          authorization: `Bearer ${token}`,
+          prefer: [prefer, 'IdType="ImmutableId"'].filter(Boolean).join(", "),
+          ...(write ? { "content-type": "application/json" } : {}),
+        },
+        body: write && write.body !== undefined ? JSON.stringify(write.body) : undefined,
+        signal: AbortSignal.timeout(timeout),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "TimeoutError" && timeout < CALL_TIMEOUT_MS) throw new GraphOutOfTime();
+      const wait = 1000 * 2 ** attempt;
+      if (write || attempt >= GRAPH_RETRIES || !fitsBefore(limit.deadline, wait)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      continue;
+    }
+    const retried = response.status === 429 || (!write && RETRIED_READ_STATUSES.has(response.status));
+    const wait = retried && attempt < GRAPH_RETRIES ? retryWaitMs(response, attempt) : null;
+    if (wait === null || !fitsBefore(limit.deadline, wait)) break;
     await response.body?.cancel().catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
@@ -188,7 +229,8 @@ async function graphJson<T>(
       `${code} ${body.error?.message ?? ""}`.trim(),
     );
   }
-  throw new GraphMailError((body.error?.message || `Microsoft answered ${response.status}.`).slice(0, 240), response.status, code);
+  const retryAfter = response.status === 429 || response.status === 503 ? retryAfterHeaderMs(response) : null;
+  throw new GraphMailError((body.error?.message || `Microsoft answered ${response.status}.`).slice(0, 240), response.status, code, retryAfter);
 }
 
 function address(value: GraphRecipient | null | undefined): MailAddress | null {
@@ -207,8 +249,15 @@ function focusedFrom(value: string | null | undefined) {
   return null;
 }
 
-export async function fetchMicrosoftClassifications(url: string, token: string, fetchImpl: typeof fetch = fetch) {
-  const page = await graphJson<{ value?: { id: string; inferenceClassification?: string | null }[]; "@odata.nextLink"?: string }>(url, token, fetchImpl);
+export async function fetchMicrosoftClassifications(url: string, token: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}) {
+  const page = await graphJson<{ value?: { id: string; inferenceClassification?: string | null }[]; "@odata.nextLink"?: string }>(
+    url,
+    token,
+    fetchImpl,
+    undefined,
+    undefined,
+    limit,
+  );
   return {
     items: (page.value ?? []).flatMap((item) => {
       const focused = focusedFrom(item.inferenceClassification);
@@ -253,22 +302,22 @@ function normaliseMessage(message: GraphMessage): ProviderMessage {
   };
 }
 
-async function folderPages(url: string, token: string, fetchImpl: typeof fetch) {
+async function folderPages(url: string, token: string, fetchImpl: typeof fetch, limit: GraphLimit) {
   const folders: GraphFolder[] = [];
   let next: string | null = url;
   while (next && folders.length < FOLDER_LIMIT) {
-    const page: { value?: GraphFolder[]; "@odata.nextLink"?: string } = await graphJson(next, token, fetchImpl);
+    const page: { value?: GraphFolder[]; "@odata.nextLink"?: string } = await graphJson(next, token, fetchImpl, undefined, undefined, limit);
     folders.push(...(page.value ?? []));
     next = page["@odata.nextLink"] ?? null;
   }
   return folders;
 }
 
-export async function listMicrosoftFolders(token: string, fetchImpl: typeof fetch = fetch): Promise<ProviderFolder[]> {
+export async function listMicrosoftFolders(token: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}): Promise<ProviderFolder[]> {
   const roles = new Map<string, MailRole>();
   for (const [name, role] of WELL_KNOWN) {
     try {
-      const found = await graphJson<{ id: string }>(`${GRAPH}/me/mailFolders/${name}?$select=id`, token, fetchImpl);
+      const found = await graphJson<{ id: string }>(`${GRAPH}/me/mailFolders/${name}?$select=id`, token, fetchImpl, undefined, undefined, limit);
       roles.set(found.id, role);
     } catch (error) {
       if (error instanceof GraphMailError && error.status === 404) continue;
@@ -276,7 +325,7 @@ export async function listMicrosoftFolders(token: string, fetchImpl: typeof fetc
     }
   }
   const all: GraphFolder[] = [];
-  let level = await folderPages(`${GRAPH}/me/mailFolders?$top=100&$select=${FOLDER_FIELDS}`, token, fetchImpl);
+  let level = await folderPages(`${GRAPH}/me/mailFolders?$top=100&$select=${FOLDER_FIELDS}`, token, fetchImpl, limit);
   for (let depth = 0; depth < FOLDER_DEPTH && level.length > 0 && all.length < FOLDER_LIMIT; depth += 1) {
     all.push(...level);
     const next: GraphFolder[] = [];
@@ -287,6 +336,7 @@ export async function listMicrosoftFolders(token: string, fetchImpl: typeof fetc
           `${GRAPH}/me/mailFolders/${encodeURIComponent(folder.id)}/childFolders?$top=100&$select=${FOLDER_FIELDS}`,
           token,
           fetchImpl,
+          limit,
         )),
       );
     }
@@ -306,12 +356,14 @@ export function initialDeltaUrl(folderId: string) {
   return `${GRAPH}/me/mailFolders/${encodeURIComponent(folderId)}/messages/delta?$select=${MESSAGE_FIELDS}&$orderby=receivedDateTime%20desc`;
 }
 
-export async function fetchMicrosoftDelta(url: string, token: string, fetchImpl: typeof fetch = fetch): Promise<DeltaPage> {
+export async function fetchMicrosoftDelta(url: string, token: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}): Promise<DeltaPage> {
   const page = await graphJson<{ value?: GraphMessage[]; "@odata.nextLink"?: string; "@odata.deltaLink"?: string }>(
     url,
     token,
     fetchImpl,
     `odata.maxpagesize=${PAGE_SIZE}, outlook.body-content-type="html"`,
+    undefined,
+    limit,
   );
   const messages: ProviderMessage[] = [];
   const removed: string[] = [];
@@ -328,16 +380,25 @@ export async function fetchMicrosoftDelta(url: string, token: string, fetchImpl:
   };
 }
 
-export async function fetchMicrosoftMessageFolder(token: string, messageId: string, fetchImpl: typeof fetch = fetch) {
+export function outOfReach(error: unknown) {
+  if (!(error instanceof GraphMailError)) return false;
+  if (error.status === 404) return true;
+  return error.status === 403 && !ADMIN_CONSENT.test(error.code) && !AUTH_DENIED.test(error.code);
+}
+
+export async function fetchMicrosoftMessageFolder(token: string, messageId: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}) {
   try {
     const found = await graphJson<{ parentFolderId?: string | null }>(
       `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=id,parentFolderId`,
       token,
       fetchImpl,
+      undefined,
+      undefined,
+      limit,
     );
     return typeof found.parentFolderId === "string" && found.parentFolderId ? found.parentFolderId : null;
   } catch (error) {
-    if (error instanceof GraphMailError && error.status === 404) return null;
+    if (outOfReach(error)) return null;
     throw error;
   }
 }
@@ -531,6 +592,7 @@ export async function createMailSubscription(
   token: string,
   input: { notificationUrl: string; clientState: string },
   fetchImpl: typeof fetch = fetch,
+  limit: GraphLimit = {},
 ) {
   const expirationDateTime = new Date(Date.now() + MAIL_SUBSCRIPTION_MINUTES * 60_000).toISOString();
   const created = await graphJson<{ id: string; expirationDateTime?: string }>(`${GRAPH}/subscriptions`, token, fetchImpl, undefined, {
@@ -543,16 +605,16 @@ export async function createMailSubscription(
       clientState: input.clientState,
       latestSupportedTlsVersion: "v1_2",
     },
-  });
+  }, limit);
   return { id: created.id, expiresAt: created.expirationDateTime ?? expirationDateTime };
 }
 
-export async function renewMailSubscription(token: string, id: string, fetchImpl: typeof fetch = fetch) {
+export async function renewMailSubscription(token: string, id: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}) {
   const expirationDateTime = new Date(Date.now() + MAIL_SUBSCRIPTION_MINUTES * 60_000).toISOString();
   const renewed = await graphJson<{ expirationDateTime?: string }>(`${GRAPH}/subscriptions/${encodeURIComponent(id)}`, token, fetchImpl, undefined, {
     method: "PATCH",
     body: { expirationDateTime },
-  });
+  }, limit);
   return renewed.expirationDateTime ?? expirationDateTime;
 }
 

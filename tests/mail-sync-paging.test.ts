@@ -279,7 +279,7 @@ describe("mail sync across many pages", () => {
       Date.now = realNow;
     }
     assert.deepEqual(stopped.errors, []);
-    assert.equal(lookups, 4, "one batch of four, then it stops");
+    assert.equal(lookups, 1, "no lookup starts once the deadline has passed");
     assert.equal(stopped.removed, 0);
     const held = await admin.query("select 1 from crm.mail_messages where provider_message_id = any($1::text[])", [gone]);
     assert.equal(held.rowCount, 10);
