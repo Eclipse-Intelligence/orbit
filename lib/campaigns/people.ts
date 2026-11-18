@@ -16,18 +16,29 @@ const KEYS_SQL = `select p.id, p.contact_id, p.email, p.linkedin, c.normalized_e
   left join crm.contacts c on c.id = p.contact_id
   where p.workspace_id = $1`;
 
-const ROLE_MAILBOXES = new Set(["info", "hello", "sales", "contact", "office", "admin", "team", "enquiries", "support"]);
+const ROLE_MAILBOXES = new Set([
+  "info", "hello", "hi", "mail", "sales", "contact", "office", "admin", "team", "enquiries", "enquiry", "support",
+  "marketing", "accounts", "billing", "careers", "jobs", "press",
+]);
 
 export function roleMailbox(email: string) {
   return ROLE_MAILBOXES.has(email.split("@")[0]?.trim().toLowerCase() ?? "");
 }
 
+export function usableEmails(emails: string[], other: { linkedins: number; contacts: number }, options: { keepWhenAlone: boolean }) {
+  const personal = emails.filter((email) => !roleMailbox(email));
+  const excluded = personal.length > 0 || other.linkedins > 0 || other.contacts > 0;
+  if (!excluded) return emails;
+  if (options.keepWhenAlone && personal.length === 0 && other.linkedins === 0) return emails;
+  return personal;
+}
+
 function keysOf(row: PersonKeys) {
   const keys = [`p:${row.id}`];
   if (row.contact_id) keys.push(`c:${row.contact_id}`);
-  const otherKey = Boolean(row.contact_id || row.linkedin || row.normalized_linkedin);
-  for (const email of [row.email, row.normalized_email]) if (email && !(otherKey && roleMailbox(email))) keys.push(`e:${email}`);
-  for (const linkedin of [row.linkedin, row.normalized_linkedin]) if (linkedin) keys.push(`l:${linkedin}`);
+  const linkedins = present([row.linkedin, row.normalized_linkedin]);
+  for (const email of usableEmails(present([row.email, row.normalized_email]), { linkedins: linkedins.length, contacts: row.contact_id ? 1 : 0 }, { keepWhenAlone: false })) keys.push(`e:${email}`);
+  for (const linkedin of linkedins) keys.push(`l:${linkedin}`);
   return keys;
 }
 
@@ -83,16 +94,24 @@ export function present(values: (string | null | undefined)[]) {
 }
 
 export function doNotContactKeys(group: PersonKeys[]) {
+  const contactIds = present(group.map((row) => row.contact_id));
+  const linkedins = present(group.flatMap((row) => [row.linkedin, row.normalized_linkedin]));
+  const emails = usableEmails(present(group.flatMap((row) => [row.email, row.normalized_email])), { linkedins: linkedins.length, contacts: contactIds.length }, { keepWhenAlone: true });
+  return { contactIds, emails, linkedins };
+}
+
+export function doNotContactStatusKeys(group: PersonKeys[]) {
+  const keys = doNotContactKeys(group);
   return {
-    contactIds: present(group.map((row) => row.contact_id)),
-    emails: present(group.flatMap((row) => [row.email, row.normalized_email])),
-    linkedins: present(group.flatMap((row) => [row.linkedin, row.normalized_linkedin])),
+    contactIds: keys.contactIds,
+    emails: present([...keys.emails, ...group.map((row) => row.email)]),
+    linkedins: present([...keys.linkedins, ...group.map((row) => row.linkedin)]),
   };
 }
 
 export type Suppressed = { contactIds: Set<string>; emails: Set<string>; linkedins: Set<string> };
 
 export function suppressedPerson(group: PersonKeys[], suppressed: Suppressed) {
-  const keys = doNotContactKeys(group);
+  const keys = doNotContactStatusKeys(group);
   return keys.contactIds.some((id) => suppressed.contactIds.has(id)) || keys.emails.some((email) => suppressed.emails.has(email)) || keys.linkedins.some((linkedin) => suppressed.linkedins.has(linkedin));
 }

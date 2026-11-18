@@ -9,7 +9,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import { suppressedAddresses, suppressedLine, suppressedNames } from "@/lib/crm/suppressions";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
-import { doNotContactKeys, personKeys, present, type PersonKeys } from "@/lib/campaigns/people";
+import { doNotContactKeys, doNotContactStatusKeys, personKeys, present, type PersonKeys } from "@/lib/campaigns/people";
 import { redactedError } from "@/lib/upstream";
 import { signalCampaigns } from "@/lib/sync-signals";
 import { ServiceBusy } from "@/lib/workflows/limits";
@@ -31,7 +31,7 @@ export type DoNotContactTarget = { contactId: string } | { prospectId: string };
 
 export type DoNotContact = { reason: "manual" | "unsubscribed"; setAt: string; setBy: string | null; line: string };
 
-type Person = { contactId: string | null; contactIds: string[]; prospectId: string | null; name: string; emails: string[]; linkedins: string[] };
+type Person = { contactId: string | null; contactIds: string[]; prospectId: string | null; name: string; emails: string[]; linkedins: string[]; reached: { emails: string[]; linkedins: string[] } };
 
 type SuppressOutcome = { changed: boolean; stopping: (StopRow & { provider: CampaignProviderId })[]; skipped: number };
 
@@ -43,13 +43,15 @@ async function groupOf(db: Db, workspaceId: string, prospectId: string | null): 
   return prospectId ? personKeys(db, workspaceId, prospectId) : [];
 }
 
-function withGroup(person: Omit<Person, "contactIds">, group: PersonKeys[]): Person {
+function withGroup(person: Pick<Person, "contactId" | "prospectId" | "name">, group: PersonKeys[]): Person {
   const keys = doNotContactKeys(group);
+  const reached = doNotContactStatusKeys(group);
   return {
     ...person,
     contactIds: present([person.contactId, ...keys.contactIds]),
-    emails: present([...person.emails, ...keys.emails]),
-    linkedins: present([...person.linkedins, ...keys.linkedins]),
+    emails: keys.emails,
+    linkedins: keys.linkedins,
+    reached: { emails: reached.emails, linkedins: reached.linkedins },
   };
 }
 
@@ -64,10 +66,8 @@ async function personOf(db: Db, actor: Actor, target: DoNotContactTarget): Promi
     );
     const row = found.rows[0];
     if (!row) throw notFound("contact");
-    return withGroup(
-      { contactId: row.id, prospectId: null, name: row.name, emails: present([row.normalized_email]), linkedins: present([row.normalized_linkedin]) },
-      await groupOf(db, actor.workspaceId, row.prospect_id),
-    );
+    const own: PersonKeys = { id: `contact:${row.id}`, contact_id: row.id, email: null, linkedin: null, normalized_email: row.normalized_email, normalized_linkedin: row.normalized_linkedin };
+    return withGroup({ contactId: row.id, prospectId: null, name: row.name }, [own, ...(await groupOf(db, actor.workspaceId, row.prospect_id))]);
   }
   if (!isUuid(target.prospectId)) throw notFound("prospect");
   const found = await db.query<{ id: string; contact_id: string | null; email: string | null; linkedin: string | null; normalized_email: string | null; normalized_linkedin: string | null; name: string }>(
@@ -84,16 +84,7 @@ async function personOf(db: Db, actor: Actor, target: DoNotContactTarget): Promi
   );
   const row = found.rows[0];
   if (!row) throw notFound("prospect");
-  return withGroup(
-    {
-      contactId: row.contact_id,
-      prospectId: row.id,
-      name: row.name,
-      emails: present([row.email, row.normalized_email]),
-      linkedins: present([row.linkedin, row.normalized_linkedin]),
-    },
-    await groupOf(db, actor.workspaceId, row.id),
-  );
+  return withGroup({ contactId: row.contact_id, prospectId: row.id, name: row.name }, await groupOf(db, actor.workspaceId, row.id));
 }
 
 function dayMonth(at: Date) {
@@ -105,7 +96,7 @@ export function doNotContactLine(reason: DoNotContact["reason"], setAt: Date, se
   return setBy ? `Set by ${setBy}, ${dayMonth(setAt)}.` : `Set ${dayMonth(setAt)}.`;
 }
 
-async function statusOf(db: Db, workspaceId: string, person: Pick<Person, "contactIds" | "emails" | "linkedins">): Promise<DoNotContact | null> {
+async function statusOf(db: Db, workspaceId: string, person: Pick<Person, "contactIds" | "reached">): Promise<DoNotContact | null> {
   const found = await db.query<{ reason: DoNotContact["reason"]; created_at: Date; set_by: string | null }>(
     `select s.reason, s.created_at, coalesce(nullif(btrim(pr.full_name), ''), pr.email, a.name) as set_by
      from crm.suppressions s
@@ -115,7 +106,7 @@ async function statusOf(db: Db, workspaceId: string, person: Pick<Person, "conta
        and (s.contact_id = any($2::uuid[]) or (s.kind = 'email' and s.value = any($3::text[])) or (s.kind = 'linkedin' and s.value = any($4::text[])))
      order by s.created_at, s.id
      limit 1`,
-    [workspaceId, person.contactIds, person.emails, person.linkedins],
+    [workspaceId, person.contactIds, person.reached.emails, person.reached.linkedins],
   );
   const row = found.rows[0];
   if (!row) return null;
@@ -280,9 +271,9 @@ export async function setDoNotContact(actor: Actor, target: DoNotContactTarget, 
     throw new CrmError("invalid_input", "Add an email address or LinkedIn profile first.", 400);
   }
   const provenance = web("set_do_not_contact", options.provenance);
-  const saved = await query<{ result: SuppressOutcome }>("select private.suppress_person($1, $2, $3::text[], $4::text[], 'manual', $5, $6, $7, null, null, $8::jsonb) as result", [
+  const saved = await query<{ result: SuppressOutcome }>("select private.suppress_person_group($1, $2::uuid[], $3::text[], $4::text[], 'manual', $5, $6, $7, $8::jsonb) as result", [
     actor.workspaceId,
-    person.contactId,
+    person.contactIds,
     person.emails,
     person.linkedins,
     (provenance.source ?? (actor.type === "agent" ? "agent" : "web")).slice(0, 40),
@@ -304,9 +295,9 @@ export async function liftDoNotContact(actor: Actor, target: DoNotContactTarget,
   if (actor.type === "agent") throw new CrmError("forbidden", ONLY_A_PERSON_LIFTS, 403);
   assertScope(actor.scopes, "campaigns:write");
   const person = await withActor(actor, (db) => personOf(db, actor, target));
-  const gone = await query<{ lifted: { id: string; kind: string; value: string; reason: string }[] }>("select private.suppression_lift($1, $2, $3::text[], $4::text[], $5::jsonb) as lifted", [
+  const gone = await query<{ lifted: { id: string; kind: string; value: string; reason: string }[] }>("select private.suppression_lift_person($1, $2::uuid[], $3::text[], $4::text[], $5::jsonb) as lifted", [
     actor.workspaceId,
-    person.contactId,
+    person.contactIds,
     person.emails,
     person.linkedins,
     JSON.stringify(auditOf(actor, SUPPRESSION_AUDIT_EVENTS.lifted, person, web("lift_do_not_contact", options.provenance), {})),

@@ -7,7 +7,7 @@ import { runTool } from "@/lib/assistant/tools";
 import { readCampaigns } from "@/lib/campaigns/agent";
 import { adoptSearch, conversationFilters, conversationsHref, readConversationView } from "@/lib/campaigns/conversation-view";
 import { conversationsWaiting, listConversations, markConversationRead, needsReplyNow, previewText, type Conversation } from "@/lib/campaigns/conversations";
-import { groupPeople } from "@/lib/campaigns/people";
+import { doNotContactKeys, groupPeople, usableEmails } from "@/lib/campaigns/people";
 import { onlySenderMessage, replyToProspect } from "@/lib/campaigns/replies";
 import { liftDoNotContact, setDoNotContact } from "@/lib/campaigns/suppression";
 import { getProspectThread } from "@/lib/campaigns/threads";
@@ -18,7 +18,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { registerCampaignTools } from "@/server/mcp/campaigns";
-import { createAgent, createUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 let owner: UserActor;
 let ann: UserActor;
@@ -451,5 +451,98 @@ describe("campaign conversations", () => {
     assert.equal(adoptSearch({ value: "pri", sent: "pri", text: "priya" }), false, "the echo of what was sent");
     assert.equal(adoptSearch({ value: "", sent: "pri", text: "priya" }), false, "still typing, so the stale value is ignored");
     assert.equal(adoptSearch({ value: "", sent: "pri", text: "pri " }), true);
+  });
+
+  const snapshot = async () => {
+    const rows = await sql<{ id: string; stopping: boolean; stop_reason: string | null; state: string }>(
+      "select id, stop_requested_at is not null as stopping, stop_reason, state from crm.campaign_prospects where workspace_id = $1 order by id",
+      [owner.workspaceId],
+    );
+    const flags = await Promise.all(rows.map(async (row) => Boolean((await getProspectThread(owner, row.id)).doNotContact)));
+    return new Map(rows.map((row, index) => [row.id, JSON.stringify([row.stopping, row.stop_reason, row.state, flags[index]])]));
+  };
+
+  it("never changes anyone outside the person's group when Do not contact is set or lifted through a shared role mailbox", async () => {
+    const shop = await campaign(owner, "Shared inbox one", "email", "em-role-1");
+    const other = await campaign(owner, "Shared inbox two", "email", "em-role-2");
+    const ann = await contact(owner, "Ann", "Acme", "info@acme.test", "https://www.linkedin.com/in/annacme");
+    const annEmail = await prospect(owner, { campaignId: shop, lead: "role-ann-em", contactId: ann.id, email: "info@acme.test" });
+    const annLinkedin = await prospect(owner, { campaignId: ids.longevity, lead: "role-ann-li", contactId: ann.id, linkedin: ann.linkedin, sender: "acct-li-1" });
+    const bob = await prospect(owner, { campaignId: other, lead: "role-bob", email: "info@acme.test", linkedin: "linkedin.com/in/bobacme", name: ["Bob", "Acme"] });
+    const group = (await getProspectThread(owner, annEmail)).campaigns.map((item) => item.prospectId).sort();
+    assert.deepEqual(group, [annEmail, annLinkedin].sort());
+    assert.ok(!(await getProspectThread(owner, bob)).campaigns.some((item) => group.includes(item.prospectId)));
+    const before = await snapshot();
+    await setDoNotContact(owner, { prospectId: annEmail });
+    const during = await snapshot();
+    for (const [id, state] of before) {
+      if (group.includes(id)) assert.notEqual(during.get(id), state, "Ann is stopped and flagged");
+      else assert.equal(during.get(id), state, `${id === bob ? "Bob" : id} is untouched`);
+    }
+    assert.deepEqual(await sql("select kind, value from crm.suppressions where workspace_id = $1 and value like '%acme%' order by kind", [owner.workspaceId]), [{ kind: "linkedin", value: ann.linkedin }]);
+    await setDoNotContact(owner, { contactId: ann.id });
+    assert.deepEqual(await snapshot(), during, "setting it from the contact covers the same people");
+    await liftDoNotContact(owner, { prospectId: annLinkedin });
+    assert.deepEqual(await snapshot(), before);
+  });
+
+  it("never lets a lift clear a stop on a prospect that still reads as Do not contact", async () => {
+    const desk = await campaign(owner, "Front desk", "email", "em-desk-1");
+    const x = await prospect(owner, { campaignId: desk, lead: "desk-x", email: "office@corp-desk.test", name: ["Xia", "Desk"] });
+    const y = await prospect(owner, { campaignId: desk, lead: "desk-y", email: "office@corp-desk.test", linkedin: "linkedin.com/in/yudesk", name: ["Yu", "Desk"] });
+    assert.ok(!(await getProspectThread(owner, x)).campaigns.some((item) => item.prospectId === y), "a role mailbox doesn't make them one person");
+    const read = (state: string) => JSON.parse(state) as [boolean, string | null, string, boolean];
+    const lift = async (prospectId: string) => {
+      const before = await snapshot();
+      await liftDoNotContact(owner, { prospectId });
+      for (const [id, state] of await snapshot()) {
+        const [stopping, , , flagged] = read(state);
+        if (flagged && read(before.get(id)!)[0]) assert.ok(stopping, `${id} still reads as Do not contact, so the lift keeps it stopped`);
+      }
+    };
+    await setDoNotContact(owner, { prospectId: x });
+    assert.ok((await getProspectThread(owner, y)).doNotContact, "Yu's own address is on the list");
+    await setDoNotContact(owner, { prospectId: y });
+    await lift(y);
+    assert.deepEqual(await sql("select stop_reason from crm.campaign_prospects where id = $1", [y]), [{ stop_reason: "suppressed" }]);
+    await lift(x);
+    assert.deepEqual(await sql("select stop_reason, stop_requested_at from crm.campaign_prospects where id = any($1::uuid[]) order by id", [[x, y].sort()]), [
+      { stop_reason: null, stop_requested_at: null },
+      { stop_reason: null, stop_requested_at: null },
+    ]);
+  });
+
+  it("stops and lifts a second contact's prospect that has no email or LinkedIn of its own", async () => {
+    const pair = await campaign(owner, "Two records", "email", "em-pair-1");
+    const first = await contact(owner, "Rae", "Pair", "rae@pair.test");
+    const second = await contact(owner, "Rae", "Pair-Two", "rae.two@pair.test", "https://www.linkedin.com/in/raepair");
+    const p1 = await prospect(owner, { campaignId: pair, lead: "pair-1", contactId: first.id, email: first.email });
+    await prospect(owner, { campaignId: pair, lead: "pair-bridge", email: first.email, linkedin: second.linkedin, name: ["Rae", "Pair"] });
+    const bare = await prospect(owner, { campaignId: ids.spring, lead: "pair-bare", contactId: second.id, name: ["Rae", "Pair"] });
+    assert.ok((await getProspectThread(owner, p1)).campaigns.some((item) => item.prospectId === bare));
+    await setDoNotContact(owner, { prospectId: p1 });
+    assert.deepEqual(await sql("select stop_reason from crm.campaign_prospects where id = $1", [bare]), [{ stop_reason: "suppressed" }]);
+    await sql("insert into crm.suppressions (workspace_id, contact_id, kind, value, reason, source) values ($1, $2, 'email', 'old@pair.test', 'manual', 'test')", [owner.workspaceId, second.id]);
+    await liftDoNotContact(owner, { prospectId: p1 });
+    assert.deepEqual(await sql("select value from crm.suppressions where workspace_id = $1 and contact_id = any($2::uuid[])", [owner.workspaceId, [first.id, second.id]]), []);
+    assert.deepEqual(await sql("select stop_reason from crm.campaign_prospects where id = $1", [bare]), [{ stop_reason: null }]);
+  });
+
+  it("uses one role mailbox rule for linking and for Do not contact", () => {
+    for (const local of ["info", "hello", "hi", "mail", "sales", "contact", "office", "admin", "team", "enquiries", "enquiry", "support", "marketing", "accounts", "billing", "careers", "jobs", "press"]) {
+      assert.deepEqual(usableEmails([`${local}@acme.test`], { linkedins: 1, contacts: 0 }, { keepWhenAlone: true }), [], local);
+    }
+    assert.deepEqual(usableEmails(["info@acme.test", "ann@acme.test"], { linkedins: 0, contacts: 0 }, { keepWhenAlone: true }), ["ann@acme.test"]);
+    assert.deepEqual(usableEmails(["info@acme.test"], { linkedins: 0, contacts: 1 }, { keepWhenAlone: true }), ["info@acme.test"], "kept when nothing else could be suppressed");
+    assert.deepEqual(usableEmails(["info@acme.test"], { linkedins: 0, contacts: 1 }, { keepWhenAlone: false }), [], "never links through it");
+    const key = (id: string, email: string | null, linkedin: string | null, contact: string | null = null) => ({ id, contact_id: contact, email, linkedin, normalized_email: null, normalized_linkedin: null });
+    assert.deepEqual(doNotContactKeys([key("a", "info@acme.test", "linkedin.com/in/ann")]), { contactIds: [], emails: [], linkedins: ["linkedin.com/in/ann"] });
+    assert.deepEqual(doNotContactKeys([key("a", "info@acme.test", null, "c1")]), { contactIds: ["c1"], emails: ["info@acme.test"], linkedins: [] });
+  });
+
+  it("runs its migration twice", async () => {
+    await reapplyMigrationsFrom("20270219100000_campaign_conversations.sql");
+    await reapplyMigrationsFrom("20270219100000_campaign_conversations.sql");
+    assert.ok((await listConversations(owner, { needsReply: false })).conversations.length > 0);
   });
 });
