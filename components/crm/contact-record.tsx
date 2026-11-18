@@ -69,6 +69,7 @@ export default function ContactRecord({
   campaignLines = [],
   campaignRows = [],
   doNotContact = null,
+  blockLine = null,
   sendCaution = null,
   canSetDoNotContact = false,
   meetings,
@@ -92,6 +93,7 @@ export default function ContactRecord({
   campaignLines?: CampaignLine[];
   campaignRows?: CampaignTimelineRow[];
   doNotContact?: DoNotContact | null;
+  blockLine?: string | null;
   sendCaution?: string | null;
   canSetDoNotContact?: boolean;
   meetings: MeetingsSummary | null;
@@ -268,6 +270,7 @@ export default function ContactRecord({
                 )}
                 <CampaignLines lines={campaignLines} />
                 {doNotContact && <DoNotContactStatus status={doNotContact} target={{ contactId: shown.id }} canLift={canSetDoNotContact} />}
+                {!doNotContact && blockLine && <span className="caption-style text-subtle">{blockLine}</span>}
                 {relationship && (
                   <span className="flex flex-col gap-1">
                     <span className="flex flex-wrap items-center gap-2">

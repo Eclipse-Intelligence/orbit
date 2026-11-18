@@ -17,7 +17,13 @@ export type StopRow = {
   linkedin: string | null;
   sender_id: string | null;
   stop_reason: StopReason | null;
+  pushed_at?: Date | null;
+  leads_at?: Date | null;
 };
+
+export function absenceProven(row: Pick<StopRow, "pushed_at" | "leads_at">) {
+  return Boolean(row.pushed_at && row.leads_at && row.leads_at.getTime() > row.pushed_at.getTime());
+}
 
 export async function leadAtProvider(
   workspaceId: string,
@@ -27,7 +33,7 @@ export async function leadAtProvider(
   prospectId: string,
   lead: LeadRef,
 ): Promise<LeadRef | null> {
-  if (lead.externalLeadId) return lead;
+  if (lead.externalLeadId || !provider.needsLeadId) return lead;
   const found = await provider.findLead(context, campaignExternalId, { email: lead.email, linkedin: lead.linkedin });
   if (!found) return null;
   if (found.externalLeadId) await query("select private.campaign_prospect_lead_id($1, $2, $3)", [workspaceId, prospectId, found.externalLeadId]);
@@ -53,6 +59,7 @@ export async function stopAtProvider(workspaceId: string, provider: CampaignProv
       senderId: row.sender_id,
     });
     if (!lead) {
+      if (!absenceProven(row)) return false;
       await confirm(workspaceId, row.prospect_id, "stopped");
       return true;
     }
@@ -78,7 +85,7 @@ export async function stopAtProvider(workspaceId: string, provider: CampaignProv
 }
 
 export async function processStops(workspaceId: string, provider: CampaignProvider, context: ProviderContext, deadline?: number) {
-  const pending = await query<StopRow>("select * from private.campaign_pending_stops($1, $2, $3)", [workspaceId, provider.id, STOP_BATCH]);
+  const pending = await query<StopRow>("select * from private.campaign_stops_due($1, $2, $3)", [workspaceId, provider.id, STOP_BATCH]);
   let stopped = 0;
   for (const row of pending.rows) {
     if (!timeLeft(deadline, STOP_RESERVE_MS)) break;

@@ -94,6 +94,9 @@ async function noteUnreadThread(provider: CampaignProvider, event: EventDetail, 
   await query("select private.campaign_sync_update($1, $2::jsonb)", [event.campaign_id, JSON.stringify({ syncError: line })]).catch((error) =>
     console.error("Couldn't note an unread campaign reply", redactedError(error)),
   );
+  await query("select private.campaign_thread_unread($1, $2)", [event.prospect_id, line]).catch((error) =>
+    console.error("Couldn't keep an unread campaign reply", redactedError(error)),
+  );
   return line;
 }
 
@@ -221,7 +224,10 @@ export async function handleCampaignEvents(campaign: SyncedCampaign, events: Syn
   let syncError: string | undefined;
   for (const event of details) {
     if (event.kind === "added") {
-      await fileAdded(actor, event).catch((error) => console.error("Couldn't file a campaign add on the timeline", redactedError(error)));
+      await fileAdded(actor, event).catch((error) => {
+        console.error("Couldn't file a campaign add on the timeline", redactedError(error));
+        retry.push(event.id);
+      });
       continue;
     }
     if (event.kind === "unsubscribed" || event.kind === "bounced") {

@@ -146,9 +146,9 @@ function emailTarget(prospect: ProspectRef, messages: StoredTarget[]): ReplyTarg
   };
 }
 
-async function refresh(provider: CampaignProvider, context: ProviderContext, prospect: ProspectRef) {
+async function refresh(provider: CampaignProvider, context: ProviderContext, prospect: ProspectRef, actor: UserActor) {
   const messages = await provider.readThread(context, { externalId: prospect.campaign_external_id }, leadRef(prospect));
-  await saveThread(prospect.id, messages, { replyEvents: provider.repliesFromThreads, handled: false });
+  await saveThread(prospect.id, messages, { replyEvents: provider.repliesFromThreads, handled: false, fileFor: actor });
   await threadFetched(prospect.id);
 }
 
@@ -191,7 +191,7 @@ export async function replyToProspect(
       : emailTarget(read.prospect, read.messages);
   if (!target) {
     try {
-      await refresh(provider, context, read.prospect);
+      await refresh(provider, context, read.prospect, actor);
     } catch (error) {
       throw providerError(provider, error, "Couldn't read the conversation. Try again.");
     }

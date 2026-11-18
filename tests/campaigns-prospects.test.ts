@@ -19,11 +19,13 @@ import type { Contact, UserActor } from "@/lib/crm/types";
 import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { definitionFromInput, type WorkflowDefinition } from "@/lib/workflows/definition";
+import { removeProspect } from "@/lib/campaigns/manage";
 import { runWorkflowTick } from "@/lib/workflows/engine";
+import { withService } from "@/lib/workflows/limits";
 import { createWorkflow, getRunSteps, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import { STARTER_TEMPLATES } from "@/lib/workflows/templates";
 import { fakeHeyReach, fakeSmartlead, type FakeAccount, type FakeHeyReachAccount } from "./campaigns-fake";
-import { createAgent, createUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const SL_A = "sl_key_prospects_alpha_01";
 const SL_B = "sl_key_prospects_bravo_02";
@@ -50,6 +52,7 @@ const state = {
   foundElsewhere: new Set<string>(),
   badEmail: null as string | null,
   llmStatus: null as number | null,
+  gate: null as null | { seenPush: boolean | null },
 };
 
 function json(body: unknown, status = 200) {
@@ -80,6 +83,15 @@ function router(accounts: FakeAccount[], heyreach: FakeHeyReachAccount[]): typeo
       const user = String((body?.messages as { content: string }[] | undefined)?.[1]?.content ?? "");
       state.llm.push(user);
       state.webSearch.push(Boolean(body?.web_search_options));
+      if (user.includes("FAIRNESS") && state.gate) {
+        const pushesAtStart = state.pushes.length;
+        for (let waited = 0; waited < 40 && state.pushes.length === pushesAtStart && state.gate.seenPush === null; waited += 1) {
+          if (state.pushes.some((push) => JSON.stringify(push.body).includes("fair@fill.test"))) break;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        state.gate.seenPush = state.pushes.some((push) => JSON.stringify(push.body).includes("fair@fill.test"));
+        return json({ model: "test", choices: [{ message: { content: JSON.stringify({ text: "ok" }) }, finish_reason: "stop" }] });
+      }
       if (state.llmStatus) return json({ error: { message: "Down" } }, state.llmStatus);
       return json({ model: "test", choices: [{ message: { content: JSON.stringify(fillReply(user)) }, finish_reason: "stop" }] });
     }
@@ -271,9 +283,8 @@ describe("adding prospects", () => {
   useServerlessPool();
 
   it("runs its migration twice", async () => {
-    const text = readFileSync("supabase/migrations/20270211100000_campaign_prospects.sql", "utf8");
-    await applyMigrationSql(getAdminPool(), text);
-    await applyMigrationSql(getAdminPool(), text);
+    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270211100000_campaign_prospects.sql", "utf8"));
+    await reapplyMigrationsFrom("20270211100000_campaign_prospects.sql");
   });
 
   it("skips everyone the rules say not to contact, and says why", async () => {
@@ -829,6 +840,77 @@ describe("adding prospects", () => {
     assert.equal(invented.problem, "Nothing found for hook");
     const long = judgeFill(input, { values: [{ name: "hook", value: "x".repeat(41), sources: [] }] }, []);
     assert.equal(long.problem, "hook was too long");
+  });
+
+  it("waits for a workflow add's backoff, and ends the item with the row's reason when the person is removed while it waits", async () => {
+    await contact(owner, "wren", { firstName: "Wren", lastName: "Wait", email: "wren@wait.test" });
+    const id = await workflow(stepFlow());
+    state.smartleadFails = 503;
+    const run = await startRun(owner, id, { test: false, record: { type: "contact", id: people.wren.id }, fetchImpl });
+    for (let round = 0; round < 2; round += 1) await runWorkflowTick({ fetchImpl, budgetMs: 230_000, long: true, limit: 5 });
+    const waiting = await sql<{ status: string; resume_at: Date | null }>("select status, resume_at from crm.workflow_runs where id = $1", [run.runId]);
+    assert.equal(waiting[0].status, "waiting");
+    const wait = (waiting[0].resume_at?.getTime() ?? 0) - Date.now();
+    assert.ok(wait > 4 * 60_000 && wait < 6 * 60_000, `the run waits for the row's five minute backoff, not a minute (${wait} ms)`);
+    const prospect = (await sql<{ id: string; fill_attempts: number }>("select id, fill_attempts from crm.campaign_prospects where contact_id = $1", [people.wren.id]))[0];
+    assert.equal(prospect.fill_attempts, 1);
+
+    state.smartleadFails = null;
+    await removeProspect(owner, prospect.id, { fetchImpl });
+    const pushesBefore = pushesFor("wren@wait.test").length;
+    await sql("update crm.workflow_runs set resume_at = now() - interval '1 second' where id = $1", [run.runId]);
+    for (let round = 0; round < 2; round += 1) await runWorkflowTick({ fetchImpl, budgetMs: 230_000, long: true, limit: 5 });
+    const ended = await sql<{ status: string; skip_reason: string | null }>("select status, skip_reason from crm.workflow_runs where id = $1", [run.runId]);
+    assert.deepEqual(ended, [{ status: "succeeded", skip_reason: "Add to campaign: Removed" }]);
+    const rows = await sql<{ state: string; skip_reason: string | null }>("select state, skip_reason from crm.campaign_prospects where contact_id = $1", [people.wren.id]);
+    assert.deepEqual(rows, [{ state: "skipped", skip_reason: "Removed" }], "the step never adds the person again when it resumes");
+    assert.equal(pushesFor("wren@wait.test").length, pushesBefore, "and never pushes them");
+  });
+
+  it("keeps a share of the Smartlead budget for sync when pushes use theirs up", async () => {
+    const savedLimit = process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR;
+    process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR = "1";
+    try {
+      await withService("smartlead_push", async () => undefined, { scope: owner.workspaceId });
+      await contact(owner, "bud", { firstName: "Bud", lastName: "Get", email: "bud@budget.test" });
+      const bud = (await addProspects(owner, emailCampaign, [people.bud.id], { operation: "test" })).prospects[0];
+      const pushesBefore = state.pushes.length;
+      await runWorkflowTick({ fetchImpl, budgetMs: 230_000, long: true, limit: 5 });
+      assert.equal(state.pushes.length, pushesBefore, "no push goes over the push budget");
+      const waiting = await sql<{ state: string; fill_attempts: number }>("select state, fill_attempts from crm.campaign_prospects where id = $1", [bud.prospectId]);
+      assert.deepEqual(waiting, [{ state: "filling", fill_attempts: 0 }], "a busy budget costs no attempt");
+      await assert.doesNotReject(smartleadProvider.listCampaigns({ key: SL_A, workspaceId: owner.workspaceId, fetchImpl }), "sync still has its share");
+    } finally {
+      if (savedLimit === undefined) delete process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR;
+      else process.env.WORKFLOW_LIMIT_SMARTLEAD_PUSH_PER_HOUR = savedLimit;
+    }
+    await sql("update crm.campaign_prospects set state = 'skipped', skip_reason = 'test', claimed_by = null where contact_id = $1", [people.bud.id]);
+  });
+
+  it("starts a fill batch in every long tick before taking runs, so bulk adds aren't starved", async () => {
+    await contact(owner, "fair", { firstName: "Fair", lastName: "Fill", email: "fair@fill.test" });
+    const parsed = definitionFromInput({
+      trigger: { type: "manual", object: "contact" },
+      nodes: [{ id: "ai_1", type: "ai", config: { prompt: "FAIRNESS check.", outputs: [{ key: "text", type: "text" }] } }],
+      edges: [{ source: "trigger", handle: "out", target: "ai_1" }],
+    });
+    assert.ok("definition" in parsed, JSON.stringify(parsed));
+    const id = await workflow(parsed.definition);
+    state.gate = { seenPush: false };
+    const first = await startRun(owner, id, { test: false, record: { type: "contact", id: people.fair.id }, fetchImpl });
+    await sql("update crm.campaign_prospects set state = 'skipped', skip_reason = 'test', claimed_by = null where state in ('queued', 'filling', 'pushing')");
+    await addProspects(owner, emailCampaign, [people.fair.id], { operation: "test" });
+    await sql(
+      "insert into crm.workflow_runs (workspace_id, workflow_id, owner_id, status, test, definition, event) select workspace_id, workflow_id, owner_id, 'queued', false, definition, event from crm.workflow_runs where id = $1",
+      [first.runId],
+    );
+    state.gate = { seenPush: null };
+    try {
+      await runWorkflowTick({ fetchImpl, budgetMs: 230_000, long: true, limit: 1 });
+      assert.equal(state.gate.seenPush, true, "the fill ran before the run that would have held the only slot");
+    } finally {
+      state.gate = null;
+    }
   });
 
   it("ships templates that save", () => {

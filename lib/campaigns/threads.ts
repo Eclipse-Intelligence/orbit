@@ -358,7 +358,7 @@ export async function refreshProspectThread(actor: Actor, prospectId: string, op
     if (!provider || !context) continue;
     try {
       const messages = await provider.readThread(context, { externalId: prospect.campaign_external_id }, leadRef(prospect));
-      saved += (await saveThread(prospect.id, messages, { replyEvents: provider.repliesFromThreads, handled: false })).length;
+      saved += (await saveThread(prospect.id, messages, { replyEvents: provider.repliesFromThreads, handled: false, fileFor: actor })).length;
       await threadFetched(prospect.id);
       read += 1;
     } catch (error) {

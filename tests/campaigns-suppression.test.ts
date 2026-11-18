@@ -24,7 +24,7 @@ import { processDueMail } from "@/lib/mail/due";
 import { syncMail } from "@/lib/mail/sync";
 import { createWorkflow, getRunSteps, saveWorkflow, setWorkflowStatus, startRun } from "@/lib/workflows/store";
 import { fakeHeyReach, fakeSmartlead, sequenceOf, type FakeAccount, type FakeHeyReachAccount } from "./campaigns-fake";
-import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const SL_A = "sl_key_suppress_alpha_01";
 const SL_B = "sl_key_suppress_bravo_02";
@@ -244,7 +244,7 @@ describe("suppression and Do not contact", () => {
 
   it("runs its migration twice", async () => {
     await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270210100000_campaign_suppression.sql", "utf8"));
-    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270210100000_campaign_suppression.sql", "utf8"));
+    await reapplyMigrationsFrom("20270210100000_campaign_suppression.sql");
   });
 
   it("keeps an unsubscribe found while backfilling, across channels", async () => {
@@ -788,7 +788,7 @@ describe("suppression and Do not contact", () => {
 
     it("doesn't bring back lifted unsubscribes when the migration runs again", async () => {
       await liftDoNotContact(owner, { contactId: ivy });
-      await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270210100000_campaign_suppression.sql", "utf8"));
+      await reapplyMigrationsFrom("20270210100000_campaign_suppression.sql");
       assert.equal((await sql("select 1 from crm.suppressions where value = 'ivy@kiln.test'")).length, 0);
     });
 

@@ -1,6 +1,7 @@
 import type { ProviderMessage } from "@/lib/campaigns/providers";
 import type { CampaignChannel } from "@/lib/campaigns/types";
 import { createActivityInDb } from "@/lib/crm/activities";
+import { withActor } from "@/lib/crm/context";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 
@@ -24,13 +25,34 @@ function messageJson(message: ProviderMessage) {
   };
 }
 
-export async function saveThread(prospectId: string, messages: ProviderMessage[], options: { replyEvents: boolean; handled: boolean }): Promise<SavedMessage[]> {
+export async function saveThread(
+  prospectId: string,
+  messages: ProviderMessage[],
+  options: { replyEvents: boolean; handled: boolean; fileFor?: Actor },
+): Promise<SavedMessage[]> {
   if (messages.length === 0) return [];
   const result = await query<{ message_id: string; direction: "inbound" | "outbound"; automatic: boolean; sent_at: Date; event_id: string | null }>(
     "select * from private.campaign_sync_messages($1, $2::jsonb, $3, $4)",
     [prospectId, JSON.stringify(messages.map(messageJson)), options.replyEvents, options.handled],
   );
-  return result.rows.map((row) => ({ messageId: row.message_id, direction: row.direction, automatic: row.automatic, sentAt: row.sent_at.toISOString(), eventId: row.event_id }));
+  const saved = result.rows.map((row) => ({ messageId: row.message_id, direction: row.direction, automatic: row.automatic, sentAt: row.sent_at.toISOString(), eventId: row.event_id }));
+  if (options.fileFor) await fileCountedReplies(options.fileFor, prospectId, saved);
+  return saved;
+}
+
+export async function fileCountedReplies(actor: Actor, prospectId: string, saved: SavedMessage[]) {
+  const inbound = saved.filter((message) => message.direction === "inbound" && !message.automatic).map((message) => message.messageId);
+  if (inbound.length === 0) return 0;
+  return withActor(actor, async (db) => {
+    const counted = await db.query(
+      "select 1 from crm.campaign_events e where e.prospect_id = $1 and e.workspace_id = $2 and e.kind = 'replied' and e.counted_at is not null limit 1",
+      [prospectId, actor.workspaceId],
+    );
+    if (counted.rows.length === 0) return 0;
+    const found = await db.query<FilableMessage>(`${FILABLE_SQL} where m.id = any($1::uuid[]) and m.workspace_id = $2`, [inbound, actor.workspaceId]);
+    for (const message of found.rows) await fileMessageActivity(db, actor, message, { operation: "campaign_reply", source: "campaign" });
+    return found.rows.length;
+  });
 }
 
 export async function threadFetched(prospectId: string, requestedAt: Date | null = null) {

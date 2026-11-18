@@ -113,8 +113,16 @@ export async function contactSuppression(actor: Actor, contactId: string) {
     const doNotContact = await statusOf(db, actor.workspaceId, person);
     const recipients = person.emails.map((address) => ({ address, name: person.name }));
     const caution = suppressedLine(suppressedNames(recipients, await suppressedAddresses(db, actor.workspaceId, person.emails)));
-    return { doNotContact, caution };
+    return { doNotContact, caution, blockLine: await blockLineOf(db, actor.workspaceId, person.emails) };
   });
+}
+
+export const STILL_BLOCKED = "Still on Smartlead's block list, so campaigns skip them.";
+
+async function blockLineOf(db: Db, workspaceId: string, emails: string[]) {
+  if (emails.length === 0) return null;
+  const found = await db.query("select 1 from crm.campaign_block_lifts where workspace_id = $1 and value = any($2::text[]) limit 1", [workspaceId, emails]);
+  return found.rows.length > 0 ? STILL_BLOCKED : null;
 }
 
 export async function doNotContactIn(db: Db, actor: Actor, target: DoNotContactTarget) {

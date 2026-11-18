@@ -1,6 +1,8 @@
 set lock_timeout = '5s';
 
 alter table crm.campaign_prospects add column if not exists stop_error text;
+alter table crm.campaign_prospects add column if not exists stop_tried_at timestamptz;
+alter table crm.campaign_prospects add column if not exists thread_error text;
 alter table crm.campaign_events add column if not exists handle_attempts integer not null default 0;
 
 create table if not exists crm.campaign_block_lifts (
@@ -8,14 +10,25 @@ create table if not exists crm.campaign_block_lifts (
   workspace_id uuid not null references crm.workspaces (id) on delete cascade,
   value text not null,
   attempts integer not null default 0,
+  last_tried_at timestamptz,
   created_at timestamptz not null default now(),
   constraint campaign_block_lifts_value_length check (char_length(value) between 1 and 500),
   constraint campaign_block_lifts_unique unique (workspace_id, value)
 );
 
+alter table crm.campaign_block_lifts add column if not exists last_tried_at timestamptz;
+
 alter table crm.campaign_block_lifts enable row level security;
 alter table crm.campaign_block_lifts force row level security;
 revoke all on crm.campaign_block_lifts from anon, authenticated, crm_agent;
+grant select on crm.campaign_block_lifts to authenticated, crm_agent;
+
+drop policy if exists campaign_block_lifts_select_member on crm.campaign_block_lifts;
+create policy campaign_block_lifts_select_member on crm.campaign_block_lifts
+  for select to authenticated using (workspace_id in (select private.user_workspace_ids()));
+drop policy if exists campaign_block_lifts_select_agent on crm.campaign_block_lifts;
+create policy campaign_block_lifts_select_agent on crm.campaign_block_lifts
+  for select to crm_agent using (workspace_id = (select private.request_workspace_id()));
 
 create or replace function private.campaign_person_block(
   p_workspace uuid,
@@ -357,7 +370,8 @@ begin
 end;
 $$;
 
-create or replace function private.campaign_pending_stops(p_workspace uuid, p_provider text, p_limit integer)
+
+create or replace function private.campaign_stops_due(p_workspace uuid, p_provider text, p_limit integer)
 returns table (
   prospect_id uuid,
   campaign_id uuid,
@@ -366,7 +380,9 @@ returns table (
   email text,
   linkedin text,
   sender_id text,
-  stop_reason text
+  stop_reason text,
+  pushed_at timestamptz,
+  leads_at timestamptz
 )
 language plpgsql
 stable
@@ -378,12 +394,14 @@ begin
     raise exception 'forbidden' using errcode = '42501';
   end if;
   return query
-  select p.id, p.campaign_id, k.external_id, p.external_lead_id, p.email, p.linkedin, p.sender_id, p.stop_reason
+  select p.id, p.campaign_id, k.external_id, p.external_lead_id, p.email, p.linkedin, p.sender_id, p.stop_reason, p.pushed_at,
+    case when (k.sync_state ->> 'leadsAt') ~ '^\d{4}-' then (k.sync_state ->> 'leadsAt')::timestamptz end
   from crm.campaign_prospects p
   join crm.campaigns k on k.id = p.campaign_id
   where p.workspace_id = p_workspace and k.provider = p_provider
     and p.stop_requested_at is not null and p.stopped_at is null
     and p.state = 'pushed'
+    and (p.stop_error is null or p.stop_tried_at is null or p.stop_tried_at < now() - interval '1 hour')
   order by (p.stop_error is not null), p.stop_requested_at, p.id
   limit least(greatest(p_limit, 1), 500);
 end;
@@ -402,6 +420,7 @@ begin
   update crm.campaign_prospects p
   set stopped_at = coalesce(p.stopped_at, now()),
       stop_error = null,
+      stop_tried_at = null,
       lead_status = coalesce(left(nullif(p_lead_status, ''), 100), p.lead_status)
   where p.id = p_prospect and p.workspace_id = p_workspace and p.stop_requested_at is not null;
 end;
@@ -418,8 +437,88 @@ begin
     raise exception 'forbidden' using errcode = '42501';
   end if;
   update crm.campaign_prospects p
-  set stop_error = left(coalesce(nullif(btrim(p_error), ''), 'Couldn''t stop this person. Try again.'), 500)
+  set stop_error = left(coalesce(nullif(btrim(p_error), ''), 'Couldn''t stop this person. Try again.'), 500),
+      stop_tried_at = now()
   where p.id = p_prospect and p.workspace_id = p_workspace and p.stop_requested_at is not null and p.stopped_at is null;
+end;
+$$;
+
+create or replace function private.campaign_thread_unread(p_prospect uuid, p_line text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_prospects p
+  set thread_error = left(coalesce(nullif(btrim(p_line), ''), 'Couldn''t read the reply.'), 500),
+      sync_requested_at = coalesce(p.sync_requested_at, now())
+  where p.id = p_prospect;
+end;
+$$;
+
+create or replace function private.campaign_thread_request_done(p_prospect uuid, p_requested_at timestamptz)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_prospects p
+  set sync_claimed_at = null,
+      sync_requested_at = case
+        when p_requested_at is not null and date_trunc('milliseconds', p.sync_requested_at) <= p_requested_at then null
+        else p.sync_requested_at
+      end
+  where p.id = p_prospect;
+end;
+$$;
+
+create or replace function private.campaign_unread_note(p_campaign uuid)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  return (
+    select p.thread_error from crm.campaign_prospects p
+    where p.campaign_id = p_campaign and p.thread_error is not null
+    order by p.updated_at desc, p.id
+    limit 1
+  );
+end;
+$$;
+
+create or replace function private.campaign_thread_fetched(p_prospect uuid, p_requested_at timestamptz)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  update crm.campaign_prospects p
+  set thread_fetched_at = now(),
+      thread_error = null,
+      sync_claimed_at = case when p_requested_at is null then p.sync_claimed_at end,
+      sync_requested_at = case
+        when p_requested_at is not null and date_trunc('milliseconds', p.sync_requested_at) <= p_requested_at then null
+        else p.sync_requested_at
+      end
+  where p.id = p_prospect;
 end;
 $$;
 
@@ -578,7 +677,6 @@ begin
             else p.import_error
           end,
           state = case when p.state in ('skipped', 'failed') and v_lead.external_id is not null then 'pushed' else p.state end,
-          skip_reason = case when p.state in ('skipped', 'failed') and v_lead.external_id is not null then null else p.skip_reason end,
           claimed_at = case when p.state in ('skipped', 'failed') and v_lead.external_id is not null then null else p.claimed_at end,
           claimed_by = case when p.state in ('skipped', 'failed') and v_lead.external_id is not null then null else p.claimed_by end,
           external_lead_id = coalesce(p.external_lead_id, v_lead.external_id),
@@ -586,7 +684,6 @@ begin
           linkedin = coalesce(p.linkedin, v_lead.linkedin),
           lead = p.lead || v_lead.lead,
           lead_status = coalesce(v_lead.lead_status, p.lead_status),
-          category = coalesce(v_lead.category, p.category),
           pushed_at = coalesce(p.pushed_at, v_lead.added_at, case when p.state in ('skipped', 'failed') and v_lead.external_id is not null then now() end),
           sender_id = coalesce(p.sender_id, v_lead.sender_id)
       where p.id = v_id;
@@ -604,6 +701,10 @@ begin
     select p.* from crm.campaign_prospects p
     where p.id = any(v_revived) and p.state = 'pushed' and p.stop_requested_at is null and p.stopped_at is null
   loop
+    if v_row.skip_reason = 'Removed' then
+      update crm.campaign_prospects p set stop_requested_at = now(), stop_reason = 'removed' where p.id = v_row.id;
+      continue;
+    end if;
     v_block := private.campaign_person_block(
       v_row.workspace_id, v_campaign.channel, p_campaign, v_row.id, v_row.contact_id, v_row.email, v_row.linkedin, false
     );
@@ -910,12 +1011,20 @@ begin
       provider_message_id = coalesce(m.provider_message_id, left(nullif(p_provider_message_id, ''), 500)),
       send_error = case when p_state = 'sent' then null else left(p_error, 500) end,
       sent_at = case when p_state = 'sent' and m.confirmed_at is null then now() else m.sent_at end
-  where m.id = p_message and m.workspace_id = p_workspace and m.send_state = 'sending'
+  where m.id = p_message and m.workspace_id = p_workspace and m.send_state in ('sending', 'unknown')
   returning m.send_state into v_state;
   if v_state is null then
-    return false;
+    select m.send_state into v_state from crm.campaign_messages m
+    where m.id = p_message and m.workspace_id = p_workspace and m.send_state = 'sent' and m.confirmed_at is not null;
+    if v_state is null then
+      return false;
+    end if;
   end if;
-  if p_audit is not null and v_state <> 'failed' then
+  if p_audit is not null and v_state <> 'failed' and not exists (
+    select 1 from crm.audit_events a
+    where a.entity_type = p_audit ->> 'entityType' and a.entity_id = (p_audit ->> 'entityId')::uuid
+      and a.workspace_id = p_workspace and a.event_type = p_audit ->> 'eventType' and a.changes ->> 'messageId' = p_message::text
+  ) then
     perform private.suppression_audit(p_workspace, p_audit, jsonb_build_object('messageId', p_message, 'sendState', v_state));
   end if;
   return true;
@@ -1118,6 +1227,7 @@ declare
   v_already boolean;
   v_stopping jsonb;
   v_skipped integer;
+  v_still_blocked text[];
 begin
   if p_reason not in ('unsubscribed', 'manual') then
     raise exception 'The reason must be unsubscribed or manual.' using errcode = '22023';
@@ -1135,7 +1245,11 @@ begin
     raise exception 'Add an email address or LinkedIn profile first.' using errcode = '22023';
   end if;
 
-  delete from crm.campaign_block_lifts b where b.workspace_id = p_workspace and b.value = any(v_emails);
+  with gone as (
+    delete from crm.campaign_block_lifts b where b.workspace_id = p_workspace and b.value = any(v_emails)
+    returning b.value
+  )
+  select coalesce(array_agg(gone.value), '{}'::text[]) into v_still_blocked from gone;
 
   select exists (
     select 1 from crm.suppressions s
@@ -1149,7 +1263,7 @@ begin
 
   insert into crm.suppressions as s (workspace_id, contact_id, kind, value, reason, source, campaign_id, created_by_user_id, created_by_agent_id, blocked_at)
   select p_workspace, p_contact, w.kind, w.value, p_reason, left(p_source, 40), p_campaign, p_user, p_agent,
-    case when p_source = 'smartlead' then now() end
+    case when p_source = 'smartlead' or (w.kind = 'email' and w.value = any(v_still_blocked)) then now() end
   from (
     select 'email'::text as kind, e as value from unnest(v_emails) e
     union all
@@ -1261,7 +1375,7 @@ begin
   select p_workspace, s.value
   from crm.suppressions s
   where s.id = any(v_targets) and s.bounced_at is null and s.kind = 'email' and s.blocked_at is not null and s.source <> 'smartlead'
-  on conflict on constraint campaign_block_lifts_unique do update set attempts = 0;
+  on conflict on constraint campaign_block_lifts_unique do update set attempts = 0, last_tried_at = null;
   delete from crm.suppressions s where s.id = any(v_targets) and s.bounced_at is null;
   update crm.suppressions s
   set reason = 'bounced', created_at = s.bounced_at, created_by_user_id = null, created_by_agent_id = null
@@ -1372,6 +1486,9 @@ declare
   prospects_combined integer := 0;
   suppressions_moved integer;
   prospects_stopped integer;
+  merged_emails text[];
+  merged_linkedins text[];
+  stop_reason_for_duplicate text;
 begin
   perform private.merge_actor_check(p_workspace, p_user, p_agent);
   if p_keep = p_merge then
@@ -1445,16 +1562,53 @@ begin
   update crm.mail_thread_routes r set contact_id = p_keep where r.contact_id = p_merge;
   get diagnostics routes = row_count;
 
+  merged_emails := array_remove(array[keep_row.normalized_email, merge_row.normalized_email], null);
+  merged_linkedins := array_remove(array[keep_row.normalized_linkedin, merge_row.normalized_linkedin], null);
+  if exists (
+    select 1 from crm.suppressions s
+    where s.workspace_id = p_workspace and s.reason <> 'bounced'
+      and (s.contact_id in (p_keep, p_merge) or (s.kind = 'email' and s.value = any(merged_emails)) or (s.kind = 'linkedin' and s.value = any(merged_linkedins)))
+  ) then
+    stop_reason_for_duplicate := 'suppressed';
+  elsif exists (
+    select 1 from crm.campaign_prospects p
+    where p.workspace_id = p_workspace and p.replied_at is not null
+      and (p.contact_id in (p_keep, p_merge) or p.email = any(merged_emails) or p.linkedin = any(merged_linkedins))
+  ) then
+    stop_reason_for_duplicate := 'replied';
+  end if;
+
   for prospect in
     select dup.id as merge_id, kept.id as keep_id, dup.replied_at, dup.last_event_at, dup.external_lead_id, dup.email, dup.linkedin,
-      dup.stop_requested_at, dup.stopped_at, dup.stop_reason
+      dup.stop_requested_at, dup.stopped_at, dup.stop_reason,
+      dup.state in ('pushing', 'pushed') and private.campaign_prospect_active(dup.state, dup.stopped_at, dup.lead_status, k.status) as live
     from crm.campaign_prospects dup
+    join crm.campaigns k on k.id = dup.campaign_id
     join crm.campaign_prospects kept
       on kept.campaign_id = dup.campaign_id and kept.contact_id = p_keep and kept.workspace_id = p_workspace
     where dup.workspace_id = p_workspace and dup.contact_id = p_merge
     order by dup.id
     for update of dup, kept
   loop
+    if stop_reason_for_duplicate is not null and prospect.live and prospect.replied_at is null then
+      update crm.campaign_messages m set prospect_id = prospect.keep_id where m.prospect_id = prospect.merge_id;
+      update crm.campaign_prospects d
+      set contact_id = null,
+          stop_requested_at = coalesce(d.stop_requested_at, now()),
+          stop_reason = coalesce(d.stop_reason, stop_reason_for_duplicate)
+      where d.id = prospect.merge_id;
+      update crm.campaign_prospects k
+      set replied_at = case
+            when k.replied_at is null then prospect.replied_at
+            when prospect.replied_at is null then k.replied_at
+            else least(k.replied_at, prospect.replied_at)
+          end,
+          email = coalesce(k.email, prospect.email),
+          linkedin = coalesce(k.linkedin, prospect.linkedin)
+      where k.id = prospect.keep_id;
+      prospects_combined := prospects_combined + 1;
+      continue;
+    end if;
     update crm.campaign_events e set prospect_id = prospect.keep_id where e.prospect_id = prospect.merge_id;
     update crm.campaign_messages m set prospect_id = prospect.keep_id where m.prospect_id = prospect.merge_id;
     update crm.campaign_prospects k
@@ -1546,7 +1700,7 @@ begin
   end if;
   return query
   select b.id, b.value from crm.campaign_block_lifts b
-  where b.workspace_id = p_workspace and b.attempts < 5
+  where b.workspace_id = p_workspace and (b.attempts < 5 or b.last_tried_at is null or b.last_tried_at < now() - interval '1 day')
   order by b.attempts, b.created_at, b.id
   limit least(greatest(p_limit, 1), 100);
 end;
@@ -1565,7 +1719,7 @@ begin
   if p_removed then
     delete from crm.campaign_block_lifts b where b.workspace_id = p_workspace and b.id = p_id;
   else
-    update crm.campaign_block_lifts b set attempts = b.attempts + 1 where b.workspace_id = p_workspace and b.id = p_id;
+    update crm.campaign_block_lifts b set attempts = b.attempts + 1, last_tried_at = now() where b.workspace_id = p_workspace and b.id = p_id;
   end if;
 end;
 $$;
@@ -1646,7 +1800,7 @@ revoke all on function private.claim_campaign_fills(integer, text) from public;
 revoke all on function private.campaign_push_begin(uuid, uuid, text) from public;
 revoke all on function private.campaign_run_gave_up(uuid, uuid, uuid, text) from public;
 revoke all on function private.campaign_prospect_lead_id(uuid, uuid, text) from public;
-revoke all on function private.campaign_pending_stops(uuid, text, integer) from public;
+revoke all on function private.campaign_stops_due(uuid, text, integer) from public;
 revoke all on function private.campaign_stop_confirmed(uuid, uuid, text) from public;
 revoke all on function private.campaign_stop_refused(uuid, uuid, text) from public;
 revoke all on function private.campaign_events_attempted(uuid, uuid[]) from public;
@@ -1674,7 +1828,7 @@ grant execute on function private.claim_campaign_fills(integer, text) to crm_app
 grant execute on function private.campaign_push_begin(uuid, uuid, text) to crm_app;
 grant execute on function private.campaign_run_gave_up(uuid, uuid, uuid, text) to crm_app;
 grant execute on function private.campaign_prospect_lead_id(uuid, uuid, text) to crm_app;
-grant execute on function private.campaign_pending_stops(uuid, text, integer) to crm_app;
+grant execute on function private.campaign_stops_due(uuid, text, integer) to crm_app;
 grant execute on function private.campaign_stop_confirmed(uuid, uuid, text) to crm_app;
 grant execute on function private.campaign_stop_refused(uuid, uuid, text) to crm_app;
 grant execute on function private.campaign_events_attempted(uuid, uuid[]) to crm_app;
@@ -1691,5 +1845,13 @@ grant execute on function private.suppression_lift(uuid, uuid, text[], text[], j
 grant execute on function private.merge_contact_references(uuid, uuid, uuid, uuid, uuid) to crm_app;
 grant execute on function private.campaign_block_lifts_pending(uuid, integer) to crm_app;
 grant execute on function private.campaign_block_lift_done(uuid, uuid, boolean) to crm_app;
+revoke all on function private.campaign_thread_unread(uuid, text) from public;
+revoke all on function private.campaign_thread_request_done(uuid, timestamptz) from public;
+revoke all on function private.campaign_unread_note(uuid) from public;
+revoke all on function private.campaign_thread_fetched(uuid, timestamptz) from public;
+grant execute on function private.campaign_thread_unread(uuid, text) to crm_app;
+grant execute on function private.campaign_thread_request_done(uuid, timestamptz) to crm_app;
+grant execute on function private.campaign_unread_note(uuid) to crm_app;
+grant execute on function private.campaign_thread_fetched(uuid, timestamptz) to crm_app;
 
 reset lock_timeout;

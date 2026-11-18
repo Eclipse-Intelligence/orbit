@@ -286,7 +286,7 @@ async function syncRequested(pass: Pass, campaigns: Map<string, CampaignRow>) {
           senderId: row.sender_id,
         });
         const campaign = campaigns.get(row.campaign_id);
-        await saveThread(row.prospect_id, messages, { replyEvents: pass.provider.repliesFromThreads, handled: !campaign?.backfilled_at || !pass.options.onEvents });
+        await saveThread(row.prospect_id, messages, { replyEvents: pass.provider.repliesFromThreads, handled: !campaign?.backfilled_at || !pass.options.onEvents, fileFor: pass.actor });
         await threadFetched(row.prospect_id, row.requested_at);
         pass.report.threads += 1;
         touched.add(row.campaign_id);
@@ -297,7 +297,7 @@ async function syncRequested(pass: Pass, campaigns: Map<string, CampaignRow>) {
         }
         const refused = refusedByProvider(pass.provider, error);
         if (refused) {
-          await threadFetched(row.prospect_id, row.requested_at);
+          await query("select private.campaign_thread_request_done($1, $2)", [row.prospect_id, row.requested_at]);
           pass.report.errors.push(`Couldn't read a thread from ${pass.provider.name}. ${refused}`);
           continue;
         }
@@ -436,7 +436,8 @@ async function syncCampaign(pass: Pass, row: CampaignRow) {
     await saveCampaign(row.id, { backfilled: true });
     report.backfilled += 1;
   }
-  await saveCampaign(row.id, { syncError: pass.notes.get(row.id) ?? null, syncState: { missingAt: null } });
+  const unread = pass.notes.get(row.id) ?? (await query<{ note: string | null }>("select private.campaign_unread_note($1) as note", [row.id])).rows[0]?.note ?? null;
+  await saveCampaign(row.id, { syncError: unread, syncState: { missingAt: null } });
   report.campaigns += 1;
 }
 
@@ -449,8 +450,14 @@ async function probeUnlisted(pass: Pass, row: CampaignRow) {
   if (row.status === "archived") return;
   const state = row.sync_state ?? {};
   if (state.probedAt && !due(state.probedAt, PROBE_EVERY_MS, Date.now())) return;
-  const found = await pass.provider.readCampaign(pass.context, row.external_id);
   const probedAt = new Date().toISOString();
+  let found;
+  try {
+    found = await pass.provider.readCampaign(pass.context, row.external_id);
+  } catch (error) {
+    if (!(error instanceof ServiceBusy) && pass.provider.failure(error) && !pass.context.signal?.aborted) await saveCampaign(row.id, { syncState: { probedAt } });
+    throw error;
+  }
   if (!found || found.status === "archived") {
     await saveCampaign(row.id, { status: "archived", syncState: { probedAt } });
     return;

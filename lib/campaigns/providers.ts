@@ -192,6 +192,7 @@ export type CampaignProvider = {
   name: string;
   standardVariables: readonly string[];
   failure(error: unknown): ProviderFailure | null;
+  needsLeadId: boolean;
   checkKey(context: ProviderContext): Promise<ConnectionCheck>;
   connectedLine(details: Record<string, unknown>, campaigns: number): string;
   listCampaigns(context: ProviderContext): Promise<ProviderCampaign[]>;
@@ -313,6 +314,7 @@ export const smartleadProvider: CampaignProvider = {
   id: "smartlead",
   channel: "email",
   name: "Smartlead",
+  needsLeadId: true,
   standardVariables: [
     "first_name",
     "last_name",
@@ -537,6 +539,7 @@ export const heyReachProvider: CampaignProvider = {
   id: "heyreach",
   channel: "linkedin",
   name: "HeyReach",
+  needsLeadId: false,
   standardVariables: ["first_name", "last_name", "company_name", "position", "location"],
   failure: (error) => (error instanceof HeyReachError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404, status: error.status } : null),
   async checkKey(context) {

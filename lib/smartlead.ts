@@ -550,12 +550,20 @@ export async function findSmartleadLead(key: string, campaignId: string, email: 
     if (error instanceof SmartleadError && error.status === 404) return null;
     throw error;
   }
-  const row = record(Array.isArray(body) ? body[0] : body);
-  const id = text(row.id);
-  if (!id) return null;
-  const memberships = list(row.lead_campaign_data).map(record);
+  if (emptyResult(body)) return null;
+  const raw = Array.isArray(body) ? body[0] : body;
+  const row = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Json) : null;
+  const id = row ? text(row.id) : null;
+  if (!row || !id || !Array.isArray(row.lead_campaign_data)) throw new SmartleadError(UNREADABLE, null);
+  const memberships = row.lead_campaign_data.map(record);
   if (!memberships.some((item) => text(item.campaign_id) === campaignId)) return null;
   return { id };
+}
+
+function emptyResult(body: unknown) {
+  if (body === null || body === undefined || body === "") return true;
+  if (Array.isArray(body)) return body.length === 0;
+  return typeof body === "object" && Object.keys(body as Json).length === 0;
 }
 
 export const SMARTLEAD_BLOCK_BATCH = 100;
