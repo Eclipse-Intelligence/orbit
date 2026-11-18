@@ -25,6 +25,7 @@ import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { decryptSecret } from "@/lib/crypto/secret";
+import { dropCalendarSubscriptions, keepCalendarSubscriptions, type CalendarSourceRef } from "@/lib/crm/calendar-subscriptions";
 import { isMeetingNoise } from "@/lib/mail/senders";
 import { readFeed } from "@/lib/ical/events";
 import { FeedError, feedErrorSummary, fetchFeed, type Lookup } from "@/lib/ical/fetch";
@@ -145,6 +146,7 @@ type SyncSource = {
 
 type SyncContext = {
   fetchImpl: typeof fetch;
+  calendarIds?: string[];
   ownLink: string | null;
   feedFetch?: typeof fetch;
   lookup?: Lookup;
@@ -377,6 +379,7 @@ async function saveCalendarList(
   actor: UserActor,
   source: SyncSource,
   listed: CalendarListFetch,
+  dropped?: string[],
 ): Promise<SyncTarget[]> {
   const column = sourceColumn(source);
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`calendars:${source.id}`]);
@@ -438,11 +441,13 @@ async function saveCalendarList(
     );
   }
   if (listed.complete) {
-    await db.query(
+    const removed = await db.query<{ graph_subscription_id: string | null }>(
       `delete from crm.calendars
-       where ${column} = $1 and provider_calendar_id <> all($2::text[])`,
+       where ${column} = $1 and provider_calendar_id <> all($2::text[])
+       returning graph_subscription_id`,
       [source.id, listed.calendars.map((calendar) => calendar.providerCalendarId)],
     );
+    for (const row of removed.rows) if (row.graph_subscription_id) dropped?.push(row.graph_subscription_id);
   }
   const targets = await db.query<{ id: string; provider_calendar_id: string }>(
     `select id, provider_calendar_id from crm.calendars
@@ -640,13 +645,13 @@ export async function relinkCalendar(actor: UserActor) {
   return withActor(actor, (db) => linkEvents(db, actor));
 }
 
-async function readSources(actor: UserActor, accountId?: string) {
+async function readSources(actor: UserActor, accountId?: string, only?: CalendarSourceRef) {
   return withActor(actor, async (db) => {
     const sources: SyncSource[] = [];
     const microsoft = microsoftConfigured();
-    if (!accountId && microsoft) {
+    if (!accountId && only?.kind !== "account" && microsoft) {
       const stored = await readStored(db, actor);
-      if (stored && stored.status === "connected" && stored.refreshTokenCipher) {
+      if (stored && stored.status === "connected" && stored.refreshTokenCipher && (!only || only.id === stored.id)) {
         const state = await db.query<{ last_attempt_at: Date | string | null }>(
           "select last_attempt_at from crm.integration_state where connection_id = $1 and source = 'calendar'",
           [stored.id],
@@ -667,6 +672,7 @@ async function readSources(actor: UserActor, accountId?: string) {
     const accounts = await readAccounts(db, actor);
     for (const [index, account] of accounts.entries()) {
       if (accountId && account.id !== accountId) continue;
+      if (only && (only.kind !== "account" || only.id !== account.id)) continue;
       if (account.status !== "connected") continue;
       if (account.provider === "ics" ? !account.feed : !account.refreshTokenCipher || !microsoft) continue;
       sources.push({
@@ -738,7 +744,11 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
       colorOffset: source.colorOffset,
     });
     if (!listed.complete) outcome.complete = false;
-    const targets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed));
+    const dropped: string[] = [];
+    const listedTargets = await withActor(actor, (db) => saveCalendarList(db, actor, source, listed, dropped));
+    const only = context.calendarIds;
+    const targets = only ? listedTargets.filter((calendar) => only.includes(calendar.id)) : listedTargets;
+    if (only) outcome.complete = false;
     if (source.kind === "connection") await flushBlocks(actor, source.id, token.scope ?? null, context);
     const seriesEvents = await ownSeriesEvents(actor.userId);
     for (const calendar of targets) {
@@ -776,6 +786,15 @@ async function syncGraphSource(actor: UserActor, source: SyncSource, context: Sy
         outcome.error ??= message;
         if (REJECTED.test(message)) break;
       }
+    }
+    if (!outcome.error || !REJECTED.test(outcome.error)) {
+      await dropCalendarSubscriptions(token.accessToken, dropped, { fetchImpl: context.fetchImpl, deadline: context.deadline });
+      await keepCalendarSubscriptions(actor, { kind: source.kind, id: source.id }, token.accessToken, {
+        fetchImpl: context.fetchImpl,
+        deadline: context.deadline,
+        only,
+        placeholder: DEFAULT_CALENDAR_PLACEHOLDER,
+      }).catch((error) => console.error("Calendar subscriptions failed", error instanceof Error ? error.message : error));
     }
     await finishSource(actor, source, {
       syncedAt: outcome.complete ? new Date(context.now).toISOString() : null,
@@ -978,6 +997,8 @@ export async function syncCalendar(
     force?: boolean;
     now?: number;
     accountId?: string;
+    source?: CalendarSourceRef;
+    calendarIds?: string[];
   } = {},
 ): Promise<CalendarSyncResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -991,7 +1012,7 @@ export async function syncCalendar(
     scopeMissing: false,
     calendars: 0,
   };
-  const { sources, ownLink } = await readSources(actor, options.accountId);
+  const { sources, ownLink } = await readSources(actor, options.accountId, options.source);
   if (sources.length === 0) return { ...result, error: NOT_CONNECTED };
   const now = options.now ?? Date.now();
   let complete = true;
@@ -1006,6 +1027,7 @@ export async function syncCalendar(
     result.ran = true;
     const outcome = await syncSource(actor, source, {
       fetchImpl,
+      calendarIds: options.calendarIds,
       ownLink,
       feedFetch: options.feedFetch,
       lookup: options.lookup,

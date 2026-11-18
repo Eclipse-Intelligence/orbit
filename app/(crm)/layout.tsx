@@ -7,11 +7,10 @@ import CrmChrome from "@/components/crm/chrome";
 import { FindAvailabilityProvider } from "@/components/crm/find-availability";
 import DocsProvider from "@/components/docs/docs-provider";
 import ChatLive from "@/components/chat/chat-live";
+import SyncSignals from "@/components/crm/sync-signals";
 import MailUnread from "@/components/mail/mail-unread";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
 import { getHomeActor, getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
-import { syncCalendar } from "@/lib/crm/calendar";
-import { syncCalls } from "@/lib/crm/calls";
 import { syncClickUp } from "@/lib/crm/clickup";
 import { listBoards } from "@/lib/crm/boards";
 import { countCompanies } from "@/lib/crm/companies";
@@ -22,10 +21,8 @@ import { BELL_LIMIT, listNotifications } from "@/lib/workflows/store";
 import { countOpenTasks } from "@/lib/crm/tasks";
 import { captureStatuses } from "@/lib/crm/capture";
 import { unreadBrief } from "@/lib/learning/nightly";
-import { syncTeamsTranscripts } from "@/lib/crm/teams-transcripts";
 import { processDueMail } from "@/lib/mail/due";
 import { classifyCapture } from "@/lib/mail/capture-filter";
-import { syncMail } from "@/lib/mail/sync";
 import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
@@ -40,36 +37,12 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   if (microsoftConfigured()) {
     after(async () => {
       try {
-        const result = await syncCalls(home);
-        if (result.ran && result.error) console.error("Teams call sync failed", result.error);
-      } catch (error) {
-        console.error("Teams call sync failed", error);
-      }
-      try {
-        const result = await syncCalendar(home);
-        if (result.ran && result.error) console.error("Calendar sync failed", result.error);
-      } catch (error) {
-        console.error("Calendar sync failed", error);
-      }
-      try {
-        const result = await syncTeamsTranscripts(home);
-        if (result.ran && result.error) console.error("Teams transcript sync failed", result.error);
-      } catch (error) {
-        console.error("Teams transcript sync failed", error);
-      }
-    });
-  }
-  if (microsoftConfigured()) {
-    after(async () => {
-      try {
-        const result = await syncMail(home, { budgetMs: 10_000, backfill: false });
-        if (result.errors.length) console.error("Mail sync failed", result.errors.join("; "));
         await processDueMail(home);
         await classifyCapture(home, { budgetMs: 20_000, gapSeconds: 60 }).catch((error) =>
           console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
         );
       } catch (error) {
-        console.error("Mail sync failed", error);
+        console.error("Due mail failed", error);
       }
     });
   }
@@ -128,6 +101,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
             <KeepPageInPlace />
             <MailUnread />
             <ChatLive />
+            <SyncSignals />
             <Sidebar
               boards={boards}
               companyCount={companyCount}

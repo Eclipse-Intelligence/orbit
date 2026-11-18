@@ -78,6 +78,7 @@ import FlagIcon from "@/public/assets/images/mail/flag.svg";
 import CloseIcon from "@/public/assets/images/mail/close.svg";
 import { usePullToRefresh } from "@/components/mail/pull-refresh";
 import MailShareLive, { useMailShareEvents } from "@/components/mail/share-live";
+import { useSyncSignal, useSyncSignalsLive } from "@/components/crm/sync-signals";
 import { fetchSharedList } from "@/components/mail/share-client";
 import SharedList from "@/components/mail/shared-list";
 import SharedReader from "@/components/mail/shared-reader";
@@ -115,9 +116,8 @@ function pushedThread() {
   const state = window.history.state as { mailThread?: string } | null;
   return Boolean(state?.mailThread);
 }
-const POLL_MS = 60_000;
-const FIRST_POLL_MS = 12_000;
-const MIN_POLL_GAP_MS = 20_000;
+const OFFLINE_REREAD_MS = 60_000;
+const REREAD_GAP_MS = 5_000;
 const READ_DWELL_MS = 700;
 
 
@@ -1078,22 +1078,25 @@ export default function MailScreen({
   });
   useEffect(() => () => window.clearTimeout(sharedSettle.current), []);
 
+  const signalsLive = useSyncSignalsLive();
+  useSyncSignal("mail", () => refreshRef.current(false));
+
   useEffect(() => {
-    let last = 0;
-    const tick = () => {
-      if (document.visibilityState !== "visible" || Date.now() - last < MIN_POLL_GAP_MS) return;
+    let last = Date.now();
+    const reread = () => {
+      if (document.visibilityState !== "visible" || Date.now() - last < REREAD_GAP_MS) return;
       last = Date.now();
-      refreshRef.current(true, true);
+      refreshRef.current(false);
     };
-    const first = window.setTimeout(tick, FIRST_POLL_MS);
-    const timer = window.setInterval(tick, POLL_MS);
-    window.addEventListener("focus", tick);
+    window.addEventListener("focus", reread);
+    document.addEventListener("visibilitychange", reread);
+    const timer = signalsLive ? 0 : window.setInterval(reread, OFFLINE_REREAD_MS);
     return () => {
-      window.clearTimeout(first);
       window.clearInterval(timer);
-      window.removeEventListener("focus", tick);
+      window.removeEventListener("focus", reread);
+      document.removeEventListener("visibilitychange", reread);
     };
-  }, []);
+  }, [signalsLive]);
 
   function step(delta: number) {
     if (inShared) {

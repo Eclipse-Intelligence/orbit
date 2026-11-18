@@ -163,7 +163,7 @@ class FakeOutlook {
   }
 
   graphCalls() {
-    return this.calls.filter((call) => new URL(call.url).hostname === "graph.microsoft.com" && call.method !== "GET");
+    return this.calls.filter((call) => new URL(call.url).hostname === "graph.microsoft.com" && call.method !== "GET" && !new URL(call.url).pathname.startsWith("/v1.0/subscriptions"));
   }
 
   reset() {

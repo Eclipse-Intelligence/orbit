@@ -593,6 +593,7 @@ export async function ensureMicrosoftFolder(token: string, name: string, fetchIm
 }
 
 const MAIL_SUBSCRIPTION_MINUTES = 4_200;
+export const MAILBOX_SUBSCRIPTION_SCOPE = "mailbox";
 
 export async function createMailSubscription(
   token: string,
@@ -604,9 +605,10 @@ export async function createMailSubscription(
   const created = await graphJson<{ id: string; expirationDateTime?: string }>(`${GRAPH}/subscriptions`, token, fetchImpl, undefined, {
     method: "POST",
     body: {
-      changeType: "created",
+      changeType: "created,updated,deleted",
       notificationUrl: input.notificationUrl,
-      resource: "me/mailFolders('inbox')/messages",
+      lifecycleNotificationUrl: input.notificationUrl,
+      resource: "me/messages",
       expirationDateTime,
       clientState: input.clientState,
       latestSupportedTlsVersion: "v1_2",
@@ -622,6 +624,15 @@ export async function renewMailSubscription(token: string, id: string, fetchImpl
     body: { expirationDateTime },
   }, limit);
   return renewed.expirationDateTime ?? expirationDateTime;
+}
+
+export async function deleteMailSubscription(token: string, id: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}) {
+  try {
+    await graphJson(`${GRAPH}/subscriptions/${encodeURIComponent(id)}`, token, fetchImpl, undefined, { method: "DELETE" }, limit);
+  } catch (error) {
+    if (error instanceof GraphMailError && error.status === 404) return;
+    throw error;
+  }
 }
 
 type MicrosoftAttachment = { id: string; name: string; contentType: string | null; size: number; inline: boolean };
