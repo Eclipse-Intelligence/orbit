@@ -2,9 +2,11 @@ import { alertMembers } from "@/lib/alerts";
 import { campaignThreadPath } from "@/lib/campaigns/format";
 import { FILABLE_SQL, fileMessageActivity, saveThread, threadFetched, type FilableMessage } from "@/lib/campaigns/messages";
 import { campaignProvider, type CampaignProvider, type ProviderContext } from "@/lib/campaigns/providers";
+import { SUPPRESSION_AUDIT_EVENTS } from "@/lib/campaigns/suppression";
 import type { SyncedCampaign, SyncedEvent } from "@/lib/campaigns/sync";
 import type { CampaignChannel } from "@/lib/campaigns/types";
 import { withActor } from "@/lib/crm/context";
+import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { automaticReply } from "@/lib/smartlead";
@@ -152,6 +154,21 @@ async function handleReply(actor: UserActor, provider: CampaignProvider, context
   await notifyReply(actor, event, reply?.body ?? null);
 }
 
+async function auditSuppression(actor: UserActor, event: EventDetail) {
+  const unsubscribed = event.kind === "unsubscribed";
+  await withActor(actor, (db) =>
+    recordAudit(
+      db,
+      actor,
+      unsubscribed ? SUPPRESSION_AUDIT_EVENTS.unsubscribed : SUPPRESSION_AUDIT_EVENTS.bounced,
+      "campaign_prospect",
+      event.prospect_id,
+      { operation: unsubscribed ? "campaign_unsubscribe" : "campaign_bounce", source: "campaign" },
+      { campaignId: event.campaign_id, campaign: event.campaign_name, contactId: event.contact_id, channel: event.channel, email: event.email, linkedin: unsubscribed ? event.linkedin : null },
+    ),
+  );
+}
+
 export async function fireCampaignEvents(ids: string[]) {
   if (ids.length === 0) return 0;
   const result = await query<{ fired: number }>("select private.campaign_fire_events($1::uuid[]) as fired", [ids]);
@@ -168,6 +185,10 @@ export async function handleCampaignEvents(campaign: SyncedCampaign, events: Syn
   const retry: string[] = [];
   let busy: string | undefined;
   for (const event of details) {
+    if (event.kind === "unsubscribed" || event.kind === "bounced") {
+      await auditSuppression(actor, event).catch((error) => console.error("Couldn't record a campaign opt-out", redactedError(error)));
+      continue;
+    }
     if (event.kind !== "replied") continue;
     if (busy) {
       retry.push(event.id);

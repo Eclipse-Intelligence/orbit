@@ -14,6 +14,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import { hasScope } from "@/lib/crm/scopes";
+import { checkSuppressed, sentToSuppressed, type SuppressionPolicy } from "@/lib/crm/suppressions";
 import { followUpTitle } from "@/lib/mail/follow-up-title";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
@@ -440,6 +441,7 @@ export async function sendContactEmail(
     signature?: boolean;
     provenance?: Provenance;
     origin?: string | null;
+    suppression?: SuppressionPolicy;
   },
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ warning: string | null }> {
@@ -490,9 +492,13 @@ export async function sendContactEmail(
        where id = $1 and workspace_id = $2 and archived_at is null`,
       [contactId, actor.workspaceId],
     );
+    const row = found.rows[0] ?? null;
+    const address = row?.email ? canonicalEmail(row.email) : null;
+    const suppressed = address ? await checkSuppressed(db, actor.workspaceId, [{ address, name: row?.name }], input.suppression ?? "warn") : [];
     return {
-      contact: found.rows[0] ?? null,
-      sender: found.rows[0] ? await resolveSender(db, actor, input.from) : null,
+      contact: row,
+      suppressed,
+      sender: row ? await resolveSender(db, actor, input.from) : null,
     };
   });
   const contact = prepared.contact;
@@ -595,7 +601,7 @@ export async function sendContactEmail(
   if (trackingId && activityId) {
     await linkTracking(actor, trackingId, activityId).catch((error: unknown) => console.error("Couldn't link the read status to the timeline", error));
   }
-  return { warning: null };
+  return { warning: prepared.suppressed.length > 0 ? sentToSuppressed(prepared.suppressed) : null };
 }
 
 async function startTracking(actor: UserActor, senderEmail: string) {

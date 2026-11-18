@@ -4,6 +4,7 @@ import { useId, useState } from "react";
 import Button from "@/components/_ui/button";
 import { Textarea } from "@/components/_ui/textarea";
 import { useComposer } from "@/components/mail/compose-dock";
+import { useSuppressionCaution } from "@/components/mail/suppression-caution";
 import { firstNames, followUpWhen } from "@/lib/mail/format";
 import type { FollowUpReminder, FollowUpReplied } from "@/lib/mail/view";
 import FollowUpIcon from "@/public/assets/images/mail/follow-up.svg";
@@ -44,6 +45,7 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
   const [error, setError] = useState<string | null>(null);
   const [gone, setGone] = useState(false);
   const names = firstNames(followUp.to ?? []);
+  const caution = useSuppressionCaution(followUp.to ?? []);
 
   async function run(kind: Exclude<Busy, null>, work: () => Promise<void>) {
     if (busy) return;
@@ -151,6 +153,11 @@ export function FollowUpBanner({ followUp, onChanged }: { followUp: FollowUpRemi
           <p className="text-soft line-clamp-2 text-[14px] leading-6">{body.replace(/\s*\n+\s*/g, " ")}</p>
         ) : (
           <p className="caption-style text-subtle">{busy === "write" ? "Writing…" : "Orbit writes it when due."}</p>
+        )}
+        {caution && (
+          <p role="status" className="caption-style text-warning">
+            {caution}
+          </p>
         )}
         {error && (
           <p role="alert" className="caption-style text-danger">

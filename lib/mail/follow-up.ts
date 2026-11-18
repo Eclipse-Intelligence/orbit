@@ -2,6 +2,7 @@ import { sendAlert } from "@/lib/alerts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
+import { checkSuppressed, isSuppressedRefusal } from "@/lib/crm/suppressions";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { readDraftInput, sendMailDraft } from "@/lib/mail/compose";
@@ -19,6 +20,7 @@ type Recipients = { to: MailAddress[]; cc: MailAddress[]; bcc: MailAddress[] };
 
 export type SendFollowUpRow = {
   id: string;
+  workspace_id: string;
   source_id: string;
   thread_key: string;
   subject: string | null;
@@ -45,7 +47,7 @@ type Outcome =
   | { kind: "gone" }
   | { kind: "failed"; reason: string; conflict: boolean; body: string | null; messageId: string | null };
 
-export const FOLLOW_UP_ROW_COLUMNS = "id, source_id, thread_key, subject, follow_up_body, recipients, identity_id, used_identity, original_internet_id, created_at";
+export const FOLLOW_UP_ROW_COLUMNS = "id, workspace_id, source_id, thread_key, subject, follow_up_body, recipients, identity_id, used_identity, original_internet_id, created_at";
 
 const ORIGINAL_SLACK_MS = 5 * 60_000;
 const STUCK_MINUTES = 10;
@@ -157,6 +159,22 @@ function failed(reason: string, conflict: boolean, body: string | null, messageI
   return { kind: "failed", reason, conflict, body, messageId };
 }
 
+function followUpRecipients(row: SendFollowUpRow, latest: Latest): Recipients {
+  return row.recipients?.to?.length
+    ? { to: row.recipients.to, cc: row.recipients.cc ?? [], bcc: row.recipients.bcc ?? [] }
+    : { to: latest.to_recipients ?? [], cc: latest.cc_recipients ?? [], bcc: [] };
+}
+
+async function suppressedProblem(actor: UserActor, workspaceId: string, recipients: Recipients) {
+  try {
+    await withActor(actor, (db) => checkSuppressed(db, workspaceId, [...recipients.to, ...recipients.cc, ...recipients.bcc], "refuse"));
+    return null;
+  } catch (error) {
+    if (isSuppressedRefusal(error)) return error.message;
+    throw error;
+  }
+}
+
 async function deliverFollowUp(
   actor: UserActor,
   row: SendFollowUpRow,
@@ -169,6 +187,8 @@ async function deliverFollowUp(
   }
   const blocked = blocker(row, state.latest);
   if (blocked) return failed(blocked, true, null, state.latest?.own ? state.latest.id : null);
+  const suppressed = options.from === "due" ? await suppressedProblem(actor, row.workspace_id, followUpRecipients(row, state.latest!)) : null;
+  if (suppressed) return failed(suppressed, true, null, state.latest?.own ? state.latest.id : null);
   let body = readFollowUpBody(row.follow_up_body);
   if (!body) {
     const written = await writeNudge(actor, row.source_id, row.thread_key, {
@@ -202,9 +222,7 @@ async function deliverFollowUp(
     await moveState(actor, row.id, options.from, "replied");
     return { kind: "replied", name: remote.name };
   }
-  const recipients: Recipients = row.recipients?.to?.length
-    ? { to: row.recipients.to, cc: row.recipients.cc ?? [], bcc: row.recipients.bcc ?? [] }
-    : { to: latest.to_recipients ?? [], cc: latest.cc_recipients ?? [], bcc: [] };
+  const recipients = followUpRecipients(row, latest);
   if (!(await moveState(actor, row.id, options.from, "sending"))) return { kind: "gone" };
   try {
     await sendMailDraft(
@@ -222,7 +240,7 @@ async function deliverFollowUp(
         }),
         attachments: [],
       },
-      { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep" },
+      { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep", suppression: options.from === "due" ? { refuseSince: null, workspaceId: row.workspace_id } : "warn" },
     );
   } catch (error) {
     await moveState(actor, row.id, "sending", options.from);

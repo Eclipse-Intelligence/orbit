@@ -50,6 +50,9 @@ import type {
 } from "@/lib/crm/types";
 import { teamsCallUrl } from "@/lib/phone";
 import CampaignLines from "@/components/campaigns/campaign-lines";
+import { DoNotContactDialog, DoNotContactStatus } from "@/components/campaigns/do-not-contact";
+import { DropdownMenuItem } from "@/components/_ui/dropdown-menu";
+import type { DoNotContact } from "@/lib/campaigns/suppression";
 import type { CampaignLine, CampaignTimelineRow } from "@/lib/campaigns/threads";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
@@ -65,6 +68,9 @@ export default function ContactRecord({
   reads = {},
   campaignLines = [],
   campaignRows = [],
+  doNotContact = null,
+  sendCaution = null,
+  canSetDoNotContact = false,
   meetings,
   tasks,
   tags,
@@ -85,6 +91,9 @@ export default function ContactRecord({
   reads?: Record<string, EmailRead>;
   campaignLines?: CampaignLine[];
   campaignRows?: CampaignTimelineRow[];
+  doNotContact?: DoNotContact | null;
+  sendCaution?: string | null;
+  canSetDoNotContact?: boolean;
   meetings: MeetingsSummary | null;
   tasks: Task[];
   tags: TagCount[];
@@ -105,6 +114,7 @@ export default function ContactRecord({
   const [fresh, setFresh] = useState<Contact | null>(null);
   const [invitingAt, setInvitingAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [blocking, setBlocking] = useState(false);
   const clearNotice = useCallback(() => setNotice(null), []);
   const shown =
     fresh && fresh.id === contact.id && fresh.updatedAt > contact.updatedAt
@@ -150,7 +160,22 @@ export default function ContactRecord({
         action={
           <div className="flex items-center gap-1">
             <RunWorkflowButton object="contact" recordId={shown.id} workflows={workflows} />
-            {!shown.archivedAt && <MergeRecordMenu kind="contact" id={shown.id} name={shown.name} moveTargets={moveTargets} workspaceName={viewer.workspaceName} />}
+            {!shown.archivedAt && (
+              <MergeRecordMenu
+                kind="contact"
+                id={shown.id}
+                name={shown.name}
+                moveTargets={moveTargets}
+                workspaceName={viewer.workspaceName}
+                extraItems={
+                  canSetDoNotContact && !doNotContact && (shown.email || shown.linkedinUrl) ? (
+                    <DropdownMenuItem onSelect={() => setBlocking(true)} className="text-danger">
+                      Do not contact…
+                    </DropdownMenuItem>
+                  ) : null
+                }
+              />
+            )}
             <span
               title={
                 shown.email
@@ -242,6 +267,7 @@ export default function ContactRecord({
                   </div>
                 )}
                 <CampaignLines lines={campaignLines} />
+                {doNotContact && <DoNotContactStatus status={doNotContact} target={{ contactId: shown.id }} canLift={canSetDoNotContact} />}
                 {relationship && (
                   <span className="flex flex-col gap-1">
                     <span className="flex flex-wrap items-center gap-2">
@@ -407,9 +433,11 @@ export default function ContactRecord({
             campaignRows={campaignRows}
             insights={insights}
             reads={reads}
+            caution={sendCaution}
           />
         }
       />
+      <DoNotContactDialog open={blocking} onOpenChange={setBlocking} name={shown.name} target={{ contactId: shown.id }} />
     </section>
   );
 }

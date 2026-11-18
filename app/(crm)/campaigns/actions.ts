@@ -10,10 +10,12 @@ import { campaignThreadPath } from "@/lib/campaigns/format";
 import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused, type RemoveResult } from "@/lib/campaigns/manage";
 import { replyToProspect, type ReplyResult } from "@/lib/campaigns/replies";
 import { linkCampaignSender } from "@/lib/campaigns/senders";
+import { liftDoNotContact, setDoNotContact, type DoNotContactTarget } from "@/lib/campaigns/suppression";
 import { syncCampaigns } from "@/lib/campaigns/sync";
 import { refreshProspectThread } from "@/lib/campaigns/threads";
 import { importCampaignProspects, type ImportResult } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
+import { contactHref } from "@/lib/crm/hrefs";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 const IMPORT_BUDGET_MS = 45_000;
@@ -166,5 +168,33 @@ export async function linkCampaignSenderAction(senderId: string, userId: string 
     return {};
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't save. Try again." };
+  }
+}
+
+function revalidatePerson(target: DoNotContactTarget) {
+  if ("prospectId" in target) revalidatePath(campaignThreadPath(target.prospectId));
+  if ("contactId" in target) revalidatePath(contactHref(target.contactId));
+  revalidatePath("/campaigns");
+}
+
+export async function setDoNotContactAction(target: DoNotContactTarget): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await setDoNotContact(user, target);
+    revalidatePerson(target);
+    return {};
+  } catch (error) {
+    return { error: errorText(error, "Couldn't save. Try again.") };
+  }
+}
+
+export async function liftDoNotContactAction(target: DoNotContactTarget): Promise<{ error?: string }> {
+  const user = await requireUser();
+  try {
+    await liftDoNotContact(user, target);
+    revalidatePerson(target);
+    return {};
+  } catch (error) {
+    return { error: errorText(error, "Couldn't lift. Try again.") };
   }
 }

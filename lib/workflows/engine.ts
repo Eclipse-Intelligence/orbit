@@ -17,6 +17,7 @@ import { currentLinksInDb } from "@/lib/crm/links";
 import { emailThreadKey } from "@/lib/crm/task-mail";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { listSenders, sendContactEmail } from "@/lib/crm/inbox";
+import { isSuppressedRefusal } from "@/lib/crm/suppressions";
 import { isUuid } from "@/lib/crm/mutate";
 import { createOpportunity, getOpportunity, listOpportunities, updateOpportunity } from "@/lib/crm/opportunities";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -1397,7 +1398,10 @@ async function runStepAction(ctx: Ctx, step: Step): Promise<StepResult> {
       if (!subject || !body) throw new CrmError("invalid_input", "The email needs a subject and a body.", 400);
       const from = await emailSender(ctx.actor, str(config.from));
       await startOnlyOnce(ctx, step);
-      const sent = await sendContactEmail(ctx.actor, contactId, { subject, body, from: from?.id ?? null, provenance: provenance(ctx, step) }, ctx.fetchImpl);
+      const sent = await sendContactEmail(ctx.actor, contactId, { subject, body, from: from?.id ?? null, provenance: provenance(ctx, step), suppression: "refuse" }, ctx.fetchImpl).catch((error: unknown) => {
+        if (isSuppressedRefusal(error)) throw new ItemSkipped(error.message, { skipped: true, reason: "do_not_contact" });
+        throw error;
+      });
       return { kind: "next", output: { subject, ...(from ? { from: from.email } : {}), warning: sent.warning, automated: config.automated === true } };
     }
     case "find_records": {

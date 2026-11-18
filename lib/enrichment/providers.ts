@@ -5,6 +5,10 @@ export const PROVIDER_IDS = ["context", "hunter", "enrow", "icypeas"] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
+export const CHECK_SOURCES = { smartlead: "Smartlead" } as const;
+
+export type CheckSourceId = keyof typeof CHECK_SOURCES;
+
 export type ContactField = "email" | "linkedin" | "phone";
 
 export type PersonQuery = {

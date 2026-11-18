@@ -5,6 +5,7 @@ import { attachmentSummary, discardAttachments, loadAttachments } from "@/lib/cr
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
+import { checkSuppressed, type SuppressionPolicy } from "@/lib/crm/suppressions";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { composeEmailHtml, imageMarkers, trackingPixelUrl } from "@/lib/mail/html";
@@ -618,7 +619,13 @@ type SendOptions = {
   claimed?: boolean;
   force?: boolean;
   keyDetails?: KeyDetails;
+  suppression?: SuppressionPolicy;
 };
+
+async function refuseSuppressed(actor: UserActor, input: Pick<DraftInput, "to" | "cc" | "bcc">, policy: SuppressionPolicy | undefined) {
+  if (!policy || policy === "warn") return;
+  await withActor(actor, (db) => checkSuppressed(db, actor.workspaceId, [...input.to, ...input.cc, ...input.bcc], policy));
+}
 
 export const ALREADY_SENDING = "Already sending. Check Sent.";
 export const DRAFT_GONE = "This draft was already sent or deleted.";
@@ -846,6 +853,7 @@ async function sendableWithSharedText(actor: UserActor, input: DraftInput) {
 
 async function sendDraftOnce(actor: UserActor, input: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<SendOutcome> {
   await sendableWithSharedText(actor, input);
+  await refuseSuppressed(actor, input, options.suppression);
   const sendKey = !options.claimed && input.sendKey ? input.sendKey : null;
   const key = sendKey ? await claimSendKey(actor, sendKey, input.id ?? null, options.keyDetails) : null;
   if (key?.state === "sent") return { warning: null };
@@ -1189,10 +1197,12 @@ export async function scheduleMailDraft(
     onDraftRow?: (id: string) => void | Promise<void>;
     shareVersion?: number | null;
     clearSending?: boolean;
+    suppression?: SuppressionPolicy;
   },
 ): Promise<MailDraft> {
   const sharedNow = input.id ? await sharedDraftText(actor, input.id) : null;
   checkSendable(sharedNow ? { ...input, ...sharedNow } : input);
+  await refuseSuppressed(actor, input, options.suppression);
   const at = scheduleTime(input.sendAt);
   const ids = await draftFileList(actor, input, options.storedFiles);
   await attachmentSummary(actor, ids);
@@ -1211,6 +1221,7 @@ export async function scheduleMailDraft(
     if (version !== undefined) await touchShare(db, actor, row.id, false);
     const result = await db.query<DraftRow>(
       `update crm.mail_drafts set send_at = $2, remind_hours = $3, signature = $4, follow_up_days = $5, follow_up_body = $6, send_error = null,
+         scheduled_at = now(), updated_at = now(),
          sending_at = case when $7::boolean and ${DRAFT_SHARE} is not null then null else sending_at end
        where id = $1 returning ${DRAFT_COLUMNS}`,
       [
@@ -1267,7 +1278,7 @@ export async function listScheduledDrafts(actor: UserActor): Promise<MailDraft[]
   });
 }
 
-type DueDraft = DraftRow & { signature: boolean };
+type DueDraft = DraftRow & { signature: boolean; scheduled_at?: Date | string | null; workspace_id?: string };
 
 async function sharedDraftText(actor: UserActor, id: string) {
   if (!isUuid(id)) return null;
@@ -1376,7 +1387,7 @@ export async function changeScheduledDraft(
   });
   if (!held) throw new CrmError("conflict", SCHEDULED_NOT_WAITING, 409);
   try {
-    const draft = await scheduleMailDraft(actor, { ...input, sendAt }, { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep", clearSending: true });
+    const draft = await scheduleMailDraft(actor, { ...input, sendAt }, { origin: options.origin, fetchImpl: options.fetchImpl, storedFiles: "keep", clearSending: true, suppression: "refuse" });
     return (await getScheduledDraft(actor, draft.id)) ?? draft;
   } catch (error) {
     await withActor(actor, (db) =>
@@ -1400,7 +1411,7 @@ export async function claimDueDrafts(actor: UserActor, limit = 5): Promise<DueDr
        )
        update crm.mail_drafts d set send_at = null, sending_at = now()
        from picked where d.id = picked.id
-       returning ${draftColumns("d")}, d.signature`,
+       returning ${draftColumns("d")}, d.signature, d.scheduled_at, d.workspace_id`,
       [actor.userId, limit],
     );
     return result.rows;
@@ -1813,10 +1824,10 @@ export async function sendForAgent(
   };
   const threadHref = original ? `/mail?thread=${encodeURIComponent(`${original.source_id}|${original.tk}`)}` : null;
   if (input.sendAt) {
-    const scheduled = await scheduleMailDraft(actor, { ...draft, attachments, sendAt: input.sendAt }, { ...options, storedFiles: "keep" });
+    const scheduled = await scheduleMailDraft(actor, { ...draft, attachments, sendAt: input.sendAt }, { ...options, storedFiles: "keep", suppression: "refuse" });
     return { ...summary, followUp, warning: null, scheduled: true, sendAt: scheduled.sendAt, draftId: scheduled.id, href: threadHref ?? "/mail?view=scheduled" };
   }
-  const result = await sendMailDraft(actor, { ...draft, attachments }, { ...options, storedFiles: "keep" });
+  const result = await sendMailDraft(actor, { ...draft, attachments }, { ...options, storedFiles: "keep", suppression: "refuse" });
   return { ...summary, followUp, warning: result.warning, scheduled: false, sendAt: null, draftId: null, href: threadHref ?? "/mail?view=sent" };
 }
 
@@ -2125,6 +2136,7 @@ async function sendOrSchedule(actor: UserActor, request: MailSendRequest, option
   const input = kept?.content_hash ? dueDraftInput(kept) : { ...asked, id: kept?.id ?? asked.id ?? null };
   const about = described(key, accounts, input, kept ? rowThreadKey(kept) : askedThread);
   checkSendable(input);
+  await refuseSuppressed(actor, input, "refuse");
   await options.charge?.();
   const details = { contentHash: fingerprint, tokenId: options.tokenId ?? null };
   const sendOptions = { origin: options.origin, fetchImpl: options.fetchImpl, smtp: options.smtp, saveSent: options.saveSent };

@@ -8,6 +8,7 @@ import { manualWorkflows } from "@/lib/workflows/store";
 import { listDocuments } from "@/lib/proposals/documents";
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { listActivitiesByContact } from "@/lib/crm/activities";
+import { contactSuppression } from "@/lib/campaigns/suppression";
 import { contactCampaignLines, contactCampaignTimeline } from "@/lib/campaigns/threads";
 import { getMeetings } from "@/lib/crm/calendar";
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
@@ -71,6 +72,7 @@ export default async function ContactPage({
     moveTargets,
     campaignLines,
     campaignRows,
+    suppression,
   ] = await Promise.all([
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
@@ -91,6 +93,10 @@ export default async function ContactPage({
     contactCampaignTimeline(user, contact.id).catch((error: unknown) => {
       console.error("Couldn't read the contact's campaign timeline", error);
       return [];
+    }),
+    contactSuppression(user, contact.id).catch((error: unknown) => {
+      console.error("Couldn't read the contact's do not contact status", error);
+      return { doNotContact: null, caution: null };
     }),
   ]);
   const available = enrichmentAvailability();
@@ -136,6 +142,9 @@ export default async function ContactPage({
       reads={reads}
       campaignLines={campaignLines}
       campaignRows={campaignRows}
+      doNotContact={suppression.doNotContact}
+      sendCaution={suppression.caution}
+      canSetDoNotContact={user.scopes.includes("campaigns:write")}
       meetings={meetings}
       tags={tags}
       invite={invite}

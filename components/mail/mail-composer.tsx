@@ -20,6 +20,7 @@ import { ComposerReconnect, flagReconnect, reconnectOf } from "@/components/mail
 import { fromFallback } from "@/lib/mail/mailboxes";
 import { draftQueued, holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
+import { useSuppressionCaution } from "@/components/mail/suppression-caution";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { MODE_LABEL } from "@/lib/mail/format";
 import { useShortcutHint, useShortcuts } from "@/components/shortcuts/shortcuts-provider";
@@ -157,6 +158,7 @@ export default function MailComposer({
   const [to, setTo] = useState<MailAddress[]>(draft?.to ?? start.to);
   const [cc, setCc] = useState<MailAddress[]>(draft?.cc ?? start.cc);
   const [bcc, setBcc] = useState<MailAddress[]>(draft?.bcc ?? []);
+  const caution = useSuppressionCaution([...to, ...cc, ...bcc]);
   const [showCopies, setShowCopies] = useState(Boolean(draft?.cc.length || draft?.bcc.length || start.cc.length));
   const [subject, setSubject] = useState(draft?.subject || start.subject);
   const [body, setBody] = useState(draft?.body ?? "");
@@ -946,6 +948,11 @@ export default function MailComposer({
           <Button variant="link" size="none" onClick={() => void unschedule()} className="font-normal">
             Unschedule
           </Button>
+        </p>
+      )}
+      {caution && (
+        <p role="status" className="caption-style text-warning">
+          {caution}
         </p>
       )}
       {error && (

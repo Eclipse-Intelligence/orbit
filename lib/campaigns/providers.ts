@@ -9,6 +9,7 @@ import type {
   Mailbox,
   ProviderDay,
   SequenceStep,
+  StopReason,
 } from "@/lib/campaigns/types";
 import {
   checkHeyReachKey,
@@ -31,6 +32,7 @@ import {
   type HeyReachLead,
 } from "@/lib/heyreach";
 import {
+  blockSmartleadAddresses,
   createSmartleadWebhook,
   listSmartleadCampaigns,
   listSmartleadCategories,
@@ -176,8 +178,9 @@ export type CampaignProvider = {
   setCampaignStatus(context: ProviderContext, externalId: string, status: "paused" | "active"): Promise<void>;
   pauseLead?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
   resumeLead?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
-  stopLead(context: ProviderContext, campaignExternalId: string, lead: LeadRef, reason: "replied" | "removed"): Promise<LeadStatus>;
+  stopLead(context: ProviderContext, campaignExternalId: string, lead: LeadRef, reason: StopReason): Promise<LeadStatus>;
   setCategory?(context: ProviderContext, campaignExternalId: string, lead: LeadRef, category: string): Promise<void>;
+  blockAddresses?(context: ProviderContext, addresses: string[]): Promise<void>;
   categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
   registerWebhook(context: ProviderContext, campaignExternalId: string, url: string): Promise<string>;
   webhookHint(payload: unknown, headers: Headers): WebhookHint | null;
@@ -359,6 +362,7 @@ export const smartleadProvider: CampaignProvider = {
     await setSmartleadCategory(context.key, campaignExternalId, leadIdOf(lead), match.id, context);
   },
   categoryKey: (campaignExternalId, lead, category) => smartleadCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.email ?? "", category),
+  blockAddresses: (context, addresses) => blockSmartleadAddresses(context.key, addresses, context),
   registerWebhook: (context, campaignExternalId, url) => createSmartleadWebhook(context.key, campaignExternalId, url, context),
   webhookHint: (payload, headers) => smartleadWebhookHint(payload, headers.get("x-request-id")),
 };

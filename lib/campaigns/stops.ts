@@ -1,4 +1,5 @@
 import { LeadNotReady, type CampaignProvider, type ProviderContext } from "@/lib/campaigns/providers";
+import type { StopReason } from "@/lib/campaigns/types";
 import { timeLeft } from "@/lib/crm/conversations";
 import { query } from "@/lib/db/pool";
 import { redactedError } from "@/lib/upstream";
@@ -15,7 +16,7 @@ export type StopRow = {
   email: string | null;
   linkedin: string | null;
   sender_id: string | null;
-  stop_reason: "replied" | "removed" | null;
+  stop_reason: StopReason | null;
 };
 
 export async function stopAtProvider(workspaceId: string, provider: CampaignProvider, context: ProviderContext, row: StopRow) {

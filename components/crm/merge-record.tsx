@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
@@ -27,12 +27,14 @@ export default function MergeRecordMenu({
   name,
   moveTargets = [],
   workspaceName = "",
+  extraItems,
 }: {
   kind: "company" | "contact";
   id: string;
   name: string;
   moveTargets?: WorkspaceRef[];
   workspaceName?: string;
+  extraItems?: ReactNode;
 }) {
   const router = useRouter();
   const [moving, setMoving] = useState(false);
@@ -95,6 +97,7 @@ export default function MergeRecordMenu({
               Move to workspace…
             </DropdownMenuItem>
           )}
+          {extraItems}
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={picking} onOpenChange={(open) => !busy && setPicking(open)}>

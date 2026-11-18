@@ -4,6 +4,7 @@ import { bareAddress } from "@/lib/agent-mail/senders";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
+import { checkSuppressed } from "@/lib/crm/suppressions";
 import type { UserActor } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { MachineMailError, replyToMessage, sendNewMessage, type SentMail } from "@/lib/machinemail";
@@ -153,6 +154,14 @@ function addresses(values: string[]) {
   return out;
 }
 
+async function refuseSuppressedMail(actor: UserActor, recipients: string[]) {
+  const parsed = recipients.flatMap((value) => {
+    const address = bareAddress(value);
+    return address ? [{ address }] : [];
+  });
+  await withActor(actor, (db) => checkSuppressed(db, actor.workspaceId, parsed, "refuse"));
+}
+
 export async function sendFromAgentMailbox(
   actor: UserActor,
   input: { replyTo: string | null; to: string[]; cc: string[]; subject: string | null; body: string },
@@ -173,12 +182,14 @@ export async function sendFromAgentMailbox(
       to = [...new Set([...base, ...extra])].filter((address) => address !== mailbox.address);
       if (to.length === 0) throw new CrmError("invalid_input", "Say who the reply is to.", 400, { field: "to" });
       subject = original.subject && /^re:/i.test(original.subject) ? original.subject : `Re: ${original.subject ?? ""}`.trim();
+      await refuseSuppressedMail(actor, [...to, ...cc]);
       sent = await replyToMessage(mailbox.address, original.message_id, { to, cc, text: emailText(input.body), html: emailHtml(input.body) }, fetchImpl);
     } else {
       to = extra;
       if (to.length === 0) throw new CrmError("invalid_input", "Say who the email is to.", 400, { field: "to" });
       subject = input.subject?.trim() || null;
       if (!subject) throw new CrmError("invalid_input", "A new email needs a subject.", 400, { field: "subject" });
+      await refuseSuppressedMail(actor, [...to, ...cc]);
       sent = await sendNewMessage(mailbox.address, { to, cc, subject, text: emailText(input.body), html: emailHtml(input.body) }, fetchImpl);
     }
   } catch (error) {

@@ -60,6 +60,7 @@ export default function ContactEmail({
   to,
   onDone,
   focusSubject,
+  caution = null,
 }: {
   contactId: string | null;
   companyId?: string;
@@ -71,6 +72,7 @@ export default function ContactEmail({
   to?: ReactNode;
   onDone?: (result: { sent: boolean; from: string | null; warning: string | null }) => void;
   focusSubject?: boolean;
+  caution?: string | null;
 }) {
   const router = useRouter();
   const files = useEmailAttachments();
@@ -369,6 +371,11 @@ export default function ContactEmail({
         </div>
       )}
 
+      {caution && !notice && (
+        <p role="status" className="caption-style text-warning pt-2">
+          {caution}
+        </p>
+      )}
       {(error || notice || !email || !canSendMail) && (
         <p
           role={error || notice?.tone === "warn" ? "alert" : "status"}

@@ -441,6 +441,13 @@ export async function setSmartleadCategory(key: string, campaignId: string, lead
   });
 }
 
+export const SMARTLEAD_BLOCK_BATCH = 100;
+
+export async function blockSmartleadAddresses(key: string, addresses: string[], options: SmartleadOptions = {}) {
+  if (addresses.length === 0) return;
+  await call(key, "/leads/add-domain-block-list", { ...options, body: { domain_block_list: addresses.slice(0, SMARTLEAD_BLOCK_BATCH) } });
+}
+
 export const SMARTLEAD_WEBHOOK_EVENTS = ["EMAIL_REPLY", "LEAD_CATEGORY_UPDATED"] as const;
 
 export async function createSmartleadWebhook(key: string, campaignId: string, url: string, options: SmartleadOptions = {}) {

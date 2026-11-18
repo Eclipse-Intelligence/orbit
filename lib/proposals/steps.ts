@@ -164,7 +164,7 @@ export async function emailOpenSteps(actor: UserActor, documentId: string, url: 
   const lines = open.map((step) => `- ${step.title}${step.dueDate ? `, by ${longDate(step.dueDate)}` : ""}`).join("\n");
   const tab = tabsOf(readBlocks(row.blocks))?.find((entry) => entry.blocks.some((block) => block.type === "steps"));
   const body = `Hi ${first},\n\nHere are the next steps on your side:\n\n${lines}\n\nYou can tick them off as you go here:\n${url}${tab ? `#${tab.slug}` : ""}`;
-  const sent = await sendContactEmail(actor, row.contact_id, { subject: `Next steps: ${row.title}`, body }, fetchImpl);
+  const sent = await sendContactEmail(actor, row.contact_id, { subject: `Next steps: ${row.title}`, body, suppression: "warn" }, fetchImpl);
   await withActor(actor, (db) => logEvent(db, { workspaceId: actor.workspaceId, documentId: row.id, type: "steps_emailed", actor: "user", userId: actor.userId, data: { count: open.length } }));
   return { warning: sent.warning ?? null };
 }
