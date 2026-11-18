@@ -8,6 +8,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
+import { applyMailAction } from "@/lib/mail/actions";
 import { handleMailNotifications } from "@/lib/mail/notifications";
 import { REFRESH_FLOOR_MS, SCHEDULED_FLOOR_MS, screenSyncOptions, syncMail, syncNotifiedMailboxes } from "@/lib/mail/sync";
 import { readGraphNotices } from "@/lib/microsoft/notifications";
@@ -18,7 +19,9 @@ const SITE = "https://orbit.test";
 
 type Call = { method: string; url: string; token: string; body: Record<string, unknown> | null };
 
-type Person = { actor: UserActor; token: string; source: string; inbox: unknown[] };
+type Person = { actor: UserActor; token: string; source: string; inbox: unknown[]; parents: Record<string, string> };
+
+const FOLDERS: Record<string, string> = { inbox: "f-inbox", sentitems: "f-sent", archive: "f-archive" };
 
 function message(id: string) {
   return {
@@ -78,8 +81,16 @@ function microsoft(people: () => Person[], hooks: Hooks = {}) {
       return new Response(null, { status: 204 });
     }
     const named = url.match(/\/me\/mailFolders\/(inbox|sentitems|drafts|archive|deleteditems|junkemail|outbox)\?\$select=id$/);
-    if (named) return named[1] === "inbox" ? Response.json({ id: "f-inbox" }) : Response.json({ error: { code: "ErrorFolderNotFound" } }, { status: 404 });
-    if (url.startsWith(`${GRAPH}/me/mailFolders?$top=100`)) return Response.json({ value: [{ id: "f-inbox", displayName: "Inbox", childFolderCount: 0 }] });
+    if (named) return FOLDERS[named[1]] ? Response.json({ id: FOLDERS[named[1]] }) : Response.json({ error: { code: "ErrorFolderNotFound" } }, { status: 404 });
+    if (url.startsWith(`${GRAPH}/me/mailFolders?$top=100`)) {
+      return Response.json({ value: Object.entries(FOLDERS).map(([name, id]) => ({ id, displayName: name, childFolderCount: 0 })) });
+    }
+    const lookup = url.match(/\/me\/messages\/([^/?]+)\?\$select=id,parentFolderId$/);
+    if (lookup) {
+      const parent = people().find((item) => item.token === token)?.parents[decodeURIComponent(lookup[1])];
+      return parent ? Response.json({ id: lookup[1], parentFolderId: parent }) : Response.json({ error: { code: "ErrorItemNotFound" } }, { status: 404 });
+    }
+    if (method === "PATCH" && /\/me\/messages\/[^/?]+\?\$select=id$/.test(url)) return Response.json({ id: "x" });
     if (url.includes("$select=id,inferenceClassification")) return Response.json({ value: [] });
     const folder = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/)?.[1];
     if (folder) {
@@ -98,17 +109,19 @@ function microsoft(people: () => Person[], hooks: Hooks = {}) {
     return Response.json({ value: [] });
   };
   const inboxDeltas = (token: string) => calls.filter((call) => call.token === token && call.url.includes("/mailFolders/f-inbox/messages/delta"));
+  const deltaFolders = (token: string) =>
+    [...new Set(calls.filter((call) => call.token === token && call.url.includes("/messages/delta")).map((call) => call.url.match(/mailFolders\/([^/]+)\//)?.[1]))].sort();
   const calendarViews = (token: string) => calls.filter((call) => call.token === token && call.url.includes("/calendarView"));
   const subscriptionCalls = (token: string, method: string) => calls.filter((call) => call.token === token && call.method === method && call.url.startsWith(`${GRAPH}/subscriptions`));
-  return { fetchImpl, calls, inboxDeltas, calendarViews, subscriptionCalls };
+  return { fetchImpl, calls, inboxDeltas, deltaFolders, calendarViews, subscriptionCalls };
 }
 
-function notice(subscriptionId: string, clientState: string, lifecycleEvent?: string) {
+function notice(subscriptionId: string, clientState: string, lifecycleEvent?: string, messageId = "y", changeType = "updated") {
   return {
     subscriptionId,
     clientState,
-    changeType: lifecycleEvent ? undefined : "updated",
-    resource: "Users('x')/Messages('y')",
+    changeType: lifecycleEvent ? undefined : changeType,
+    resource: `Users('x')/Messages('${messageId}')`,
     ...(lifecycleEvent ? { lifecycleEvent } : {}),
   };
 }
@@ -147,8 +160,8 @@ describe("Microsoft change notifications", () => {
     const b = await createUser("bruno@orbit.test", "Bruno Bell");
     await saveMailbox(a, { email: "alice@eclipse.test", refreshToken: "refresh", accessToken: "token-a", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
     await saveMailbox(b, { email: "bruno@eclipse.test", refreshToken: "refresh", accessToken: "token-b", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
-    alice = { actor: a, token: "token-a", source: "", inbox: [] };
-    bruno = { actor: b, token: "token-b", source: "", inbox: [] };
+    alice = { actor: a, token: "token-a", source: "", inbox: [], parents: {} };
+    bruno = { actor: b, token: "token-b", source: "", inbox: [], parents: {} };
     const box = microsoft(people);
     await syncMail(a, { budgetMs: 30_000, fetchImpl: box.fetchImpl });
     await syncMail(b, { budgetMs: 30_000, fetchImpl: box.fetchImpl });
@@ -161,6 +174,8 @@ describe("Microsoft change notifications", () => {
     signals.length = 0;
     alice.inbox = [];
     bruno.inbox = [];
+    alice.parents = {};
+    bruno.parents = {};
     await getAdminPool().query("update crm.mail_sources set locked_until = null, resync_pending = false, retry_at = null, last_synced_at = now() - interval '1 hour'");
     await getAdminPool().query("update crm.calendars set notify_locked_until = null, resync_pending = false");
   });
@@ -403,10 +418,64 @@ describe("Microsoft change notifications", () => {
     it("answers Microsoft's validation, folds a large batch into one notice per subscription and drops malformed ones", async () => {
       const check = await handleMailNotifications(new Request(`${SITE}/api/microsoft/mail-webhook?validationToken=abc%20123`, { method: "POST" }));
       assert.equal(await check.text(), "abc 123");
-      assert.deepEqual(readGraphNotices({ value: Array.from({ length: 300 }, () => notice("x", "y")) }), [{ subscriptionId: "x", clientState: "y", lifecycleEvent: null }]);
+      assert.deepEqual(readGraphNotices({ value: Array.from({ length: 300 }, () => notice("x", "y")) }), [
+        { subscriptionId: "x", clientState: "y", lifecycleEvent: null, changeType: "updated", messageId: "y" },
+      ]);
+      const many = readGraphNotices({ value: Array.from({ length: 300 }, (_, index) => notice("x", "y", undefined, `m-${index}`)) });
+      assert.deepEqual(many, [{ subscriptionId: "x", clientState: "y", lifecycleEvent: null, changeType: null, messageId: null }], "too many messages fall back to a full walk");
       assert.deepEqual(readGraphNotices({ value: [notice("x", "y", "somethingElse"), { subscriptionId: "x" }] }), []);
       const malformed = await handleMailNotifications(new Request(`${SITE}/api/microsoft/mail-webhook`, { method: "POST", body: "not json" }));
       assert.equal(malformed.status, 400);
+    });
+
+    it("skips the echo of Orbit's own change without calling Microsoft", async () => {
+      alice.inbox = [message("echo-1")];
+      await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: microsoft(people).fetchImpl });
+      alice.inbox = [];
+      const acting = microsoft(people);
+      await applyMailAction(alice.actor, { thread: `${alice.source}|conv-echo-1`, action: "read" }, acting.fetchImpl);
+      assert.equal(acting.calls.filter((call) => call.method === "PATCH").length, 1);
+      const a = await mailSource(alice.actor.userId);
+      const box = microsoft(people);
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "echo-1")])], box);
+      assert.equal(box.calls.length, 0, "an echo costs no Microsoft call");
+      assert.equal((await mailSource(alice.actor.userId)).resync_pending, false);
+    });
+
+    it("syncs a change made in Outlook to the same message once the echo window has passed, and only its folder", async () => {
+      await getAdminPool().query("update crm.mail_echoes set changed_at = now() - interval '3 minutes' where provider_message_id = 'echo-1'");
+      const a = await mailSource(alice.actor.userId);
+      const box = microsoft(people);
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "echo-1")])], box);
+      assert.deepEqual(box.deltaFolders("token-a"), ["f-inbox"]);
+      assert.equal(box.calls.filter((call) => call.url.includes("parentFolderId")).length, 0, "a known message needs no lookup");
+    });
+
+    it("syncs only the folders a burst involves: where Orbit has each message, and where a new one landed", async () => {
+      alice.inbox = [message("known-1")];
+      await syncMail(alice.actor, { budgetMs: 30_000, backfill: false, fetchImpl: microsoft(people).fetchImpl });
+      alice.parents = { "new-sent": "f-sent" };
+      const a = await mailSource(alice.actor.userId);
+      const box = microsoft(people);
+      await runMail(
+        [
+          post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "known-1")]),
+          post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "new-sent", "created")]),
+          post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "gone-1", "deleted")]),
+        ],
+        box,
+      );
+      assert.deepEqual(box.deltaFolders("token-a"), ["f-inbox", "f-sent"]);
+      assert.equal(box.calls.filter((call) => call.url.includes("/me/messages/new-sent?")).length, 1, "one lookup for the new message");
+      const pending = await getAdminPool().query("select 1 from crm.mail_folders where resync_pending");
+      assert.equal(pending.rowCount, 0);
+    });
+
+    it("walks every folder for a message it doesn't know and can't find", async () => {
+      const a = await mailSource(alice.actor.userId);
+      const box = microsoft(people);
+      await runMail([post("/api/microsoft/mail-webhook", [notice(a.graph_subscription_id!, a.graph_client_state!, undefined, "mystery", "created")])], box);
+      assert.deepEqual(box.deltaFolders("token-a"), ["f-archive", "f-inbox", "f-sent"]);
     });
 
     it("no longer syncs mail from the ten-minute job", () => {

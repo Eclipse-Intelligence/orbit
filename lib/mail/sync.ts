@@ -110,6 +110,7 @@ export type MailSyncReport = {
   synced: string[];
   recent: string[];
   passes: number;
+  lookups: number;
 };
 
 function mailStorageLimitBytes() {
@@ -777,7 +778,7 @@ async function loadFolders(actor: UserActor, sourceId: string) {
   });
 }
 
-async function releaseSource(actor: UserActor, sourceId: string, lastError: string | null, retryAt: Date | null, unfinished = false) {
+async function releaseSource(actor: UserActor, sourceId: string, lastError: string | null, retryAt: Date | null, unfinished = false, redo = false) {
   try {
     await withActor(actor, (db) =>
       db.query(
@@ -785,9 +786,10 @@ async function releaseSource(actor: UserActor, sourceId: string, lastError: stri
            last_synced_at = case when $2::text is null then now() else last_synced_at end,
            last_error = $2,
            retry_at = $3,
-           resync_pending = resync_pending or $4
+           resync_pending = resync_pending or $4,
+           resync_full = resync_full or $5
          where id = $1`,
-        [sourceId, lastError, retryAt, unfinished],
+        [sourceId, lastError, retryAt, unfinished, unfinished || redo],
       ),
     );
   } catch (error) {
@@ -805,6 +807,98 @@ async function claimArrivals(actor: UserActor) {
   });
 }
 
+const LOOKUP_LIMIT = 20;
+export const ECHO_WINDOW_MS = 2 * 60_000;
+
+type Work = { full: boolean; lookups: string[]; folderIds: string[] };
+
+export type MailChange = { sourceId: string; full: boolean; folderIds: string[]; lookups: string[] };
+
+async function takeWork(actor: UserActor, sourceId: string): Promise<Work> {
+  return withActor(actor, async (db) => {
+    const source = await db.query<{ resync_full: boolean; resync_lookups: string[] }>(
+      `update crm.mail_sources s set resync_full = false, resync_lookups = '{}'
+       from (select id, resync_full, resync_lookups from crm.mail_sources where id = $1 for update) o
+       where s.id = o.id
+       returning o.resync_full, o.resync_lookups`,
+      [sourceId],
+    );
+    const folders = await db.query<{ id: string }>(
+      "update crm.mail_folders set resync_pending = false where source_id = $1 and resync_pending returning id",
+      [sourceId],
+    );
+    return {
+      full: source.rows[0]?.resync_full ?? false,
+      lookups: source.rows[0]?.resync_lookups ?? [],
+      folderIds: folders.rows.map((row) => row.id),
+    };
+  });
+}
+
+async function targetFolders(
+  actor: UserActor,
+  source: Source,
+  live: FolderRow[],
+  work: Work,
+  token: string,
+  places: Places,
+  limit: { fetchImpl: typeof fetch; deadline: number },
+  report: MailSyncReport,
+) {
+  if (work.full || work.lookups.length > LOOKUP_LIMIT) return live;
+  const wanted = new Set(work.folderIds);
+  for (const id of work.lookups) {
+    report.lookups += 1;
+    let parent: string | null;
+    try {
+      parent = await fetchMicrosoftMessageFolder(token, id, limit.fetchImpl, { deadline: limit.deadline, mailScope: places.mailScope });
+    } catch (error) {
+      if (error instanceof GraphOutOfTime || (await stopsSource(actor, source, error))) throw error;
+      return live;
+    }
+    const folder = parent ? places.folders.get(parent) : undefined;
+    if (!folder) return live;
+    wanted.add(folder);
+  }
+  return live.filter((folder) => wanted.has(folder.id));
+}
+
+export async function noteMailChanges(actor: UserActor, changes: MailChange[]) {
+  if (changes.length === 0) return;
+  await withActor(actor, async (db) => {
+    for (const change of changes) {
+      if (change.folderIds.length > 0) {
+        await db.query("update crm.mail_folders set resync_pending = true where source_id = $1 and user_id = $2 and id = any($3::uuid[])", [
+          change.sourceId,
+          actor.userId,
+          change.folderIds,
+        ]);
+      }
+      await db.query(
+        `update crm.mail_sources set
+           resync_pending = true,
+           resync_full = resync_full or $3 or cardinality(resync_lookups) + cardinality($4::text[]) > $5,
+           resync_lookups = case when cardinality(resync_lookups) + cardinality($4::text[]) > $5 then '{}'
+             else array(select distinct unnest(resync_lookups || $4::text[])) end
+         where id = $1 and user_id = $2`,
+        [change.sourceId, actor.userId, change.full, change.lookups, LOOKUP_LIMIT],
+      );
+    }
+  });
+}
+
+export async function recordMailEchoes(db: Db, actor: UserActor, sourceId: string, providerMessageIds: string[]) {
+  const ids = [...new Set(providerMessageIds.filter((id) => id && id.length <= 400))];
+  if (ids.length === 0) return;
+  await db.query("delete from crm.mail_echoes where user_id = $1 and changed_at < now() - interval '1 hour'", [actor.userId]);
+  await db.query(
+    `insert into crm.mail_echoes (source_id, user_id, provider_message_id)
+     select $1, $2, unnest($3::text[])
+     on conflict (source_id, provider_message_id) do update set changed_at = now()`,
+    [sourceId, actor.userId, ids],
+  );
+}
+
 export type MailSyncOptions = {
   deadline?: number;
   budgetMs?: number;
@@ -815,6 +909,7 @@ export type MailSyncOptions = {
   ignoreFolderWaits?: boolean;
   skipRecentMs?: number;
   announce?: boolean;
+  targeted?: boolean;
 };
 
 export async function syncMail(actor: UserActor, options: MailSyncOptions): Promise<MailSyncReport> {
@@ -838,6 +933,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
     waiting: [],
     recent: [],
     passes: 0,
+    lookups: 0,
   };
   const sources = (await loadSources(actor)).filter((source) => !options.sourceIds || options.sourceIds.includes(source.id));
   const hardStop = await withActor(actor, async (db) => (await databaseBytes(db)) >= mailHardStopBytes());
@@ -903,8 +999,10 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
         const folders = await loadFolders(actor, source.id);
         const { live, backfill } = folderOrder(folders);
         places.folders = new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id]));
+        const work = await takeWork(actor, source.id);
+        const walk = options.targeted ? await targetFolders(actor, source, live, work, token.accessToken, places, { fetchImpl, deadline: sourceDeadline }, report) : live;
         const cutBefore = report.backfilling;
-        for (const folder of live.filter(ready)) {
+        for (const folder of walk.filter(ready)) {
           if (Date.now() >= sourceDeadline) {
             unfinished = true;
             break;
@@ -937,7 +1035,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
         if (throttled(error)) retryAt = throttleUntil(error);
       }
     } finally {
-      await releaseSource(actor, source.id, lastError, retryAt, unfinished);
+      await releaseSource(actor, source.id, lastError, retryAt, unfinished, lastError !== null);
     }
   }
   await announce();
@@ -977,13 +1075,6 @@ const SHORTEST_NOTIFIED_SYNC_MS = 3_000;
 
 type PendingSource = { id: string; held: boolean; throttled: boolean };
 
-export async function requestMailResync(actor: UserActor, sourceIds: string[]) {
-  if (sourceIds.length === 0) return;
-  await withActor(actor, (db) =>
-    db.query("update crm.mail_sources set resync_pending = true where user_id = $1 and id = any($2::uuid[])", [actor.userId, sourceIds]),
-  );
-}
-
 async function pendingSources(actor: UserActor, sourceIds: string[]) {
   const result = await withActor(actor, (db) =>
     db.query<PendingSource>(
@@ -998,14 +1089,14 @@ async function pendingSources(actor: UserActor, sourceIds: string[]) {
 export async function syncNotifiedMailboxes(
   actor: UserActor,
   sourceIds: string[],
-  options: { deadline: number; fetchImpl?: typeof fetch; pollMs?: number },
+  options: { deadline: number; fetchImpl?: typeof fetch; pollMs?: number; noted?: boolean },
 ) {
   const pollMs = options.pollMs ?? NOTIFIED_POLL_MS;
   let waiting = [...new Set(sourceIds)];
   let stored = 0;
   let workflowEvents = 0;
   let syncs = 0;
-  await requestMailResync(actor, waiting);
+  if (!options.noted) await noteMailChanges(actor, waiting.map((sourceId) => ({ sourceId, full: true, folderIds: [], lookups: [] })));
   while (waiting.length > 0) {
     const pending = await pendingSources(actor, waiting);
     waiting = pending.filter((source) => !source.throttled).map((source) => source.id);
@@ -1021,6 +1112,7 @@ export async function syncNotifiedMailboxes(
         ignoreFolderWaits: true,
         fetchImpl: options.fetchImpl,
         announce: true,
+        targeted: true,
       });
       stored += report.stored;
       workflowEvents += report.workflowEvents;

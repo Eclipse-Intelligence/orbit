@@ -2,6 +2,31 @@ set lock_timeout = '5s';
 
 alter table crm.mail_sources add column if not exists graph_subscription_scope text;
 alter table crm.mail_sources add column if not exists resync_pending boolean not null default false;
+alter table crm.mail_sources add column if not exists resync_full boolean not null default false;
+alter table crm.mail_sources add column if not exists resync_lookups text[] not null default '{}';
+alter table crm.mail_folders add column if not exists resync_pending boolean not null default false;
+
+create table if not exists crm.mail_echoes (
+  source_id uuid not null references crm.mail_sources (id) on delete cascade,
+  user_id uuid not null references crm.profiles (id) on delete cascade,
+  provider_message_id text not null check (char_length(provider_message_id) <= 400),
+  changed_at timestamptz not null default now(),
+  primary key (source_id, provider_message_id)
+);
+
+create index if not exists mail_echoes_user_idx on crm.mail_echoes (user_id, changed_at);
+
+alter table crm.mail_echoes enable row level security;
+alter table crm.mail_echoes force row level security;
+
+drop policy if exists mail_echoes_owner on crm.mail_echoes;
+create policy mail_echoes_owner on crm.mail_echoes
+  for all to authenticated
+  using (user_id = (select private.session_user_id()) and source_id in (select s.id from crm.mail_sources s))
+  with check (user_id = (select private.session_user_id()) and source_id in (select s.id from crm.mail_sources s));
+
+revoke all on crm.mail_echoes from anon, authenticated, crm_agent;
+grant select, insert, update, delete on crm.mail_echoes to authenticated;
 
 alter table crm.calendars add column if not exists graph_subscription_id text;
 alter table crm.calendars add column if not exists graph_subscription_expires_at timestamptz;

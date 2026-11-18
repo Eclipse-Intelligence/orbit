@@ -5,9 +5,9 @@ import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
 import { classifyCapture } from "@/lib/mail/capture-filter";
 import { prepareMail } from "@/lib/mail/prepare";
-import { syncNotifiedMailboxes } from "@/lib/mail/sync";
+import { ECHO_WINDOW_MS, noteMailChanges, syncNotifiedMailboxes, type MailChange } from "@/lib/mail/sync";
 import { runWorkflowTick } from "@/lib/workflows/engine";
-import { graphNotices, graphValidation, type GraphNotice } from "@/lib/microsoft/notifications";
+import { graphNotices, graphValidation, type GraphChangeType, type GraphNotice } from "@/lib/microsoft/notifications";
 
 const BUDGET_MS = 55_000;
 const SHORTEST_SYNC_MS = 3_000;
@@ -24,7 +24,16 @@ type SourceOwnerRow = {
   full_name: string | null;
 };
 
-export type MailTarget = { actor: UserActor; sourceIds: string[]; removed: string[]; renew: string[] };
+type SourceNotices = {
+  full: boolean;
+  removed: boolean;
+  renew: boolean;
+  messages: { id: string; changeType: GraphChangeType | null }[];
+};
+
+export type MailTarget = { actor: UserActor; sources: Map<string, SourceNotices> };
+
+type Outcome = Awaited<ReturnType<typeof syncNotifiedMailboxes>>;
 
 type Schedule = (task: () => Promise<unknown>) => void;
 
@@ -33,7 +42,7 @@ type Options = {
   deadline?: number;
   schedule?: Schedule;
   pollMs?: number;
-  afterSync?: (target: MailTarget, outcome: Awaited<ReturnType<typeof syncNotifiedMailboxes>>, deadline: number) => Promise<void>;
+  afterSync?: (target: MailTarget, outcome: Outcome, deadline: number) => Promise<void>;
 };
 
 function left(deadline: number) {
@@ -49,35 +58,66 @@ export async function mailTargets(notices: GraphNotice[]) {
   for (const notice of notices) {
     const owner = bySubscription.get(notice.subscriptionId);
     if (!owner?.client_state || !safeEqual(notice.clientState, owner.client_state)) continue;
-    const key = owner.user_id;
-    const target = targets.get(key) ?? { actor: memberActor(owner), sourceIds: [], removed: [], renew: [] };
-    if (!target.sourceIds.includes(owner.source_id)) target.sourceIds.push(owner.source_id);
-    if (notice.lifecycleEvent === "subscriptionRemoved") target.removed.push(owner.source_id);
-    if (notice.lifecycleEvent === "reauthorizationRequired") target.renew.push(owner.source_id);
-    targets.set(key, target);
+    const target = targets.get(owner.user_id) ?? { actor: memberActor(owner), sources: new Map<string, SourceNotices>() };
+    const source = target.sources.get(owner.source_id) ?? { full: false, removed: false, renew: false, messages: [] };
+    if (notice.lifecycleEvent === "subscriptionRemoved") {
+      source.removed = true;
+      source.full = true;
+    } else if (notice.lifecycleEvent === "reauthorizationRequired") source.renew = true;
+    else if (notice.lifecycleEvent === "missed" || !notice.messageId) source.full = true;
+    else source.messages.push({ id: notice.messageId, changeType: notice.changeType });
+    target.sources.set(owner.source_id, source);
+    targets.set(owner.user_id, target);
   }
   return [...targets.values()];
 }
 
-async function prepareForRenewal(target: MailTarget) {
-  if (target.removed.length === 0 && target.renew.length === 0) return;
-  await withActor(target.actor, async (db) => {
-    if (target.removed.length > 0) {
-      await db.query(
-        "update crm.mail_sources set graph_subscription_id = null, graph_subscription_expires_at = null where user_id = $1 and id = any($2::uuid[])",
-        [target.actor.userId, target.removed],
-      );
+async function planChanges(target: MailTarget): Promise<MailChange[]> {
+  return withActor(target.actor, async (db) => {
+    const changes: MailChange[] = [];
+    for (const [sourceId, notices] of target.sources) {
+      if (notices.removed) {
+        await db.query("update crm.mail_sources set graph_subscription_id = null, graph_subscription_expires_at = null where user_id = $1 and id = $2", [
+          target.actor.userId,
+          sourceId,
+        ]);
+      }
+      if (notices.renew) {
+        await db.query("update crm.mail_sources set graph_subscription_expires_at = now() where user_id = $1 and id = $2", [target.actor.userId, sourceId]);
+      }
+      const ids = notices.full ? [] : [...new Set(notices.messages.map((message) => message.id))];
+      const echoes = ids.length
+        ? await db.query<{ provider_message_id: string }>(
+            `select provider_message_id from crm.mail_echoes
+             where user_id = $1 and source_id = $2 and provider_message_id = any($3::text[])
+               and changed_at > now() - make_interval(secs => $4)`,
+            [target.actor.userId, sourceId, ids, ECHO_WINDOW_MS / 1000],
+          )
+        : { rows: [] };
+      const known = ids.length
+        ? await db.query<{ provider_message_id: string; folder_id: string }>(
+            "select provider_message_id, folder_id from crm.mail_messages where user_id = $1 and source_id = $2 and provider_message_id = any($3::text[])",
+            [target.actor.userId, sourceId, ids],
+          )
+        : { rows: [] };
+      const echoed = new Set(echoes.rows.map((row) => row.provider_message_id));
+      const folderOf = new Map(known.rows.map((row) => [row.provider_message_id, row.folder_id]));
+      const folderIds = new Set<string>();
+      const lookups = new Set<string>();
+      for (const message of notices.messages) {
+        if (notices.full || echoed.has(message.id)) continue;
+        const folder = folderOf.get(message.id);
+        if (folder) folderIds.add(folder);
+        else if (message.changeType !== "deleted") lookups.add(message.id);
+      }
+      const change: MailChange = { sourceId, full: notices.full, folderIds: [...folderIds], lookups: [...lookups] };
+      if (change.full || change.folderIds.length > 0 || change.lookups.length > 0 || notices.renew) changes.push(change);
     }
-    if (target.renew.length > 0) {
-      await db.query("update crm.mail_sources set graph_subscription_expires_at = now() where user_id = $1 and id = any($2::uuid[])", [
-        target.actor.userId,
-        target.renew,
-      ]);
-    }
+    return changes;
   });
 }
 
-async function followUp(target: MailTarget, outcome: Awaited<ReturnType<typeof syncNotifiedMailboxes>>, deadline: number) {
+async function followUp(target: MailTarget, outcome: Outcome, deadline: number) {
   if (outcome.unreached.length > 0) console.error("Mail webhook couldn't reach every mailbox", outcome.unreached.length);
   if (outcome.workflowEvents > 0 && left(deadline) > SHORTEST_SYNC_MS) {
     await runWorkflowTick({ budgetMs: Math.min(15_000, left(deadline)) }).catch((error) => console.error("Workflow tick failed", error));
@@ -96,8 +136,14 @@ export async function processMailTargets(targets: MailTarget[], deadline: number
   for (const target of targets) {
     if (left(deadline) < SHORTEST_SYNC_MS) break;
     try {
-      await prepareForRenewal(target);
-      const outcome = await syncNotifiedMailboxes(target.actor, target.sourceIds, { deadline, fetchImpl: options.fetchImpl, pollMs: options.pollMs });
+      const changes = await planChanges(target);
+      if (changes.length === 0) continue;
+      await noteMailChanges(target.actor, changes);
+      const outcome = await syncNotifiedMailboxes(
+        target.actor,
+        changes.map((change) => change.sourceId),
+        { deadline, fetchImpl: options.fetchImpl, pollMs: options.pollMs, noted: true },
+      );
       await (options.afterSync ?? followUp)(target, outcome, deadline);
     } catch (error) {
       console.error("Mail webhook sync failed", error);
