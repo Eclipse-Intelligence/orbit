@@ -3,12 +3,13 @@
 import { useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
+import Switch from "@/components/_ui/switch";
 import { Textarea } from "@/components/_ui/textarea";
 import { saveCampaignVariablesAction } from "@/app/(crm)/campaigns/actions";
 import type { VariableBrief } from "@/lib/campaigns/types";
 import { cn } from "@/lib/utils";
 
-const ROW = "grid grid-cols-1 gap-1.5 md:grid-cols-[9rem_minmax(0,1fr)_4.5rem] md:items-start md:gap-3";
+const ROW = "grid grid-cols-1 gap-1.5 md:grid-cols-[9rem_minmax(0,1fr)_4.5rem_4.5rem] md:items-start md:gap-3";
 
 type Draft = { name: string; brief: string; required: boolean; max: string };
 
@@ -55,6 +56,7 @@ export default function VariableBriefs({ campaignId, briefs, canEdit }: { campai
             <span className="font-mono text-[12px] text-(--tag-purple-text) md:pt-0.5">{item.name}</span>
             <span className={cn("wrap-anywhere", !item.brief && "text-subtle")}>{item.brief || "No brief"}</span>
             <span className="text-subtle tabular-nums">{item.maxLength === null ? "" : `${item.maxLength.toLocaleString("en-GB")} max`}</span>
+            <span className="text-subtle">{item.required ? "" : "Optional"}</span>
           </li>
         ))}
       </ul>
@@ -67,6 +69,7 @@ export default function VariableBriefs({ campaignId, briefs, canEdit }: { campai
         <span />
         <span />
         <span>Max characters</span>
+        <span>Required</span>
       </div>
       <ul className="flex flex-col gap-3">
         {drafts.map((item, index) => (
@@ -97,6 +100,12 @@ export default function VariableBriefs({ campaignId, briefs, canEdit }: { campai
                 onChange={(event) => edit(index, { max: event.target.value })}
                 className="w-20 md:w-full"
               />
+            </div>
+            <div className="flex items-center gap-2 md:pt-2">
+              <span aria-hidden className="caption-style text-subtle md:hidden">
+                Required
+              </span>
+              <Switch id={`required-${item.name}`} label={`${item.name} is required`} checked={item.required} onChange={(required) => edit(index, { required })} className="hit" />
             </div>
           </li>
         ))}

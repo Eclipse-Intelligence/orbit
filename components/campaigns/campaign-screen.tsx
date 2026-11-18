@@ -159,17 +159,26 @@ function Steps({ campaign }: { campaign: CampaignDetail }) {
   if (rows.length === 0) return <p className="ui-style text-subtle">No steps</p>;
   return (
     <ul className="flex flex-col">
-      <li aria-hidden className="caption-style text-subtle hidden grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem_4.5rem] gap-3 pb-1.5 md:grid">
+      <li
+        aria-hidden
+        className={cn(
+          "caption-style text-subtle hidden gap-3 pb-1.5 md:grid",
+          linkedin ? "grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem]" : "grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem_4.5rem]",
+        )}
+      >
         <span />
         <span />
         <span className="text-right">Sent</span>
         <span className="text-right">{linkedin ? "Accepted" : "Opened"}</span>
-        <span className="text-right">Replied</span>
+        {!linkedin && <span className="text-right">Replied</span>}
       </li>
       {rows.map(({ step, stats }) => (
         <li
           key={`${step.step}:${step.variant ?? ""}`}
-          className="border-border ui-style grid grid-cols-[2rem_minmax(0,1fr)_auto] items-baseline gap-3 border-t py-2 md:grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem_4.5rem]"
+          className={cn(
+            "border-border ui-style grid grid-cols-[2rem_minmax(0,1fr)_auto] items-baseline gap-3 border-t py-2",
+            linkedin ? "md:grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem]" : "md:grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem_4.5rem]",
+          )}
         >
           <span className="text-faint tabular-nums">{stepLabel(step, campaign.sequence)}</span>
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -191,10 +200,12 @@ function Steps({ campaign }: { campaign: CampaignDetail }) {
             <span className="sr-only">{linkedin ? "Accepted " : "Opened "}</span>
             {stats ? (secondRate(stats, linkedin) ?? "·") : "·"}
           </span>
-          <span className={cn("text-right tabular-nums", linkedin && "hidden md:block")}>
-            <span className="sr-only">Replied </span>
-            {stats && !linkedin ? (rate(stats.replied, stats.sent) ?? "·") : "·"}
-          </span>
+          {!linkedin && (
+            <span className="text-right tabular-nums">
+              <span className="sr-only">Replied </span>
+              {stats ? (rate(stats.replied, stats.sent) ?? "·") : "·"}
+            </span>
+          )}
         </li>
       ))}
     </ul>

@@ -951,7 +951,7 @@ describe("campaign events and replies", () => {
       const priya = await prospectId("lead-priya");
       const sends = () => (alpha.writes ?? []).filter((write) => write.path === "/campaigns/801/reply-email-thread").length;
       const before = sends();
-      await sql("revoke execute on function private.campaign_reply_finish(uuid, uuid, text, text, text) from crm_app");
+      await sql("revoke execute on function private.campaign_reply_finish(uuid, uuid, text, text, text, jsonb) from crm_app");
       try {
         await assert.rejects(replyToProspect(owner, priya, { text: "Sent but not recorded.", clientKey: "after-begin-1" }, { fetchImpl }), (error: unknown) => {
           assert.ok(error instanceof CrmError);
@@ -959,7 +959,7 @@ describe("campaign events and replies", () => {
           return true;
         });
       } finally {
-        await sql("grant execute on function private.campaign_reply_finish(uuid, uuid, text, text, text) to crm_app");
+        await sql("grant execute on function private.campaign_reply_finish(uuid, uuid, text, text, text, jsonb) to crm_app");
       }
       assert.equal(sends(), before + 1);
       const again = await replyToProspect(owner, priya, { text: "Sent but not recorded.", clientKey: "after-begin-1" }, { fetchImpl });

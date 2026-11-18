@@ -24,6 +24,7 @@ import {
   listHeyReachCampaigns,
   listHeyReachConversations,
   listHeyReachLeads,
+  readHeyReachCampaign,
   readHeyReachChatroom,
   readHeyReachSequence,
   readHeyReachStats,
@@ -37,12 +38,14 @@ import {
 import {
   addSmartleadLeads,
   blockSmartleadAddresses,
+  clearSmartleadCategory,
   createSmartleadWebhook,
   findSmartleadLead,
   listSmartleadCampaigns,
   listSmartleadCategories,
   listSmartleadLeads,
   pauseSmartleadLead,
+  readSmartleadCampaign,
   readSmartleadClient,
   readSmartleadMailboxes,
   readSmartleadSequence,
@@ -57,7 +60,9 @@ import {
   SMARTLEAD_APP,
   SMARTLEAD_PUSH_BATCH,
   SmartleadError,
+  smartleadClients,
   smartleadWebhookHint,
+  unblockSmartleadAddress,
   type SmartleadStatRow,
   type WebhookHint,
   variablesIn,
@@ -68,7 +73,11 @@ export type ProviderContext = {
   workspaceId: string;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
+  details?: Record<string, unknown>;
+  lane?: "push";
 };
+
+export const ACCOUNT_KEY = "Use the client's key, not the account key.";
 
 export type ProviderCampaign = { externalId: string; name: string; status: CampaignStatus; senderIds?: string[] };
 
@@ -186,6 +195,7 @@ export type CampaignProvider = {
   checkKey(context: ProviderContext): Promise<ConnectionCheck>;
   connectedLine(details: Record<string, unknown>, campaigns: number): string;
   listCampaigns(context: ProviderContext): Promise<ProviderCampaign[]>;
+  readCampaign(context: ProviderContext, externalId: string): Promise<ProviderCampaign | null>;
   readSequence(context: ProviderContext, externalId: string): Promise<SequenceStep[]>;
   variables(steps: SequenceStep[]): string[];
   readStats(context: ProviderContext, externalId: string): Promise<StatsRead>;
@@ -203,6 +213,8 @@ export type CampaignProvider = {
   resumeLead?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
   stopLead(context: ProviderContext, campaignExternalId: string, lead: LeadRef, reason: StopReason): Promise<LeadStatus>;
   setCategory?(context: ProviderContext, campaignExternalId: string, lead: LeadRef, category: string): Promise<void>;
+  clearCategory?(context: ProviderContext, campaignExternalId: string, lead: LeadRef): Promise<void>;
+  unblockAddress?(context: ProviderContext, address: string): Promise<number>;
   blockAddresses?(context: ProviderContext, addresses: string[]): Promise<void>;
   categoryKey(campaignExternalId: string, lead: LeadRef, category: string): string;
   registerWebhook(context: ProviderContext, campaignExternalId: string, url: string): Promise<string>;
@@ -317,7 +329,8 @@ export const smartleadProvider: CampaignProvider = {
   failure: (error) => (error instanceof SmartleadError ? { message: error.message, rejectedKey: error.rejectedKey, missing: error.status === 404, status: error.status } : null),
   async checkKey(context) {
     const campaigns = await listSmartleadCampaigns(context.key, context);
-    const clientIds = [...new Set(campaigns.map((item) => item.clientId).filter((id): id is string => Boolean(id)))];
+    const clientIds = smartleadClients(campaigns);
+    if (clientIds.length > 1) throw new SmartleadError(ACCOUNT_KEY, 400);
     const client = await readSmartleadClient(context.key, clientIds, context);
     return {
       details: { clientId: client?.id ?? clientIds[0] ?? null, clientName: client?.name ?? null, campaigns: campaigns.length },
@@ -329,7 +342,19 @@ export const smartleadProvider: CampaignProvider = {
     return `Connected${client}. ${campaignsLine(campaigns)}.`;
   },
   async listCampaigns(context) {
-    return (await listSmartleadCampaigns(context.key, context)).map((item) => ({ externalId: item.id, name: item.name, status: item.status }));
+    const campaigns = await listSmartleadCampaigns(context.key, context);
+    const stored = typeof context.details?.clientId === "string" && context.details.clientId ? context.details.clientId : null;
+    if (!stored && smartleadClients(campaigns).length > 1) throw new SmartleadError(ACCOUNT_KEY, 400);
+    return campaigns
+      .filter((item) => !stored || item.clientId === null || item.clientId === stored)
+      .map((item) => ({ externalId: item.id, name: item.name, status: item.status }));
+  },
+  async readCampaign(context, externalId) {
+    const found = await readSmartleadCampaign(context.key, externalId, context);
+    if (!found) return null;
+    const stored = typeof context.details?.clientId === "string" && context.details.clientId ? context.details.clientId : null;
+    if (stored && found.clientId && found.clientId !== stored) return null;
+    return { externalId: found.id, name: found.name, status: found.status };
   },
   readSequence: (context, externalId) => readSmartleadSequence(context.key, externalId, context),
   variables: variablesIn,
@@ -405,6 +430,8 @@ export const smartleadProvider: CampaignProvider = {
     if (!match) throw new SmartleadError(`Smartlead has no category called ${category}.`, 400);
     await setSmartleadCategory(context.key, campaignExternalId, leadIdOf(lead), match.id, context);
   },
+  clearCategory: (context, campaignExternalId, lead) => clearSmartleadCategory(context.key, campaignExternalId, leadIdOf(lead), context),
+  unblockAddress: (context, address) => unblockSmartleadAddress(context.key, address, context),
   categoryKey: (campaignExternalId, lead, category) => smartleadCategoryKey(campaignExternalId, lead.externalLeadId ?? lead.email ?? "", category),
   blockAddresses: (context, addresses) => blockSmartleadAddresses(context.key, addresses, context),
   registerWebhook: (context, campaignExternalId, url) => createSmartleadWebhook(context.key, campaignExternalId, url, context),
@@ -523,6 +550,10 @@ export const heyReachProvider: CampaignProvider = {
   },
   async listCampaigns(context) {
     return (await listHeyReachCampaigns(context.key, context)).map((item) => ({ externalId: item.id, name: item.name, status: item.status, senderIds: item.accountIds }));
+  },
+  async readCampaign(context, externalId) {
+    const found = await readHeyReachCampaign(context.key, externalId, context);
+    return found ? { externalId: found.id, name: found.name, status: found.status, senderIds: found.accountIds } : null;
   },
   readSequence: (context, externalId) => readHeyReachSequence(context.key, externalId, context),
   variables: heyReachVariables,

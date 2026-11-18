@@ -292,7 +292,8 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.match(listed, /Agency founders/);
     assert.doesNotMatch(listed, /Agency outreach/);
     assert.equal(result.cards[0]?.title, "Add 30 people to Agency founders");
-    assert.equal(result.cards[0]?.lines.length, 9);
+    assert.equal(result.cards[0]?.lines.length, 10);
+    assert.match(result.cards[0]?.lines[0] ?? "", /^Sends from .+ accounts?\.$/, "a LinkedIn add names the accounts it sends from");
     const wrong = await runOnce(byId("campaign-add-run-to-linkedin"), settings(scripted([add("Agency outreach")])));
     assert.deepEqual(failed(wrong), ["proposes adding all 30 to Agency founders", "doesn't use the email campaign"]);
   });

@@ -61,8 +61,8 @@ export async function fileMessageActivity(db: Db, actor: Actor, message: Filable
   if (!message.contactId) return null;
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`campaign-activity|${actor.workspaceId}|${message.id}`]);
   const existing = await db.query<{ id: string }>(
-    "select id from crm.activities where workspace_id = $1 and metadata->>'campaignMessageId' = $2 limit 1",
-    [actor.workspaceId, message.id],
+    "select id from crm.activities where workspace_id = $1 and contact_id = $3 and metadata->>'campaignMessageId' = $2 limit 1",
+    [actor.workspaceId, message.id, message.contactId],
   );
   if (existing.rows[0]) return existing.rows[0].id;
   const body = message.body.trim().slice(0, ACTIVITY_BODY_MAX) || null;
@@ -76,6 +76,36 @@ export async function fileMessageActivity(db: Db, actor: Actor, message: Filable
       occurredAt: message.sentAt.toISOString(),
       contactId: message.contactId,
       metadata: { campaignMessageId: message.id, campaignId: message.campaignId, prospectId: message.prospectId, direction: message.direction },
+    },
+    provenance,
+  );
+  return activity.id;
+}
+
+export type AddedProspect = { prospectId: string; contactId: string | null; campaignId: string; campaignName: string };
+
+export function addedProvenance(payload: { workflowId: string | null; depth: number }): Provenance {
+  return payload.workflowId
+    ? { operation: "campaign_prospect_added", source: "workflow", workflowId: payload.workflowId, depth: payload.depth, sourceUrl: `/workflows/${payload.workflowId}` }
+    : { operation: "campaign_prospect_added", source: "campaign" };
+}
+
+export async function fileAddedActivity(db: Db, actor: Actor, added: AddedProspect, provenance: Provenance) {
+  if (!added.contactId) return null;
+  await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`campaign-added|${actor.workspaceId}|${added.prospectId}`]);
+  const existing = await db.query<{ id: string }>(
+    "select id from crm.activities where workspace_id = $1 and contact_id = $3 and metadata->>'campaignAddedProspectId' = $2 limit 1",
+    [actor.workspaceId, added.prospectId, added.contactId],
+  );
+  if (existing.rows[0]) return existing.rows[0].id;
+  const activity = await createActivityInDb(
+    db,
+    actor,
+    {
+      type: "note",
+      title: `Added to ${added.campaignName || "a campaign"}`.slice(0, 200),
+      contactId: added.contactId,
+      metadata: { campaignAddedProspectId: added.prospectId, campaignId: added.campaignId },
     },
     provenance,
   );

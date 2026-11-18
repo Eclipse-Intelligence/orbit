@@ -3,11 +3,14 @@ import { addedLine } from "@/lib/campaigns/format";
 import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused } from "@/lib/campaigns/manage";
 import { addCompanyContacts, addProspects, type AddResult } from "@/lib/campaigns/prospects";
 import { replyToProspect } from "@/lib/campaigns/replies";
+import { campaignSenderNames } from "@/lib/campaigns/senders";
+import { doNotContactFor } from "@/lib/campaigns/suppression";
 import { getProspectThread } from "@/lib/campaigns/threads";
 import { PROSPECT_FILTERS, type CampaignChannel, type ProspectFilter } from "@/lib/campaigns/types";
 import { campaignChannel, campaignOfProspect, campaignSummaryOf, contactProspectId, getCampaign, listCampaignActivity, listCampaignProspects, listCampaigns } from "@/lib/crm/campaigns";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid, replayOrRunOutside, requestHash } from "@/lib/crm/mutate";
+import { suppressedRefusal } from "@/lib/crm/suppressions";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { readDateTime } from "@/lib/time";
 
@@ -123,8 +126,13 @@ export async function replyTarget(actor: Actor, target: ProspectTarget): Promise
   return { prospectId: option.prospectId, channel: option.channel, senderName: option.senderName, reason: option.canReply ? null : option.reason, person: thread.person.name, campaignName: option.campaignName };
 }
 
+async function assertContactable(actor: Actor, target: { prospectId: string; person: string }) {
+  if (await doNotContactFor(actor, { prospectId: target.prospectId })) throw suppressedRefusal([target.person]);
+}
+
 export async function replyInCampaign(actor: Actor, input: ProspectTarget & { text?: string | null; clientKey?: string | null }, options: ProviderOptions & { provenance: Provenance }) {
   const target = await replyTarget(actor, input);
+  await assertContactable(actor, target);
   const result = await replyToProspect(actor, target.prospectId, { text: input.text ?? "", clientKey: input.clientKey ?? null }, options);
   return { ...result, prospectId: target.prospectId, channel: target.channel, campaign: await campaignOfProspect(actor, target.prospectId), to: target.person };
 }
@@ -172,6 +180,16 @@ export async function runCampaignAction(actor: Actor, input: CampaignActionInput
   }
 }
 
+function possessive(name: string) {
+  return /s$/i.test(name) ? `${name}'` : `${name}'s`;
+}
+
+export function sendsFromLine(names: string[]) {
+  const owned = names.map(possessive);
+  const listed = owned.length === 1 ? owned[0] : `${owned.slice(0, -1).join(", ")} and ${owned[owned.length - 1]}`;
+  return `Sends from ${listed} ${names.length === 1 ? "account" : "accounts"}.`;
+}
+
 export async function addProspectsFromApi(
   actor: Actor,
   campaignId: string,
@@ -191,6 +209,10 @@ export async function campaignActionNames(actor: Actor, input: CampaignActionInp
     if (campaign) {
       names[input.campaignId] = campaign.name;
       names[`${input.campaignId}:channel`] = campaign.channel;
+      if (campaign.channel === "linkedin" && input.action === "add") {
+        const senders = await campaignSenderNames(actor, input.campaignId).catch(() => []);
+        if (senders.length > 0) names["add:senders"] = sendsFromLine(senders);
+      }
     }
   }
   const action = input.action ?? "";
@@ -202,7 +224,12 @@ export async function campaignActionNames(actor: Actor, input: CampaignActionInp
       names["reply:channel"] = target.channel;
       names["reply:campaign"] = target.campaignName;
       if (target.senderName) names["reply:sender"] = target.senderName;
-      if (target.reason) names["reply:refused"] = target.reason;
+      const blocked = await assertContactable(actor, target).then(
+        () => null,
+        (error: unknown) => (error instanceof CrmError ? error.message : null),
+      );
+      const refused = target.reason ?? blocked;
+      if (refused) names["reply:refused"] = refused;
     }
     return names;
   }

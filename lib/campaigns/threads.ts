@@ -522,7 +522,7 @@ export async function contactCampaignTimeline(actor: Actor, contactId: string, o
        left join crm.campaign_senders s on s.workspace_id = p.workspace_id and s.provider = k.provider
          and s.external_id = coalesce(e.payload->>'senderId', p.sender_id)
        left join crm.profiles pr on pr.id = s.user_id
-       where e.workspace_id = $1 and p.contact_id = $2 and e.kind = any($3::text[])
+       where e.workspace_id = $1 and p.workspace_id = $1 and p.contact_id = $2 and e.kind = any($3::text[])
        order by e.occurred_at desc, e.id
        limit $4`,
       [actor.workspaceId, contactId, TIMELINE_KINDS, limit],

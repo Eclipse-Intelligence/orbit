@@ -1,7 +1,8 @@
 import { alertMembers } from "@/lib/alerts";
 import { campaignThreadPath } from "@/lib/campaigns/format";
-import { FILABLE_SQL, fileMessageActivity, saveThread, threadFetched, type FilableMessage } from "@/lib/campaigns/messages";
+import { addedProvenance, FILABLE_SQL, fileAddedActivity, fileMessageActivity, saveThread, threadFetched, type FilableMessage } from "@/lib/campaigns/messages";
 import { campaignProvider, type CampaignProvider, type ProviderContext } from "@/lib/campaigns/providers";
+import { refusedByProvider } from "@/lib/campaigns/stops";
 import { SUPPRESSION_AUDIT_EVENTS } from "@/lib/campaigns/suppression";
 import type { SyncedCampaign, SyncedEvent } from "@/lib/campaigns/sync";
 import type { CampaignChannel } from "@/lib/campaigns/types";
@@ -17,6 +18,7 @@ import { ServiceBusy } from "@/lib/workflows/limits";
 const REPLY_PROVENANCE: Provenance = { operation: "campaign_reply", source: "campaign" };
 const MATCH_WINDOW_MS = 24 * 60 * 60_000;
 const SNIPPET = 160;
+export const THREAD_TRIES = 3;
 
 type EventDetail = {
   id: string;
@@ -37,6 +39,7 @@ type EventDetail = {
   channel: CampaignChannel;
   person: string;
   sender_user_id: string | null;
+  handle_attempts: number;
 };
 
 async function eventDetails(actor: UserActor, ids: string[]) {
@@ -49,7 +52,7 @@ async function eventDetails(actor: UserActor, ids: string[]) {
                 nullif(btrim(concat_ws(' ', p.lead->>'firstName', p.lead->>'lastName')), ''),
                 c.email, p.email, p.linkedin, 'Someone'
               ) as person,
-              s.user_id as sender_user_id
+              s.user_id as sender_user_id, e.handle_attempts
        from crm.campaign_events e
        join crm.campaign_prospects p on p.id = e.prospect_id
        join crm.campaigns k on k.id = e.campaign_id
@@ -64,7 +67,7 @@ async function eventDetails(actor: UserActor, ids: string[]) {
   });
 }
 
-async function refreshForReply(provider: CampaignProvider, context: ProviderContext, event: EventDetail) {
+async function refreshForReply(provider: CampaignProvider, context: ProviderContext, event: EventDetail): Promise<string | null> {
   try {
     const messages = await provider.readThread(context, { externalId: event.campaign_external_id }, {
       externalLeadId: event.external_lead_id,
@@ -74,11 +77,24 @@ async function refreshForReply(provider: CampaignProvider, context: ProviderCont
     });
     await saveThread(event.prospect_id, messages, { replyEvents: provider.repliesFromThreads, handled: false });
     await threadFetched(event.prospect_id);
+    return null;
   } catch (error) {
-    if (provider.failure(error)?.missing) return;
-    if (!(error instanceof ServiceBusy)) console.error(`Couldn't read a ${provider.name} thread after a reply`, redactedError(error));
+    if (error instanceof ServiceBusy) throw error;
+    if (provider.failure(error)?.missing) return null;
+    const refused = refusedByProvider(provider, error);
+    const lastTry = event.handle_attempts + 1 >= THREAD_TRIES;
+    if (!refused) console.error(`Couldn't read a ${provider.name} thread after a reply`, redactedError(error));
+    if (refused || lastTry) return refused ?? provider.failure(error)?.message ?? `Couldn't read the thread from ${provider.name}.`;
     throw error;
   }
+}
+
+async function noteUnreadThread(provider: CampaignProvider, event: EventDetail, reason: string) {
+  const line = `Couldn't read ${event.person}'s reply from ${provider.name}. ${reason}`.slice(0, 500);
+  await query("select private.campaign_sync_update($1, $2::jsonb)", [event.campaign_id, JSON.stringify({ syncError: line })]).catch((error) =>
+    console.error("Couldn't note an unread campaign reply", redactedError(error)),
+  );
+  return line;
 }
 
 async function replyMessages(actor: UserActor, event: EventDetail): Promise<(FilableMessage & { automatic: boolean })[]> {
@@ -95,14 +111,16 @@ async function replyMessages(actor: UserActor, event: EventDetail): Promise<(Fil
   });
 }
 
-async function owners(workspaceId: string) {
+async function members(workspaceId: string) {
   const result = await query<{ workspace_id: string; user_id: string; role: string }>("select workspace_id, user_id, role from private.background_members()");
-  return result.rows.filter((row) => row.workspace_id === workspaceId && row.role === "owner").map((row) => row.user_id);
+  return result.rows.filter((row) => row.workspace_id === workspaceId);
 }
 
 export async function replyRecipients(event: { workspaceId: string; addedBy: string | null; senderUser: string | null; channel: CampaignChannel }) {
-  const people = new Set<string>(event.addedBy ? [event.addedBy] : await owners(event.workspaceId));
-  if (event.channel === "linkedin" && event.senderUser) people.add(event.senderUser);
+  const team = await members(event.workspaceId);
+  const member = (id: string | null): id is string => Boolean(id && team.some((row) => row.user_id === id));
+  const people = new Set<string>(member(event.addedBy) ? [event.addedBy] : team.filter((row) => row.role === "owner").map((row) => row.user_id));
+  if (event.channel === "linkedin" && member(event.senderUser)) people.add(event.senderUser);
   return [...people];
 }
 
@@ -136,12 +154,13 @@ async function notifyReply(actor: UserActor, event: EventDetail, body: string | 
 }
 
 async function handleReply(actor: UserActor, provider: CampaignProvider, context: ProviderContext | undefined, event: EventDetail) {
-  if (!provider.repliesFromThreads && context) await refreshForReply(provider, context, event);
+  const unread = !provider.repliesFromThreads && context ? await refreshForReply(provider, context, event) : null;
+  const note = unread ? await noteUnreadThread(provider, event, unread) : null;
   const messages = await replyMessages(actor, event);
   const reply = messages[0] ?? null;
   if (reply ? reply.automatic : automaticReply(event.category)) {
     const uncounted = await query<{ done: boolean }>("select private.campaign_reply_uncount($1) as done", [event.id]);
-    if (uncounted.rows[0]?.done) return;
+    if (uncounted.rows[0]?.done) return note;
   }
   await query("select private.campaign_reply_counted($1)", [event.id]);
   await query("select * from private.campaign_stop_person($1, $2)", [actor.workspaceId, event.prospect_id]);
@@ -152,6 +171,7 @@ async function handleReply(actor: UserActor, provider: CampaignProvider, context
     });
   }
   await notifyReply(actor, event, reply?.body ?? null);
+  return note;
 }
 
 async function auditSuppression(actor: UserActor, event: EventDetail) {
@@ -165,6 +185,20 @@ async function auditSuppression(actor: UserActor, event: EventDetail) {
       event.prospect_id,
       { operation: unsubscribed ? "campaign_unsubscribe" : "campaign_bounce", source: "campaign" },
       { campaignId: event.campaign_id, campaign: event.campaign_name, contactId: event.contact_id, channel: event.channel, email: event.email, linkedin: unsubscribed ? event.linkedin : null },
+    ),
+  );
+}
+
+async function fileAdded(actor: UserActor, event: EventDetail) {
+  if (!event.contact_id) return;
+  const workflowId = typeof event.payload.sourceWorkflowId === "string" ? event.payload.sourceWorkflowId : null;
+  const depth = typeof event.payload.depth === "number" ? event.payload.depth : 0;
+  await withActor(actor, (db) =>
+    fileAddedActivity(
+      db,
+      actor,
+      { prospectId: event.prospect_id, contactId: event.contact_id, campaignId: event.campaign_id, campaignName: event.campaign_name },
+      addedProvenance({ workflowId, depth }),
     ),
   );
 }
@@ -184,7 +218,12 @@ export async function handleCampaignEvents(campaign: SyncedCampaign, events: Syn
   const details = await eventDetails(actor, events.map((event) => event.eventId));
   const retry: string[] = [];
   let busy: string | undefined;
+  let syncError: string | undefined;
   for (const event of details) {
+    if (event.kind === "added") {
+      await fileAdded(actor, event).catch((error) => console.error("Couldn't file a campaign add on the timeline", redactedError(error)));
+      continue;
+    }
     if (event.kind === "unsubscribed" || event.kind === "bounced") {
       await auditSuppression(actor, event).catch((error) => console.error("Couldn't record a campaign opt-out", redactedError(error)));
       continue;
@@ -195,13 +234,16 @@ export async function handleCampaignEvents(campaign: SyncedCampaign, events: Syn
       continue;
     }
     try {
-      await handleReply(actor, provider, context, event);
+      syncError = (await handleReply(actor, provider, context, event)) ?? syncError;
     } catch (error) {
       if (error instanceof ServiceBusy) busy = `${provider.name}: ${error.message}`;
-      else console.error("Couldn't handle a campaign reply", redactedError(error));
+      else {
+        console.error("Couldn't handle a campaign reply", redactedError(error));
+        await query("select private.campaign_events_attempted($1, $2::uuid[])", [event.campaign_id, [event.id]]).catch(() => undefined);
+      }
       retry.push(event.id);
     }
   }
   await fireCampaignEvents(events.map((event) => event.eventId).filter((id) => !retry.includes(id)));
-  return { retry, busy };
+  return { retry, busy, syncError };
 }

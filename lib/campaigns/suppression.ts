@@ -188,6 +188,41 @@ export async function pushBlockList(workspaceId: string, provider: CampaignProvi
   return blocked;
 }
 
+const LIFT_PAGE = 25;
+
+export async function liftBlocks(workspaceId: string, provider: CampaignProvider, context: ProviderContext) {
+  if (!provider.unblockAddress) return 0;
+  let pending: { id: string; value: string }[];
+  try {
+    pending = (await query<{ id: string; value: string }>("select * from private.campaign_block_lifts_pending($1, $2)", [workspaceId, LIFT_PAGE])).rows;
+  } catch (error) {
+    console.error(`Couldn't read the ${provider.name} block list removals`, redactedError(error));
+    return 0;
+  }
+  let lifted = 0;
+  for (const row of pending) {
+    try {
+      await provider.unblockAddress(context, row.value);
+      await query("select private.campaign_block_lift_done($1, $2, true)", [workspaceId, row.id]);
+      lifted += 1;
+    } catch (error) {
+      if (error instanceof ServiceBusy) break;
+      if (!rejected(provider, error)) {
+        if (!provider.failure(error)) console.error(`Couldn't take an address off the ${provider.name} block list`, redactedError(error));
+        break;
+      }
+      await query("select private.campaign_block_lift_done($1, $2, false)", [workspaceId, row.id]).catch(() => undefined);
+    }
+  }
+  return lifted;
+}
+
+async function liftBlocksNow(workspaceId: string, options: ProviderOptions) {
+  const connected = await connectedContext(workspaceId, "smartlead", options).catch(() => null);
+  if (!connected) return 0;
+  return liftBlocks(workspaceId, connected.provider, connected.context);
+}
+
 async function pushBlockListNow(workspaceId: string, options: ProviderOptions) {
   const connected = await connectedContext(workspaceId, "smartlead", options).catch(() => null);
   if (!connected) return 0;
@@ -235,7 +270,7 @@ export async function setDoNotContact(actor: Actor, target: DoNotContactTarget, 
   return { changed: outcome.changed, stopping: outcome.stopping.length, stopped, skipped: outcome.skipped };
 }
 
-export async function liftDoNotContact(actor: Actor, target: DoNotContactTarget, options: { provenance?: Provenance } = {}) {
+export async function liftDoNotContact(actor: Actor, target: DoNotContactTarget, options: ProviderOptions & { provenance?: Provenance } = {}) {
   if (actor.type === "agent") throw new CrmError("forbidden", ONLY_A_PERSON_LIFTS, 403);
   assertScope(actor.scopes, "campaigns:write");
   const person = await withActor(actor, (db) => personOf(db, actor, target));
@@ -249,5 +284,6 @@ export async function liftDoNotContact(actor: Actor, target: DoNotContactTarget,
   const lifted = gone.rows[0]?.lifted ?? [];
   if (lifted.length === 0) return { lifted: 0 };
   scheduleWebhooks();
+  if (lifted.some((item) => item.kind === "email")) await liftBlocksNow(actor.workspaceId, options).catch(() => 0);
   return { lifted: lifted.length };
 }

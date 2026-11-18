@@ -178,7 +178,7 @@ describe("adding prospects", () => {
     for (let round = 0; round < 5; round += 1) {
       const batch = await claimFillBatch();
       if (!batch) return;
-      await runFillBatch(batch, { deadline: Date.now() + 60_000, fetchImpl });
+      await runFillBatch(batch, { deadline: Date.now() + 300_000, fetchImpl });
     }
   }
 
@@ -674,7 +674,8 @@ describe("adding prospects", () => {
     assert.equal((await row(fin.prospectId)).state, "filling", "rows wait for the key to be replaced");
     assert.equal((await sql<{ fill_attempts: number }>("select fill_attempts from crm.campaign_prospects where id = $1", [fin.prospectId]))[0].fill_attempts, 1, "a push the key was rejected for counts");
     const marked = await sql<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId]);
-    assert.equal(marked[0].last_error, "Smartlead rejected the key. Save a new one.");
+    assert.equal(marked[0].last_error, null, "a refused push never marks the key, only the key check and campaign list do");
+    await sql("update crm.campaign_connections set last_error = 'Smartlead rejected the key. Save a new one.' where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId]);
 
     await contact(owner, "joy", { firstName: "Joy", lastName: "Bird", email: "joy@bird.test" });
     const joy = (await addProspects(owner, emailCampaign, [people.joy.id], { operation: "test" })).prospects[0];

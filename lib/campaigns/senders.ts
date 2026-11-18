@@ -43,6 +43,22 @@ function linkChanges(provider: string, sender: { id: string; externalId: string;
   return { provider, sender, linked, unlinked };
 }
 
+export async function campaignSenderNames(actor: Actor, campaignId: string) {
+  if (!isUuid(campaignId)) return [];
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ name: string }>(
+      `select coalesce(nullif(btrim(pr.full_name), ''), nullif(btrim(s.name), ''), pr.email, s.external_id) as name
+       from crm.campaigns k
+       join crm.campaign_senders s on s.workspace_id = k.workspace_id and s.provider = k.provider and s.external_id = any(k.sender_ids)
+       left join crm.profiles pr on pr.id = s.user_id
+       where k.id = $1 and k.workspace_id = $2
+       order by 1`,
+      [campaignId, actor.workspaceId],
+    );
+    return [...new Set(result.rows.map((row) => row.name))];
+  });
+}
+
 export async function saveProviderSenders(actor: UserActor, provider: CampaignProviderId, senders: ProviderSender[], provenance?: Provenance) {
   const matched = await query<{ sender_id: string; user_id: string; name: string; external_id: string }>(
     "select * from private.campaign_sync_senders($1, $2, $3::jsonb)",

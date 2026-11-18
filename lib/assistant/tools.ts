@@ -3297,7 +3297,7 @@ const TOOL_LIST: AssistantTool[] = [
           companies.length > 0
             ? `Add the people at ${companies.length} ${companies.length === 1 ? "company" : "companies"} to ${campaign}`
             : `Add ${people.length} ${people.length === 1 ? "person" : "people"} to ${campaign}`;
-        return { title, lines: [...shown, ...more] };
+        return { title, lines: [chatTargetName(name, "add:senders", ""), ...shown, ...more] };
       }
       if (action === "pause" || action === "resume") {
         const verb = action === "pause" ? "Pause" : "Resume";

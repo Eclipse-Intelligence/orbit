@@ -195,6 +195,7 @@ describe("suppression and Do not contact", () => {
   const smartleadFetch = fakeSmartlead([alpha, bravo]);
   const heyreachFetch = fakeHeyReach([heyreach]);
   const fetchImpl: typeof fetch = (input, init) => (String(input instanceof Request ? input.url : input).includes("heyreach") ? heyreachFetch(input, init) : smartleadFetch(input, init));
+  const providerDown: typeof fetch = async () => new Response("", { status: 503 });
   const sync = (workspaceId: string) => syncCampaigns({ workspaceId, deadline: Date.now() + 60_000, fetchImpl, onEvents: handleCampaignEvents });
 
   before(async () => {
@@ -630,9 +631,9 @@ describe("suppression and Do not contact", () => {
         [owner.workspaceId, tom],
       );
       await liftDoNotContact(owner, { contactId: tom });
-      await setDoNotContact(owner, { contactId: tom }, { fetchImpl });
+      await setDoNotContact(owner, { contactId: tom }, { fetchImpl: providerDown });
       const stopping = await sql<{ stop_reason: string | null; stopped_at: Date | null }>("select stop_reason, stopped_at from crm.campaign_prospects where contact_id = $1", [tom]);
-      assert.deepEqual(stopping, [{ stop_reason: "suppressed", stopped_at: null }], "Smartlead hasn't given the lead an id yet");
+      assert.deepEqual(stopping, [{ stop_reason: "suppressed", stopped_at: null }], "Smartlead is down, so the stop waits");
       assert.ok((await contactCampaignLines(owner, tom)).some((line) => line.label.startsWith("Stopping")));
       await liftDoNotContact(owner, { contactId: tom });
       assert.ok(!(await contactCampaignLines(owner, tom)).some((line) => line.label.startsWith("Stopping")));
@@ -647,7 +648,7 @@ describe("suppression and Do not contact", () => {
          select k.workspace_id, k.id, $2, 'rae@reply.test', 'pushed', 'in_progress', now() from crm.campaigns k where k.workspace_id = $1 and k.external_id in ('501', '502')`,
         [owner.workspaceId, rae],
       );
-      await setDoNotContact(owner, { contactId: rae }, { fetchImpl });
+      await setDoNotContact(owner, { contactId: rae }, { fetchImpl: providerDown });
       const pending = await sql<{ campaign: string; stop_reason: string | null; stopped_at: Date | null }>(
         "select k.external_id as campaign, p.stop_reason, p.stopped_at from crm.campaign_prospects p join crm.campaigns k on k.id = p.campaign_id where p.contact_id = $1 order by k.external_id",
         [rae],
