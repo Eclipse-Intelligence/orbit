@@ -113,6 +113,18 @@ async function statusOf(db: Db, workspaceId: string, person: Pick<Person, "conta
   return { reason: row.reason, setAt: row.created_at.toISOString(), setBy: row.set_by, line: doNotContactLine(row.reason, row.created_at, row.set_by) };
 }
 
+async function holdingValue(db: Db, workspaceId: string, person: Pick<Person, "contactIds" | "reached">) {
+  const found = await db.query<{ value: string }>(
+    `select s.value from crm.suppressions s
+     where s.workspace_id = $1 and s.reason <> 'bounced'
+       and (s.contact_id = any($2::uuid[]) or (s.kind = 'email' and s.value = any($3::text[])) or (s.kind = 'linkedin' and s.value = any($4::text[])))
+     order by s.created_at, s.id
+     limit 1`,
+    [workspaceId, person.contactIds, person.reached.emails, person.reached.linkedins],
+  );
+  return found.rows[0]?.value ?? null;
+}
+
 export async function doNotContactFor(actor: Actor, target: DoNotContactTarget) {
   return withActor(actor, async (db) => statusOf(db, actor.workspaceId, await personOf(db, actor, target)));
 }
@@ -303,7 +315,11 @@ export async function liftDoNotContact(actor: Actor, target: DoNotContactTarget,
     JSON.stringify(auditOf(actor, SUPPRESSION_AUDIT_EVENTS.lifted, person, web("lift_do_not_contact", options.provenance), {})),
   ]);
   const lifted = gone.rows[0]?.lifted ?? [];
-  if (lifted.length === 0) return { lifted: 0 };
+  if (lifted.length === 0) {
+    const holding = await withActor(actor, (db) => holdingValue(db, actor.workspaceId, person));
+    if (holding) throw new CrmError("conflict", `${holding} is on the list for someone else.`, 409);
+    return { lifted: 0 };
+  }
   scheduleWebhooks();
   await signalCampaigns(actor.workspaceId);
   if (lifted.some((item) => item.kind === "email")) await liftBlocksNow(actor.workspaceId, options).catch(() => 0);

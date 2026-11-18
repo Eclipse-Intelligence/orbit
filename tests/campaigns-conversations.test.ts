@@ -545,4 +545,46 @@ describe("campaign conversations", () => {
     await reapplyMigrationsFrom("20270219100000_campaign_conversations.sql");
     assert.ok((await listConversations(owner, { needsReply: false })).conversations.length > 0);
   });
+
+  it("suppresses only the address that unsubscribed, not the contact's shared mailbox", async () => {
+    const list = await campaign(owner, "Unsubscribe list", "email", "em-unsub-1");
+    const jane = await contact(owner, "Jane", "Acme", "info@acme-unsub.test");
+    const janeProspect = await prospect(owner, { campaignId: list, lead: "unsub-jane", contactId: jane.id, email: "jane@acme-unsub.test" });
+    const desk = await prospect(owner, { campaignId: list, lead: "unsub-desk", email: "info@acme-unsub.test", name: ["Front", "Desk"] });
+    const bare = await contact(owner, "Noel", "Bare", "noel@bare-unsub.test");
+    const bareProspect = await prospect(owner, { campaignId: list, lead: "unsub-bare", contactId: bare.id });
+    const unsubscribe = (prospectId: string, key: string) =>
+      sql("insert into crm.campaign_events (workspace_id, campaign_id, prospect_id, kind, occurred_at, dedupe_key, handled_at) values ($1, $2, $3, 'unsubscribed', now(), $4, now())", [owner.workspaceId, list, prospectId, key]);
+    await unsubscribe(janeProspect, "unsub-jane-1");
+    assert.deepEqual(await sql("select value from crm.suppressions where workspace_id = $1 and value like '%acme-unsub%' order by value", [owner.workspaceId]), [{ value: "jane@acme-unsub.test" }]);
+    assert.deepEqual(await sql("select stop_requested_at from crm.campaign_prospects where id = $1", [desk]), [{ stop_requested_at: null }], "nobody else at info@ is stopped");
+    await unsubscribe(bareProspect, "unsub-bare-1");
+    assert.deepEqual(await sql("select value from crm.suppressions where workspace_id = $1 and contact_id = $2", [owner.workspaceId, bare.id]), [{ value: "noel@bare-unsub.test" }], "an event with no address still uses the contact's");
+  });
+
+  it("releases what a lifted suppression stopped, even when its address isn't one of the person's now", async () => {
+    const moved = await campaign(owner, "Moved on", "email", "em-moved-1");
+    const kai = await contact(owner, "Kai", "Moved", "kai@new-moved.test");
+    const current = await prospect(owner, { campaignId: moved, lead: "moved-now", contactId: kai.id, email: kai.email });
+    const old = await prospect(owner, { campaignId: moved, lead: "moved-old", email: "kai@old-moved.test", name: ["Kai", "Old"] });
+    await sql("insert into crm.suppressions (workspace_id, contact_id, kind, value, reason, source) values ($1, $2, 'email', 'kai@old-moved.test', 'manual', 'test')", [owner.workspaceId, kai.id]);
+    await sql("update crm.campaign_prospects set stop_requested_at = now(), stop_reason = 'suppressed' where id = $1", [old]);
+    assert.ok(!(await getProspectThread(owner, current)).campaigns.some((item) => item.prospectId === old));
+    await liftDoNotContact(owner, { prospectId: current });
+    assert.deepEqual(await sql("select stop_reason, stop_requested_at from crm.campaign_prospects where id = $1", [old]), [{ stop_reason: null, stop_requested_at: null }]);
+  });
+
+  it("says why a lift can't clear someone whose address is on the list for someone else", async () => {
+    const desk = await campaign(owner, "Reception", "email", "em-reception-1");
+    const shared = await prospect(owner, { campaignId: desk, lead: "reception-x", email: "office@reception.test", name: ["Xan", "Reception"] });
+    const person = await prospect(owner, { campaignId: desk, lead: "reception-y", email: "office@reception.test", linkedin: "linkedin.com/in/yureception", name: ["Yu", "Reception"] });
+    await setDoNotContact(owner, { prospectId: shared });
+    assert.ok((await getProspectThread(owner, person)).doNotContact);
+    await assert.rejects(
+      liftDoNotContact(owner, { prospectId: person }),
+      (error: unknown) => error instanceof CrmError && error.code === "conflict" && error.message === "office@reception.test is on the list for someone else.",
+    );
+    await liftDoNotContact(owner, { prospectId: shared });
+    assert.deepEqual(await liftDoNotContact(owner, { prospectId: person }), { lifted: 0 }, "nothing on the list is still silent");
+  });
 });
