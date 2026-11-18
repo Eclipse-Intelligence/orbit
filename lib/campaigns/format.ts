@@ -36,7 +36,7 @@ export const PROVIDER_STATS: Record<CampaignProviderId, { funnel: FunnelLabel[];
     statuses: [
       { key: "leads", label: "Total leads" },
       { key: "enrolled", label: "Enrolled in sequence" },
-      { key: "notEnrolled", label: "Pending" },
+      { key: "notEnrolled", label: "Not enrolled yet" },
       { key: "finished", label: "Finished" },
       { key: "pausedLeads", label: "Paused" },
       { key: "failed", label: "Failed leads" },

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { campaignConnectionViews, keyFingerprint, KEY_TAKEN, saveCampaignConnection } from "@/lib/campaigns/connections";
+import { campaignConnectionViews, keyFingerprint, KEY_TAKEN, removeCampaignConnection, saveCampaignConnection } from "@/lib/campaigns/connections";
 import { campaignProvider, heyReachEvents } from "@/lib/campaigns/providers";
 import { linkCampaignSender, listCampaignSenders, SENDER_LINKED } from "@/lib/campaigns/senders";
 import { registeredWebhooks, syncCampaigns, type SyncedEvent } from "@/lib/campaigns/sync";
@@ -820,6 +820,28 @@ describe("campaigns through HeyReach", () => {
         else process.env.SITE_URL = savedSite;
       }
       await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+    });
+
+    it("forgets every webhook on disconnect, so a reconnect registers all of them again", async () => {
+      const savedSite = process.env.SITE_URL;
+      process.env.SITE_URL = "https://orbit.test";
+      try {
+        await sql("update crm.campaigns set sync_state = sync_state || jsonb_build_object('webhooks', $2::jsonb, 'webhookId', '77', 'webhookFailedAt', now()::text) where id = $1", [foundersId, JSON.stringify(HEYREACH_WEBHOOK_EVENTS)]);
+        assert.equal(await removeCampaignConnection(owner, "heyreach"), true);
+        const forgotten = (await sql<{ state: Record<string, unknown> }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+        assert.deepEqual([forgotten.webhooks, forgotten.webhookId, forgotten.webhookFailedAt], [undefined, undefined, undefined]);
+        await saveCampaignConnection(owner, "heyreach", KEY, { fetchImpl });
+        eclipse.webhooks = [];
+        eclipse.calls.length = 0;
+        await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
+        const created = eclipse.calls.filter((call) => call.path === "/webhooks/CreateWebhook" && (call.body?.campaignIds as number[]).includes(9001)).map((call) => call.body?.eventType);
+        assert.deepEqual([...created].sort(), [...HEYREACH_WEBHOOK_EVENTS].sort());
+        const state = (await sql<{ state: { webhooks?: string[] } }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
+        assert.deepEqual([...(state.webhooks ?? [])].sort(), [...HEYREACH_WEBHOOK_EVENTS].sort());
+      } finally {
+        if (savedSite === undefined) delete process.env.SITE_URL;
+        else process.env.SITE_URL = savedSite;
+      }
     });
 
     it("starts a campaign that has never run, audits it once, and refuses one that has", async () => {
