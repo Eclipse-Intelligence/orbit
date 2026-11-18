@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
 import { snoozeTask, waitingFor, waitingIn } from "@/lib/crm/action-needed";
 import { onWorkingDay, taskSnoozeChoices } from "@/lib/crm/task-snooze";
@@ -24,7 +23,7 @@ import { startOfDay } from "@/lib/time";
 import { listNotifications } from "@/lib/workflows/store";
 import { sendAlert } from "@/lib/alerts";
 import { notify } from "@/lib/workflows/engine";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 delete process.env.TYPESAFE_API_KEY;
 delete process.env.LLM_API_KEY;
@@ -549,7 +548,7 @@ describe("Approvals and To file", () => {
       ["Demo with Acme ended with no next step", "Follow-up sent to Grace", "No reply yet: Pilot pricing", "Workflow failed: Granola to ClickUp"],
       "the bell doesn't match on title text",
     );
-    await admin.query(readFileSync("supabase/migrations/20261230100000_action_needed.sql", "utf8"));
+    await reapplyMigrationsFrom("20261230100000_action_needed.sql");
     assert.deepEqual(await titles(), ["Follow-up sent to Grace", "Workflow failed: Granola to ClickUp"], "running the migration again tags the older rows");
     const tags = await admin.query<{ category: string | null }>("select category from crm.notifications where user_id = $1 and title like 'No reply yet:%'", [mark.userId]);
     assert.deepEqual(

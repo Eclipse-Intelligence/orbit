@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { calendarAlerts } from "@/lib/calendar-alerts";
 import { isPersonalEvent, storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
@@ -25,13 +24,13 @@ import {
 import { archiveTask, completeTask, createTask, getTask, OWNER_SETS_LENGTH, placeTask, reopenTask, updateTask } from "@/lib/crm/tasks";
 import { undoAuditEvent } from "@/lib/crm/undo";
 import type { UserActor } from "@/lib/crm/types";
-import { applyMigrationSql, migrationBatches } from "@/lib/db/migration-sql";
+import { migrationBatches } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { refreshTimes, offerTimes } from "@/lib/mail/scheduling";
-import { TASK_BLOCK_NOTE, taskBlockDraft, taskBlockPatch, type GraphEvent } from "@/lib/microsoft/calendar";
+import { TASK_BLOCK_NOTE, TASK_BLOCK_PROPERTY, taskBlockDraft, taskBlockPatch, type GraphEvent } from "@/lib/microsoft/calendar";
 import { dropZoneNote } from "@/lib/task-blocks";
-import { createAgent, createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 const WRITE_SCOPES = "https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Mail.Read offline_access";
 const READ_SCOPES = "https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Mail.Read offline_access";
@@ -40,7 +39,7 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 type Call = { url: string; method: string; body: Record<string, unknown> | null };
-type Stored = { subject: string; start: string; end: string; transactionId?: string };
+type Stored = { subject: string; start: string; end: string; transactionId?: string; key?: string | null };
 
 function json(body: unknown, status = 200) {
   return new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -101,8 +100,16 @@ class FakeOutlook {
       if (existing) return json(this.graphEvent(existing[0]), 201);
       this.created += 1;
       const id = `block-${this.created}`;
-      this.events.set(id, { subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end), transactionId: String(body!.transactionId) });
+      const properties = (body!.singleValueExtendedProperties as { id: string; value: string }[] | undefined) ?? [];
+      const key = properties.find((item) => item.id === TASK_BLOCK_PROPERTY)?.value ?? null;
+      this.events.set(id, { subject: String(body!.subject), start: fromGraph(body!.start), end: fromGraph(body!.end), transactionId: String(body!.transactionId), key });
       return json(this.graphEvent(id), 201);
+    }
+    if (method === "GET" && parsed.pathname === "/v1.0/me/events") {
+      const filter = parsed.searchParams.get("$filter") ?? "";
+      const value = /ep\/value eq '([^']+)'/.exec(filter)?.[1];
+      const matches = [...this.events.entries()].filter(([, event]) => value && event.key === value && filter.includes(TASK_BLOCK_PROPERTY));
+      return json({ value: matches.map(([id]) => this.graphEvent(id)) });
     }
     const one = /^\/v1\.0\/me\/events\/([^/]+)$/.exec(parsed.pathname);
     if (one && method === "PATCH") {
@@ -193,6 +200,10 @@ async function timed(actor: UserActor, title: string, at: number, durationMinute
   return created.body.task;
 }
 
+async function pastCreateGrace() {
+  await admin().query("update crm.task_outlook_queue set create_sent_at = now() - interval '3 minutes' where create_sent_at is not null");
+}
+
 async function queued(taskId: string) {
   const row = await admin().query<{ pending_at: Date; claimed_at: Date | null }>("select pending_at, claimed_at from crm.task_outlook_queue where task_id = $1", [taskId]);
   return row.rows[0] ?? null;
@@ -270,9 +281,8 @@ function row(overrides: Partial<BlockRow> = {}): BlockRow {
 
 describe("the migration", () => {
   it("runs again over itself", async () => {
-    const sql = readFileSync("supabase/migrations/20270124100000_task_blocks_outlook.sql", "utf8");
-    await applyMigrationSql(getAdminPool(), sql);
-    await applyMigrationSql(getAdminPool(), sql);
+    await reapplyMigrationsFrom("20270124100000_task_blocks_outlook.sql");
+    await reapplyMigrationsFrom("20270124100000_task_blocks_outlook.sql");
     assert.deepEqual(migrationBatches("set x = 1;\ncreate index concurrently if not exists a on b (c);\nselect 1;"), [
       "set x = 1;",
       "create index concurrently if not exists a on b (c);",
@@ -554,6 +564,7 @@ describe("Outlook lifecycle", () => {
     assert.equal(backedOff.created + backedOff.deferred, 0);
 
     await admin().query("update crm.task_outlook_queue set retry_at = now() - interval '1 second' where task_id = $1", [task.id]);
+    await pastCreateGrace();
     outlook.reset();
     const [one, two] = await Promise.all([
       syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch }),
@@ -743,10 +754,12 @@ describe("Outlook lifecycle", () => {
     assert.deepEqual(row.rows[0], { refused: false, attempts: 1 });
 
     await admin().query("update crm.task_outlook_queue set retry_at = null where task_id = $1", [task.id]);
+    await pastCreateGrace();
     outlook.failCreateWith = 400;
     await syncTaskBlocks({ taskIds: [task.id], fetchImpl: outlook.fetch });
     row = await admin().query("select refused, attempts from crm.task_outlook_queue where task_id = $1", [task.id]);
     assert.equal(row.rows[0].refused, true);
+    await pastCreateGrace();
     outlook.failCreateWith = null;
     assert.equal(await noteTaskBlocksWrite(connection, true), true);
     assert.equal(await noteTaskBlocksWrite(connection, true), false);
@@ -848,6 +861,7 @@ describe("Outlook lifecycle", () => {
     assert.equal(outlook.calls.filter((call) => call.method === "POST" && new URL(call.url).hostname === "graph.microsoft.com").length, 1);
 
     await admin().query("update crm.task_outlook_queue set retry_at = null");
+    await pastCreateGrace();
     outlook.failCreateWith = 400;
     outlook.reset();
     await syncTaskBlocks({ taskIds: [first.id], fetchImpl: outlook.fetch });
@@ -858,6 +872,7 @@ describe("Outlook lifecycle", () => {
     await syncTaskBlocks({ taskIds: [first.id], fetchImpl: outlook.fetch });
     assert.equal(outlook.graphCalls().length, 0);
     outlook.failCreateWith = null;
+    await pastCreateGrace();
     await updateTask(mark, first.id, { title: "Call one again" });
     await syncTaskBlocks({ taskIds: [first.id, second.id], fetchImpl: outlook.fetch });
     assert.equal(await ref(first.id) !== null, true);

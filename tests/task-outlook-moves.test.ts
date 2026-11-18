@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
 import { withActor } from "@/lib/crm/context";
@@ -7,10 +6,9 @@ import { disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
 import { queueOwnTaskBlocks, syncTaskBlocks } from "@/lib/crm/task-outlook";
 import { archiveTask, completeTask, createTask, getTask, placeTask, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
-import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { TASK_BLOCK_PROPERTY } from "@/lib/microsoft/calendar";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 const WRITE_SCOPES = "https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Mail.Read offline_access";
 const MINUTE = 60_000;
@@ -289,9 +287,8 @@ describe("a lost create response", () => {
 
 describe("the migration", () => {
   it("runs again over itself", async () => {
-    const sql = readFileSync("supabase/migrations/20270129100000_tasks_outlook_moves.sql", "utf8");
-    await applyMigrationSql(getAdminPool(), sql);
-    await applyMigrationSql(getAdminPool(), sql);
+    await reapplyMigrationsFrom("20270129100000_tasks_outlook_moves.sql");
+    await reapplyMigrationsFrom("20270129100000_tasks_outlook_moves.sql");
   });
 });
 

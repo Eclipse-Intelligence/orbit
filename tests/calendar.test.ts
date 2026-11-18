@@ -33,7 +33,7 @@ import {
 } from "@/lib/microsoft/calendar";
 import { NOTES_MAX } from "@/lib/meeting-links";
 import { grantsCalendar, MICROSOFT_SCOPES } from "@/lib/microsoft/oauth";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -841,12 +841,9 @@ describe("calendar sync", () => {
   });
 
   it("re-applies the migration and keeps transcript and calendar state side by side", async () => {
-    const sql = readFileSync("supabase/migrations/20261020100000_calendar.sql", "utf8");
-    const multi = readFileSync("supabase/migrations/20261022100000_multi_calendar.sql", "utf8");
     const before = await eventRows(owner.userId);
-    await getAdminPool().query(sql);
-    await getAdminPool().query(multi);
-    await getAdminPool().query(multi);
+    await reapplyMigrationsFrom("20261020100000_calendar.sql");
+    await reapplyMigrationsFrom("20261022100000_multi_calendar.sql");
     assert.deepEqual([...(await eventRows(owner.userId)).keys()], [...before.keys()]);
     const connection = await getAdminPool().query<{ id: string }>(
       "select id from crm.mailbox_connections where user_id = $1",

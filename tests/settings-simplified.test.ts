@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, describe, it } from "node:test";
 import { getGranolaStatus, personalGranolaKey, removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -12,7 +11,7 @@ import { listAddressHomes, setAddressHome } from "@/lib/mail/routing";
 import { readwiseStatus, readwiseToken, removeReadwiseToken, saveReadwiseToken, setReadwiseWorkspace } from "@/lib/readwise/keys";
 import { listMemories } from "@/lib/learning/memories";
 import { recallKey, recallStatus, removeRecallKey, saveRecallKey } from "@/lib/recall/keys";
-import { createUser, resetDatabase } from "./helpers";
+import { createUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 delete process.env.TYPESAFE_API_KEY;
 delete process.env.LLM_API_KEY;
@@ -183,7 +182,6 @@ describe("settings that belong to you or to one workspace", () => {
 
   it("keeps the newest key per person and service when the migration runs again, alongside the old per-workspace constraint", async () => {
     const admin = getAdminPool();
-    const sql = readFileSync("supabase/migrations/20270108100000_settings_simplified.sql", "utf8");
     for (const table of ["recall_keys", "readwise_keys", "granola_keys"]) {
       await admin.query(`delete from crm.${table} where user_id = $1`, [eclipse.userId]);
       await admin.query(`alter table crm.${table} drop constraint ${table.replace("_keys", "_keys_user")}`);
@@ -203,8 +201,8 @@ describe("settings that belong to you or to one workspace", () => {
        ($1, $3, 'old', 'old1', now() - interval '1 day', now() - interval '5 days'), ($2, $3, 'new', 'new1', now() - interval '9 days', now() - interval '1 hour')`,
       [eclipse.workspaceId, ridgeon.workspaceId, eclipse.userId],
     );
-    await admin.query(sql);
-    await admin.query(sql);
+    await reapplyMigrationsFrom("20270108100000_settings_simplified.sql");
+    await reapplyMigrationsFrom("20270108100000_settings_simplified.sql");
     assert.deepEqual(await keyRows("recall_keys"), [{ workspace_id: ridgeon.workspaceId, key_hint: "new1" }]);
     assert.deepEqual(await keyRows("readwise_keys"), [{ workspace_id: eclipse.workspaceId, key_hint: "new1" }]);
     assert.deepEqual(await keyRows("granola_keys"), [{ workspace_id: ridgeon.workspaceId, key_hint: "new1" }]);

@@ -1,14 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
-import { readFileSync } from "node:fs";
 import { archiveTask, completeTask, createTask, getTask, listDueReminders, updateTask } from "@/lib/crm/tasks";
-import { applyMigrationSql } from "@/lib/db/migration-sql";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { processTaskReminders, taskReminderPush } from "@/lib/task-reminder-push";
-import { createAgent, createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 const MINUTE = 60 * 1000;
 
@@ -295,7 +293,7 @@ describe("task reminder pushes", () => {
     assert.equal(forTask(sent.sent, old.id).length, 0);
     assert.equal((await sentAt(old.id)).reminder_sent_at, null);
     const before = (await sentAt(old.id)).updated_at;
-    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270126100000_task_reminder_sent.sql", "utf8"));
+    await reapplyMigrationsFrom("20270126100000_task_reminder_sent.sql");
     const stamped = await sentAt(old.id);
     assert.ok(stamped.reminder_sent_at);
     assert.equal(stamped.updated_at.getTime(), before.getTime());

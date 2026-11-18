@@ -19,7 +19,7 @@ import { listDailyNotes, openDailyNote } from "@/lib/docs/daily-notes";
 import { createDoc, docsMentioning, getDoc, listUnlinkedMentions, saveDoc } from "@/lib/docs/store";
 import { listThreads, mailUnreadCount } from "@/lib/mail/threads";
 import { sectionIndex, workspaceInitial, workspaceTone } from "@/lib/workspace-paths";
-import { createUser, queryAsUser, resetDatabase } from "./helpers";
+import { createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 function inWorkspace(actor: UserActor, id: string, name: string, role: UserActor["role"] = "owner"): UserActor {
   return { ...actor, workspaceId: id, workspaceName: name, role, scopes: scopesForRole(role) };
@@ -390,7 +390,7 @@ describe("workspaces", () => {
     assert.equal(await outside(), 0);
     const preferences = await admin.query("select 1 from crm.mail_preferences where user_id = $1", [mark.userId]);
     assert.equal(preferences.rowCount, 1);
-    for (const file of migrations) await admin.query(readFileSync(`supabase/migrations/${file}`, "utf8"));
+    await reapplyMigrationsFrom(migrations[0]);
     assert.equal(await outside(), 0);
   });
 

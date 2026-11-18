@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
@@ -28,9 +27,8 @@ import { removeMember } from "@/lib/crm/team";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { applyMigrationSql } from "@/lib/db/migration-sql";
 import { describeRepeat, repeatInputOf, ruleWords, checkEnds, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
-import { createAgent, createUser, resetDatabase } from "./helpers";
+import { createAgent, createUser, reapplyMigrationsFrom, resetDatabase } from "./helpers";
 
 let mark: UserActor;
 let sam: UserActor;
@@ -712,7 +710,7 @@ describe("database backstops", () => {
 
   it("rebuilds an index a failed concurrent build left invalid when the migration runs again (72)", async () => {
     await sql("update pg_index set indisvalid = false where indexrelid = 'crm.tasks_series_open_idx'::regclass");
-    await applyMigrationSql(getAdminPool(), readFileSync("supabase/migrations/20270203100000_recurring_tasks.sql", "utf8"));
+    await reapplyMigrationsFrom("20270203100000_recurring_tasks.sql");
     const [index] = await sql<{ valid: boolean }>("select indisvalid as valid from pg_index where indexrelid = 'crm.tasks_series_open_idx'::regclass");
     assert.equal(index.valid, true);
   });
