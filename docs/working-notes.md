@@ -79,7 +79,8 @@ These are the habits and decisions settled with Mark while building Orbit. Read 
   - **Remind me**, not Snooze.
   - Errors read **"Couldn't X. Try again."** Use **Save** and **Saved**.
   - **Delete** destroys something. **Remove** takes it out of a group. Exits are labelled **Cancel**.
-- **Lines to keep:** lines about who can see something, outward effects ("Nothing is sent until you press Send.") and preconditions.
+- **Lines to keep:** lines about who can see something, and preconditions someone wouldn't otherwise know.
+- **Lines to cut:** lines that restate how the interface obviously works, such as "Nothing is sent until you press Send." Orbit is internal and the team already knows.
 
 ### AI
 
