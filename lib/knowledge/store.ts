@@ -3,6 +3,7 @@ import { CrmError, notFound, notSetUp, tooMany } from "@/lib/crm/errors";
 import { isUuid, recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
+import { CONTENT_LIMIT } from "@/lib/knowledge/limits";
 import { linkKind } from "@/lib/knowledge/media";
 import { KNOWLEDGE_MAX_BYTES, putObject, removeObjects, signedUploadUrl, storageConfigured, StorageError } from "@/lib/storage";
 
@@ -12,7 +13,6 @@ export type KnowledgeStatus = "pending" | "indexing" | "ready" | "failed";
 export type KnowledgeTarget = { companyId: string } | { eclipse: true };
 
 export const READ_WINDOW = 100_000;
-export const CONTENT_LIMIT = 2_000_000;
 export const STALE_MS = 5 * 60_000;
 export const UPLOAD_STALE_MS = 30 * 60_000;
 

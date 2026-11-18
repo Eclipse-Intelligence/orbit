@@ -80,6 +80,7 @@ export class GraphMailError extends Error {
     readonly status: number,
     readonly code: string = "",
     readonly retryAfterMs: number | null = null,
+    readonly afterServerError = false,
   ) {
     super(message);
   }
@@ -139,7 +140,7 @@ const GRAPH_RETRIES = 2;
 const RETRY_WAIT_MAX_MS = 5_000;
 const CALL_TIMEOUT_MS = 30_000;
 const SHORTEST_CALL_MS = 1_000;
-const RETRIED_READ_STATUSES = new Set([429, 500, 502, 503, 504]);
+const RETRIED_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 export type GraphLimit = { deadline?: number };
 
@@ -181,10 +182,12 @@ async function graphJson<T>(
   token: string,
   fetchImpl: typeof fetch,
   prefer?: string,
-  write?: { method: "PATCH" | "POST" | "DELETE"; body?: unknown },
+  write?: { method: "PATCH" | "POST" | "DELETE"; body?: unknown; repeatable?: boolean },
   limit: GraphLimit = {},
 ): Promise<T> {
   const target = graphUrl(url);
+  const retriesServerErrors = !write || write.repeatable === true;
+  let afterServerError = false;
   let response: Response;
   for (let attempt = 0; ; attempt += 1) {
     const timeout = callTimeout(limit.deadline);
@@ -207,9 +210,10 @@ async function graphJson<T>(
       await new Promise((resolve) => setTimeout(resolve, wait));
       continue;
     }
-    const retried = response.status === 429 || (!write && RETRIED_READ_STATUSES.has(response.status));
+    const retried = response.status === 429 || (retriesServerErrors && RETRIED_STATUSES.has(response.status));
     const wait = retried && attempt < GRAPH_RETRIES ? retryWaitMs(response, attempt) : null;
     if (wait === null || !fitsBefore(limit.deadline, wait)) break;
+    if (response.status >= 500) afterServerError = true;
     await response.body?.cancel().catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, wait));
   }
@@ -221,17 +225,19 @@ async function graphJson<T>(
   const code = body.error?.code ?? "";
   if (response.status === 410 || /syncstate/i.test(code)) throw new MailSyncReset(body.error?.message ?? "The sync state expired.");
   if (response.status === 401 || code === "InvalidAuthenticationToken") {
-    throw new GraphMailError("Microsoft rejected the mailbox connection. Connect it again.", 401, code);
+    throw new GraphMailError("Microsoft rejected the mailbox connection. Connect it again.", 401, code, null, afterServerError);
   }
   if (response.status === 403) {
     throw new GraphMailError(
       write ? "Outlook refused that change (access denied)." : "Outlook didn't let Orbit read that (access denied).",
       403,
       `${code} ${body.error?.message ?? ""}`.trim(),
+      null,
+      afterServerError,
     );
   }
   const retryAfter = response.status === 429 || response.status === 503 ? retryAfterHeaderMs(response) : null;
-  throw new GraphMailError((body.error?.message || `Microsoft answered ${response.status}.`).slice(0, 240), response.status, code, retryAfter);
+  throw new GraphMailError((body.error?.message || `Microsoft answered ${response.status}.`).slice(0, 240), response.status, code, retryAfter, afterServerError);
 }
 
 function address(value: GraphRecipient | null | undefined): MailAddress | null {
@@ -411,22 +417,45 @@ export async function fetchMicrosoftMessageFolder(
 
 type MicrosoftMessageChange = { isRead?: boolean; flagged?: boolean };
 
-export async function updateMicrosoftMessage(token: string, messageId: string, change: MicrosoftMessageChange, fetchImpl: typeof fetch = fetch) {
+export async function updateMicrosoftMessage(
+  token: string,
+  messageId: string,
+  change: MicrosoftMessageChange,
+  fetchImpl: typeof fetch = fetch,
+  limit: GraphLimit = {},
+) {
   const body: Record<string, unknown> = {};
   if (change.isRead !== undefined) body.isRead = change.isRead;
   if (change.flagged !== undefined) body.flag = { flagStatus: change.flagged ? "flagged" : "notFlagged" };
-  await graphJson<unknown>(`${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=id`, token, fetchImpl, undefined, { method: "PATCH", body });
-}
-
-export async function moveMicrosoftMessage(token: string, messageId: string, destination: string, fetchImpl: typeof fetch = fetch) {
-  const moved = await graphJson<{ id?: string; parentFolderId?: string }>(
-    `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/move`,
+  await graphJson<unknown>(
+    `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=id`,
     token,
     fetchImpl,
     undefined,
-    { method: "POST", body: { destinationId: destination } },
+    { method: "PATCH", body, repeatable: true },
+    limit,
   );
-  return { id: moved.id ?? messageId, folderId: moved.parentFolderId ?? null };
+}
+
+export const MOVE_UNCONFIRMED = "Couldn't confirm the move in Outlook. Try again.";
+
+export async function moveMicrosoftMessage(token: string, messageId: string, destination: string, fetchImpl: typeof fetch = fetch, limit: GraphLimit = {}) {
+  try {
+    const moved = await graphJson<{ id?: string; parentFolderId?: string }>(
+      `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/move`,
+      token,
+      fetchImpl,
+      undefined,
+      { method: "POST", body: { destinationId: destination }, repeatable: true },
+      limit,
+    );
+    return { id: moved.id ?? messageId, folderId: moved.parentFolderId ?? null };
+  } catch (error) {
+    if (!(error instanceof GraphMailError && error.status === 404 && error.afterServerError)) throw error;
+    const folderId = await fetchMicrosoftMessageFolder(token, messageId, fetchImpl, limit).catch(() => null);
+    if (!folderId) throw new GraphMailError(MOVE_UNCONFIRMED, 502, error.code);
+    return { id: messageId, folderId };
+  }
 }
 
 export async function fetchMicrosoftHeaders(token: string, messageId: string, fetchImpl: typeof fetch = fetch) {

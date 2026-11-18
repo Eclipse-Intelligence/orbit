@@ -1,18 +1,10 @@
-import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
+import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, CALENDAR_SENDER, CALENDAR_SUBJECT, FREE_MAIL_DOMAINS, UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { MAIL_SPLITS, type MailSplit } from "@/lib/mail/view";
-
-export const CALENDAR_SUBJECT =
-  "^(accepted|declined|tentative|tentatively accepted|invitation|updated invitation|canceled|cancelled|new time proposed|meeting forward notification|invitation updated)\\M";
-export const CALENDAR_SENDER = "^(calendar-notification|calendar|noreply-calendar|invites?)@";
-export const AUTOMATED_SENDER =
-  "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team)([._+-][^@]*)?@";
-export const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
-export const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
 
 export function sameThread(alias: string, key: string) {
   return `${alias}.thread_key = ${key}`;

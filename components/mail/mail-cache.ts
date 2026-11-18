@@ -289,8 +289,22 @@ export function fetchNav() {
   return getJson<MailNav>("/api/mail/nav");
 }
 
+export type MailActionReply = { changed: number; failed?: number; problem?: string | null };
+
+function emails(count: number) {
+  return `${count} ${count === 1 ? "email" : "emails"}`;
+}
+
+export function partlyMoved(failed: number, problem: string | null, conversations = 1) {
+  return `Couldn't move ${emails(failed)} in ${conversations === 1 ? "this conversation" : "these conversations"}. ${problem ?? "Try again."}`;
+}
+
+export function partlyUpdated(failed: number, problem: string | null) {
+  return `Couldn't update ${emails(failed)} in this conversation. ${problem ?? "Try again."}`;
+}
+
 export function postAction(thread: string, action: string, view: string, until?: string) {
-  return getJson<{ changed: number }>("/api/mail/actions", {
+  return getJson<MailActionReply>("/api/mail/actions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ thread, action, view, until }),

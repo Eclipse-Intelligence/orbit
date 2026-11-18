@@ -5,7 +5,15 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
-import { ensureMicrosoftFolder, GraphMailError, moveMicrosoftMessage, reconnectProblem, SNOOZE_FOLDER, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import {
+  ensureMicrosoftFolder,
+  GraphMailError,
+  moveMicrosoftMessage,
+  reconnectProblem,
+  SNOOZE_FOLDER,
+  updateMicrosoftMessage,
+  type GraphLimit,
+} from "@/lib/mail/microsoft";
 import { sourceReconnect } from "@/lib/mail/accounts";
 import { announceSharedThreads, shareVisibleRole } from "@/lib/mail/share-live";
 import { mailSourceToken, recordMailEchoes } from "@/lib/mail/sync";
@@ -28,6 +36,7 @@ const SNOOZE_MAX_MS = 366 * 24 * 60 * 60 * 1000;
 
 const PARALLEL = 4;
 const MESSAGE_LIMIT = 100;
+export const ACTION_BUDGET_MS = 40_000;
 
 type Row = {
   id: string;
@@ -83,6 +92,16 @@ async function eachLimited<T>(items: T[], run: (item: T) => Promise<void>) {
     }),
   );
   return failures;
+}
+
+function graphFailure(error: unknown) {
+  if (error instanceof GraphMailError) return { status: error.status, code: error.code.split(/\s/)[0] || null };
+  if (error instanceof CrmError) return { status: error.status, code: error.code };
+  return { status: null, code: error instanceof Error ? error.name : "unknown" };
+}
+
+function logFailures(action: string, sourceId: string, failures: unknown[]) {
+  for (const failure of failures) console.error("Mail action failed in Microsoft", { action, mailbox: sourceId, ...graphFailure(failure) });
 }
 
 async function snoozeFolder(actor: UserActor, sourceId: string, token: string, fetchImpl: typeof fetch) {
@@ -188,11 +207,15 @@ async function failureMessage(actor: UserActor, sourceId: string, error: unknown
   return error instanceof Error ? error.message : "Outlook didn't accept that change. Try again.";
 }
 
+export type MailActionResult = { changed: number; failed: number; problem: string | null };
+
 export async function applyMailAction(
   actor: UserActor,
   input: { thread: string; action: MailAction; view?: MailView | null; until?: string | null },
   fetchImpl: typeof fetch = fetch,
-): Promise<{ changed: number }> {
+  options: { deadline?: number } = {},
+): Promise<MailActionResult> {
+  const limit: GraphLimit = { deadline: options.deadline ?? Date.now() + ACTION_BUDGET_MS };
   if (!MAIL_ACTIONS.includes(input.action)) throw new CrmError("validation_error", "Choose a mail action.", 400);
   const until = input.action === "snooze" ? new Date(input.until ?? "") : null;
   if (until && (Number.isNaN(until.getTime()) || until.getTime() < Date.now() + SNOOZE_MIN_MS || until.getTime() > Date.now() + SNOOZE_MAX_MS)) {
@@ -223,7 +246,7 @@ export async function applyMailAction(
   const subject = rows[rows.length - 1].subject?.slice(0, 2000) ?? null;
   if (chosen.length === 0) {
     if (input.action !== "snooze") await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, null, subject));
-    return { changed: 0 };
+    return { changed: 0, failed: 0, problem: null };
   }
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
   const base = MOVES[input.action];
@@ -231,13 +254,13 @@ export async function applyMailAction(
   const done: { row: Row; folder: string | null; providerId: string }[] = [];
   const failures = await eachLimited(chosen, async (row) => {
     if (move) {
-      const moved = await moveMicrosoftMessage(token, row.provider_message_id, move.destination, fetchImpl);
+      const moved = await moveMicrosoftMessage(token, row.provider_message_id, move.destination, fetchImpl, limit);
       done.push({ row, folder: moved.folderId, providerId: moved.id });
       return;
     }
     const isRead = input.action === "read" ? true : input.action === "unread" ? false : undefined;
     const flagged = input.action === "flag" ? true : input.action === "unflag" ? false : undefined;
-    await updateMicrosoftMessage(token, row.provider_message_id, { isRead, flagged }, fetchImpl);
+    await updateMicrosoftMessage(token, row.provider_message_id, { isRead, flagged }, fetchImpl, limit);
     done.push({ row, folder: null, providerId: row.provider_message_id });
   });
   if (done.length > 0) {
@@ -257,10 +280,12 @@ export async function applyMailAction(
     announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
-  if (failures.length > 0) {
+  if (failures.length === 0) return { changed: done.length, failed: 0, problem: null };
+  logFailures(input.action, sourceId, failures);
+  if (done.length === 0) {
     throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
   }
-  return { changed: done.length };
+  return { changed: done.length, failed: failures.length, problem: await failureMessage(actor, sourceId, failures[0]) };
 }
 
 export async function threadForEmail(actor: UserActor, emailId: string) {
@@ -306,5 +331,7 @@ export async function moveMessages(
     announceMailChange(actor);
     announceMoves(actor, sourceId, touched);
   }
-  return { moved: done.map((item) => item.id), error: failures.length ? await failureMessage(actor, sourceId, failures[0]) : null };
+  if (failures.length === 0) return { moved: done.map((item) => item.id), error: null };
+  logFailures(typeof target === "string" ? target : "move", sourceId, failures);
+  return { moved: done.map((item) => item.id), error: await failureMessage(actor, sourceId, failures[0]) };
 }

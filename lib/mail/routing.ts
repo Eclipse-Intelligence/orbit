@@ -1,7 +1,8 @@
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
-import { FREE_MAIL_DOMAINS, isFreeMailDomain } from "@/lib/crm/communications";
+import { isFreeMailDomain } from "@/lib/crm/communications";
+import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { companyNameFromDomain, internalAddresses } from "@/lib/crm/conversations";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -10,7 +11,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { workspaceActors, type WorkspaceRef } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
-import { AUTOMATED_DOMAIN, AUTOMATED_SENDER } from "@/lib/mail/split";
+import { AUTOMATED_DOMAIN, AUTOMATED_SENDER } from "@/lib/mail/patterns";
 import type { ThreadFiling } from "@/lib/mail/view";
 
 export const SKIPPED_ROLES = ["drafts", "junk", "outbox"];

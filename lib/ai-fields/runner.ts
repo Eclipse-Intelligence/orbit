@@ -6,7 +6,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Actor, Company } from "@/lib/crm/types";
 import { query } from "@/lib/db/pool";
-import { GAP_THRESHOLD, TAG_THRESHOLD } from "@/lib/enrichment/web-checks";
+import { GAP_THRESHOLD, TAG_THRESHOLD } from "@/lib/enrichment/thresholds";
 import { createTaskRun, decide, getTaskResult, getTaskRun, parallelKey, ParallelError, stopsParallel, type DecisionCitation, type DecisionQuestion, type TaskField, type TaskFieldBasis } from "@/lib/parallel";
 import { BACKGROUND_PROVENANCE, fillSizeFromStaff, recordAnswerChange, type StoredValue } from "@/lib/ai-fields/answers";
 import { readFields, scopeProblem, scopeSql, spendThisMonth, type StoredField } from "@/lib/ai-fields/fields";

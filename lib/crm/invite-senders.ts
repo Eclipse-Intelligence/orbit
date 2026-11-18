@@ -4,6 +4,7 @@ import { storeAccountToken } from "@/lib/crm/calendar-accounts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { currentToken, readStored, storeToken, type StoredTokens } from "@/lib/crm/inbox";
+import { INVITE_NOT_CONNECTED } from "@/lib/crm/invite-problems";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
 import type { UserActor } from "@/lib/crm/types";
@@ -11,7 +12,6 @@ import { CALENDAR_WRITE_RECONNECT } from "@/lib/microsoft/calendar";
 import { addressHomesInDb } from "@/lib/mail/routing";
 import { grantsCalendarWrite, microsoftConfigured, refreshMicrosoftToken, type MicrosoftToken } from "@/lib/microsoft/oauth";
 
-export const INVITE_NOT_CONNECTED = "Connect Microsoft in Settings › Email to send invites.";
 export const INVITE_RECONNECT = CALENDAR_WRITE_RECONNECT;
 export const CALENDAR_NOT_CONNECTED = "Connect Microsoft in Settings › Email to add meetings to your calendar.";
 

@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { FREE_MAIL_DOMAINS } from "@/lib/crm/communications";
+import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
@@ -7,7 +7,8 @@ import type { UserActor } from "@/lib/crm/types";
 import { addWorkingDays, dayKeyAt, nonWorkingReason, shiftDay, wallClockAt } from "@/lib/crm/working-days";
 import type { Db } from "@/lib/db/pool";
 import { filingDomain, parseRouteKey, routedParams, routedSql } from "@/lib/mail/routing";
-import { automatedLooking, crmSender, crmValues, ownAddressesSql, replyableSplit, sameThread, splitJoin, UNSUBSCRIBE_TEXT } from "@/lib/mail/split";
+import { UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
+import { automatedLooking, crmSender, crmValues, ownAddressesSql, replyableSplit, sameThread, splitJoin } from "@/lib/mail/split";
 
 export { ownAddressesSql };
 import { DEFERRAL_GRACE_MINUTES } from "@/lib/mail/deferral-dates";

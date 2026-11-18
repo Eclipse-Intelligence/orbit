@@ -3,7 +3,17 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { fetchMicrosoftDelta, GraphMailError, GraphOutOfTime, lookupPurged, retryWaitMs, updateMicrosoftMessage } from "@/lib/mail/microsoft";
+import {
+  createMicrosoftDraft,
+  ensureMicrosoftFolder,
+  fetchMicrosoftDelta,
+  GraphMailError,
+  GraphOutOfTime,
+  lookupPurged,
+  retryWaitMs,
+  sendMicrosoftDraft,
+  updateMicrosoftMessage,
+} from "@/lib/mail/microsoft";
 import { folderRetryAt, screenSyncOptions, syncMail, syncNotifiedMailboxes } from "@/lib/mail/sync";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -376,10 +386,21 @@ describe("mail sync recovers from a folder, a mailbox or Microsoft going wrong",
     assert.equal(await stored("after-502"), 1);
   });
 
-  it("never sends a change twice after a server error", async () => {
-    const box = outlook((_url, method) => (method === "PATCH" ? new Response("<html>Bad Gateway</html>", { status: 502 }) : undefined));
-    await assert.rejects(updateMicrosoftMessage("access", "m-1", { isRead: true }, box.fetchImpl), (error) => error instanceof GraphMailError && error.status === 502);
-    assert.equal(box.calls.filter((call) => call.startsWith("PATCH")).length, 1);
+  it("never sends or creates anything twice after a server error, but repeats a read state change", async () => {
+    const failing = outlook((_url, method) => (method === "POST" ? new Response("<html>Bad Gateway</html>", { status: 502 }) : undefined));
+    await assert.rejects(sendMicrosoftDraft("access", "d-1", failing.fetchImpl), (error) => error instanceof GraphMailError && error.status === 502);
+    await assert.rejects(createMicrosoftDraft("access", "m-1", "reply", failing.fetchImpl), (error) => error instanceof GraphMailError && error.status === 502);
+    await assert.rejects(ensureMicrosoftFolder("access", "Research", failing.fetchImpl), (error) => error instanceof GraphMailError && error.status === 502);
+    assert.equal(failing.calls.filter((call) => call.startsWith("POST")).length, 3, "one attempt each");
+
+    let patches = 0;
+    const flaky = outlook((_url, method) => {
+      if (method !== "PATCH") return undefined;
+      patches += 1;
+      return patches === 1 ? new Response("<html>Bad Gateway</html>", { status: 502, headers: { "retry-after": "0" } }) : Response.json({ id: "m-1" });
+    });
+    await updateMicrosoftMessage("access", "m-1", { isRead: true }, flaky.fetchImpl);
+    assert.equal(patches, 2);
   });
 
   it("leaves a throttled mailbox alone for as long as Microsoft asks, without waiting in the request", async () => {

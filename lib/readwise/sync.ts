@@ -5,7 +5,8 @@ import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { scheduleIndexing } from "@/lib/knowledge/background";
-import { CONTENT_LIMIT, insertItem, type KnowledgeTarget } from "@/lib/knowledge/store";
+import { CONTENT_LIMIT } from "@/lib/knowledge/limits";
+import { insertItem, type KnowledgeTarget } from "@/lib/knowledge/store";
 import {
   hasReaderTag,
   highlightText,

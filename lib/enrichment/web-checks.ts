@@ -7,6 +7,7 @@ import type { Actor, Company, Provenance, UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { getEnrichmentSettings, icpHashOf } from "@/lib/enrichment/settings";
 import { fitLabel } from "@/lib/enrichment/fit";
+import { GAP_THRESHOLD, TAG_THRESHOLD } from "@/lib/enrichment/thresholds";
 import { decide, parallelKey, ParallelError, stopsParallel, type DecisionCitation, type DecisionQuestion } from "@/lib/parallel";
 import { webChecksNotSetUp } from "@/lib/ai-fields/types";
 
@@ -14,8 +15,6 @@ export type WebCheckKind = "tag" | "signal";
 export type SignalNoteKind = "funding" | "hire" | "launch" | "signal";
 export type WebCheck = { id: string; kind: WebCheckKind; label: string; question: string; noteKind: SignalNoteKind };
 
-export const TAG_THRESHOLD = 0.85;
-export const GAP_THRESHOLD = 0.7;
 export const SIGNAL_THRESHOLD = 0.8;
 export const SIGNAL_REPEAT_DAYS = 90;
 export const SIGNAL_INTERVAL_DAYS = 7;

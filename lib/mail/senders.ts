@@ -1,5 +1,5 @@
 import { isFreeMailDomain } from "@/lib/crm/communications";
-import { AUTOMATED_SENDER } from "@/lib/mail/split";
+import { AUTOMATED_SENDER } from "@/lib/mail/patterns";
 
 export type ListedCategory = "supplier" | "service" | "personal" | "collections";
 
