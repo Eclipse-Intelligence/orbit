@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { keyFingerprint } from "@/lib/campaigns/connections";
 import { connectedContext, mightHaveSent, rejectedKeyLine } from "@/lib/campaigns/context";
 import { fireCampaignEvents } from "@/lib/campaigns/events";
 import { prospectEmail, prospectLinkedin } from "@/lib/campaigns/normalize";
@@ -62,6 +63,7 @@ type Job = {
   fetchImpl?: typeof fetch;
   deadline: number;
   runSteps?: unknown;
+  fingerprint: string;
   halted?: boolean;
   writing?: Promise<{ brand: BrandProfile; proof: ProofEntry[]; sender: { firstName: string; bookingUrl: string | null } }>;
 };
@@ -120,7 +122,7 @@ function rejectedKey(job: Job, error: unknown) {
 export function transient(provider: CampaignProvider, error: unknown) {
   if (error instanceof Ended) return false;
   if (error instanceof ServiceBusy) return true;
-  if (error instanceof LlmError) return error.retryable;
+  if (error instanceof LlmError) return true;
   if (error instanceof CrmError) return error.status >= 500 || error.status === 429 || error.details?.retry === true;
   const failure = provider.failure(error);
   if (failure) return failure.rejectedKey || failure.status === null || failure.status >= 500 || failure.status === 429;
@@ -134,15 +136,20 @@ function failureText(error: unknown, provider?: CampaignProvider) {
   return "Couldn't add this person. Try again.";
 }
 
-class KeyWaiting extends Error {
-  constructor(provider: CampaignProvider) {
-    super(rejectedKeyLine(provider));
-    this.name = "KeyWaiting";
+class Waiting extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "Waiting";
   }
 }
 
+export function aiSetupProblem(error: unknown) {
+  if (!(error instanceof LlmError) || error.retryable) return false;
+  return error.status === 401 || error.status === 402 || error.status === 403 || (error.status === null && error.actionable);
+}
+
 async function markKeyRejected(job: Job) {
-  await query("select private.campaign_key_rejected($1, $2, $3)", [job.actor.workspaceId, job.provider.id, rejectedKeyLine(job.provider)]).catch((error) =>
+  await query("select private.campaign_key_rejected($1, $2, $3, $4)", [job.actor.workspaceId, job.provider.id, job.fingerprint, rejectedKeyLine(job.provider)]).catch((error) =>
     console.error("Couldn't note a rejected campaign key", redactedError(error)),
   );
 }
@@ -163,11 +170,12 @@ async function releaseAfter(job: Job, prospectId: string, error: unknown) {
     await end(job, prospectId, null, null);
     return null;
   }
-  if (rejectedKey(job, error)) {
-    await markKeyRejected(job);
+  if (aiSetupProblem(error)) {
     await end(job, prospectId, null, null);
+    job.halted = true;
     return null;
   }
+  if (rejectedKey(job, error)) await markKeyRejected(job);
   return countedRelease(job.actor.workspaceId, job.holder, prospectId, failureText(error, job.provider));
 }
 
@@ -368,7 +376,13 @@ async function send(job: Job, items: Ready[]): Promise<ProspectOutcome[]> {
       if (error instanceof ServiceBusy) throw error;
       await markKeyRejected(job);
       job.halted = true;
-      return stillFilling(items);
+      const reason = failureText(error, job.provider);
+      const counted: ProspectOutcome[] = [];
+      for (const item of items) {
+        const state = await countedRelease(job.actor.workspaceId, job.holder, item.prospect.id, reason);
+        counted.push({ prospectId: item.prospect.id, state: state === "failed" ? "failed" : "filling", reason: state === "failed" ? reason : null });
+      }
+      return counted;
     }
     const lasting = lastingFailure(job, error);
     if (lasting && items.length > 1) return sendOneByOne(job, items);
@@ -466,8 +480,9 @@ async function jobFor(actor: UserActor, campaignId: string, holder: string, opti
     const campaign = await readCampaignTarget(db, actor.workspaceId, campaignId);
     return { campaign, variables: await readCampaignVariables(db, campaign) };
   });
+  if (campaign.status === "completed" || campaign.status === "stopped" || campaign.status === "archived") throw new CrmError("conflict", "This campaign has ended.", 409);
   const refusal = addRefusal(campaign);
-  if (refusal) throw new CrmError("conflict", refusal, 409);
+  if (refusal) throw new Waiting(refusal);
   const { provider, context } = await connectedContext(actor.workspaceId, campaign.provider, { fetchImpl: options.fetchImpl });
   const connection = await withActor(actor, async (db) => {
     const result = await db.query<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = $2", [
@@ -476,8 +491,8 @@ async function jobFor(actor: UserActor, campaignId: string, holder: string, opti
     ]);
     return result.rows[0] ?? null;
   });
-  if (connection?.last_error === rejectedKeyLine(provider)) throw new KeyWaiting(provider);
-  return { actor, campaign, variables, provider, context, holder, fetchImpl: options.fetchImpl, deadline: options.deadline, runSteps: options.runSteps };
+  if (connection?.last_error === rejectedKeyLine(provider)) throw new Waiting(`${rejectedKeyLine(provider).replace(/\.$/, "")} in Settings › Tools.`);
+  return { actor, campaign, variables, provider, context, holder, fingerprint: keyFingerprint(provider.id, context.key), fetchImpl: options.fetchImpl, deadline: options.deadline, runSteps: options.runSteps };
 }
 
 function lastingSetup(error: unknown) {
@@ -508,9 +523,9 @@ export async function addOneNow(
       await finish(actor.workspaceId, holder, prospectId, "failed", lasting);
       return { prospectId, state: "failed", reason: lasting };
     }
-    if (error instanceof KeyWaiting) {
+    if (error instanceof Waiting) {
       await finish(actor.workspaceId, holder, prospectId, null, null);
-      throw new CrmError("upstream_error", `${error.message.replace(/\.$/, "")} in Settings › Tools.`, 502, { retry: true });
+      throw new CrmError("upstream_error", error.message, 502, { retry: true });
     }
     const state = await countedRelease(actor.workspaceId, holder, prospectId, failureText(error));
     if (state === "failed") return { prospectId, state: "failed", reason: failureText(error) };
@@ -558,7 +573,7 @@ async function runGroup(rows: BatchRow[], holder: string, options: { fetchImpl?:
     job = await jobFor(actor, first.campaign_id, holder, options);
   } catch (error) {
     const lasting = lastingSetup(error);
-    if (error instanceof KeyWaiting) {
+    if (error instanceof Waiting) {
       await releaseAll(first.workspace_id, holder, ids);
       return [];
     }

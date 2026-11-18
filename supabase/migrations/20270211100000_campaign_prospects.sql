@@ -238,17 +238,17 @@ begin
           or (v_contact.normalized_linkedin is not null and p.linkedin = v_contact.normalized_linkedin))
       order by (p.state in ('skipped', 'failed')), p.created_at
       limit 1;
-      if v_twin.id is not null then
+      if v_twin.id is not null and v_twin.state in ('skipped', 'failed') then
+        update crm.campaign_prospects p
+        set contact_id = v_contact.id, company_id = v_contact.company_id
+        where p.id = v_twin.id
+        returning * into v_existing;
+      elsif v_twin.id is not null then
         contact_id := v_contact.id;
         prospect_id := v_twin.id;
         state := v_twin.state;
-        if v_twin.state in ('skipped', 'failed') then
-          skip_reason := 'Already in this campaign';
-          outcome := 'skipped';
-        else
-          skip_reason := v_twin.skip_reason;
-          outcome := 'already';
-        end if;
+        skip_reason := v_twin.skip_reason;
+        outcome := 'already';
         mine := false;
         return next;
         continue;
@@ -678,7 +678,15 @@ begin
         when p.fill_attempts + 1 >= p_most then left(coalesce(nullif(btrim(p_reason), ''), 'Couldn''t add this person. Try again.'), 500)
         else p.skip_reason
       end,
-      claimed_at = case when p.fill_attempts + 1 >= p_most then null else now() - interval '9 minutes' end,
+      claimed_at = case
+        when p.fill_attempts + 1 >= p_most then null
+        else now() - interval '10 minutes' + case p.fill_attempts + 1
+          when 1 then interval '5 minutes'
+          when 2 then interval '30 minutes'
+          when 3 then interval '2 hours'
+          else interval '6 hours'
+        end
+      end,
       claimed_by = case when p.fill_attempts + 1 >= p_most then null else p.claimed_by end
   where p.id = p_prospect and p.workspace_id = p_workspace and p.claimed_by = p_holder
     and p.state in ('queued', 'filling', 'pushing')
@@ -687,7 +695,9 @@ begin
 end;
 $$;
 
-create or replace function private.campaign_key_rejected(p_workspace uuid, p_provider text, p_error text)
+drop function if exists private.campaign_key_rejected(uuid, text, text);
+
+create or replace function private.campaign_key_rejected(p_workspace uuid, p_provider text, p_key_fingerprint text, p_error text)
 returns void
 language plpgsql
 security definer
@@ -699,14 +709,14 @@ begin
   end if;
   update crm.campaign_connections c
   set last_error = left(p_error, 500)
-  where c.workspace_id = p_workspace and c.provider = p_provider;
+  where c.workspace_id = p_workspace and c.provider = p_provider and c.key_fingerprint = p_key_fingerprint;
 end;
 $$;
 
 revoke all on function private.campaign_fill_retry(uuid, uuid, text, text, integer) from public;
-revoke all on function private.campaign_key_rejected(uuid, text, text) from public;
+revoke all on function private.campaign_key_rejected(uuid, text, text, text) from public;
 grant execute on function private.campaign_fill_retry(uuid, uuid, text, text, integer) to crm_app;
-grant execute on function private.campaign_key_rejected(uuid, text, text) to crm_app;
+grant execute on function private.campaign_key_rejected(uuid, text, text, text) to crm_app;
 
 revoke all on function private.campaign_push_undo(uuid, uuid[], text) from public;
 grant execute on function private.campaign_push_undo(uuid, uuid[], text) to crm_app;

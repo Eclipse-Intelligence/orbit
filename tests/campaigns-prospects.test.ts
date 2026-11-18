@@ -569,6 +569,21 @@ describe("adding prospects", () => {
     assert.equal(judge("Beta cut costs by 30%", [{ fact: "cut costs by 30%", proofId: "proof-unknown" }]), "Nothing found for hook");
   });
 
+  it("never counts a model's own fact for a page it didn't read, even one Orbit knows", () => {
+    const input = {
+      variables: [{ name: "hook", brief: "", required: true, maxLength: null }],
+      valueLimit: 2000,
+      token: (name: string) => `{{${name}}}`,
+      campaign: { name: "x", channel: "email", provider: "smartlead", sequence: [] },
+      contact: { name: "A", firstName: "A" },
+      company: { name: "Acme", website: "https://acme.test" },
+      proof: [],
+    } as unknown as FillInput;
+    const text = "Acme raised £45m and grew 300%";
+    assert.equal(judgeFill(input, { values: [{ name: "hook", value: text, sources: [{ fact: text, url: "https://acme.test" }] }] }, []).problem, "Nothing found for hook");
+    assert.equal(judgeFill(input, { values: [{ name: "hook", value: text, sources: [{ fact: text, url: "https://acme.test" }] }] }, ["https://acme.test"]).problem, null, "a page it read counts");
+  });
+
   it("puts a row back to filling when nothing was sent, and trusts a lookup only for this campaign", async () => {
     await contact(owner, "abe", { firstName: "Abe", lastName: "Ross", email: "abe@ross.test" });
     const abe = (await addProspects(owner, emailCampaign, [people.abe.id], { operation: "test" })).prospects[0];
@@ -601,6 +616,8 @@ describe("adding prospects", () => {
     assert.equal(other, null, "a HeyReach lead in another campaign isn't this one");
     const here = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1", campaignId: 801 }) });
     assert.deepEqual(here, { id: "lead-1" });
+    const unsure = await findHeyReachLead("key", "801", "https://www.linkedin.com/in/x", { fetchImpl: async () => json({ id: "lead-1" }) });
+    assert.equal(unsure, null, "a reply that doesn't name the campaign doesn't count");
   });
 
   it("never adds two contacts with the same email to one campaign", async () => {
@@ -612,9 +629,15 @@ describe("adding prospects", () => {
     assert.equal(twin.outcome, "already");
     assert.equal(twin.prospectId, wes.prospectId);
     await sql("update crm.campaign_prospects set state = 'failed', skip_reason = 'x' where id = $1", [wes.prospectId]);
-    const skipped = (await addProspects(owner, otherCampaign, [people.xan.id], { operation: "test" })).prospects[0];
-    assert.deepEqual([skipped.outcome, skipped.skipReason], ["skipped", "Already in this campaign"]);
-    assert.equal((await sql("select 1 from crm.campaign_prospects where contact_id = $1", [people.xan.id])).length, 0);
+    const moved = (await addProspects(owner, otherCampaign, [people.xan.id], { operation: "test" })).prospects[0];
+    assert.deepEqual([moved.outcome, moved.prospectId], ["requeued", wes.prospectId], "a failed twin moves to the new contact and is checked again");
+    assert.deepEqual(await sql("select contact_id, state from crm.campaign_prospects where id = $1", [wes.prospectId]), [{ contact_id: people.xan.id, state: "queued" }]);
+    await sql("update crm.campaign_prospects set state = 'skipped', skip_reason = 'x' where id = $1", [wes.prospectId]);
+    await sql("insert into crm.suppressions (workspace_id, kind, value, reason, source) values ($1, 'email', 'wes@long.test', 'manual', 'test')", [owner.workspaceId]);
+    await sql("update crm.contacts set email = 'xan@other.test', normalized_email = 'xan@other.test' where id = $1", [people.xan.id]);
+    await sql("update crm.contacts set email = 'wes@long.test', normalized_email = 'wes@long.test' where id = $1", [people.wes.id]);
+    const back = (await addProspects(owner, otherCampaign, [people.wes.id], { operation: "test" })).prospects[0];
+    assert.deepEqual([back.outcome, back.prospectId, back.skipReason], ["skipped", wes.prospectId, "Do not contact"], "the do-not-contact check runs again on the moved row");
   });
 
   it("an outage releases prospects instead of failing them", async () => {
@@ -649,6 +672,7 @@ describe("adding prospects", () => {
     state.smartleadFails = 401;
     await drainFills();
     assert.equal((await row(fin.prospectId)).state, "filling", "rows wait for the key to be replaced");
+    assert.equal((await sql<{ fill_attempts: number }>("select fill_attempts from crm.campaign_prospects where id = $1", [fin.prospectId]))[0].fill_attempts, 1, "a push the key was rejected for counts");
     const marked = await sql<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId]);
     assert.equal(marked[0].last_error, "Smartlead rejected the key. Save a new one.");
 
@@ -662,21 +686,82 @@ describe("adding prospects", () => {
     assert.equal(state.llm.filter((text) => text.includes('"firstName":"Joy"')).length, 0, "nothing is filled while the key is rejected");
     assert.equal(state.pushes.length, pushesBefore, "and nothing is sent");
     const waiting = await sql<{ state: string; fill_attempts: number }>("select state, fill_attempts from crm.campaign_prospects where id = any($1::uuid[]) order by created_at", [[fin.prospectId, joy.prospectId]]);
-    assert.deepEqual(waiting.map((item) => [item.state, item.fill_attempts]), [["filling", 0], ["filling", 0]], "waiting for a key never uses up attempts");
+    assert.deepEqual(waiting.map((item) => [item.state, item.fill_attempts]), [["filling", 1], ["filling", 0]], "waiting for a key uses up no more attempts");
+
+    await sql("select private.campaign_key_rejected($1, 'smartlead', 'not-this-key-fingerprint', 'x')", [owner.workspaceId]);
+    assert.equal((await sql<{ last_error: string | null }>("select last_error from crm.campaign_connections where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId]))[0].last_error, "Smartlead rejected the key. Save a new one.", "an old key's rejection can't mark another key");
 
     state.smartleadFails = null;
-    await sql("update crm.campaign_connections set last_error = null where workspace_id = $1 and provider = 'smartlead'", [owner.workspaceId]);
+    await saveCampaignConnection(owner, "smartlead", SL_A, { fetchImpl });
     await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = any($1::uuid[])", [[fin.prospectId, joy.prospectId]]);
     await drainFills();
     assert.equal((await row(fin.prospectId)).state, "pushed");
     assert.equal((await row(joy.prospectId)).state, "pushed");
   });
 
+  it("a key that keeps being rejected at push gives up after five tries", async () => {
+    await contact(owner, "kit", { firstName: "Kit", lastName: "Shaw", email: "kit@shaw.test" });
+    const kit = (await addProspects(owner, emailCampaign, [people.kit.id], { operation: "test" })).prospects[0];
+    state.smartleadFails = 403;
+    for (let round = 0; round < 7; round += 1) {
+      await saveCampaignConnection(owner, "smartlead", SL_A, { fetchImpl });
+      await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1 and state <> 'failed'", [kit.prospectId]);
+      await drainFills();
+    }
+    const done = await sql<{ state: string; fill_attempts: number }>("select state, fill_attempts from crm.campaign_prospects where id = $1", [kit.prospectId]);
+    assert.deepEqual([done[0].state, done[0].fill_attempts], ["failed", 5]);
+    state.smartleadFails = null;
+    await saveCampaignConnection(owner, "smartlead", SL_A, { fetchImpl });
+  });
+
+  it("waits without counting while the AI isn't set up, and counts a bad request", async () => {
+    await contact(owner, "lia", { firstName: "Lia", lastName: "Moss", email: "lia@moss.test" });
+    const lia = (await addProspects(owner, emailCampaign, [people.lia.id], { operation: "test" })).prospects[0];
+    state.llmStatus = 401;
+    await drainFills();
+    assert.deepEqual(await sql("select state, fill_attempts from crm.campaign_prospects where id = $1", [lia.prospectId]), [{ state: "filling", fill_attempts: 0 }]);
+    process.env.LLM_API_KEY = "";
+    state.llmStatus = null;
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [lia.prospectId]);
+    await drainFills();
+    assert.deepEqual(await sql("select state, fill_attempts from crm.campaign_prospects where id = $1", [lia.prospectId]), [{ state: "filling", fill_attempts: 0 }], "a missing key is a setup problem");
+    process.env.LLM_API_KEY = "test-llm-key";
+    state.llmStatus = 400;
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [lia.prospectId]);
+    await drainFills();
+    assert.deepEqual(await sql("select state, fill_attempts from crm.campaign_prospects where id = $1", [lia.prospectId]), [{ state: "filling", fill_attempts: 1 }], "a bad request counts");
+    state.llmStatus = null;
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [lia.prospectId]);
+    await drainFills();
+    assert.equal((await row(lia.prospectId)).state, "pushed");
+  });
+
+  it("holds queued LinkedIn prospects while their campaign is paused", async () => {
+    await contact(owner, "kai", { firstName: "Kai", lastName: "Webb", email: "kai@webb.test", linkedinUrl: "https://www.linkedin.com/in/kaiwebb" });
+    const kai = (await addProspects(owner, linkedinCampaign, [people.kai.id], { operation: "test" })).prospects[0];
+    await sql("update crm.campaigns set status = 'paused' where id = $1", [linkedinCampaign]);
+    await drainFills();
+    assert.deepEqual(await sql("select state, fill_attempts from crm.campaign_prospects where id = $1", [kai.prospectId]), [{ state: "filling", fill_attempts: 0 }]);
+    await sql("update crm.campaigns set status = 'active' where id = $1", [linkedinCampaign]);
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [kai.prospectId]);
+    await drainFills();
+    assert.equal((await row(kai.prospectId)).state, "pushed");
+  });
+
   it("gives up after five failed attempts, and a re-add starts the count again", async () => {
     await contact(owner, "ivo", { firstName: "Ivo", lastName: "Kent", email: "ivo@kent.test" });
     const ivo = (await addProspects(owner, emailCampaign, [people.ivo.id], { operation: "test" })).prospects[0];
     state.llmStatus = 503;
-    for (let round = 0; round < 8; round += 1) {
+    await drainFills();
+    const held = await sql<{ wait: number }>("select extract(epoch from (claimed_at + interval '10 minutes' - now()))::int as wait from crm.campaign_prospects where id = $1", [ivo.prospectId]);
+    assert.ok(held[0].wait > 240 && held[0].wait <= 300, `the first retry waits five minutes (${held[0].wait}s)`);
+    await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1", [ivo.prospectId]);
+    await drainFills();
+    const longer = await sql<{ wait: number }>("select extract(epoch from (claimed_at + interval '10 minutes' - now()))::int as wait from crm.campaign_prospects where id = $1", [ivo.prospectId]);
+    assert.ok(longer[0].wait > 1700 && longer[0].wait <= 1800, `the second waits half an hour (${longer[0].wait}s)`);
+    await drainFills();
+    assert.equal(state.llm.filter((text) => text.includes('"firstName":"Ivo"')).length, 2, "nothing retries before the hold ends");
+    for (let round = 0; round < 6; round += 1) {
       await sql("update crm.campaign_prospects set claimed_at = now() - interval '11 minutes' where id = $1 and state <> 'failed'", [ivo.prospectId]);
       await drainFills();
     }

@@ -514,7 +514,7 @@ export async function findHeyReachLead(key: string, campaignId: string, profileU
   const url = text(profile.profileUrl) ?? text(row.profileUrl);
   if (!id && !url) return null;
   const campaigns = campaignIdsOf(row);
-  if (campaigns.length > 0 && !campaigns.includes(campaignId)) return null;
+  if (!campaigns.includes(campaignId)) return null;
   return { id };
 }
 

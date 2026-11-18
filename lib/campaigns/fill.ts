@@ -84,14 +84,14 @@ function entryText(entry: ProofEntry) {
   return [entry.client, entry.description, entry.usedFor, entry.result, entry.measured].filter(Boolean).join(" ");
 }
 
-export function supported(value: string, sources: FillSource[], proof: ProofEntry[], known: string) {
+export function supported(value: string, sources: FillSource[], proof: ProofEntry[], known: string, citations: Set<string>) {
   const held: string[] = [known];
   for (const source of sources) {
     if (source.proofId) {
       const entry = proof.find((item) => item.id === source.proofId);
       if (!entry) return false;
       held.push(entryText(entry));
-    } else if (source.url) {
+    } else if (source.url && citations.has(source.url)) {
       held.push(source.fact);
     }
   }
@@ -198,7 +198,7 @@ export function judgeFill(input: FillInput, data: z.infer<typeof fillSchema>, ci
     const raw = data.values.find((item) => item.name.trim() === variable.name);
     const kept = usableSources(raw?.sources, cited, known);
     let value = cleanValue(raw?.value ?? "", notes.has(variable.name));
-    if (value && !supported(value, kept, input.proof, known)) value = "";
+    if (value && !supported(value, kept, input.proof, known, cited)) value = "";
     const cap = Math.min(variable.maxLength ?? input.valueLimit, input.valueLimit);
     if (value.length > cap) {
       if (variable.required && !problem) problem = `${variable.name} was too long`;
