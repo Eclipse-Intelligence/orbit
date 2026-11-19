@@ -139,7 +139,7 @@ export default function ActivityLog({
             {filtered ? "No matches" : "No activities"}
           </p>
         ) : (
-          <ul className="border-border flex flex-col border-t">
+          <ul className="flex flex-col">
             {activities.map((activity) => (
               <RecordRow
                 key={activity.id}

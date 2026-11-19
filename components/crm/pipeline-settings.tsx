@@ -86,7 +86,7 @@ export default function PipelineSettings({
         {drafts.map((stage, index) => (
           <li
             key={stage.id}
-            className="border-border grid gap-2 border-b pb-2 last:border-b-0 last:pb-0 sm:grid-cols-[1fr_90px_auto_auto_auto] sm:items-center sm:border-b-0 sm:pb-0"
+            className="grid gap-2 pb-2 last:pb-0 sm:grid-cols-[1fr_90px_auto_auto_auto] sm:items-center sm:pb-0"
           >
             <Input
               aria-label={`Stage ${index + 1} name`}

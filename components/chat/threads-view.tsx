@@ -142,7 +142,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="border-line-subtle flex h-[52px] shrink-0 items-center gap-2 border-b px-5 max-md:h-auto max-md:border-border max-md:px-3 max-md:py-2.5">
+      <header className="flex h-[52px] shrink-0 items-center gap-2 px-5 max-md:h-auto max-md:px-3 max-md:py-2.5">
         <PhoneBack label="Chat" onClick={back} />
         <h2 className="max-md:flex-1 max-md:text-center">Threads</h2>
         <span aria-hidden className="size-11 shrink-0 md:hidden" />

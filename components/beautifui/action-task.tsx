@@ -309,7 +309,7 @@ function ActionTask({
       data-list-row={keyboard ? "" : undefined}
       data-task-id={task.id}
       tabIndex={keyboard ? -1 : undefined}
-      className={cn(keyboard && KEYBOARD_ROW_CLASS, "border-border @container relative overflow-hidden border-b", expanded && "bg-white/[0.025]")}
+      className={cn(keyboard && KEYBOARD_ROW_CLASS, "@container relative overflow-hidden rounded-lg", expanded && "bg-white/[0.025]")}
     >
       {offset !== 0 && (
         <span

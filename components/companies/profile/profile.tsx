@@ -54,7 +54,7 @@ export default function Profile({ viewer }: { viewer: Viewer }) {
         </SheetHeader>
 
         <ScrollArea className="min-h-0 flex-1">
-          <div className="flex items-center gap-3 p-5 shadow-[inset_0_-1px_0_var(--line-strong)]">
+          <div className="flex items-center gap-3 p-5">
             <span
               aria-hidden
               className="bg-muted flex size-[50px] items-center justify-center rounded-full text-[16px] shadow-[0px_6.25px_6.25px_0px_rgba(15,15,15,0.24),0px_0px_0px_1.563px_#232323]"

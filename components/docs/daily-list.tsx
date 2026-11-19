@@ -126,8 +126,7 @@ export default function DailyList({ selected, chosen, initial }: { selected: str
           })}
         </div>
       </div>
-      <div className="mx-2.5 mb-2 h-px bg-white/[0.05]" />
-      <ul aria-label="Days" className="flex flex-col gap-0.5">
+      <ul aria-label="Days" className="mt-2 flex flex-col gap-0.5">
         {listed.map((day) => {
           const href = dailyHref(day.date);
           const current = chosen && day.date === selected;

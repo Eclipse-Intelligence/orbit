@@ -146,7 +146,7 @@ export default function RoomView({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="border-line-subtle flex h-[52px] shrink-0 items-center gap-2 border-b pr-3 pl-5 max-md:h-auto max-md:border-border max-md:px-3 max-md:py-2.5">
+      <header className="flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-5 max-md:h-auto max-md:px-3 max-md:py-2.5">
         <PhoneBack label="Chat" onClick={back} />
         <h2 className="flex min-w-0 items-center gap-1 max-md:flex-1 max-md:justify-center">
           {dm ? (

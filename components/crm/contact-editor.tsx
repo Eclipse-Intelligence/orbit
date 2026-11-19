@@ -222,7 +222,7 @@ export default function ContactEditor({
       </form>
       <div
         className={cn(
-          "border-line-strong flex items-center justify-end gap-2 border-t px-5 py-4",
+          "flex items-center justify-end gap-2 px-5 py-4",
           footerClassName,
         )}
       >

@@ -265,7 +265,7 @@ export function AiFilterChip({
       <PopoverContent align="start" className="w-[min(18rem,calc(100vw-2rem))] p-3">
         <div className="flex flex-col gap-3">
           <AiFilterEditor field={field} filter={filter} onChange={onChange} />
-          <div className="border-border flex justify-between gap-2 border-t pt-3">
+          <div className="flex justify-between gap-2 pt-3">
             <Button
               variant="ghost"
               size="sm"

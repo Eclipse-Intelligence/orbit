@@ -264,7 +264,7 @@ export default function RoomSettings({
             <RoomHooks open={open} roomId={conversation.id} roomName={conversation.name} secrets={secrets} />
           </div>
           {error?.area === "room" && (
-            <p role="alert" className="caption-style text-danger border-line-strong border-t px-6 pt-3 max-md:px-4">
+            <p role="alert" className="caption-style text-danger px-6 pt-3 max-md:px-4">
               {error.text}
             </p>
           )}

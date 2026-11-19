@@ -250,13 +250,13 @@ export function AnswerDetail({ field, companyId, canManage, showTitle = true }: 
         )}
       </div>
       {answer && answer.sources.length > 0 && !editing && (
-        <div className="border-border flex flex-col gap-1.5 border-t px-4 py-3">
+        <div className="flex flex-col gap-1.5 px-4 py-3">
           <span className="caption-style text-subtle">Sources</span>
           <SourceList sources={answer.sources} />
         </div>
       )}
       {answer && !editing && (timing || canManage) && (
-        <div className="border-border flex flex-wrap items-center justify-between gap-2 border-t px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
           <span className="caption-style text-subtle flex flex-wrap items-center gap-x-2">
             {timing ? `${timing}.` : null}
             {answer.manual && canManage && (

@@ -433,9 +433,9 @@ function CompanyStrip({ task, context, kind, canChange, here, onLinked }: Action
         </div>
         {callable(task.companyPhone) && <CallLink phone={task.companyPhone} label="Call switchboard" spoken={`Call ${company}'s switchboard`} primary={false} />}
       </div>
-      {context && people.length === 0 && <p className="caption-style text-subtle border-line-subtle border-t px-0.5 pt-2">No people at {company} yet.</p>}
+      {context && people.length === 0 && <p className="caption-style text-subtle px-0.5 pt-2">No people at {company} yet.</p>}
       {people.length > 0 && (
-        <ul aria-label={`People at ${company}`} className="border-line-subtle flex flex-col border-t pt-1 [@media(pointer:coarse)]:gap-1.5">
+        <ul aria-label={`People at ${company}`} className="flex flex-col pt-1 [@media(pointer:coarse)]:gap-1.5">
           {people.map((person) => (
             <PersonRow key={person.id} person={person} busy={busy} canLink={canChange} onLink={(item) => void link(item)} />
           ))}

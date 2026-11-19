@@ -271,7 +271,7 @@ export default function ProposalPage({ token, initial, preview }: { token: strin
             </div>
           )}
         </ProposalSite>
-        <footer className="text-subtle flex flex-wrap justify-between gap-2 border-t border-[var(--border)] pt-6 text-[12.5px]">
+        <footer className="text-subtle flex flex-wrap justify-between gap-2 pt-6 text-[12.5px]">
           <span>
             {content.sender.company} · Version {doc.versionNumber}
           </span>

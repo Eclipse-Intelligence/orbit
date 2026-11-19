@@ -92,7 +92,7 @@ export default function TagsSettings({ tags }: { tags: TagCount[] }) {
           {tags.map((tag) => (
             <li
               key={tag.name}
-              className="border-border flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b py-2 first:pt-0 last:border-b-0 last:pb-0"
+              className="flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 py-2 first:pt-0 last:pb-0"
             >
               {renaming === tag.name ? (
                 <form className="flex min-w-0 flex-1 flex-col gap-1.5" onSubmit={rename}>

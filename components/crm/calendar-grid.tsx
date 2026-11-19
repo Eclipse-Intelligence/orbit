@@ -339,7 +339,7 @@ export default function CalendarGrid({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div
-        className="border-border grid shrink-0 overflow-y-hidden border-b [scrollbar-gutter:stable]"
+        className="border-line-subtle grid shrink-0 overflow-y-hidden border-b [scrollbar-gutter:stable]"
         style={columns}
       >
         <div aria-hidden />
@@ -349,7 +349,7 @@ export default function CalendarGrid({
           return (
             <div
               key={key}
-              className="border-border flex min-w-0 items-center gap-1.5 border-l px-2 py-2.5"
+              className="border-line-subtle flex min-w-0 items-center gap-1.5 border-l px-2 py-2.5"
             >
               <span className="caption-style text-subtle">
                 {heading.weekday}
@@ -369,13 +369,13 @@ export default function CalendarGrid({
         })}
         {hasChips && (
           <>
-            <div aria-hidden className="border-border border-t" />
+            <div aria-hidden className="border-line-subtle border-t" />
             {days.map((key) => {
               const dayChips = upcomingDayBlocks(chips, key);
               const visibleChips = days.length > 1 ? dayChips.slice(0, CHIPS_SHOWN) : dayChips;
               const more = dayChips.length - visibleChips.length;
               return (
-                <div key={key} className="border-border flex min-w-0 flex-col gap-1 border-t border-l px-1 pt-1 pb-1.5 [@media(pointer:coarse)]:gap-6 [@media(pointer:coarse)]:py-3">
+                <div key={key} className="border-line-subtle flex min-w-0 flex-col gap-1 border-t border-l px-1 pt-1 pb-1.5 [@media(pointer:coarse)]:gap-6 [@media(pointer:coarse)]:py-3">
                   {visibleChips.map((block) => (
                     <UpcomingChip key={block.id} block={block} onOpen={taskHandlers!.onOpen} />
                   ))}
@@ -391,13 +391,13 @@ export default function CalendarGrid({
         )}
         {hasAllDay && (
           <>
-            <div className="caption-style text-subtle border-border flex items-start justify-end border-t px-2 py-1.5">
+            <div className="caption-style text-subtle border-line-subtle flex items-start justify-end border-t px-2 py-1.5">
               All day
             </div>
             {days.map((key) => (
               <div
                 key={key}
-                className="border-border flex min-w-0 flex-col gap-1 border-t border-l p-1"
+                className="border-line-subtle flex min-w-0 flex-col gap-1 border-t border-l p-1"
               >
                 {(allDay.get(key) ?? []).map((item) => (
                   <EventBlock
@@ -464,7 +464,7 @@ export default function CalendarGrid({
               <div
                 key={key}
                 className={cn(
-                  "border-border relative border-l",
+                  "border-line-subtle relative border-l",
                   onSlot && "cursor-copy",
                 )}
                 data-day={key}
@@ -499,7 +499,7 @@ export default function CalendarGrid({
                   >
                     <div
                       className={cn(
-                        "border-border border-t",
+                        "border-line-subtle border-t",
                         hour === 0 && "border-transparent",
                       )}
                     />

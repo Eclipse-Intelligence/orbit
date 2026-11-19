@@ -150,7 +150,7 @@ export default function ThreadNotes({
   if (layout === "below") {
     return (
       <DiscussionProvider discussion={discussion}>
-        <section ref={section} data-chat-room-pane aria-labelledby={`notes-${shareId}`} className="border-line-subtle mt-2 flex flex-col gap-2 border-t px-4 pt-4">
+        <section ref={section} data-chat-room-pane aria-labelledby={`notes-${shareId}`} className="mt-4 flex flex-col gap-2 px-4 pt-4">
           <div className="flex items-baseline gap-2">
             <h3 id={`notes-${shareId}`} className="flex-1">
               Notes
@@ -169,7 +169,7 @@ export default function ThreadNotes({
 
   return (
     <DiscussionProvider discussion={discussion}>
-      <aside ref={section} data-chat-room-pane data-quick-add-hide="" aria-labelledby={`notes-${shareId}`} className="border-line-subtle flex min-h-0 w-[19rem] shrink-0 flex-col border-l xl:w-[21rem]">
+      <aside ref={section} data-chat-room-pane data-quick-add-hide="" aria-labelledby={`notes-${shareId}`} className="flex min-h-0 w-[19rem] shrink-0 flex-col xl:w-[21rem]">
         <div className="flex shrink-0 items-baseline gap-2 px-5 pt-3 pb-2">
           <h3 id={`notes-${shareId}`} className="flex-1">
             Notes

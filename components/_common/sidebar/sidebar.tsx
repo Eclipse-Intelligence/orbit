@@ -47,7 +47,7 @@ export default function Sidebar({ boards, companyCount, openActionCount, capture
 
   return (
     <>
-      <aside className="relative hidden w-(--sidebar-width) shrink-0 border-r border-sidebar-border bg-sidebar sidebar-collapsed:lg:hidden docs-focus:lg:hidden lg:flex lg:flex-col">
+      <aside className="relative hidden w-(--sidebar-width) shrink-0 bg-sidebar sidebar-collapsed:lg:hidden docs-focus:lg:hidden lg:flex lg:flex-col">
         <SidebarContent
           boards={boards}
           companyCount={companyCount}

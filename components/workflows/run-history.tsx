@@ -50,8 +50,8 @@ function StepLog({ step }: { step: RunStepLog }) {
   const output = pretty(step.output);
   const input = pretty(step.input);
   return (
-    <li className="border-border flex flex-col gap-1.5 border-b py-2.5 last:border-b-0">
-      <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="flex cursor-pointer items-center gap-2 text-left">
+    <li className="flex flex-col gap-1.5 py-2.5">
+      <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="-mx-2 flex cursor-pointer items-center gap-2 rounded-md px-2 text-left transition-colors duration-150 hover:bg-surface-hover">
         <span
           aria-hidden
           className={cn(
@@ -113,8 +113,8 @@ function ChildRow({ child, initiallyOpen = false }: { child: ChildRun; initially
   }
 
   return (
-    <li className="border-border flex flex-col border-b last:border-b-0">
-      <button type="button" onClick={toggle} aria-expanded={open} className="flex min-h-10 cursor-pointer items-center gap-2 py-1.5 text-left">
+    <li className="flex flex-col">
+      <button type="button" onClick={toggle} aria-expanded={open} className="-mx-2 flex min-h-10 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-surface-hover">
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="ui-style truncate">{child.name}</span>
           {(child.skipReason ?? child.error) && <span className="caption-style text-subtle line-clamp-2">{child.skipReason ?? child.error}</span>}
@@ -274,7 +274,7 @@ export default function RunHistory({
               )}
             </div>
             {active && (
-              <div className="border-border flex flex-col gap-2 border-t px-3 py-2">
+              <div className="flex flex-col gap-2 px-3 py-2">
                 {run.error && <p className={cn("caption-style", run.skipReason ? "text-subtle" : "text-danger")}>{run.error}</p>}
                 {run.waitingFor === "approval" && (
                   <Link href={`/workflows?approve=${run.id}#approval-${run.id}`} className="caption-style text-foreground underline underline-offset-2">

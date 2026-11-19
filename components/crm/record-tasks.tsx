@@ -156,7 +156,7 @@ export default function RecordTasks({
       {shown.length === 0 ? (
         <p className="caption-style text-subtle">{empty}</p>
       ) : (
-        <ul className="-mx-2.5 flex flex-col [&>li:last-child]:border-b-0">
+        <ul className="-mx-2.5 flex flex-col">
           {shown.map((task) => (
             <ActionTask
               key={task.id}

@@ -128,7 +128,7 @@ function ToolButton({
 }
 
 function ToolbarDivider() {
-  return <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-line-subtle max-sm:hidden @max-lg:hidden" />;
+  return <span aria-hidden className="w-3 shrink-0 max-sm:hidden @max-lg:hidden" />;
 }
 
 function MenuAction({
@@ -366,7 +366,7 @@ function SummaryLine({ threadKey, latestId, messages }: { threadKey: string; lat
       <span className="text-subtle font-mono text-[10.5px] leading-4 tracking-[0.08em] uppercase">Summary</span>
       <p className="text-soft">{current.data.summary}</p>
       {current.data.todo && (
-        <p className="text-foreground border-t border-dashed border-white/10 pt-1.5">
+        <p className="text-foreground pt-1">
           <span className="text-subtle mr-1.5 font-mono text-[10.5px] tracking-[0.08em] uppercase">Next</span>
           {current.data.todo}
         </p>

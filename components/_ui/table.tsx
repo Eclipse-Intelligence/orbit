@@ -24,7 +24,7 @@ function TableRow({ className, ...props }: ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "border-b border-border transition-colors duration-150 ease-power3-out",
+        "transition-colors duration-150 ease-power3-out",
         className,
       )}
       {...props}

@@ -69,7 +69,7 @@ export default function SidebarContent({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-sidebar-border bg-sidebar-accent flex shrink-0 items-center gap-2 border-b p-3 lg:h-(--header-height) lg:py-0">
+      <div className="flex shrink-0 items-center gap-2 p-3 lg:h-(--header-height) lg:py-0">
         <WorkspaceSwitcher
           workspaces={workspace.choices}
           currentId={workspace.id}
@@ -81,7 +81,7 @@ export default function SidebarContent({
 
       <ScrollArea className="min-h-0 flex-1">
         <nav aria-label="Primary">
-          <SidebarSection className="border-sidebar-border border-b">
+          <SidebarSection>
             <SidebarNavItem
               href="/mail"
               icon={InboxIcon}
@@ -182,7 +182,7 @@ export default function SidebarContent({
         </nav>
       </ScrollArea>
 
-      <SidebarSection className="border-sidebar-border shrink-0 border-t">
+      <SidebarSection className="shrink-0">
         <SidebarNavItem
           href={settingsHref}
           icon={MessageIcon}

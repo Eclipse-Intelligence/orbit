@@ -51,7 +51,7 @@ export default function SidebarBoards({
 
   return (
     <li>
-      <ul aria-label="Boards" className="border-sidebar-border mb-1 ml-[15px] flex flex-col border-l pl-1.5">
+      <ul aria-label="Boards" className="mb-1 ml-[15px] flex flex-col pl-1.5">
         {boards.map((board) => (
           <SidebarNavItem
             key={board.id}

@@ -285,7 +285,7 @@ export default function SubscriptionsScreen({ viewer, initial, days }: { viewer:
           {shown.length === 0 ? (
             <p className="text-subtle px-4 py-12 text-center">No subscriptions</p>
           ) : (
-            <ul className="divide-border flex flex-col divide-y">
+            <ul className="flex flex-col">
               {shown.map((sender) => (
                 <SenderRow
                   key={sender.sender}

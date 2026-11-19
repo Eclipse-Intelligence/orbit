@@ -92,7 +92,7 @@ export default function TeamSettings({
             const canChangeRole = isOwner && member.role !== "owner";
             const canRemove = canManage && !self && member.role !== "owner" && (member.role !== "admin" || isOwner);
             return (
-              <li key={member.id} className="border-border flex flex-wrap items-center gap-3 border-b py-3 last:border-b-0">
+              <li key={member.id} className="flex flex-wrap items-center gap-3 py-3">
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="truncate text-[14px] leading-5">
                     {member.name}
@@ -190,7 +190,7 @@ export default function TeamSettings({
               <span className="caption-style text-subtle">Pending</span>
               <ul className="flex flex-col">
                 {team.invites.map((item) => (
-                  <li key={item.id} className="border-border flex flex-wrap items-center gap-3 border-b py-2.5 last:border-b-0">
+                  <li key={item.id} className="flex flex-wrap items-center gap-3 py-2.5">
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-[14px] leading-5">{item.email}</span>
                       <span className="caption-style text-subtle">

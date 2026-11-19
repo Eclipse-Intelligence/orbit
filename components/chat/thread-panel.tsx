@@ -61,17 +61,15 @@ export default function ThreadPanel({
   const header = root ? (
     <>
       <ChatMessageRow message={root} continuation={false} inThread pane="thread" fullStamp />
-      <div className="caption-style text-subtle mx-4 my-2 flex items-center gap-2.5 max-md:mx-3.5" role="separator">
-        <span aria-hidden className="bg-line-subtle h-px flex-1" />
+      <div className="caption-style text-subtle mx-4 my-3 flex items-center justify-center gap-2.5 max-md:mx-3.5" role="separator">
         {root.replyCount === 1 ? "1 reply" : `${root.replyCount} replies`}
-        <span aria-hidden className="bg-line-subtle h-px flex-1" />
       </div>
     </>
   ) : null;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" role="region" aria-labelledby={`thread-${rootId}`}>
-      <header className="border-line-subtle flex h-[52px] shrink-0 items-center gap-2 border-b pr-3 pl-4 max-md:h-auto max-md:border-border max-md:px-3 max-md:py-2.5">
+      <header className="flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-4 max-md:h-auto max-md:px-3 max-md:py-2.5">
         <PhoneBack label={backLabel} onClick={onClose} />
         <div className="flex min-w-0 flex-col gap-1 max-md:flex-1 max-md:items-center">
           <h3 id={`thread-${rootId}`} ref={heading} tabIndex={-1} className="outline-none">

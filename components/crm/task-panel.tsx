@@ -349,7 +349,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                 </div>
               )}
             </div>
-            <div className="border-line-strong flex shrink-0 flex-col gap-1.5 border-t px-4 pt-3 pb-3 max-md:px-2 max-md:pb-2">
+            <div className="flex shrink-0 flex-col gap-1.5 px-4 pt-3 pb-3 max-md:px-2 max-md:pb-2">
               {!thread && (canChange || runsSeries(task, viewer.id)) && !done && isRepeating(task) && (
                 <div data-task-actions="" className="flex gap-2 pb-1 md:hidden">
                   <SkipButton task={task} variant="secondary" size="md" className="flex-1" />
@@ -371,7 +371,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
             </div>
           </div>
           {error && (
-            <p role="alert" className="caption-style text-danger border-line-strong border-t px-5 py-2 max-md:px-3.5">
+            <p role="alert" className="caption-style text-danger px-5 py-2 max-md:px-3.5">
               {error}
             </p>
           )}

@@ -117,7 +117,7 @@ export default function PersonalTokenSettings({ origin, initial, workspaceName }
         {tokens.length > 0 && (
           <ul aria-label="Your tokens" className="flex flex-col">
             {tokens.map((token) => (
-              <li key={token.id} className="border-border flex flex-wrap items-center justify-between gap-2 border-t py-2.5 first:border-t-0">
+              <li key={token.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5">
                 <span className="flex min-w-0 flex-col">
                   <span className="truncate text-[14px]">{token.name}</span>
                   <span className="caption-style text-subtle">

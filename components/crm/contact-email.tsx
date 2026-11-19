@@ -391,7 +391,7 @@ export default function ContactEmail({
         </p>
       )}
 
-      <div className="border-line-strong/70 mt-2 flex items-center justify-between gap-2 border-t pt-2">
+      <div className="mt-2 flex items-center justify-between gap-2 pt-2">
         <span className="flex items-center">
           {email && canSendMail && (
             <AttachButton compact id={`email-files-${idPrefix}`} onFiles={(picked) => void files.add(picked)} disabled={pending !== null} />

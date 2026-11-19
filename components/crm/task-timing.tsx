@@ -422,7 +422,7 @@ export function ScheduleMenu({
           ) : (
             <>
               <div className="flex flex-col p-2">{options(false)}</div>
-              <div className="border-line-strong flex flex-col gap-2 border-t px-4 pt-3.5 pb-6">
+              <div className="flex flex-col gap-2 px-4 pt-3.5 pb-6">
                 <span className="eyebrow-style text-subtle">Duration</span>
                 <DurationButtons value={task.durationMinutes} onPick={setDuration} />
                 <CustomDuration value={task.durationMinutes} onSet={setDuration} />
