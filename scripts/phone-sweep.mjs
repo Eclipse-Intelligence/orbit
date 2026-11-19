@@ -244,6 +244,75 @@ async function checkDailyReminders(page, device, press, shotName) {
   }
 }
 
+async function findReminder(title) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const found = await adminDb
+      ?.query(
+        "select id, due_on::text as due_on, to_char(due_at at time zone 'Europe/London', 'YYYY-MM-DD\"T\"HH24:MI') as due_at, blocks_time, duration_minutes from crm.reminders where title = $1 order by created_at desc limit 1",
+        [title],
+      )
+      .catch(() => null);
+    if (found?.rows[0]) return found.rows[0];
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return null;
+}
+
+async function checkAddLine(page, scope, device, press, shotName) {
+  if (!(await localAdmin("check what the reminders add line saves: reminders belong to a person, so the agent token can't read them"))) {
+    console.log(`skip ${device} reminders add line (set DATABASE_ADMIN_URL to a local database)`);
+    return;
+  }
+  const fakeRead = (route) => route.fulfill({ json: { value: null, available: true } });
+  await page.route("**/api/tasks/read", fakeRead);
+  const stamp = Date.now().toString(36).replace(/\d/g, "");
+  const ids = [];
+  try {
+    await press(scope.getByPlaceholder("Add a reminder"));
+    const plumber = `Sweep plumber ${stamp}`;
+    await page.keyboard.type(`${plumber} tomorrow at 9`);
+    await page.waitForTimeout(200);
+    check(`${device} an unsure date shows as a plain date chip`, (await scope.getByRole("button", { name: "Keep as text: tomorrow at 9" }).isVisible().catch(() => false)) && (await scope.locator("mark").count()) > 0);
+    await page.keyboard.press("Enter");
+    const saved = await findReminder(plumber);
+    if (saved) ids.push(saved.id);
+    check(`${device} Enter saves an unsure date`, saved?.due_at === `${londonDay(1)}T09:00`, JSON.stringify(saved));
+    const boiler = `Sweep boiler ${stamp}`;
+    await page.keyboard.type(`${boiler} thu 10am`);
+    await page.waitForTimeout(200);
+    const toggle = scope.getByRole("button", { name: "Block time", exact: true });
+    check(`${device} the add line offers Block time, off`, (await toggle.getAttribute("aria-pressed").catch(() => null)) === "false");
+    await press(toggle);
+    await page.waitForTimeout(200);
+    const length = scope.getByRole("button", { name: "Duration 15m. Change" });
+    check(`${device} Block time turns on at 15m`, (await toggle.getAttribute("aria-pressed").catch(() => null)) === "true" && (await length.isVisible().catch(() => false)));
+    await press(length);
+    await page.waitForTimeout(400);
+    await press(page.getByRole("group", { name: "Duration" }).getByRole("button", { name: "30m" }));
+    await page.waitForTimeout(400);
+    check(`${device} changing the length keeps the add line focused`, (await scope.getByRole("button", { name: "Duration 30m. Change" }).isVisible().catch(() => false)) && (await page.evaluate(() => document.activeElement?.id === "reminder-add")));
+    check(`${device} add line chips no overflow`, (await page.evaluate(() => document.scrollingElement.scrollWidth <= window.innerWidth + 1)) && (await scope.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)));
+    await page.screenshot({ path: path.join(out, `${shotName}-reminder-block-time.png`) });
+    await page.keyboard.press("Enter");
+    const blocked = await findReminder(boiler);
+    if (blocked) ids.push(blocked.id);
+    check(`${device} Enter saves Block time with its length`, blocked?.blocks_time === true && blocked?.duration_minutes === 30, JSON.stringify(blocked));
+    const kept = `Sweep dentist ${stamp} tomorrow at 9`;
+    await page.keyboard.type(kept);
+    await page.waitForTimeout(200);
+    await press(scope.getByRole("button", { name: "Keep as text: tomorrow at 9" }));
+    await page.waitForTimeout(200);
+    check(`${device} × keeps an unsure date's words as text`, (await scope.locator("mark").count()) === 0 && (await scope.getByPlaceholder("Add a reminder").inputValue()) === kept);
+    await page.keyboard.press("Enter");
+    const asText = await findReminder(kept);
+    if (asText) ids.push(asText.id);
+    check(`${device} Enter saves the words with no date`, Boolean(asText) && asText.due_on === null && asText.due_at === null, JSON.stringify(asText));
+  } finally {
+    await page.unroute("**/api/tasks/read", fakeRead);
+    await dropReminders(ids);
+  }
+}
+
 async function readReminder(id) {
   const result = await adminDb?.query("select completed_at, due_at, duration_minutes from crm.reminders where id = $1", [id]).catch(() => null);
   return result?.rows[0] ?? null;
@@ -1341,6 +1410,7 @@ for (const [device, viewport] of [
   check(`${device} the add line keeps focus and clears`, await page.evaluate(() => document.activeElement?.id === "reminder-add" && document.activeElement.value === ""));
   check(`${device} reminders sheet no page overflow`, (await noHorizontalScroll()) && (await reminderSheet.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)));
   await shot("reminders-sheet");
+  await checkAddLine(page, reminderSheet, device, (locator) => locator.tap(), device);
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
   if (await swipeReminder(page, reminderTitle, 260)) {
     await page.waitForTimeout(1200);
@@ -1444,6 +1514,7 @@ for (const width of [1100, 1280, 1440]) {
     await page.waitForTimeout(1200);
     const reminderRow = reminderCard.locator(`li[data-reminder-row="${reminderTitle} no date"]`);
     check(`${device} Enter adds a reminder in the card`, await visible(reminderRow));
+    await checkAddLine(page, reminderCard, device, (locator) => locator.click(), `desktop-${width}`);
     await reminderRow.getByRole("button", { name: /^Mark/ }).click();
     await page.waitForTimeout(1000);
     check(`${device} ticking crosses the row out with Undo`, (await visible(reminderRow.locator(".line-through"))) && (await visible(reminderCard.getByRole("status").getByRole("button", { name: "Undo" }))));

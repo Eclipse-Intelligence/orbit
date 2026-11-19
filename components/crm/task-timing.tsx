@@ -140,7 +140,19 @@ function CustomDuration({ value, onSet }: { value: number; onSet: (minutes: numb
   );
 }
 
-export function DurationMenu({ value, onChange, className, compact = false }: { value: number; onChange: (minutes: number) => void; className?: string; compact?: boolean }) {
+export function DurationMenu({
+  value,
+  onChange,
+  className,
+  compact = false,
+  onClosed,
+}: {
+  value: number;
+  onChange: (minutes: number) => void;
+  className?: string;
+  compact?: boolean;
+  onClosed?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const pick = (minutes: number) => {
     setOpen(false);
@@ -155,7 +167,18 @@ export function DurationMenu({ value, onChange, className, compact = false }: { 
           {!compact && <ChevronDownIcon aria-hidden className="text-subtle size-3 shrink-0" />}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="flex w-[min(17em,calc(100vw-2rem))] flex-col gap-2 p-2">
+      <PopoverContent
+        align="start"
+        className="flex w-[min(17em,calc(100vw-2rem))] flex-col gap-2 p-2"
+        onCloseAutoFocus={
+          onClosed
+            ? (event) => {
+                event.preventDefault();
+                onClosed();
+              }
+            : undefined
+        }
+      >
         <span className="eyebrow-style text-subtle px-1 pt-1">Duration</span>
         <DurationButtons value={value} onPick={pick} />
         <div className="bg-line-subtle -mx-2 h-px" />
