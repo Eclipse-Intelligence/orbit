@@ -288,7 +288,7 @@ export default function PlanPanel({
           </>
         )}
       </div>
-      <div className="flex flex-col gap-2.5 px-4 pt-3 pb-3.5">
+      <div className="before:from-background before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-4 before:bg-linear-to-t before:to-transparent relative flex flex-col gap-2.5 px-4 pt-3 pb-3.5">
         <div className="flex items-start gap-2.5">
           <Switch className="hit mt-px" checked={replan} disabled={busy || !preview} label="Replan my blocks" onChange={handlers.onReplan} />
           <div className="flex min-w-0 flex-col gap-0.5">

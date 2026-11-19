@@ -349,7 +349,7 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                 </div>
               )}
             </div>
-            <div className="flex shrink-0 flex-col gap-1.5 px-4 pt-3 pb-3 max-md:px-2 max-md:pb-2">
+            <div className="before:from-background before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-4 before:bg-linear-to-t before:to-transparent relative flex shrink-0 flex-col gap-1.5 px-4 pt-3 pb-3 max-md:px-2 max-md:pb-2">
               {!thread && (canChange || runsSeries(task, viewer.id)) && !done && isRepeating(task) && (
                 <div data-task-actions="" className="flex gap-2 pb-1 md:hidden">
                   <SkipButton task={task} variant="secondary" size="md" className="flex-1" />

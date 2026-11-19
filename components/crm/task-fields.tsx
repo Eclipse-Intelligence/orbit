@@ -1021,7 +1021,7 @@ export default function TaskFields({
           {(team || (task.ownerId && task.ownerId !== viewer.id)) && <AssigneeChip details={details} viewer={viewer} members={members} tagged={people} />}
           {details.canChange && !done && (
             <>
-              <span aria-hidden className="bg-line-strong mx-1 h-4 w-px" />
+              <span aria-hidden className="w-2 shrink-0" />
               <QuickDates details={details} />
               <SkipButton task={task} />
             </>

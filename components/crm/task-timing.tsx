@@ -158,7 +158,7 @@ export function DurationMenu({ value, onChange, className, compact = false }: { 
       <PopoverContent align="start" className="flex w-[min(17em,calc(100vw-2rem))] flex-col gap-2 p-2">
         <span className="eyebrow-style text-subtle px-1 pt-1">Duration</span>
         <DurationButtons value={value} onPick={pick} />
-        <div className="bg-line-strong -mx-2 h-px" />
+        <div className="bg-line-subtle -mx-2 h-px" />
         {open && <CustomDuration value={value} onSet={pick} />}
       </PopoverContent>
     </Popover>
@@ -278,7 +278,7 @@ function ScheduleOptions({
   onRemoveTime: () => void;
 }) {
   const role = menu ? "menuitem" : undefined;
-  const separator = <div role={menu ? "separator" : undefined} aria-hidden={menu ? undefined : true} className="bg-line-strong mx-1 my-1 h-px" />;
+  const separator = <div role={menu ? "separator" : undefined} aria-hidden={menu ? undefined : true} className="bg-line-subtle mx-1 my-1 h-px" />;
   return (
     <>
       {free.kind !== "outside" && (

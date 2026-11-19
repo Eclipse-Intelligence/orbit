@@ -131,7 +131,7 @@ export default function MoreMenu({
             </ul>
             {owned && (
               <>
-                <div className="bg-line-strong mx-1 my-1.5 h-px" />
+                <div className="bg-line-subtle mx-1 my-1.5 h-px" />
                 <label className="flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2">
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="ui-style text-soft">Assistant can edit without asking</span>
@@ -143,7 +143,7 @@ export default function MoreMenu({
             )}
             {note && (
               <>
-                <div className="bg-line-strong mx-1 my-1.5 h-px" />
+                <div className="bg-line-subtle mx-1 my-1.5 h-px" />
                 <div className="p-1">
                   <HoldButton size="sm" className="w-full" holding="Keep holding to archive" onConfirm={() => close(() => void archive(page.id).then(onArchived))}>
                     Hold to archive

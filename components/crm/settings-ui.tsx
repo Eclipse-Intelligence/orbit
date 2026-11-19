@@ -79,7 +79,7 @@ export function SettingsCard({
         )}
       </div>
       {children && (
-        <div className="flex flex-col gap-3 px-4 py-4 sm:px-5">
+        <div className="flex flex-col gap-3 px-4 pt-0 pb-4 sm:px-5">
           {children}
         </div>
       )}
@@ -132,7 +132,7 @@ export function SettingsDisclosure({
       <div
         id={panelId}
         hidden={!open}
-        className="flex flex-col gap-3 px-3 py-3"
+        className="flex flex-col gap-3 px-3 pt-0 pb-3"
       >
         {children}
       </div>

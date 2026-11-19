@@ -326,6 +326,8 @@ export function BookingPanel({
             <MeetingChips page={page} />
           </header>
 
+          <div className="h-px bg-white/[0.08]" />
+
           {loaded && !loaded.ok ? (
             <div role="alert" className="flex flex-col items-start gap-3 rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
               <p className="text-soft text-[14px] leading-5">{loaded.error}</p>

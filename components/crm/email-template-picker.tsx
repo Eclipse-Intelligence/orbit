@@ -169,7 +169,7 @@ export function UseTemplateButton({
                 tags={tags}
                 active={activeTag}
                 onChange={setTag}
-                className="border-line-strong max-h-[6.5em] overflow-auto border-b px-3 py-2"
+                className="max-h-[6.5em] overflow-auto px-3 py-2"
               />
             )}
             <CommandList>
