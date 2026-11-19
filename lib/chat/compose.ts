@@ -169,3 +169,12 @@ export function encodeChatMentions(text: string, mentions: Mention[]) {
 export function applyEdit(value: string, edit: TextEdit) {
   return `${value.slice(0, edit.start)}${edit.text}${value.slice(edit.end)}`;
 }
+
+const SHORTCODE_TAIL = /(?:^|[\s([{"'])(:[a-z0-9_+-]{2,40})$/i;
+
+export function shortcodeAt(text: string, caret: number): { start: number; end: number; query: string } | null {
+  const found = SHORTCODE_TAIL.exec(text.slice(0, caret));
+  if (!found) return null;
+  const token = found[1];
+  return { start: caret - token.length, end: caret, query: token.slice(1).toLowerCase() };
+}

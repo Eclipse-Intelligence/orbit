@@ -353,6 +353,9 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       case "thread-read":
         dispatch({ type: "thread-read", rootId: event.messageId, lastReadAt: event.lastReadAt });
         return;
+      case "reaction":
+        dispatch({ type: "reactions", conversationId: event.conversationId, messageId: event.messageId, parentId: event.parentId, reactions: event.reactions, at: event.at });
+        return;
       case "conversation":
         if (latest.current.state.rooms[event.conversationId]) loadRoom(event.conversationId);
         return;

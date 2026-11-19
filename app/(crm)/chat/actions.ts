@@ -2,7 +2,7 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import type { ChatFormat } from "@/lib/chat/markdown";
-import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatPost, ChatResult } from "@/lib/chat/types";
+import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatPost, ChatReacted, ChatResult } from "@/lib/chat/types";
 import {
   addRoomMembers,
   createRoom,
@@ -11,6 +11,7 @@ import {
   leaveRoom,
   openDm,
   postMessage,
+  reactToMessage,
   removeRoomMember,
   updateRoom,
 } from "@/lib/crm/chat";
@@ -69,6 +70,10 @@ export async function editMessageAction(id: string, body: string, format?: ChatF
 
 export async function deleteMessageAction(id: string): Promise<ChatResult<{ deleted: true }>> {
   return run("Couldn't delete the message. Try again.", (actor) => deleteMessage(actor, id));
+}
+
+export async function reactAction(messageId: string, emoji: string): Promise<ChatResult<ChatReacted>> {
+  return run("Couldn't react. Try again.", (actor) => reactToMessage(actor, messageId, emoji));
 }
 
 export async function listHooksAction(roomId: string): Promise<ChatResult<{ hooks: ChatHook[] }>> {

@@ -40,6 +40,10 @@ export function refreshChatSidebar() {
   reload();
 }
 
+export function echoChatEvent(event: ChatLiveEvent) {
+  for (const listener of listeners) listener(event);
+}
+
 export function useChatEvents(handler: Listener) {
   const latest = useRef(handler);
   useEffect(() => {
@@ -138,6 +142,7 @@ export default function ChatLive() {
                 useCompaniesStore.getState().setChat((current) => (current ? sidebarRead(current, conversationId) : current));
                 return;
               }
+              if (event.type === "reaction") return;
               if (event.type === "message" && event.conversationId === viewing && !event.message.parentId) return;
               soon();
             },
