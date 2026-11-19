@@ -6,6 +6,7 @@ import {
   completeReminder,
   createReminder,
   deleteReminder,
+  listDayReminders,
   listReminders,
   reopenReminder,
   setReminderMorning,
@@ -36,6 +37,10 @@ async function run<T>(work: (user: UserActor) => Promise<T>): Promise<T | Failur
 
 export async function listRemindersAction(query: ReminderQuery = {}): Promise<{ reminders: Reminder[] } | Failure> {
   return run((user) => listReminders(user, query));
+}
+
+export async function listDayRemindersAction(day: string): Promise<{ reminders: Reminder[] } | Failure> {
+  return run((user) => listDayReminders(user, day));
 }
 
 export async function addReminderAction(input: ReminderInput, key: string | null = null): Promise<{ reminder: Reminder } | Failure> {

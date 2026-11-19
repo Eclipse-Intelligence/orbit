@@ -28,6 +28,8 @@ import {
 import { seriesBusy, type SlotRules } from "@/lib/booking/slots";
 import { dateKey } from "@/lib/calendar-view";
 import { loadBookingSeries } from "@/lib/crm/upcoming";
+import { laterBlocksBusy } from "@/lib/reminder-repeat";
+import type { RepeatEnds, RepeatRule } from "@/lib/task-repeat";
 import { isTimeZone } from "@/lib/time";
 
 const DAY = 86_400_000;
@@ -520,19 +522,31 @@ export async function loadBookingImage(raw: string, kind: BookingImageKind) {
 }
 
 export async function loadBusy(userId: string, from: number, to: number, now = Date.now()) {
-  const [result, series] = await Promise.all([
+  const [result, series, repeats] = await Promise.all([
     query<{ starts_at: Date; ends_at: Date }>(
       "select starts_at, ends_at from private.booking_busy($1, $2, $3)",
       [userId, new Date(from).toISOString(), new Date(to).toISOString()],
     ),
     loadBookingSeries(userId, dateKey(from - DAY), dateKey(to)),
+    query<{ due_on: string; due_at: Date; duration_minutes: number; repeat_rule: RepeatRule; repeat_ends: RepeatEnds }>(
+      "select due_on::text as due_on, due_at, duration_minutes, repeat_rule, repeat_ends from private.booking_reminder_repeats($1)",
+      [userId],
+    ),
   ]);
+  const blocks = repeats.rows.map((row) => ({
+    dueOn: row.due_on,
+    dueAt: new Date(row.due_at).toISOString(),
+    durationMinutes: row.duration_minutes,
+    rule: row.repeat_rule,
+    ends: row.repeat_ends,
+  }));
   return [
     ...result.rows.map((row) => ({
       start: new Date(row.starts_at).getTime(),
       end: new Date(row.ends_at).getTime(),
     })),
     ...seriesBusy(series, from, to, now),
+    ...laterBlocksBusy(blocks, from, to, dateKey(from - DAY), dateKey(to), dateKey(now)),
   ];
 }
 

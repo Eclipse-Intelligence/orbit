@@ -14,6 +14,8 @@ import { linkTitlesIn, parseMentions } from "@/lib/docs/markdown";
 import { participantInitials, personParticipant } from "@/lib/docs/participants";
 import { listHref, pageHref, recordHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
+import DayReminders from "@/components/reminders/day-reminders";
+import { showsDayReminders } from "@/lib/reminder-calendar";
 import { cn } from "@/lib/utils";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
@@ -216,6 +218,7 @@ export default function NoteRail({ page }: { page: Page }) {
   const now = useDocsNow();
   const titles = useDocsStore((state) => state.titles);
   const summaries = useDocsStore((state) => state.summaries);
+  const viewerId = useDocsStore((state) => state.viewer?.id ?? null);
   const [backlinks, setBacklinks] = useState<{ id: string; value: Backlinks } | null>(null);
   const [records, setRecords] = useState<{ key: string; value: RecordRef[] } | null>(null);
   const [showUnlinked, setShowUnlinked] = useState(false);
@@ -263,6 +266,17 @@ export default function NoteRail({ page }: { page: Page }) {
 
   return (
     <div className="flex flex-col gap-2 pb-28">
+      {showsDayReminders(page, viewerId) && (
+        <DayReminders
+          key={page.dailyDate}
+          day={page.dailyDate!}
+          wrap={(count, children) => (
+            <RailSection title="Reminders" count={count}>
+              {children}
+            </RailSection>
+          )}
+        />
+      )}
       <RailSection title="Backlinks" count={links?.linked.length}>
         {links === null ? (
           <p role="status" className="caption-style text-subtle">

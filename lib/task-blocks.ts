@@ -1,5 +1,6 @@
 import { dateKey, shiftDateKey, weekStartKey } from "@/lib/calendar-view";
 import { DEFAULT_TASK_DURATION, isTaskOverdue } from "@/lib/crm/task-time";
+import type { Reminder } from "@/lib/crm/reminders";
 import type { Task } from "@/lib/crm/types";
 import { shortDay, upcomingBetween, type SeriesTiming, type UpcomingOccurrence } from "@/lib/task-repeat";
 import { appTimeZone, startOfDay } from "@/lib/time";
@@ -33,6 +34,7 @@ export type TaskBlock = {
   proposed?: boolean;
   suggested?: boolean;
   upcoming?: UpcomingRef;
+  reminder?: Reminder;
 };
 
 export type UpcomingSeries = SeriesTiming & {

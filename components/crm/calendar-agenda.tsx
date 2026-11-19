@@ -17,8 +17,10 @@ import CalendarEventDetails, {
 } from "@/components/crm/calendar-event-details";
 import { eventStyle } from "@/components/crm/calendar-grid";
 import { AgendaTaskBlock, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
+import { AgendaReminderChip, AgendaReminderMarker, type ReminderHandlers } from "@/components/reminders/calendar-reminders";
 import { allDayKeys, daySpan } from "@/lib/calendar-view";
 import type { CalendarItem } from "@/lib/crm/calendars";
+import { dayChips, dayMarkers, type ReminderChip, type ReminderMarker } from "@/lib/reminder-calendar";
 import { upcomingDayBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +34,9 @@ export default function CalendarAgenda({
   blocks = [],
   chips = [],
   taskHandlers,
+  reminderChips = [],
+  markers = [],
+  reminderHandlers,
 }: {
   date: string;
   today: string;
@@ -42,6 +47,9 @@ export default function CalendarAgenda({
   blocks?: TaskBlock[];
   chips?: TaskBlock[];
   taskHandlers?: TaskBlockHandlers;
+  reminderChips?: ReminderChip[];
+  markers?: ReminderMarker[];
+  reminderHandlers?: ReminderHandlers;
 }) {
   const [open, setOpen] = useState<CalendarItem | null>(null);
   const allDay = items.filter(
@@ -58,14 +66,20 @@ export default function CalendarAgenda({
         right.endsAt.localeCompare(left.endsAt),
     );
   const dayBlocks = taskHandlers ? blocks.filter((block) => daySpan(block.startsAt, block.endsAt, date)) : [];
-  type Row = { kind: "event"; item: CalendarItem } | { kind: "task"; block: TaskBlock };
+  type Row =
+    | { kind: "event"; item: CalendarItem }
+    | { kind: "task"; block: TaskBlock }
+    | { kind: "chip"; chip: ReminderChip }
+    | { kind: "marker"; marker: ReminderMarker };
   const list: Row[] = [
+    ...(reminderHandlers ? dayChips(reminderChips, date) : []).map((chip) => ({ kind: "chip" as const, chip })),
     ...(taskHandlers ? upcomingDayBlocks(chips, date) : []).map((block) => ({ kind: "task" as const, block })),
     ...allDay.map((item) => ({ kind: "event" as const, item })),
     ...[
       ...timed.map((item) => ({ kind: "event" as const, item, at: item.startsAt, until: item.endsAt })),
       ...dayBlocks.map((block) => ({ kind: "task" as const, block, at: block.startsAt, until: block.endsAt })),
-    ].sort((left, right) => left.at.localeCompare(right.at) || (left.kind === right.kind ? right.until.localeCompare(left.until) : left.kind === "task" ? -1 : 1)),
+      ...(reminderHandlers ? dayMarkers(markers, date) : []).map((marker) => ({ kind: "marker" as const, marker, at: marker.reminder.dueAt!, until: marker.reminder.dueAt! })),
+    ].sort((left, right) => left.at.localeCompare(right.at) || (left.kind === right.kind ? right.until.localeCompare(left.until) : left.kind === "marker" ? -1 : right.kind === "marker" ? 1 : left.kind === "task" ? -1 : 1)),
   ];
   const openCalendar = open ? (calendars.get(open.calendarId) ?? null) : null;
 
@@ -85,6 +99,20 @@ export default function CalendarAgenda({
       ) : (
         <ol className="flex flex-col gap-2" aria-label="Events">
           {list.map((row) => {
+            if (row.kind === "chip") {
+              return (
+                <li key={`reminder:${row.chip.id}`}>
+                  <AgendaReminderChip chip={row.chip} onTick={reminderHandlers!.onTick} onOpen={reminderHandlers!.onOpen} />
+                </li>
+              );
+            }
+            if (row.kind === "marker") {
+              return (
+                <li key={`marker:${row.marker.id}`}>
+                  <AgendaReminderMarker marker={row.marker} onOpen={reminderHandlers!.onOpen} />
+                </li>
+              );
+            }
             if (row.kind === "task") {
               return (
                 <li key={row.block.id}>
