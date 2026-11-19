@@ -667,11 +667,12 @@ export async function flushTaskBlocks(
   actor: UserActor,
   connectionId: string,
   scope: string | null,
-  options: { fetchImpl?: typeof fetch; deadline?: number; now?: number } = {},
+  options: { fetchImpl?: typeof fetch; deadline?: number; now?: number; noted?: (fresh: boolean) => void } = {},
 ) {
   const writes = grantsCalendarWrite(scope);
   if (writes !== null) {
     const fresh = await noteTaskBlocksWrite(connectionId, writes);
+    options.noted?.(fresh);
     if (writes) {
       await queueOwnTaskBlocks(actor.userId, options.now, fresh);
       await query(fresh ? "select private.queue_series_outlook($1)" : "select private.wake_series_outlook($1)", [actor.userId]);

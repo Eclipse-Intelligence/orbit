@@ -315,6 +315,7 @@ export async function listCalendarItems(
        where e.user_id = $1
          and not e.is_cancelled
          and e.task_id is null
+         and e.reminder_id is null
          and e.starts_at < $3
          and (e.ends_at > $2 or e.starts_at >= $2)
        order by e.starts_at, e.ends_at desc, e.id

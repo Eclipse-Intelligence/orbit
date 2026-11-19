@@ -2,6 +2,7 @@ import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound, tooLong } from "@/lib/crm/errors";
 import { isUuid, replayOrRun, requestHash } from "@/lib/crm/mutate";
+import { queueReminderBlock } from "@/lib/crm/reminder-block-queue";
 import { assertScope, type Scope } from "@/lib/crm/scopes";
 import { readRepeat } from "@/lib/crm/task-series";
 import { clockLabel, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
@@ -339,6 +340,7 @@ async function addReminder(person: UserActor, input: ReminderInput, at?: number,
        returning ${COLUMNS}`,
       [person.userId, title, settled.dueOn, settled.dueAt, blocksTime, durationMinutes, settled.rule, settled.ends],
     );
+    if (blocksTime) queueReminderBlock(db, result.rows[0].id);
     return { reminder: toReminder(result.rows[0]) };
   };
   return within ? insert(within) : withActor(person, insert);
@@ -372,6 +374,7 @@ export async function updateReminder(actor: Actor, id: string, input: ReminderIn
        returning ${COLUMNS}`,
       [row.id, title ?? row.title, settled.dueOn, settled.dueAt, blocksTime, durationMinutes ?? row.duration_minutes, settled.rule, settled.ends],
     );
+    if (row.blocks_time || blocksTime) queueReminderBlock(db, row.id);
     return { reminder: toReminder(result.rows[0]) };
   });
 }
@@ -393,6 +396,7 @@ export async function completeReminder(actor: Actor, id: string, input: { dueOn?
   return withActor(person, async (db) => {
     const row = await lockedRow(db, id);
     if (row.completed_at) return { reminder: toReminder(row), doneId: null, changed: false };
+    if (row.blocks_time) queueReminderBlock(db, row.id);
     if (!row.repeat_rule || !row.repeat_ends || !row.due_on) {
       const done = await db.query<Row>(`update crm.reminders set completed_at = now() where id = $1 returning ${COLUMNS}`, [row.id]);
       return { reminder: toReminder(done.rows[0]), doneId: row.id, changed: true };
@@ -436,6 +440,7 @@ export async function reopenReminder(actor: Actor, id: string) {
       });
       if (parent) {
         if (parent.completed_at || !parent.repeat_rule || parent.due_on !== row.moved_to) throw new CrmError("conflict", MOVED_ON, 409);
+        if (parent.blocks_time) queueReminderBlock(db, parent.id);
         await db.query("delete from crm.reminders where id = $1", [row.id]);
         const back = await db.query<Row>(
           `update crm.reminders set due_on = $2, due_at = $3, repeat_ends = $4, pushed_for = $5 where id = $1 returning ${COLUMNS}`,
@@ -445,6 +450,7 @@ export async function reopenReminder(actor: Actor, id: string) {
       }
     }
     await assertRoom(db, person.userId, { open: true, repeating: Boolean(row.repeat_rule) });
+    if (row.blocks_time) queueReminderBlock(db, row.id);
     const reopened = await db.query<Row>(
       `update crm.reminders set completed_at = null, repeat_of = null, moved_to = null, repeat_ends = $2 where id = $1 returning ${COLUMNS}`,
       [row.id, unspent(row.repeat_ends)],
@@ -458,6 +464,7 @@ export async function deleteReminder(actor: Actor, id: string) {
   if (!isUuid(id)) return { id, deleted: false };
   return withActor(person, async (db) => {
     const result = await db.query("delete from crm.reminders where id = $1", [id]);
+    if ((result.rowCount ?? 0) > 0) queueReminderBlock(db, id);
     return { id, deleted: (result.rowCount ?? 0) > 0 };
   });
 }

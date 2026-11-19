@@ -4,6 +4,7 @@ import { sweepAgentMail } from "@/lib/agent-mail/jobs";
 import { pollAgentMailboxes } from "@/lib/agent-mail/poll";
 import { processAllDueMail } from "@/lib/mail/due";
 import { syncTaskBlocks } from "@/lib/crm/task-outlook";
+import { syncReminderBlocks } from "@/lib/crm/reminder-outlook";
 import { SERIES_SHARE, syncSeriesOutlook } from "@/lib/crm/series-outlook";
 import { sweepWaitingSteers } from "@/lib/assistant/chat";
 import { processTaskReminders } from "@/lib/task-reminder-push";
@@ -48,6 +49,10 @@ async function handle(request: Request) {
     console.error("Outlook task blocks failed", error instanceof Error ? error.name : "unknown");
     return null;
   });
+  const reminderBlocks = await syncReminderBlocks({ deadline: Date.now() + 15_000, throttled }).catch((error) => {
+    console.error("Outlook reminder blocks failed", error instanceof Error ? error.name : "unknown");
+    return null;
+  });
   const polled = await pollAgentMailboxes({ deadline: Date.now() + 20_000 }).catch((error) => {
     console.error("Agent mail poll failed", error instanceof Error ? error.name : "unknown");
     return null;
@@ -60,7 +65,7 @@ async function handle(request: Request) {
     console.error("Waiting assistant messages sweep failed", error instanceof Error ? error.name : "unknown");
     return 0;
   });
-  return Response.json({ users, calendar, repeats, taskReminders, reminders, taskBlocks, seriesBlocks, agentMail, polled, steering });
+  return Response.json({ users, calendar, repeats, taskReminders, reminders, taskBlocks, seriesBlocks, reminderBlocks, agentMail, polled, steering });
 }
 
 export const GET = handle;

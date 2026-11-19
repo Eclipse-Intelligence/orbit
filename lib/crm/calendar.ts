@@ -307,7 +307,7 @@ async function linkTaskBlocks(db: Db, actor: UserActor, calendarId: string, prov
     `update crm.calendar_events e
      set task_id = t.id, block_written_at = coalesce(e.block_written_at, clock_timestamp())
      from crm.tasks t
-     where e.calendar_id = $1 and e.user_id = $2 and e.task_id is null
+     where e.calendar_id = $1 and e.user_id = $2 and e.task_id is null and e.reminder_id is null
        and e.provider_event_id = any($3::text[])
        and t.calendar_event_ref = e.provider_event_id and t.owner_id = $2
        and not exists (select 1 from crm.calendar_events x where x.task_id = t.id)`,
@@ -353,7 +353,7 @@ async function removeEvents(db: Db, calendarId: string, keep: string[] | null, w
   if (keep) {
     await db.query(
       `update crm.calendar_events set invite_hold_missing = true
-       where calendar_id = $1 and provider_event_id <> all($2::text[]) and task_id is null
+       where calendar_id = $1 and provider_event_id <> all($2::text[]) and task_id is null and reminder_id is null
          and (invite_identity_id is not null or invite_uid is not null)
          and not invite_hold_missing and not (created_by_orbit and starts_at >= $3)`,
       [calendarId, keep, window.end.toISOString()],
@@ -362,12 +362,12 @@ async function removeEvents(db: Db, calendarId: string, keep: string[] | null, w
   const result = keep
     ? await db.query(
         `delete from crm.calendar_events
-         where calendar_id = $1 and provider_event_id <> all($2::text[]) and task_id is null
+         where calendar_id = $1 and provider_event_id <> all($2::text[]) and task_id is null and reminder_id is null
            and invite_identity_id is null and invite_uid is null
            and not (created_by_orbit and starts_at >= $3)`,
         [calendarId, keep, window.end.toISOString()],
       )
-    : await db.query("delete from crm.calendar_events where calendar_id = $1 and ends_at <= $2 and task_id is null", [
+    : await db.query("delete from crm.calendar_events where calendar_id = $1 and ends_at <= $2 and task_id is null and reminder_id is null", [
         calendarId,
         window.start.toISOString(),
       ]);
@@ -559,7 +559,7 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
      set contact_ids = '{}', company_ids = '{}'
      from crm.calendars c
      where c.id = e.calendar_id and not c.use_for_crm and not (e.created_by_orbit and e.connection_id is null)
-       and e.user_id = $1 and e.task_id is null ${filter}
+       and e.user_id = $1 and e.task_id is null and e.reminder_id is null ${filter}
        and (cardinality(e.contact_ids) > 0 or cardinality(e.company_ids) > 0)`,
     values,
   );
@@ -574,7 +574,7 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
     `select e.id, e.workspace_id, e.organizer, e.attendees, e.contact_ids, e.company_ids
      from crm.calendar_events e
      join crm.calendars c on c.id = e.calendar_id and (c.use_for_crm or (e.created_by_orbit and e.connection_id is null))
-     where e.user_id = $1 and e.task_id is null ${filter}`,
+     where e.user_id = $1 and e.task_id is null and e.reminder_id is null ${filter}`,
     values,
   );
   if (events.rows.length === 0) return 0;
@@ -845,12 +845,26 @@ async function databaseNow() {
 }
 
 async function flushBlocks(actor: UserActor, connectionId: string, scope: string | null, context: SyncContext) {
+  let fresh = false;
   try {
     const { flushTaskBlocks } = await import("@/lib/crm/task-outlook");
     const granted = scope ?? (await withActor(actor, (db) => readGrantedScopes(db, connectionId)));
-    await flushTaskBlocks(actor, connectionId, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS });
+    await flushTaskBlocks(actor, connectionId, granted, {
+      fetchImpl: context.fetchImpl,
+      deadline: context.deadline - CALENDAR_RESERVE_MS,
+      noted: (noted) => {
+        fresh = noted;
+      },
+    });
   } catch (error) {
     console.error("Outlook task blocks failed", error);
+  }
+  try {
+    const { flushReminderBlocks } = await import("@/lib/crm/reminder-outlook");
+    const granted = scope ?? (await withActor(actor, (db) => readGrantedScopes(db, connectionId)));
+    await flushReminderBlocks(actor, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS, fresh });
+  } catch (error) {
+    console.error("Outlook reminder blocks failed", error);
   }
 }
 
@@ -878,6 +892,19 @@ async function readBackBlocks(
     });
   } catch (error) {
     console.error("Reading task blocks back from Outlook failed", error);
+  }
+  try {
+    const { readBackReminderBlocks } = await import("@/lib/crm/reminder-outlook");
+    await readBackReminderBlocks(actor, {
+      calendarId,
+      events: fetched.events,
+      complete: fetched.complete,
+      window,
+      fetchStartedAt,
+      isGone: (providerEventId) => graphEventGone(accessToken, providerEventId, context.fetchImpl).catch(() => false),
+    });
+  } catch (error) {
+    console.error("Reading reminder blocks back from Outlook failed", error);
   }
 }
 
@@ -1201,7 +1228,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       `select e.ical_uid, e.subject, e.starts_at, e.organizer, e.attendees
        from crm.calendar_events e
        join crm.calendars c on c.id = e.calendar_id and c.use_for_crm
-       where e.user_id = $1 and not e.is_cancelled and e.task_id is null
+       where e.user_id = $1 and not e.is_cancelled and e.task_id is null and e.reminder_id is null
        order by e.starts_at desc`,
       [actor.userId],
     );
