@@ -5,7 +5,7 @@ import { openDiscussionAction } from "@/app/(crm)/discussions";
 import type { ChatContextValue, ChatEditing } from "@/components/chat/chat-context";
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
-import { draftKey, newClientKey, readDraft, writeDraft } from "@/lib/chat/client";
+import { draftKey, newClientKey, readDraft, takeQueuedFiles, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
 import type { ChatLocation } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, type ChatAction, type ChatState, type ThreadState, type Timeline } from "@/lib/chat/timeline";
@@ -26,13 +26,13 @@ const NOWHERE: ChatLocation = {
 };
 const NO_NAMES = new Map<string, string>();
 
-export type NeedsSharePrompt = ChatNeedsShare & { parentId: string | null; text: string; mentions: Mention[]; attachments: ChatAttachment[] };
+export type NeedsSharePrompt = ChatNeedsShare & { parentId: string | null; text: string; mentions: Mention[] };
 
 export type Discussion = {
   subject: ChatSubject;
   needsShare: NeedsSharePrompt | null;
   composerVersion: number;
-  keptDraft: { parentId: string | null; text: string; mentions: Mention[] } | null;
+  keptDraft: { parentId: string | null; text: string; mentions: Mention[]; attachments: ChatAttachment[] } | null;
   settleNeedsShare: (added: boolean) => void;
   ensureConversation: () => Promise<{ id: string | null; error: string | null }>;
   context: ChatContextValue;
@@ -307,7 +307,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       dispatch({ type: "discard", message });
       if (latest.current.subjectKey !== asked) return error;
       writeDraft(draftKey(viewer.id, draftSubjectKey(subject), input.parentId), { text: input.text, mentions: input.mentions });
-      if (refused.canAdd) setNeedsShare({ ...refused, parentId: input.parentId, text: input.text, mentions: input.mentions, attachments });
+      if (refused.canAdd) setNeedsShare({ ...refused, parentId: input.parentId, text: input.text, mentions: input.mentions });
       return error;
     },
     [deliver, ensureConversation, subject, viewer],
@@ -321,10 +321,11 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       const key = draftKey(viewer.id, draftSubjectKey(subject), prompt.parentId);
       const stored = readDraft(key);
       const current = stored.text.trim() ? stored : { text: prompt.text, mentions: prompt.mentions };
+      const files = takeQueuedFiles(key);
       writeDraft(key, added ? { text: "", mentions: [] } : current);
-      setKeptDraft(added ? null : { parentId: prompt.parentId, ...current });
+      setKeptDraft(added ? null : { parentId: prompt.parentId, ...current, attachments: files });
       setComposerVersion((version) => version + 1);
-      if (added && (current.text.trim() || prompt.attachments.length > 0)) void send({ parentId: prompt.parentId, text: current.text, mentions: current.mentions, attachments: prompt.attachments });
+      if (added && (current.text.trim() || files.length > 0)) void send({ parentId: prompt.parentId, text: current.text, mentions: current.mentions, attachments: files });
     },
     [needsShare, send, subject, viewer.id],
   );

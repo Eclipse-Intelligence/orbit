@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
+import { useNoFileNavigation } from "@/components/chat/attachments";
 import { ChatContext, type ChatContextValue, type ChatEditing, type ChatWorkspace } from "@/components/chat/chat-context";
 import { NewMessageDialog, NewRoomDialog } from "@/components/chat/chat-dialogs";
 import ChatList, { listViews } from "@/components/chat/chat-list";
@@ -124,6 +125,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
 
   useKeyboardFit(pane, detail && !threadId);
   useKeyboardFit(threadPane, Boolean(threadId));
+  useNoFileNavigation();
 
   useEffect(() => {
     if (!useCompaniesStore.getState().chat && initial.sidebar) useCompaniesStore.getState().setChat(initial.sidebar);

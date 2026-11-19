@@ -1,7 +1,7 @@
 import { baseType, opensInline } from "@/lib/chat/files";
 import { CHAT_FILE_MAX_BYTES, CHAT_FILES_MAX, type ChatUpload } from "@/lib/chat/types";
 import { withActor } from "@/lib/crm/context";
-import { cleanName, cleanType, megabytes, storageFailure } from "@/lib/crm/email-attachments";
+import { cleanName, cleanType, megabytes } from "@/lib/crm/email-attachments";
 import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
@@ -14,6 +14,15 @@ const STALE_BATCH = 200;
 const DIMENSION_MAX = 100_000;
 
 export const UPLOAD_UNFINISHED = "A file didn't finish uploading. Try again.";
+const UPLOAD_FAILED = "Couldn't upload. Try again.";
+const OPEN_FAILED = "Couldn't open the file. Try again.";
+const SWEEP_BUDGET_MS = 20_000;
+
+function storageError(error: unknown, copy: string) {
+  if (error instanceof CrmError) return error;
+  console.error("Chat file storage failed", error);
+  return new CrmError("upstream_error", copy, 502, { field: "files" });
+}
 
 type AttachmentRow = { id: string; conversation_id: string; message_id: string | null; name: string; content_type: string; size: number };
 
@@ -54,7 +63,7 @@ export async function prepareChatUpload(actor: UserActor, conversationId: unknow
   if (typeof conversationId !== "string" || !isUuid(conversationId)) throw notFound("conversation");
   if (!storageConfigured()) throw noStorage();
   const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) throw new CrmError("invalid_input", "Pick a file to attach.", 400, { field: "files" });
+  if (list.length === 0) throw new CrmError("invalid_input", "Choose a file to attach.", 400, { field: "files" });
   if (list.length > CHAT_FILES_MAX) throw new CrmError("invalid_input", `Attach up to ${CHAT_FILES_MAX} files to a message.`, 400, { field: "files" });
   const cleaned = list.map(cleanFile);
   let rows: { id: string; name: string; content_type: string; size: number }[];
@@ -80,7 +89,7 @@ export async function prepareChatUpload(actor: UserActor, conversationId: unknow
     );
   } catch (error) {
     await query("select private.chat_discard_attachments($1, $2::uuid[])", [actor.userId, rows.map((row) => row.id)]).catch(() => undefined);
-    throw storageFailure(error);
+    throw storageError(error, UPLOAD_FAILED);
   }
 }
 
@@ -91,9 +100,10 @@ export async function discardChatUploads(actor: UserActor, ids: unknown) {
   return { discarded: result.rows[0]?.discarded ?? 0 };
 }
 
-function sameType(stored: string | null, declared: string) {
-  if (!stored) return false;
-  return baseType(stored) === baseType(declared);
+function storedMatches(object: { contentType: string | null; size: number | null }, row: AttachmentRow) {
+  if (object.size !== null && object.size !== row.size) return false;
+  if (!opensInline(row.content_type)) return true;
+  return object.contentType !== null && baseType(object.contentType) === baseType(row.content_type);
 }
 
 export async function checkUploads(actor: UserActor, conversationId: string, ids: string[], fetchImpl: typeof fetch = fetch) {
@@ -106,21 +116,25 @@ export async function checkUploads(actor: UserActor, conversationId: string, ids
   if (rows.length !== ids.length || rows.some((row) => row.message_id || row.conversation_id !== conversationId)) {
     throw new CrmError("not_found", "A file has expired. Attach it again.", 404, { field: "files" });
   }
-  const stored = await Promise.all(rows.map((row) => objectExists(chatAttachmentKey(row.conversation_id, row.id), fetchImpl).catch((error) => {
-    throw storageFailure(error);
-  })));
+  const stored = await Promise.all(
+    rows.map((row) =>
+      objectExists(chatAttachmentKey(row.conversation_id, row.id), fetchImpl).catch((error) => {
+        throw storageError(error, UPLOAD_FAILED);
+      }),
+    ),
+  );
   rows.forEach((row, index) => {
     const object = stored[index];
-    if (!object || object.size !== row.size || !sameType(object.contentType, row.content_type)) {
+    if (!object || !storedMatches(object, row)) {
       throw new CrmError("invalid_input", UPLOAD_UNFINISHED, 400, { field: "files", file: row.name });
     }
   });
 }
 
-export async function removeChatAttachments(actor: UserActor, messageId: string, ids: string[], body: string) {
+export async function removeChatAttachments(actor: UserActor, messageId: string, ids: string[]) {
   if (ids.length === 0) return;
   try {
-    await query("select private.chat_remove_attachments($1, $2, $3::uuid[], $4)", [actor.userId, messageId, ids, body]);
+    await query("select private.chat_remove_attachments($1, $2, $3::uuid[])", [actor.userId, messageId, ids]);
   } catch (error) {
     failure(error);
   }
@@ -134,15 +148,15 @@ export async function chatFileLink(actor: UserActor, id: string, options: { down
     return result.rows[0];
   });
   if (!row) throw notFound("file");
-  const inline = !options.download && opensInline(row.content_type);
+  const inline = !options.download && row.message_id !== null && opensInline(row.content_type);
   try {
     return await signedDownloadUrl(chatAttachmentKey(row.conversation_id, row.id), inline ? {} : { download: row.name }, fetchImpl);
   } catch (error) {
-    throw storageFailure(error);
+    throw storageError(error, OPEN_FAILED);
   }
 }
 
-export async function drainStorageTombstones(fetchImpl: typeof fetch = fetch) {
+export async function drainStorageTombstones(fetchImpl: typeof fetch = fetch, deadline = Date.now() + SWEEP_BUDGET_MS) {
   if (!storageConfigured()) return 0;
   const due = await query<{ bucket: string; path: string }>("select bucket, path from private.storage_tombstones_due($1)", [TOMBSTONE_BATCH]);
   const byBucket = new Map<string, string[]>();
@@ -151,7 +165,7 @@ export async function drainStorageTombstones(fetchImpl: typeof fetch = fetch) {
   for (const [bucketId, paths] of byBucket) {
     const bucket = bucketForId(bucketId);
     if (!bucket) continue;
-    for (let start = 0; start < paths.length; start += REMOVE_CHUNK) {
+    for (let start = 0; start < paths.length && Date.now() < deadline; start += REMOVE_CHUNK) {
       const chunk = paths.slice(start, start + REMOVE_CHUNK);
       try {
         await removeObjects(chunk, fetchImpl, bucket);
@@ -166,9 +180,10 @@ export async function drainStorageTombstones(fetchImpl: typeof fetch = fetch) {
   return removed;
 }
 
-export async function sweepChatAttachments(fetchImpl: typeof fetch = fetch) {
+export async function sweepChatAttachments(fetchImpl: typeof fetch = fetch, options: { deadline?: number } = {}) {
   if (!storageConfigured()) return { stale: 0, removed: 0 };
+  const deadline = options.deadline ?? Date.now() + SWEEP_BUDGET_MS;
   const stale = await query<{ count: number }>("select private.chat_sweep_attachments($1) as count", [STALE_BATCH]);
-  const removed = await drainStorageTombstones(fetchImpl);
+  const removed = Date.now() < deadline ? await drainStorageTombstones(fetchImpl, deadline) : 0;
   return { stale: stale.rows[0]?.count ?? 0, removed };
 }

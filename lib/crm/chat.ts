@@ -1071,7 +1071,13 @@ export async function postMessage(
         return existingPost(db, actor, clientKey, conversationId, parentId);
       });
       if (earlier) return earlier;
-      await checkUploads(actor, conversationId, attachmentIds, options.fetchImpl);
+      try {
+        await checkUploads(actor, conversationId, attachmentIds, options.fetchImpl);
+      } catch (error) {
+        const raced = await withActor(actor, (db) => existingPost(db, actor, clientKey, conversationId, parentId));
+        if (raced) return raced;
+        throw error;
+      }
     }
     if (options.charge) {
       const before = await withActor(actor, async (db) => {
@@ -1167,13 +1173,13 @@ export async function editMessage(actor: UserActor, id: string, body: unknown, o
   const removing = cleanAttachmentIds(options.removeAttachmentIds);
   const asked = options.format === "plain" || options.format === "markdown" ? options.format : null;
   try {
-    await removeChatAttachments(actor, messageId, removing, text);
     const followed = await query<{ user_id: string }>("select user_id from private.chat_message_followers($1, $2)", [actor.userId, messageId]);
     const followersBefore = new Set(followed.rows.map((row) => row.user_id));
-    return await withActor(actor, async (db) => {
+    const edited = await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
       if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
-      if (!text && current.attachments.length === 0) throw new CrmError("invalid_input", "Delete the message instead.", 400, { field: "body" });
+      const kept = current.attachments.filter((file) => !removing.includes(file.id));
+      if (!text && kept.length === 0) throw new CrmError("invalid_input", "Delete the message instead.", 400, { field: "body" });
       const conversation = await readConversation(db, actor, current.conversationId);
       const format = asked ?? current.format;
       const mentions = memberMentions(text, format);
@@ -1193,16 +1199,28 @@ export async function editMessage(actor: UserActor, id: string, body: unknown, o
         conversation.kind === "room"
           ? message.mentions.filter((person) => !before.has(person) && person !== actor.userId && memberSet.has(person) && !followersBefore.has(person))
           : [];
-      afterPost(
-        db,
-        members.map((member) => member.user_id),
-        { type: "edit", conversationId: current.conversationId, message },
+      const jobs =
         conversation.kind === "room" || conversation.kind === "dm"
           ? mentionAlert(actor, conversation, message, added)
-          : subjectAlerts(actor, conversation, { ...message, parentId: null, mentions: message.mentions.filter((person) => !before.has(person)) }, tagged),
-      );
-      return message;
+          : subjectAlerts(actor, conversation, { ...message, parentId: null, mentions: message.mentions.filter((person) => !before.has(person)) }, tagged);
+      const audience = members.map((member) => member.user_id);
+      if (removing.length === 0) afterPost(db, audience, { type: "edit", conversationId: current.conversationId, message }, jobs);
+      return { message, audience, jobs };
     });
+    if (removing.length === 0) return edited.message;
+    let failure: unknown = null;
+    try {
+      await removeChatAttachments(actor, messageId, removing);
+    } catch (error) {
+      failure = error;
+    }
+    const message = await withActor(actor, async (db) => {
+      const latest = (await readMessage(db, messageId, actor.userId)) ?? edited.message;
+      afterPost(db, edited.audience, { type: "edit", conversationId: latest.conversationId, message: latest }, edited.jobs);
+      return latest;
+    });
+    if (failure) throw failure;
+    return message;
   } catch (error) {
     chatFailure(error);
   }

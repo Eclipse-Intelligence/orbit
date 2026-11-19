@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import Asset from "@/components/_ui/asset";
 import Button from "@/components/_ui/button";
 import type { QueuedFile } from "@/components/chat/use-uploads";
@@ -72,6 +72,8 @@ function ImageGrid({ images, onOpen }: { images: ChatAttachment[]; onOpen: (inde
             key={image.id}
             type="button"
             onClick={() => onOpen(index)}
+            draggable={false}
+            onDragStart={(event) => event.preventDefault()}
             aria-label={more ? `Open ${image.name} and ${hidden} more` : `Open ${image.name}`}
             className={cn(
               "bg-surface-raised focus-visible:ring-ring/60 relative shrink-0 overflow-hidden rounded-[10px] shadow-[inset_0_0_0_1px_var(--color-line-strong)] outline-none focus-visible:ring-2",
@@ -90,6 +92,7 @@ function ImageGrid({ images, onOpen }: { images: ChatAttachment[]; onOpen: (inde
 function ImageViewer({ message, images, index, onIndex, onClose }: { message: ChatMessage; images: ChatAttachment[]; index: number; onIndex: (index: number) => void; onClose: () => void }) {
   const image = images[index];
   const start = useRef<{ x: number; y: number } | null>(null);
+  const pointers = useRef(new Set<number>());
   const [drag, setDrag] = useState(0);
   const step = (by: number) => onIndex((index + by + images.length) % images.length);
 
@@ -104,9 +107,15 @@ function ImageViewer({ message, images, index, onIndex, onClose }: { message: Ch
     }
   }
 
+  function zoomed() {
+    return (window.visualViewport?.scale ?? 1) > 1.01;
+  }
+
   function pointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.pointerType === "mouse") return;
-    start.current = { x: event.clientX, y: event.clientY };
+    pointers.current.add(event.pointerId);
+    start.current = pointers.current.size === 1 && !zoomed() ? { x: event.clientX, y: event.clientY } : null;
+    if (!start.current) setDrag(0);
   }
 
   function pointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -115,6 +124,7 @@ function ImageViewer({ message, images, index, onIndex, onClose }: { message: Ch
   }
 
   function pointerUp(event: PointerEvent<HTMLDivElement>) {
+    pointers.current.delete(event.pointerId);
     const from = start.current;
     start.current = null;
     setDrag(0);
@@ -156,11 +166,12 @@ function ImageViewer({ message, images, index, onIndex, onClose }: { message: Ch
             </a>
           </div>
           <div
-            className="relative flex min-h-0 flex-1 touch-none items-center justify-center px-2 pb-[max(env(safe-area-inset-bottom),24px)] select-none"
+            className="relative flex min-h-0 flex-1 touch-pinch-zoom items-center justify-center px-2 pb-[max(env(safe-area-inset-bottom),24px)] select-none"
             onPointerDown={pointerDown}
             onPointerMove={pointerMove}
             onPointerUp={pointerUp}
-            onPointerCancel={() => {
+            onPointerCancel={(event) => {
+              pointers.current.delete(event.pointerId);
               start.current = null;
               setDrag(0);
             }}
@@ -222,7 +233,7 @@ function RemoveButton({ name, onRemove }: { name: string; onRemove: () => void }
       title="Remove"
       onMouseDown={(event) => event.preventDefault()}
       onClick={onRemove}
-      className="hit text-soft absolute -top-1.5 -right-1.5 size-5 rounded-full bg-[#2f2f2f] shadow-[0_0_0_2px_var(--color-secondary)] hover:bg-[#3a3a3a] hover:text-white"
+      className="hit text-soft absolute -top-1.5 -right-1.5 size-5 rounded-full pointer-coarse:size-6 bg-[#2f2f2f] shadow-[0_0_0_2px_var(--color-secondary)] hover:bg-[#3a3a3a] hover:text-white"
     >
       <RemoveIcon aria-hidden className="size-3" />
     </Button>
@@ -232,7 +243,7 @@ function RemoveButton({ name, onRemove }: { name: string; onRemove: () => void }
 export function UploadQueue({ files, onRemove, onRetry }: { files: QueuedFile[]; onRemove: (key: string) => void; onRetry: (key: string) => void }) {
   if (files.length === 0) return null;
   return (
-    <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-3.5 pt-1.5 pb-1 pointer-coarse:gap-3">
+    <ul aria-label="Files to send" className="flex flex-wrap gap-2 px-3.5 pt-1.5 pb-1 pointer-coarse:gap-5 pointer-coarse:pt-3.5 pointer-coarse:pr-5">
       {files.map((file) => {
         const percent = Math.round(file.progress * 100);
         if (file.preview && file.status !== "failed") {
@@ -240,10 +251,12 @@ export function UploadQueue({ files, onRemove, onRetry }: { files: QueuedFile[];
             <li key={file.key} className="relative size-16 shrink-0 rounded-[9px] shadow-[inset_0_0_0_1px_var(--color-line-strong)]">
               <Asset type="image" src={file.preview} alt={file.name} width={1} height={1} fit="cover" unoptimized className="size-full rounded-[9px]" />
               {file.status === "uploading" && (
-                <span role="status" className="absolute inset-0 grid place-items-center rounded-[9px] bg-black/45 text-[11px] font-medium text-white tabular-nums">
+                <>
                   <span className="sr-only">Uploading {file.name}</span>
-                  {percent}%
-                </span>
+                  <span aria-hidden className="absolute inset-0 grid place-items-center rounded-[9px] bg-black/45 text-[11px] font-medium text-white tabular-nums">
+                    {percent}%
+                  </span>
+                </>
               )}
               <RemoveButton name={file.name} onRemove={() => onRemove(file.key)} />
             </li>
@@ -281,8 +294,22 @@ export function UploadQueue({ files, onRemove, onRetry }: { files: QueuedFile[];
   );
 }
 
-function draggingFiles(event: DragEvent) {
+function draggingFiles(event: { dataTransfer: DataTransfer | null }) {
   return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+export function useNoFileNavigation() {
+  useEffect(() => {
+    const hold = (event: globalThis.DragEvent) => {
+      if (draggingFiles(event)) event.preventDefault();
+    };
+    window.addEventListener("dragover", hold);
+    window.addEventListener("drop", hold);
+    return () => {
+      window.removeEventListener("dragover", hold);
+      window.removeEventListener("drop", hold);
+    };
+  }, []);
 }
 
 export function FileDrop({

@@ -5,10 +5,10 @@ import Button from "@/components/_ui/button";
 import MentionInput from "@/components/assistant/mention-input";
 import { UploadQueue } from "@/components/chat/attachments";
 import { useChat } from "@/components/chat/chat-context";
-import { queuedAttachment, useUploads, type QueuedFile, type UploadTarget } from "@/components/chat/use-uploads";
+import { attachmentQueued, queuedAttachment, useUploads, type QueuedFile, type UploadTarget } from "@/components/chat/use-uploads";
 import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
-import { draftKey, formatBarDefault, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
+import { draftKey, formatBarDefault, writeQueuedFiles, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
 import { applyEdit, formatEdit, mentionEdit, type FormatAction, type TextEdit } from "@/lib/chat/compose";
 import { formatsAt, insideCodeFence, markdownMarks, type FormatKind } from "@/lib/chat/markdown";
 import { CHAT_BODY_MAX, type ChatAttachment } from "@/lib/chat/types";
@@ -154,6 +154,7 @@ export function ComposerBox({
   phoneLead,
   attach,
   queue,
+  queued,
   onPasteFiles,
   onChange,
   onSubmit,
@@ -176,6 +177,7 @@ export function ComposerBox({
   phoneLead?: ReactNode;
   attach?: ReactNode;
   queue?: ReactNode;
+  queued?: boolean;
   onPasteFiles?: (files: File[]) => void;
   onChange: (value: string, mentions: Mention[]) => void;
   onSubmit: () => void;
@@ -255,6 +257,7 @@ export function ComposerBox({
 
   function paste(event: ClipboardEvent<HTMLDivElement>) {
     if (!onPasteFiles) return;
+    if (Array.from(event.clipboardData?.types ?? []).includes("text/plain")) return;
     const files = Array.from(event.clipboardData?.files ?? []);
     if (files.length === 0) return;
     event.preventDefault();
@@ -280,6 +283,7 @@ export function ComposerBox({
     >
       <div
         data-chat-composer={composer ? "" : undefined}
+        data-chat-queued={queued ? "" : undefined}
         className={cn(
           "border-line-strong bg-secondary focus-within:border-ring flex flex-col rounded-lg border",
           oneRow && "max-md:rounded-[22px]",
@@ -372,7 +376,7 @@ export default function Composer({
   disabled?: boolean;
   restoreOnFailure?: boolean;
   hideFailure?: boolean;
-  fallbackDraft?: { text: string; mentions: Mention[] } | null;
+  fallbackDraft?: { text: string; mentions: Mention[]; attachments?: ChatAttachment[] } | null;
   uploadTo?: UploadTarget;
   fileRef?: MutableRefObject<((files: File[]) => void) | null>;
   onSend: (text: string, mentions: Mention[], files: ChatAttachment[]) => Promise<string | null>;
@@ -388,15 +392,16 @@ export default function Composer({
   const [failure, setFailure] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
+  const uploads = useUploads(uploadTo);
   if (hydrated && loaded !== key) {
     const stored = readDraft(key);
     const draft = !stored.text.trim() && fallbackDraft?.text.trim() ? fallbackDraft : stored;
     setLoaded(key);
     setValue(draft.text);
     setMentions(draft.mentions);
+    if (fallbackDraft?.attachments?.length) uploads.restore(fallbackDraft.attachments.map(attachmentQueued));
   }
-  const uploads = useUploads(uploadTo);
-  const { reset: resetUploads, drop: dropUploads, add: addFiles } = uploads;
+  const { reset: resetUploads, abandon: abandonUploads, add: addFiles, ready: readyUploads } = uploads;
   const uploadKey = useRef(key);
   const picker = useRef<HTMLInputElement>(null);
   const length = value.trim() ? messageBody(value, mentions).length : 0;
@@ -409,7 +414,13 @@ export default function Composer({
     resetUploads();
   }, [key, resetUploads]);
 
-  useEffect(() => () => dropUploads(), [dropUploads]);
+  useEffect(() => () => abandonUploads(), [abandonUploads]);
+
+  useEffect(() => {
+    writeQueuedFiles(key, readyUploads.map(queuedAttachment));
+  }, [key, readyUploads]);
+
+  useEffect(() => () => writeQueuedFiles(key, []), [key]);
 
   useEffect(() => {
     if (!fileRef) return;
@@ -505,12 +516,13 @@ export default function Composer({
         phoneLead={attachButton(true)}
         attach={attachButton(false)}
         queue={<UploadQueue files={uploads.files} onRemove={uploads.remove} onRetry={uploads.retry} />}
+        queued={uploads.files.length > 0}
         onPasteFiles={uploadTo && !disabled ? uploads.add : undefined}
         onChange={change}
         onSubmit={send}
         onBlur={() => onTyping?.(false)}
         onKeyDown={(event) => {
-          if (event.key === "Escape" && value === "" && onEscape) {
+          if (event.key === "Escape" && value === "" && uploads.files.length === 0 && onEscape) {
             event.preventDefault();
             onEscape();
             return;

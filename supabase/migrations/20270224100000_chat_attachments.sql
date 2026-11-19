@@ -150,7 +150,7 @@ begin
     raise exception 'Conversation not found.' using errcode = 'P0002';
   end if;
   if v_count < 1 then
-    raise exception 'Pick a file to attach.' using errcode = '22023';
+    raise exception 'Choose a file to attach.' using errcode = '22023';
   end if;
   if v_count > 10 then
     raise exception 'Attach up to 10 files to a message.' using errcode = '22023';
@@ -287,7 +287,7 @@ create trigger chat_messages_files_gone
   before update of deleted_at on crm.chat_messages
   for each row when (old.attachment_count > 0) execute function private.chat_message_files_gone();
 
-create or replace function private.chat_remove_attachments(p_user uuid, p_message uuid, p_ids uuid[], p_body text)
+create or replace function private.chat_remove_attachments(p_user uuid, p_message uuid, p_ids uuid[])
 returns integer
 language plpgsql
 security definer
@@ -308,22 +308,21 @@ begin
   if cardinality(v_keep) = cardinality(v_message.attachment_ids) then
     return v_message.attachment_count;
   end if;
-  if cardinality(v_keep) = 0 and length(btrim(coalesce(p_body, ''), E' \t\n')) = 0 then
+  if cardinality(v_keep) = 0 and length(btrim(v_message.body, E' \t\n')) = 0 then
     raise exception 'Delete the message instead.' using errcode = '22023';
   end if;
   delete from crm.chat_attachments a where a.message_id = p_message and not (a.id = any(v_keep));
   update crm.chat_messages m
     set attachment_ids = v_keep,
         attachment_count = cardinality(v_keep),
-        edited_at = clock_timestamp(),
-        body = case when cardinality(v_keep) = 0 and length(btrim(m.body, E' \t\n')) = 0 then p_body else m.body end
+        edited_at = clock_timestamp()
     where m.id = p_message;
   return cardinality(v_keep);
 end;
 $$;
 
-revoke all on function private.chat_remove_attachments(uuid, uuid, uuid[], text) from public;
-grant execute on function private.chat_remove_attachments(uuid, uuid, uuid[], text) to crm_app;
+revoke all on function private.chat_remove_attachments(uuid, uuid, uuid[]) from public;
+grant execute on function private.chat_remove_attachments(uuid, uuid, uuid[]) to crm_app;
 
 create or replace function private.chat_sweep_attachments(p_limit integer)
 returns integer
@@ -335,12 +334,14 @@ declare
   v_count integer;
 begin
   delete from crm.chat_attachments a
-  where a.id in (
-    select s.id from crm.chat_attachments s
-    where s.message_id is null and s.scheduled_id is null and s.created_at < now() - interval '1 day'
-    order by s.created_at
-    limit greatest(1, least(coalesce(p_limit, 200), 500))
-  );
+  where a.message_id is null and a.scheduled_id is null
+    and a.id in (
+      select s.id from crm.chat_attachments s
+      where s.message_id is null and s.scheduled_id is null and s.created_at < now() - interval '1 day'
+      order by s.created_at
+      limit greatest(1, least(coalesce(p_limit, 200), 500))
+      for update skip locked
+    );
   get diagnostics v_count = row_count;
   return v_count;
 end;

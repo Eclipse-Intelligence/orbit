@@ -21,7 +21,7 @@ const SUPABASE = "https://project.supabase.test";
 const BUCKET = "email-attachments";
 const MIGRATION = "supabase/migrations/20270224100000_chat_attachments.sql";
 
-type Stored = { bytes: number; type: string };
+type Stored = { bytes: number | null; type: string };
 
 function storage() {
   const objects = new Map<string, Stored>();
@@ -41,7 +41,7 @@ function storage() {
     if (object && method === "HEAD") {
       const stored = objects.get(object[1]);
       if (!stored) return new Response(null, { status: 400 });
-      return new Response(null, { status: 200, headers: { "content-type": stored.type, "content-length": String(stored.bytes) } });
+      return new Response(null, { status: 200, headers: { "content-type": stored.type, ...(stored.bytes === null ? {} : { "content-length": String(stored.bytes) }) } });
     }
     if (url === `${SUPABASE}/storage/v1/object/${BUCKET}` && method === "DELETE") {
       if (failRemovals) return Response.json({ message: "down" }, { status: 500 });
@@ -259,7 +259,6 @@ describe("chat attachments", () => {
   });
 
   it("lets only one of two posts at once claim a file, and a retry with the same key returns the first", async () => {
-    pool.allowNestedConnections();
     const room = await createRoom(mark, { name: "race", memberIds: [sam.userId] });
     const ids = await upload(mark, room.id, [{ name: "race.pdf", type: "application/pdf" }]);
     const results = await Promise.allSettled([post(mark, room.id, "One", ids), post(mark, room.id, "Two", ids)]);
@@ -274,7 +273,7 @@ describe("chat attachments", () => {
     assert.equal(retried.message.attachments.length, 1);
   });
 
-  it("refuses a post until each file has finished uploading with its declared type and size", async () => {
+  it("refuses a post until each file has finished uploading, judging the type only for files shown inline", async () => {
     const room = await createRoom(mark, { name: "unfinished", memberIds: [sam.userId] });
     const missing = await upload(mark, room.id, [{ name: "missing.pdf", type: "application/pdf" }], { store: false });
     await refused(post(mark, room.id, "", missing), /A file didn't finish uploading\. Try again\./);
@@ -286,6 +285,13 @@ describe("chat attachments", () => {
     await refused(post(mark, room.id, "", short), /A file didn't finish uploading\. Try again\./);
     env.objects.set(key(room.id, short[0]), { bytes: 2048, type: "application/pdf; charset=binary" });
     assert.equal((await post(mark, room.id, "", short)).attachments.length, 1);
+    const unmeasured = await upload(mark, room.id, [{ name: "plain.pdf", type: "application/pdf" }], { store: false });
+    env.objects.set(key(room.id, unmeasured[0]), { bytes: null, type: "application/pdf" });
+    assert.equal((await post(mark, room.id, "", unmeasured)).attachments.length, 1);
+    const page = await upload(mark, room.id, [{ name: "page.html", type: "text/html" }], { store: false });
+    env.objects.set(key(room.id, page[0]), { bytes: 2048, type: "text/plain" });
+    const sent = await post(mark, room.id, "", page);
+    assert.equal(new URL(await chatFileLink(sam, sent.attachments[0].id, {}, env.fetchImpl)).searchParams.get("download"), "page.html");
   });
 
   it("refuses files from MCP, workflows and too many at once", async () => {
@@ -313,6 +319,8 @@ describe("chat attachments", () => {
     assert.equal(new URL(svg).searchParams.get("download"), "logo.svg");
     assert.equal(new URL(html).searchParams.get("download"), "page.html");
     assert.equal(new URL(await chatFileLink(sam, ids[0], { download: true }, env.fetchImpl)).searchParams.get("download"), "shot.png");
+    const unsent = await upload(mark, room.id, [{ name: "draft.png", type: "image/png" }]);
+    assert.equal(new URL(await chatFileLink(mark, unsent[0], {}, env.fetchImpl)).searchParams.get("download"), "draft.png");
   });
 
   it("removes files in an edit but never leaves an empty message", async () => {
@@ -330,7 +338,7 @@ describe("chat attachments", () => {
     assert.ok(trimmed.editedAt);
     assert.deepEqual(await tombstones(), [key(room.id, ids[0])].sort());
     await refused(editMessage(mark, message.id, "", { removeAttachmentIds: [ids[1]] }), /Delete the message instead\./);
-    await refused(editMessage(sam, message.id, "Mine", { removeAttachmentIds: [ids[1]] }), /Message not found\./);
+    await refused(editMessage(sam, message.id, "Mine", { removeAttachmentIds: [ids[1]] }), /You can only change your own messages\./);
     const worded = await editMessage(mark, message.id, "Now with words", { removeAttachmentIds: [ids[1]] });
     assert.equal(worded.body, "Now with words");
     assert.deepEqual(worded.attachments, []);
@@ -340,8 +348,77 @@ describe("chat attachments", () => {
     await sql("truncate private.storage_tombstones");
   });
 
+  it("changes nothing when an edit that removes files is refused", async () => {
+    const snapshot = async (id: string) =>
+      (
+        await sql<{ body: string; edited_at: Date | null; attachment_ids: string[]; files: number }>(
+          "select m.body, m.edited_at, m.attachment_ids::text[] as attachment_ids, (select count(*)::int from crm.chat_attachments a where a.message_id = m.id) as files from crm.chat_messages m where m.id = $1",
+          [id],
+        )
+      )[0];
+    await sql("truncate private.storage_tombstones");
+    const room = await createRoom(mark, { name: "refused-edits", memberIds: [sam.userId] });
+    const ids = await upload(mark, room.id, [
+      { name: "keep.pdf", type: "application/pdf" },
+      { name: "also.pdf", type: "application/pdf" },
+    ]);
+    const message = await post(mark, room.id, "Original", ids);
+    const before = await snapshot(message.id);
+    const crowd = Array.from({ length: 51 }, (_, index) => `@[P${index}](member:00000000-0000-4000-8000-${String(index).padStart(12, "0")})`).join(" ");
+    await refused(editMessage(mark, message.id, crowd, { removeAttachmentIds: [ids[0]] }), /Tag up to 50 people/);
+    assert.deepEqual(await snapshot(message.id), before);
+
+    const account = (await sql<{ id: string }>("insert into crm.calendar_accounts (workspace_id, user_id, email, status) values ($1, $2, 'mark@files.test', 'disconnected') returning id", [mark.workspaceId, mark.userId]))[0].id;
+    const source = (await sql<{ id: string }>("insert into crm.mail_sources (workspace_id, user_id, account_id, email) values ($1, $2, $3, 'mark@files.test') returning id", [mark.workspaceId, mark.userId, account]))[0].id;
+    const share = (await sql<{ id: string }>("insert into crm.mail_shares (owner_user_id, source_id, thread_key) values ($1, $2, 'conv-files') returning id", [mark.userId, source]))[0].id;
+    await sql("insert into crm.mail_share_members (share_id, user_id, added_by) values ($1, $2, $3)", [share, sam.userId, mark.userId]);
+    const { conversationId } = await openDiscussion(mark, { kind: "mail_thread", id: share });
+    const noteFiles = await upload(mark, conversationId, [{ name: "note.pdf", type: "application/pdf" }]);
+    const note = await post(mark, conversationId, "", noteFiles);
+    const noteBefore = await snapshot(note.id);
+    await refused(editMessage(mark, note.id, `@[Priya Nair](member:${priya.userId}) see this`, { removeAttachmentIds: noteFiles }), /in this thread/);
+    assert.deepEqual(await snapshot(note.id), noteBefore);
+    assert.deepEqual(await tombstones(), []);
+
+    const removed = await editMessage(mark, message.id, "Original", { removeAttachmentIds: [ids[0]] });
+    assert.deepEqual(
+      removed.attachments.map((file) => file.id),
+      [ids[1]],
+    );
+    await chatWorkSettled();
+    const edits = broadcasts
+      .filter((item) => item.topic === personTopic(sam.userId))
+      .map((item) => item.payload as ChatLiveEvent)
+      .flatMap((event) => (event.type === "edit" && event.message.id === message.id ? [event.message] : []));
+    assert.deepEqual(
+      edits.at(-1)?.attachments.map((file) => file.id),
+      [ids[1]],
+    );
+    await sql("truncate private.storage_tombstones");
+  });
+
+  it("never sweeps a file that a post claims while the sweep runs", async () => {
+    const room = await createRoom(mark, { name: "sweep-race", memberIds: [sam.userId] });
+    const anchor = await post(mark, room.id, "Anchor", []);
+    const stale = await upload(mark, room.id, [{ name: "racing.pdf", type: "application/pdf" }]);
+    await sql("update crm.chat_attachments set created_at = now() - interval '2 days' where id = $1", [stale[0]]);
+    const holder = await getAdminPool().connect();
+    try {
+      await holder.query("begin");
+      await holder.query("update crm.chat_attachments set message_id = $2 where id = $1", [stale[0], anchor.id]);
+      const sweeping = sweepChatAttachments(env.fetchImpl);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await holder.query("commit");
+      await sweeping;
+    } finally {
+      holder.release();
+    }
+    const kept = await sql<{ message_id: string | null }>("select message_id from crm.chat_attachments where id = $1", [stale[0]]);
+    assert.deepEqual(kept, [{ message_id: anchor.id }]);
+    assert.ok(!(await tombstones()).includes(key(room.id, stale[0])));
+  });
+
   it("leaves a tombstone on every delete path and the sweep drains them", async () => {
-    pool.allowNestedConnections();
     await sql("truncate private.storage_tombstones");
     const room = await createRoom(mark, { name: "deletes", memberIds: [sam.userId] });
     const deleted = await upload(mark, room.id, [{ name: "gone.pdf", type: "application/pdf" }]);
@@ -400,7 +477,6 @@ describe("chat attachments", () => {
   });
 
   it("says sent a file in a DM alert when there is no text", async () => {
-    pool.allowNestedConnections();
     const dm = await openDm(mark, sam.userId);
     await post(mark, dm.id, "", await upload(mark, dm.id, [{ name: "a.png", type: "image/png" }]));
     await chatWorkSettled();

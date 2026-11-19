@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { discardChatUploadsAction, prepareChatUploadAction } from "@/app/(crm)/chat/actions";
+import { releaseHandedOff } from "@/lib/chat/client";
 import { fileSize } from "@/lib/chat/files";
 import { imageSize, uploadWithProgress } from "@/lib/chat/uploads";
 import { CHAT_FILE_MAX_BYTES, CHAT_FILES_MAX, type ChatAttachment } from "@/lib/chat/types";
@@ -37,6 +38,10 @@ function typeOf(file: File) {
 
 export function queuedAttachment(file: QueuedFile): ChatAttachment {
   return { id: file.id!, name: file.name, contentType: file.contentType, size: file.size, width: file.width, height: file.height };
+}
+
+export function attachmentQueued(file: ChatAttachment): QueuedFile {
+  return { key: file.id, name: file.name, size: file.size, contentType: file.contentType, preview: null, status: "done", progress: 1, id: file.id, width: file.width, height: file.height };
 }
 
 export function useUploads(target: UploadTarget | undefined) {
@@ -103,9 +108,11 @@ export function useUploads(target: UploadTarget | undefined) {
     (picked: File[]) => {
       if (!targetRef.current || picked.length === 0) return;
       const room = CHAT_FILES_MAX - latest.current.length;
+      const empty = picked.find((file) => file.size === 0);
       const fitting = picked.filter((file) => file.size > 0 && file.size <= CHAT_FILE_MAX_BYTES);
       const accepted = fitting.slice(0, Math.max(0, room));
-      if (fitting.length < picked.length) setNotice(`Files can be up to ${fileSize(CHAT_FILE_MAX_BYTES)} each.`);
+      if (empty) setNotice(`${empty.name || "That file"} is empty.`);
+      else if (fitting.length < picked.length) setNotice(`Files can be up to ${fileSize(CHAT_FILE_MAX_BYTES)} each.`);
       else if (accepted.length < fitting.length) setNotice(`Attach up to ${CHAT_FILES_MAX} files to a message.`);
       else setNotice(null);
       if (accepted.length === 0) return;
@@ -163,8 +170,8 @@ export function useUploads(target: UploadTarget | undefined) {
     setFiles((current) => (current.length > 0 ? current : entries.map((entry) => ({ ...entry, preview: null }))));
   }, []);
 
-  const drop = useCallback(() => {
-    for (const file of latest.current) forget(file, { discard: false });
+  const abandon = useCallback(() => {
+    for (const file of latest.current) forget(file, { discard: !(file.id && releaseHandedOff(file.id)) });
   }, [forget]);
 
   const reset = useCallback(() => {
@@ -182,7 +189,7 @@ export function useUploads(target: UploadTarget | undefined) {
     take,
     restore,
     reset,
-    drop,
+    abandon,
     uploading: files.some((file) => file.status === "uploading"),
     failed: files.some((file) => file.status === "failed"),
     ready: files.filter((file) => file.status === "done"),
