@@ -78,11 +78,11 @@ after(async () => {
 });
 
 describe("assistant evaluation tasks", () => {
-  it("defines 30 to 70 core tasks and a security suite, covering every job", () => {
+  it("defines 30 to 75 core tasks and a security suite, covering every job", () => {
     const ids = ALL_TASKS.map((item) => item.id);
     assert.equal(new Set(ids).size, ids.length);
     const core = ALL_TASKS.filter((item) => item.suite === "core");
-    assert.ok(core.length >= 30 && core.length <= 70, `${core.length} core tasks`);
+    assert.ok(core.length >= 30 && core.length <= 75, `${core.length} core tasks`);
     for (const category of CORE_CATEGORIES) assert.ok(core.some((item) => item.category === category), category);
     for (const category of SECURITY_CATEGORIES) assert.ok(ALL_TASKS.some((item) => item.suite === "security" && item.category === category), category);
     for (const item of ALL_TASKS) {
@@ -541,6 +541,32 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
       settings(scripted([({ world }) => ({ calls: [{ name: "create_task", args: { title: "Call Wren Ashdown", contactId: world.id("contact:Wren Ashdown"), dueDate: londonDay({ weekday: 5 }) } }] })])),
     );
     assert.deepEqual(failed(wrong), ["proposes create_task"]);
+  });
+
+  it("makes a personal Remind me a reminder, loaded from its own area, and fails a task in its place", async () => {
+    let offered: string[] = [];
+    const result = await runOnce(
+      byId("write-personal-reminder"),
+      settings(
+        scripted([
+          ({ body }) => {
+            const prompt = JSON.stringify(body.messages);
+            assert.match(prompt, /- reminders: /);
+            assert.match(prompt, /is one of the user's own reminders, not a task/);
+            return { calls: [{ name: "find_tools", args: { domains: ["reminders"] } }] };
+          },
+          ({ body }) => {
+            offered = ((body.tools ?? []) as { function: { name: string } }[]).map((tool) => tool.function.name);
+            return { calls: [{ name: "reminders", args: { action: "create", title: "Put the bins out", dueOn: londonDay({ weekday: 4 }) } }] };
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.ok(offered.includes("reminders"));
+    assert.deepEqual(result.cards.map((item) => item.title), ["Add reminder: Put the bins out"]);
+    const wrong = await runOnce(byId("write-personal-reminder"), settings(scripted([() => ({ calls: [{ name: "create_task", args: { title: "Put the bins out", dueDate: londonDay({ weekday: 4 }) } }] })])));
+    assert.deepEqual(failed(wrong), ["proposes reminders", "doesn't propose create_task"]);
   });
 
   it("turns Create those under a morning brief into one create_task per suggestion", async () => {

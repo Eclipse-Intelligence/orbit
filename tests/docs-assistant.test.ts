@@ -76,8 +76,8 @@ after(async () => {
 });
 
 describe("assistant tools for docs", () => {
-  it("stays at 128 tools with save_doc and the two campaign tools, and still runs forget through remember", async () => {
-    assert.equal(ASSISTANT_TOOLS.length, 128);
+  it("stays at 129 tools with save_doc, the two campaign tools and reminders, and still runs forget through remember", async () => {
+    assert.equal(ASSISTANT_TOOLS.length, 129);
     const names = ASSISTANT_TOOLS.map((tool) => tool.name);
     assert.ok(names.includes("save_doc"));
     assert.ok(!names.includes("forget"));
