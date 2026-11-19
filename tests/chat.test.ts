@@ -321,6 +321,80 @@ describe("chat", () => {
     });
   });
 
+  describe("formatting", () => {
+    let room: string;
+
+    before(async () => {
+      room = (await createRoom(mark, { name: "formatting", memberIds: [sam.userId, priya.userId] })).id;
+    });
+
+    async function stored(id: string) {
+      return (await sql("select format, mentions::text[] as mentions from crm.chat_messages where id = $1", [id])).rows[0] as { format: string; mentions: string[] };
+    }
+
+    it("saves plain unless a writer asks for Markdown, and refuses nothing else", async () => {
+      const plain = await postMessage(mark, { conversationId: room, body: "Old *style*", clientKey: "format-plain" });
+      assert.equal(plain.message.format, "plain");
+      assert.equal((await stored(plain.message.id)).format, "plain");
+      const markdown = await postMessage(mark, { conversationId: room, body: "**New**", format: "markdown", clientKey: "format-md" });
+      assert.equal(markdown.message.format, "markdown");
+      assert.equal((await stored(markdown.message.id)).format, "markdown");
+      const odd = await postMessage(mark, { conversationId: room, body: "Odd", format: "html", clientKey: "format-odd" });
+      assert.equal(odd.message.format, "plain");
+      const listed = await listMessages(sam, room);
+      assert.deepEqual(
+        listed.messages.filter((message) => [plain.message.id, markdown.message.id].includes(message.id)).map((message) => message.format),
+        ["plain", "markdown"],
+      );
+    });
+
+    it("never alerts, follows or counts a tag inside code", async () => {
+      const posted = await postMessage(mark, {
+        conversationId: room,
+        body: `Run \`notify ${tag(sam)}\` then\n\`\`\`\n${tag(priya)}\n\`\`\``,
+        format: "markdown",
+        clientKey: "code-tag",
+      });
+      assert.deepEqual(posted.message.mentions, []);
+      assert.deepEqual((await stored(posted.message.id)).mentions, []);
+      const reply = await postMessage(sam, { conversationId: room, parentId: posted.message.id, body: `\`${tag(priya)}\` is the syntax`, format: "markdown", clientKey: "code-tag-reply" });
+      assert.deepEqual(reply.message.mentions, []);
+      await chatWorkSettled();
+      assert.deepEqual(await notifications(priya.userId), []);
+      assert.equal((await notifications(sam.userId)).some((alert) => alert.title.includes("mentioned")), false);
+      assert.equal((await listThread(priya, posted.message.id)).following, false);
+
+      const outside = await postMessage(mark, { conversationId: room, body: `**${tag(priya)}** and \`${tag(sam)}\``, format: "markdown", clientKey: "code-tag-mixed" });
+      assert.deepEqual(outside.message.mentions, [priya.userId]);
+      const plain = await postMessage(mark, { conversationId: room, body: `\`${tag(sam)}\``, clientKey: "code-tag-plain" });
+      assert.deepEqual(plain.message.mentions, [sam.userId]);
+    });
+
+    it("turns a message Markdown only when the edit asks, and reads tags with the saved format", async () => {
+      const posted = await postMessage(mark, { conversationId: room, body: "Plain at first", clientKey: "format-edit" });
+      const kept = await editMessage(mark, posted.message.id, `\`${tag(sam)}\``);
+      assert.equal(kept.format, "plain");
+      assert.deepEqual(kept.mentions, [sam.userId]);
+      const turned = await editMessage(mark, posted.message.id, `\`${tag(priya)}\` and ${tag(sam)}`, { format: "markdown" });
+      assert.equal(turned.format, "markdown");
+      assert.deepEqual(turned.mentions, [sam.userId]);
+      const again = await editMessage(mark, posted.message.id, `\`${tag(priya)}\``);
+      assert.equal(again.format, "markdown");
+      assert.deepEqual(again.mentions, []);
+      assert.equal((await stored(posted.message.id)).format, "markdown");
+    });
+
+    it("lets a member set the format only on their own message", async () => {
+      const posted = await postMessage(mark, { conversationId: room, body: "Mine", clientKey: "format-own" });
+      await assert.rejects(queryAsUser(sam.userId, "update crm.chat_messages set format = 'markdown' where id = $1 returning id", [posted.message.id]).then((result) => {
+        if (result.rows.length === 0) throw new Error("no rows");
+      }));
+      const own = await postMessage(sam, { conversationId: room, body: "Sam's", clientKey: "format-own-sam" });
+      await assert.rejects(queryAsUser(sam.userId, "update crm.chat_messages set format = 'rich' where id = $1", [own.message.id]), /chat_messages_format_check/);
+      assert.equal((await stored(posted.message.id)).format, "plain");
+    });
+  });
+
   describe("reading", () => {
     let room: string;
     let ids: string[];

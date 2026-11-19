@@ -37,11 +37,11 @@ import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { addTaskParticipantsInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
+import { cleanFormat, formatMentions, type ChatFormat } from "@/lib/chat/markdown";
 import { query, type Db } from "@/lib/db/pool";
 import { publishLiveBatch, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
 import { sharedThreadHref } from "@/lib/mail/share-types";
-import { mentionsIn } from "@/lib/mentions";
 
 type Stamp = Date | string;
 
@@ -55,6 +55,7 @@ type MessageRow = {
   via_workflow_name: string | null;
   client_key: string | null;
   body: string;
+  format: string | null;
   mentions: string[] | null;
   reply_count: number;
   last_reply_at: Stamp | null;
@@ -111,7 +112,7 @@ function millis(value: Stamp) {
 }
 
 function messageColumns(alias = "m") {
-  return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.author_user_id, ${alias}.author_name, ${alias}.via_workflow_id, ${alias}.via_workflow_name, ${alias}.client_key, ${alias}.body,
+  return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.author_user_id, ${alias}.author_name, ${alias}.via_workflow_id, ${alias}.via_workflow_name, ${alias}.client_key, ${alias}.body, ${alias}.format,
     ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at, ${alias}.hook,
     case when ${alias}.reply_count > 0 then coalesce((
       select json_agg(json_build_object('id', a.author_user_id, 'name', a.author_name) order by a.latest desc)
@@ -135,6 +136,7 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     via: row.via_workflow_name ? { workflowId: row.via_workflow_id, name: row.via_workflow_name } : null,
     clientKey: row.author_user_id === viewerId ? row.client_key : null,
     body: row.body,
+    format: cleanFormat(row.format),
     mentions: row.mentions ?? [],
     replyCount: row.reply_count,
     lastReplyAt: iso(row.last_reply_at),
@@ -249,8 +251,8 @@ function cleanBody(body: unknown) {
   return text;
 }
 
-function memberMentions(body: string) {
-  const ids = mentionsIn(body)
+function memberMentions(body: string, format: ChatFormat) {
+  const ids = formatMentions(body, format)
     .filter((mention) => mention.kind === "member" && isUuid(mention.id))
     .map((mention) => mention.id.toLowerCase());
   const unique = [...new Set(ids)];
@@ -849,7 +851,7 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
   });
 }
 
-type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; clientKey?: unknown };
+type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown };
 
 function chatHref(conversationId: string, message: ChatMessage) {
   return message.parentId ? `/chat/${conversationId}?thread=${message.parentId}` : `/chat/${conversationId}?message=${message.id}`;
@@ -953,9 +955,9 @@ export async function ownPostWithKey(actor: UserActor, clientKey: string): Promi
   });
 }
 
-export function checkChatPost(body: unknown) {
+export function checkChatPost(body: unknown, format: ChatFormat) {
   const text = cleanBody(body);
-  memberMentions(text);
+  memberMentions(text, format);
   return text;
 }
 
@@ -975,7 +977,8 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
   const body = cleanBody(input.body);
   const clientKey = cleanClientKey(input.clientKey);
-  const mentions = memberMentions(body);
+  const format = cleanFormat(input.format);
+  const mentions = memberMentions(body, format);
   const repeatCheck = options.charge ? body : undefined;
   try {
     if (options.charge) {
@@ -997,11 +1000,11 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
       }
       const via = options.viaWorkflowId ?? null;
       const inserted = await db.query<{ id: string }>(
-        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, mentions${via ? ", via_workflow_id" : ""})
-         values ($1, $2, $3, $4, $5, $6::uuid[]${via ? ", $7" : ""})
+        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions${via ? ", via_workflow_id" : ""})
+         values ($1, $2, $3, $4, $5, $6, $7::uuid[]${via ? ", $8" : ""})
          on conflict on constraint chat_messages_author_client_key do nothing
          returning id`,
-        [conversationId, parentId, actor.userId, clientKey, body, mentions, ...(via ? [via] : [])],
+        [conversationId, parentId, actor.userId, clientKey, body, format, mentions, ...(via ? [via] : [])],
       );
       if (!inserted.rows[0]) {
         const raced = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
@@ -1061,10 +1064,10 @@ async function ownMessage(db: Db, actor: UserActor, id: string) {
   return message;
 }
 
-export async function editMessage(actor: UserActor, id: string, body: unknown): Promise<ChatMessage> {
+export async function editMessage(actor: UserActor, id: string, body: unknown, options: { format?: unknown } = {}): Promise<ChatMessage> {
   const messageId = checkId(id, "message");
   const text = cleanBody(body);
-  const mentions = memberMentions(text);
+  const asked = options.format === undefined ? null : cleanFormat(options.format);
   try {
     const followed = await query<{ user_id: string }>("select user_id from private.chat_message_followers($1, $2)", [actor.userId, messageId]);
     const followersBefore = new Set(followed.rows.map((row) => row.user_id));
@@ -1072,6 +1075,8 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
       const current = await ownMessage(db, actor, messageId);
       if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
       const conversation = await readConversation(db, actor, current.conversationId);
+      const format = asked ?? current.format;
+      const mentions = memberMentions(text, format);
       const before = new Set(current.mentions);
       const tagged = await tagFromDiscussion(
         db,
@@ -1079,7 +1084,7 @@ export async function editMessage(actor: UserActor, id: string, body: unknown): 
         conversation,
         mentions.filter((person) => !before.has(person)),
       );
-      const updated = await db.query("update crm.chat_messages set body = $2, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId]);
+      const updated = await db.query("update crm.chat_messages set body = $2, format = $5, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId, format]);
       if ((updated.rowCount ?? 0) === 0) throw notFound("message");
       const message = (await readMessage(db, messageId, actor.userId))!;
       const members = await memberIds(db, current.conversationId);

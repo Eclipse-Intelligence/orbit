@@ -126,6 +126,7 @@ export default function ThreadPanel({
           placeholder="Reply…"
           label="Reply in thread"
           sendLabel="Send reply"
+          scope="thread"
           autoFocus
           onEscape={onClose}
           disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}

@@ -38,6 +38,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     via: null,
     clientKey: null,
     body: "Hello",
+    format: "plain",
     mentions: [],
     replyCount: 0,
     lastReplyAt: null,

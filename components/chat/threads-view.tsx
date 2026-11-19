@@ -74,7 +74,7 @@ function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean })
               placeholder="Reply…"
               label="Reply in thread"
               sendLabel="Send reply"
-              compact
+              scope="thread"
               restoreOnFailure
               onSend={(text, mentions) => send({ conversationId: card.conversation.id, parentId: card.root.id, text, mentions, discardOnFailure: true })}
             />

@@ -72,6 +72,40 @@ export function readDraft(key: string): ChatDraft {
   return { text: "", mentions: [] };
 }
 
+export type FormatScope = "room" | "thread";
+
+const FORMAT_BAR_PREFIX = "chat-format-bar:";
+const FORMAT_BAR_EVENT = "orbit-chat-format-bar";
+
+export function formatBarDefault(scope: FormatScope) {
+  return scope === "room";
+}
+
+export function readFormatBar(userId: string, scope: FormatScope) {
+  try {
+    const stored = localStorage.getItem(`${FORMAT_BAR_PREFIX}${userId}:${scope}`);
+    if (stored === "on") return true;
+    if (stored === "off") return false;
+  } catch {}
+  return formatBarDefault(scope);
+}
+
+export function writeFormatBar(userId: string, scope: FormatScope, shown: boolean) {
+  try {
+    localStorage.setItem(`${FORMAT_BAR_PREFIX}${userId}:${scope}`, shown ? "on" : "off");
+  } catch {}
+  window.dispatchEvent(new Event(FORMAT_BAR_EVENT));
+}
+
+export function subscribeFormatBar(listener: () => void) {
+  window.addEventListener(FORMAT_BAR_EVENT, listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    window.removeEventListener(FORMAT_BAR_EVENT, listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
 export function writeDraft(key: string, draft: ChatDraft) {
   try {
     if (draft.text.trim()) localStorage.setItem(key, JSON.stringify(draft));

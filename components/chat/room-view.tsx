@@ -48,7 +48,7 @@ export function PhoneBack({ label, onClick }: { label: string; onClick: () => vo
 
 export function TypingLine({ names }: { names: string[] }) {
   return (
-    <div role="status" className="caption-style text-subtle flex h-[22px] items-center gap-1.5 px-1">
+    <div role="status" className="caption-style text-subtle flex h-[22px] items-center gap-1.5 px-1 md:order-last">
       {names.length > 0 && (
         <>
           <span aria-hidden className="flex gap-[3px]">
@@ -220,7 +220,7 @@ export default function RoomView({
           {timeline.error}
         </p>
       )}
-      <div className="shrink-0 px-4 pb-3.5 max-md:px-2 max-md:pb-2">
+      <div className="flex shrink-0 flex-col px-4 pb-1.5 max-md:px-2 max-md:pb-2">
         <TypingLine names={typing.names} />
         <Composer
           id={`chat-composer-${conversationId}`}

@@ -1,3 +1,5 @@
+import type { ChatFormat } from "@/lib/chat/markdown";
+
 export type ChatKind = "room" | "dm" | "task" | "doc" | "mail_thread";
 
 export type ChatSubjectKind = "task" | "doc" | "mail_thread";
@@ -53,6 +55,7 @@ export type ChatMessage = {
   via: ChatVia | null;
   clientKey: string | null;
   body: string;
+  format: ChatFormat;
   mentions: string[];
   replyCount: number;
   lastReplyAt: string | null;
