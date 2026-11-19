@@ -82,6 +82,7 @@ import CloseIcon from "@/public/assets/images/mail/close.svg";
 import { usePullToRefresh } from "@/components/mail/pull-refresh";
 import MailShareLive, { useMailShareEvents } from "@/components/mail/share-live";
 import { useSyncSignal, useSyncSignalsLive } from "@/components/crm/sync-signals";
+import { createPendingMarks, markSummary, type MarkAction } from "@/components/mail/pending-marks";
 import { fetchSharedList } from "@/components/mail/share-client";
 import SharedList from "@/components/mail/shared-list";
 import SharedReader from "@/components/mail/shared-reader";
@@ -184,9 +185,7 @@ function patchDetail(detail: ThreadDetail, action: ReaderAction): ThreadDetail {
 }
 
 function patchSummary(thread: ThreadSummary, action: ReaderAction): ThreadSummary {
-  if (action === "read" || action === "unread") return { ...thread, unread: action === "unread" };
-  if (action === "flag" || action === "unflag") return { ...thread, flagged: action === "flag" };
-  return thread;
+  return MOVES.has(action) ? thread : markSummary(thread, action as MarkAction);
 }
 
 function shiftUnread(nav: MailNav, thread: Pick<ThreadSummary, "sourceId" | "split">, change: number): MailNav {
@@ -266,6 +265,7 @@ export default function MailScreen({
   const [peeking, setPeeking] = useState(false);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
+  const [pendingMarks] = useState(createPendingMarks);
   const sendingThreads = useRef(new Map<string, OutgoingThread[]>());
   const keptUnread = useRef(new Set<string>());
   const loadingMore = useRef(false);
@@ -451,20 +451,22 @@ export default function MailScreen({
       return;
     }
     const cached = cachedList(next);
-    setPage(cached ? { ...cached, threads: settleSending(cached.threads) } : null);
+    setPage(cached ? { ...cached, threads: settleSending(cached.threads, 0) } : null);
     setLoading(true);
     writeUrl(next, null);
+    const reading = pendingMarks.reading();
     fetchList(next)
       .then((fresh) => {
         storeList(next, fresh);
         if (token !== request.current) return;
-        setPage({ ...fresh, threads: settleSending(fresh.threads) });
+        setPage({ ...fresh, threads: settleSending(fresh.threads, reading.startedAt) });
         prefetchThreads(fresh.threads.slice(0, 4).map((thread) => thread.key));
       })
       .catch((error: Error) => {
         if (token === request.current) setListError(error.message);
       })
       .finally(() => {
+        reading.done();
         if (token === request.current) setLoading(false);
       });
   }
@@ -496,6 +498,7 @@ export default function MailScreen({
     }
     setSyncing(true);
     let problems: string[] = [];
+    let reading: ReturnType<typeof pendingMarks.reading> | null = null;
     return (sync
       ? syncNow(manual).then(
           (result) => {
@@ -515,6 +518,7 @@ export default function MailScreen({
           setNow(Date.now());
           return null;
         }
+        reading = pendingMarks.reading();
         return Promise.all([fetchList(target), fetchNav().catch(() => null), synced?.version ?? null]);
       })
       .then((loaded) => {
@@ -533,12 +537,13 @@ export default function MailScreen({
             if (thread.key === latest.current.cursor) fetchDetail(thread.key, true);
           }
         }
+        const kept = pendingMarks.keep(fresh.threads, reading?.startedAt);
         setPage((existing) => {
           const keys = new Set(fresh.threads.map((thread) => thread.key));
           const oldest = fresh.threads[fresh.threads.length - 1]?.latestAt ?? "";
           const tail = (existing?.threads ?? []).filter((thread) => !keys.has(thread.key) && (thread.latestAt ?? "") < oldest);
           return {
-            threads: settleSending([...fresh.threads, ...tail].filter((thread) => !hidden.has(thread.key))),
+            threads: settleSending([...kept, ...tail].filter((thread) => !hidden.has(thread.key))),
             next: tail.length > 0 ? (existing?.next ?? fresh.next) : fresh.next,
           };
         });
@@ -547,6 +552,7 @@ export default function MailScreen({
         if (problems.length === 0) problems = [refreshFailure(error)];
       })
       .finally(() => {
+        reading?.done();
         setSyncing(false);
         if (refreshProblem(problems.length ? problems.join("\n") : null)) for (const message of problems) showToast({ message, tone: "alert" });
       });
@@ -819,14 +825,17 @@ export default function MailScreen({
     if (cached) storeThread(patchDetail(cached, action));
     if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, change));
     const undoAction: ReaderAction = action === "read" ? "unread" : action === "unread" ? "read" : action === "flag" ? "unflag" : "flag";
+    const mark = pendingMarks.hold(key, action as MarkAction);
     postAction(key, action, from)
       .then((result) => {
-        if (!result.failed) return;
+        if (!result.failed) return mark.saved();
+        mark.failed();
         forgetThread(key);
         fetchDetail(key, true);
         if (!silent) showToast({ message: partlyUpdated(result.failed, result.problem ?? null), tone: "alert" });
       })
       .catch((error: Error) => {
+        mark.failed();
         setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, undoAction) : item)) } : existing));
         forgetThread(key);
         fetchDetail(key, true);
@@ -836,9 +845,10 @@ export default function MailScreen({
       });
   }
 
-  function settleSending(threads: ThreadSummary[]) {
+  function settleSending(threads: ThreadSummary[], startedAt?: number) {
     const outgoing = sendingThreads.current;
-    return threads
+    return pendingMarks
+      .keep(threads, startedAt)
       .filter((thread) => !removing.current.has(thread.key))
       .map((thread) => (thread.draft && outgoing.get(thread.key)?.some((entry) => entry.cleared) ? { ...thread, draft: false } : thread));
   }
