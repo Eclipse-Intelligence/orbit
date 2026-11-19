@@ -20,6 +20,8 @@ type SidebarNavItemProps = {
   tone?: "default" | "quiet";
   iconClassName?: string;
   accessory?: ReactNode;
+  onSelect?: () => void;
+  expanded?: boolean;
 };
 
 export default function SidebarNavItem({
@@ -36,6 +38,8 @@ export default function SidebarNavItem({
   tone = "default",
   iconClassName,
   accessory,
+  onSelect,
+  expanded,
 }: SidebarNavItemProps) {
   const setSidebarOpen = useCompaniesStore((state) => state.setSidebarOpen);
 
@@ -45,9 +49,13 @@ export default function SidebarNavItem({
         variant="nav"
         size="md"
         href={disabled ? undefined : href}
-        onClick={() => setSidebarOpen(false)}
-        data-active={active}
+        onClick={() => {
+          setSidebarOpen(false);
+          onSelect?.();
+        }}
+        data-active={active || expanded}
         aria-current={active ? "page" : undefined}
+        aria-expanded={expanded}
         aria-disabled={disabled || undefined}
         disabled={disabled}
         title={disabled ? "Not available yet" : undefined}

@@ -1,7 +1,8 @@
-export type QuickAddKind = "task" | "contact" | "company" | "opportunity" | "email";
+export type QuickAddKind = "task" | "reminder" | "contact" | "company" | "opportunity" | "email";
 
 export const QUICK_ADD_ITEMS: { kind: QuickAddKind; label: string; key: string }[] = [
   { kind: "task", label: "Add task", key: "t" },
+  { kind: "reminder", label: "Add reminder", key: "r" },
   { kind: "contact", label: "Add contact", key: "c" },
   { kind: "company", label: "Add company", key: "o" },
   { kind: "opportunity", label: "Add opportunity", key: "p" },
@@ -39,6 +40,7 @@ export function quickAddPrefill(
   record: QuickAddRecord | null,
   kind: QuickAddKind,
 ): QuickAddPrefill {
+  if (kind === "reminder") return EMPTY;
   const route = recordRoute(pathname);
   if (!route || !record || record.type !== route.type || record.id !== route.id) return EMPTY;
   if (record.type === "company") {

@@ -14,11 +14,13 @@ import {
   type ReminderInput,
   type ReminderQuery,
 } from "@/lib/crm/reminders";
+import { CrmError } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 
 const SESSION_ENDED = "Your session ended. Sign in again.";
 
-type Failure = { error: string; field?: string };
+type Failure = { error: string; field?: string; missing?: boolean };
 
 async function run<T>(work: (user: UserActor) => Promise<T>): Promise<T | Failure> {
   const user = await getUserActor();
@@ -27,7 +29,8 @@ async function run<T>(work: (user: UserActor) => Promise<T>): Promise<T | Failur
     return await work(user);
   } catch (error) {
     const failure: Failure = actionError(error);
-    return { error: failure.error, ...(failure.field ? { field: failure.field } : {}) };
+    const missing = error instanceof CrmError && error.status === 404;
+    return { error: failure.error, ...(failure.field ? { field: failure.field } : {}), ...(missing ? { missing } : {}) };
   }
 }
 
@@ -35,8 +38,8 @@ export async function listRemindersAction(query: ReminderQuery = {}): Promise<{ 
   return run((user) => listReminders(user, query));
 }
 
-export async function addReminderAction(input: ReminderInput): Promise<{ reminder: Reminder } | Failure> {
-  return run((user) => createReminder(user, input));
+export async function addReminderAction(input: ReminderInput, key: string | null = null): Promise<{ reminder: Reminder } | Failure> {
+  return run((user) => createReminder(user, input, typeof key === "string" && isUuid(key) ? { idempotencyKey: key } : {}));
 }
 
 export async function updateReminderAction(id: string, input: ReminderInput): Promise<{ reminder: Reminder } | Failure> {

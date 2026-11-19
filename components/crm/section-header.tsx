@@ -23,6 +23,7 @@ import { captureHasNew, useCompaniesStore } from "@/stores/companies-store";
 import { cn } from "@/lib/utils";
 import { useShortcuts } from "@/components/shortcuts/shortcuts-provider";
 import { ExpandSidebarButton, NewDot } from "@/components/_common/sidebar/sidebar-toggle";
+import RemindersBell from "@/components/reminders/reminders-bell";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import ChevronRightIcon from "@/public/assets/images/_common/chevron-right.svg";
 import MenuIcon from "@/public/assets/images/_common/menu.svg";
@@ -65,6 +66,7 @@ export default function SectionHeader({
             {captureNew && <NewDot />}
           </Button>
           <ExpandSidebarButton dot={captureNew} />
+          <RemindersBell />
           {list ? (
             <RecordBreadcrumb list={list} title={title} />
           ) : (

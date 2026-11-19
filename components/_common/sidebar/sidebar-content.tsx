@@ -18,6 +18,7 @@ import { SETTINGS_ROOT } from "@/lib/settings-nav";
 import type { BoardSummary } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import WorkspaceSwitcher from "@/components/workspaces/workspace-switcher";
+import { useRemindersToggle } from "@/components/reminders/reminders-bell";
 import type { SidebarWorkspace } from "./sidebar";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
@@ -32,6 +33,7 @@ import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import ZapIcon from "@/public/assets/images/companies/sidebar/zap.svg";
 import SendIcon from "@/public/assets/images/campaigns/send.svg";
 import MessageIcon from "@/public/assets/images/companies/sidebar/message-question.svg";
+import BellIcon from "@/public/assets/images/mail/bell.svg";
 
 type SidebarContentProps = {
   boards: BoardSummary[];
@@ -62,6 +64,7 @@ export default function SidebarContent({
   const waiting = liveCapture ?? capture;
   const waitingCount = captureLeft(waiting, captureCleared).total;
   const [boardsOpen, setBoardsOpen] = useState(true);
+  const reminders = useRemindersToggle();
   const current = (href: string) =>
     href === "/"
       ? pathname === "/" || pathname.startsWith("/companies/")
@@ -183,6 +186,15 @@ export default function SidebarContent({
       </ScrollArea>
 
       <SidebarSection className="shrink-0">
+        <SidebarNavItem
+          icon={BellIcon}
+          label="Reminders"
+          count={reminders.due > 0 ? reminders.due : undefined}
+          countLabel="due"
+          accent
+          expanded={reminders.open}
+          onSelect={() => reminders.toggle(false)}
+        />
         <SidebarNavItem
           href={settingsHref}
           icon={MessageIcon}

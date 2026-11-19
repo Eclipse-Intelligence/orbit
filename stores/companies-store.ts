@@ -21,6 +21,13 @@ type CompaniesState = {
   captureCleared: CaptureCounts;
   captureLive: boolean;
   captureSeen: string | null;
+  remindersOpen: boolean;
+  remindersAsked: number;
+  remindersFocus: boolean;
+  remindersDue: number | null;
+  openReminders: (focus?: boolean) => void;
+  setRemindersOpen: (open: boolean) => void;
+  setRemindersDue: (count: number) => void;
   openProfile: () => void;
   closeProfile: () => void;
   setSidebarOpen: (open: boolean) => void;
@@ -55,6 +62,13 @@ export const useCompaniesStore = create<CompaniesState>((set) => ({
   captureCleared: NO_CAPTURE_COUNTS,
   captureLive: false,
   captureSeen: null,
+  remindersOpen: false,
+  remindersAsked: 0,
+  remindersFocus: false,
+  remindersDue: null,
+  openReminders: (focus = true) => set((state) => ({ remindersOpen: true, remindersAsked: state.remindersAsked + 1, remindersFocus: focus })),
+  setRemindersOpen: (remindersOpen) => set({ remindersOpen }),
+  setRemindersDue: (remindersDue) => set({ remindersDue }),
   openProfile: () => set({ profileOpen: true }),
   closeProfile: () => set({ profileOpen: false }),
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),

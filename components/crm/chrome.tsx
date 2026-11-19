@@ -6,6 +6,7 @@ import Profile from "@/components/companies/profile/profile";
 import { AttentionProvider } from "@/components/crm/attention";
 import QuickAdd, { QuickAddProvider } from "@/components/crm/quick-add";
 import TaskReminders from "@/components/crm/task-reminders";
+import Reminders from "@/components/reminders/reminders";
 import AssistantDock from "@/components/assistant/assistant-dock";
 import { ComposerProvider } from "@/components/mail/compose-dock";
 import PushRegistrar from "@/components/push/push-registrar";
@@ -39,6 +40,7 @@ export default function CrmChrome({
           <CommandMenu multi={multi} />
           <QuickAdd viewerId={viewer.id} />
           <TaskReminders />
+          <Reminders viewerId={viewer.id} />
           <ShortcutsHelp />
           <AssistantDock brief={brief} workspaceName={viewer.workspaceName} workspaceId={viewer.workspaceId} />
           <PushRegistrar workspaceId={viewer.workspaceId} />

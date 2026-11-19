@@ -31,6 +31,7 @@ import {
   padDueHasTime,
   padRepeatDue,
   padSaveIds,
+  padSaveOutcome,
   ownerSetsTime,
   dayOnlyHint,
   londonParts,
@@ -466,6 +467,8 @@ function StaticChip({ icon: ChipIcon, label, name, variant }: { icon: Icon; labe
 
 export type PadThread = { key: string; subject: string | null };
 
+export type PadStart = { title: string; due: string | null; durationMinutes: number | null; repeat: RepeatDraft | null };
+
 function ThreadChip({ thread, variant, onRemove }: { thread: PadThread; variant: Variant; onRemove: () => void }) {
   const subject = thread.subject?.trim();
   const label = subject || "Email";
@@ -501,6 +504,8 @@ export default function TaskPad({
   members = [],
   viewerId = null,
   variant = "inline",
+  start = null,
+  fromReminderId = null,
   onAdded,
 }: {
   clickup: ClickUpPicker | null;
@@ -514,12 +519,14 @@ export default function TaskPad({
   members?: AssignableMember[];
   viewerId?: string | null;
   variant?: Variant;
-  onAdded?: (result: { warning?: string }) => void;
+  start?: PadStart | null;
+  fromReminderId?: string | null;
+  onAdded?: (result: { warning?: string; reminderError?: string }) => void;
 }) {
   const router = useRouter();
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
-  const [text, setText] = useState("");
+  const [text, setText] = useState(start?.title ?? "");
   const [mention, setMention] = useState<Mention | null>(null);
   const muted = useRef<number | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -532,10 +539,10 @@ export default function TaskPad({
   const aiReads = useRef(new Map<string, { promise: Promise<PadAiParse | null>; controller: AbortController }>());
   const answers = useRef(new Map<string, PadAiParse>());
   const latestRead = useRef<(value: string) => Promise<PadAiParse | null>>(async () => null);
-  const [due, setDue] = useState<Override<string | null>>(unset);
+  const [due, setDue] = useState<Override<string | null>>(() => (start?.due ? { set: true, value: start.due } : unset()));
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
-  const [chosenDuration, setDuration] = useState<number | null>(null);
-  const [repeatPick, setRepeatPick] = useState<Override<RepeatDraft | null>>(unset);
+  const [chosenDuration, setDuration] = useState<number | null>(start?.durationMinutes ?? null);
+  const [repeatPick, setRepeatPick] = useState<Override<RepeatDraft | null>>(() => (start?.repeat ? { set: true, value: start.repeat } : unset()));
   const [repeatOver, setRepeatOver] = useState<RepeatDraft | null>(null);
   const [askingTime, setAskingTime] = useState(false);
   const [addedTime, setAddedTime] = useState<{ date: string; time: string } | null>(null);
@@ -970,14 +977,16 @@ export default function TaskPad({
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
       ...(docs.length > 0 ? { docIds: docs.map((doc) => doc.id) } : {}),
+      ...(fromReminderId ? { fromReminderId } : {}),
     };
     const typed = JSON.stringify({ ...request, dueAt: null, repeat: null, text, due, repeatPick, addedTime });
     if (saveKey.current?.typed !== typed) saveKey.current = { typed, request, key: crypto.randomUUID() };
     const attempt = saveKey.current;
     const result = await addPadTaskAction({ ...attempt.request, key: attempt.key }).catch(() => null);
     setBusy(false);
-    if (!result || result.error) {
-      if (result) saveKey.current = null;
+    const outcome = padSaveOutcome(result);
+    if (outcome !== "saved" || !result) {
+      if (outcome === "failed") saveKey.current = null;
       setError(result?.error ?? "Couldn't add the task. Try again.");
       return;
     }
@@ -986,10 +995,10 @@ export default function TaskPad({
     reset();
     router.refresh();
     if (onAdded) {
-      onAdded({ warning: notes });
+      onAdded({ warning: notes, ...(result.reminderError ? { reminderError: result.reminderError } : {}) });
       return;
     }
-    setWarning(notes ?? null);
+    setWarning(result.reminderError ?? notes ?? null);
     input.current?.focus();
   }
 
