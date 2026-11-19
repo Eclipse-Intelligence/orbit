@@ -49,7 +49,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "border-line-strong bg-popover text-popover-foreground data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:ease-power3-out fixed top-1/2 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border shadow-overlay duration-250 data-[state=closed]:duration-200 outline-none",
+          "border-line-subtle bg-popover text-popover-foreground data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:ease-power3-out fixed top-1/2 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-[480px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border shadow-overlay duration-250 data-[state=closed]:duration-200 outline-none",
           className,
         )}
         onInteractOutside={(event) => {
@@ -83,7 +83,7 @@ function DialogHeader({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="dialog-header"
       className={cn(
-        "border-line-strong flex flex-col gap-2 border-b px-6 py-5",
+        "border-line-subtle flex flex-col gap-2 border-b px-6 py-5",
         className,
       )}
       {...props}
@@ -96,7 +96,7 @@ function DialogFooter({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="dialog-footer"
       className={cn(
-        "border-line-strong bg-popover sticky bottom-0 z-10 flex items-center justify-end gap-2 border-t px-6 py-4",
+        "border-line-subtle bg-popover sticky bottom-0 z-10 flex items-center justify-end gap-2 border-t px-6 py-4",
         className,
       )}
       {...props}

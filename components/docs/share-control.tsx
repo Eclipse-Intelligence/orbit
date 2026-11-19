@@ -87,7 +87,7 @@ function ShareNotice({ tone = "plain", icon, children }: { tone?: "plain" | "amb
 
 function ShareFooter({ link }: { link: () => string }) {
   return (
-    <div className="border-line-strong mt-4 flex items-center gap-2 border-t px-4 py-3">
+    <div className="mt-4 flex items-center gap-2 px-4 py-3">
       <span className="caption-style text-subtle flex-1">The assistant and your MCP agents follow the same rule.</span>
       <CopyButton text={link} label="Copy link" />
     </div>

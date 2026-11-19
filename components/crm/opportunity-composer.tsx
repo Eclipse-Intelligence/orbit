@@ -207,7 +207,7 @@ export default function OpportunityComposer({
       ref={root}
       className={cn(
         "flex flex-col gap-2",
-        layout === "card" ? "border-line-strong bg-card shrink-0 rounded-lg border p-2" : "border-border border-b px-2.5 py-2.5",
+        layout === "card" ? "border-line-strong bg-card shrink-0 rounded-lg border p-2" : "px-2.5 py-2.5",
       )}
     >
       <div className={cn("flex gap-2", layout === "row" ? "flex-col md:flex-row md:items-start" : "flex-col")}>

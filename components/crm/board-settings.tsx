@@ -160,7 +160,7 @@ export default function BoardSettings({
           </span>
           <Switch checked={addOnWon} onChange={setAddOnWon} label="Add companies when an opportunity is won" />
         </div>
-        <div className="border-border border-t pt-5">
+        <div className="pt-5">
           <HoldButton disabled={pending} onConfirm={() => void remove()}>
             Hold to delete
           </HoldButton>

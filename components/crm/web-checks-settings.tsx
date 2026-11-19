@@ -131,7 +131,7 @@ function Rules({
       {checks.length > 0 ? (
         <ul className="flex flex-col">
           {checks.map((check) => (
-            <li key={check.id} className="border-border flex flex-col gap-2 border-t py-2 first:border-t-0">
+            <li key={check.id} className="flex flex-col gap-2 py-2">
               <div className="flex items-start justify-between gap-3">
                 <span className="flex min-w-0 flex-col gap-0.5">
                   {kind === "tag" ? (

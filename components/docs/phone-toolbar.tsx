@@ -39,7 +39,7 @@ export default function PhoneToolbar({ view, children, entry = false }: { view: 
       onPointerDown={keep}
     >
       {children}
-      <div role="toolbar" aria-label="Formatting" className="border-line-strong flex items-center gap-1 px-2 py-1.5 [&:not(:first-child)]:border-t">
+      <div role="toolbar" aria-label="Formatting" className="flex items-center gap-1 px-2 py-1.5">
         {items.map((item) => (
           <Button key={item.label} variant="ghost" size="icon" aria-label={item.label} className="size-10 text-[15px] font-medium" onPointerDown={keep} onClick={() => insertAtCursor(view, item.text)}>
             {item.text}

@@ -270,7 +270,7 @@ function CategoryPicker({ category, disabled, onChange }: { category: string | n
               {category}
             </Tag>
           ) : (
-            <Tag tone="neutral" size="sm" className="caption-style text-subtle border-dashed">
+            <Tag tone="neutral" size="sm" className="caption-style text-subtle rounded-md bg-surface-field px-1.5 before:hidden">
               Category
             </Tag>
           )}
@@ -542,7 +542,7 @@ export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer:
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col">
       {pane ? (
-        <header className="border-border flex min-h-13 shrink-0 items-center gap-2 border-b px-3 py-2 sm:px-4 lg:h-(--header-height) lg:py-0">
+        <header className="flex min-h-13 shrink-0 items-center gap-2 px-3 py-2 sm:px-4 lg:h-(--header-height) lg:py-0">
           <Button variant="ghost" size="icon" href={pane.back} data-shortcut="back" aria-label="Back to Conversations" title="Back to Conversations" className="text-subtle hit shrink-0 md:hidden">
             <ChevronLeftIcon aria-hidden className="size-3" />
           </Button>
@@ -598,13 +598,13 @@ export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer:
         />
       )}
       {pane && thread.progress.length > 0 && (
-        <section aria-label="Progress" className="border-border max-h-[40vh] shrink-0 overflow-auto border-b px-3 py-3 sm:px-5">
+        <section aria-label="Progress" className="border-line-subtle max-h-[40vh] shrink-0 overflow-auto border-b px-3 py-3 sm:px-5">
           <CampaignProgressList progress={thread.progress} columns className="mx-auto w-full max-w-[47.5em]" />
         </section>
       )}
       <div className="min-h-0 flex-1 overflow-auto">
         <div className={cn("grid min-h-full", !pane && "lg:grid-cols-[minmax(0,1fr)_300px]")}>
-          <div className={cn("border-border flex min-w-0 flex-col gap-3 px-3 py-4 sm:px-5", !pane && "border-b lg:border-r lg:border-b-0")}>
+          <div className="flex min-w-0 flex-col gap-3 px-3 py-4 sm:px-5">
             <div className="mx-auto flex w-full max-w-[47.5em] flex-col gap-3 pb-20">
               {thread.doNotContact && <DoNotContactStatus status={thread.doNotContact} target={{ prospectId: thread.prospectId }} canLift={canAct} />}
               {problem && (

@@ -238,10 +238,8 @@ export default function MessageList({
                 </div>
               )}
               {newDay && (
-                <div className="caption-style text-subtle mx-5 mt-3.5 mb-1.5 flex items-center gap-2.5 max-md:mx-3.5" role="separator" aria-label={dayLabel(message.createdAt, now)}>
-                  <span aria-hidden className="bg-line-subtle h-px flex-1" />
+                <div className="caption-style text-subtle mx-5 mt-5 mb-2 flex items-center justify-center gap-2.5 max-md:mx-3.5" role="separator" aria-label={dayLabel(message.createdAt, now)}>
                   {dayLabel(message.createdAt, now)}
-                  <span aria-hidden className="bg-line-subtle h-px flex-1" />
                 </div>
               )}
               <ChatMessageRow message={message} continuation={continuation} inThread={pane !== "room"} pane={pane} highlighted={highlight === message.id} tabStop={index === lastIndex} />

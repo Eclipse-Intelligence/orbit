@@ -92,7 +92,7 @@ export function RecordRow({
     </span>
   );
   return (
-    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "border-border flex min-h-11 items-center gap-3 border-b px-2.5 py-2")}>
+    <li data-list-row="" className={cn(KEYBOARD_ROW_CLASS, "flex min-h-11 items-center gap-3 rounded-lg px-2.5 py-2")}>
       {href ? (
         <Link href={href} className="flex min-w-0 flex-1">
           {body}

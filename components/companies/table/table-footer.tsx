@@ -14,7 +14,6 @@ export default function TableFooter({ page, count, total }: TableFooterProps) {
       count={count}
       total={total}
       noun={["company", "companies"]}
-      className="border-b"
     />
   );
 }

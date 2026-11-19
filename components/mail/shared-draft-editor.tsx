@@ -309,7 +309,7 @@ export default function SharedDraftEditor({
           </p>
         )}
       </div>
-      <div className="border-line-subtle flex items-center gap-2 border-t px-4 py-2">
+      <div className="flex items-center gap-2 px-4 py-2">
         <span className="ui-style text-soft flex items-center gap-1.5">
           <LockIcon aria-hidden className="text-subtle size-3.5" />
           {onlyOwnerSends(owner)}

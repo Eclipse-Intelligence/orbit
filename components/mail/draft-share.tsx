@@ -183,7 +183,7 @@ export default function DraftShare({
             </ul>
           )}
           {listed.length > 0 && (
-            <div className="border-line-strong mt-2 flex flex-col border-t px-2 pt-2">
+            <div className="mt-3 flex flex-col px-2 pt-2">
               <p className="caption-style text-subtle px-2 py-1">{shareId ? "In this draft" : "Shared with everyone on the thread"}</p>
               <ul aria-label={shareId ? "In this draft" : "Shared with everyone on the thread"} className="flex flex-col">
                 {listed.map((person) => (

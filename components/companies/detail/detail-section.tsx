@@ -17,7 +17,7 @@ export default function DetailSection({
   return (
     <section
       className={cn(
-        "flex flex-col gap-4 p-5 shadow-[inset_0_-1px_0_var(--line-strong)]",
+        "flex flex-col gap-4 p-5",
         className,
       )}
     >

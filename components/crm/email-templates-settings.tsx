@@ -511,7 +511,7 @@ export default function EmailTemplatesSettings({
                 </Select>
               </div>
               <div className="border-line-strong bg-background flex min-h-[16em] flex-col rounded-lg border">
-                <div className="border-border flex flex-col gap-1.5 border-b px-3 py-2.5">
+                <div className="flex flex-col gap-1.5 px-3 py-2.5">
                   <span className="caption-style text-subtle truncate">
                     To {previewRecipient.name}
                     {previewRecipient.email

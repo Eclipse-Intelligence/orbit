@@ -346,7 +346,7 @@ const NotePicker = forwardRef<
   });
 
   const createRow = canCreate && (
-    <li id={`${listId}-${options.length}`} role="option" aria-selected={active === options.length} className={cn("bg-popover sticky bottom-0", !sheet && "border-line-strong -mx-1 -mb-1 mt-1 border-t p-1")}>
+    <li id={`${listId}-${options.length}`} role="option" aria-selected={active === options.length} className={cn("bg-popover sticky bottom-0", !sheet && "border-line-subtle -mx-1 -mb-1 mt-1 border-t p-1")}>
       <button
         type="button"
         tabIndex={-1}

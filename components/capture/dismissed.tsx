@@ -186,7 +186,7 @@ export default function Dismissed({
       {open && (
         <div id={listId} className="flex flex-col gap-2">
           {left.length > 0 && (
-            <ul ref={listRef} className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
+            <ul ref={listRef} className="bg-card border-line-strong flex flex-col overflow-hidden rounded-2xl border">
               {left.map((item) => {
                 const names = people(item);
                 const when = item.occurredAt ? dayLabel(item.occurredAt, now) : null;

@@ -110,7 +110,7 @@ function TreeItem({
       }}
       className={cn(
         "group text-sidebar-foreground hover:text-foreground focus-visible:ring-ring/60 relative flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-[13.5px] leading-none outline-none focus-visible:ring-2",
-        "data-[active=true]:bg-sidebar-primary data-[active=true]:text-foreground data-[active=true]:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
+        "data-[active=true]:bg-surface-raised data-[active=true]:text-foreground",
         drag?.indicator === "inside" && "bg-white/[0.06] shadow-[inset_0_0_0_1px_var(--primary)]",
         className,
       )}
@@ -495,7 +495,7 @@ export default function SidebarDocs() {
   }
 
   return (
-    <div className="border-sidebar-border flex flex-col gap-1 border-b p-3">
+    <div className="flex flex-col gap-1 p-3">
       <ul className="flex flex-col">
         <li className={cn("relative", allActive && "mb-0.75")}>
           <Button
@@ -534,7 +534,7 @@ export default function SidebarDocs() {
           </span>
         </li>
       </ul>
-      <ul role="tree" aria-label="Docs folders" aria-busy={loading || undefined} onKeyDown={onTreeKey} className="border-sidebar-border ml-[15px] flex flex-col border-l pl-1.5">
+      <ul role="tree" aria-label="Docs folders" aria-busy={loading || undefined} onKeyDown={onTreeKey} className="ml-[15px] flex flex-col pl-1.5">
         <li role="none">
           <TreeItem
             icon={SunIcon}
@@ -549,7 +549,7 @@ export default function SidebarDocs() {
         {renderFolders(null, 1)}
       </ul>
       {nav.tags.length > 0 && (
-        <div className="border-sidebar-border ml-[15px] flex flex-col border-l pt-1.5 pl-1.5">
+        <div className="ml-[15px] flex flex-col pt-1.5 pl-1.5">
           <span id={tagsLabel} className="eyebrow-style text-subtle flex h-6 items-center px-2 text-[11px]">
             Tags
           </span>
@@ -558,7 +558,7 @@ export default function SidebarDocs() {
           </ul>
         </div>
       )}
-      <div className="ml-[15px] flex flex-col border-l border-transparent pl-1.5">
+      <div className="ml-[15px] flex flex-col pl-1.5">
         {naming?.parentId === null ? (
           <NameInput label="New folder name" placeholder="Folder name" level={1} onDone={(value) => void finishCreate(null, value)} />
         ) : (

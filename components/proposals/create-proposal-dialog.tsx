@@ -283,7 +283,7 @@ function CreateForm({ company: preset, contactId, onClose }: { company: { id: st
                 const price = priceOf(product);
                 const on = Boolean(chosen[product.id]);
                 return (
-                  <li key={product.id} className="border-border flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
+                  <li key={product.id} className="flex items-center gap-3 px-3 py-2.5">
                     <label className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-3", price === null && "cursor-not-allowed opacity-50")}>
                       <input
                         type="checkbox"

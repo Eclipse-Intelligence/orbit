@@ -4,20 +4,16 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 export const buttonVariants = cva(
-  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-medium leading-none outline-none select-none transition-[background-color,color,box-shadow,scale] duration-150 ease-power3-out focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium leading-none outline-none select-none transition-[background-color,color,box-shadow,scale] duration-150 ease-power3-out focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        primary:
-          "bg-primary text-primary-foreground shadow-[0px_4px_4px_0px_rgba(42,42,42,0.32),0px_0px_0px_1px_#0e0e0e,inset_0px_4px_6px_0px_rgba(255,255,255,0.2),inset_0px_0px_0px_1px_rgba(255,255,255,0.15),inset_0px_-8px_14px_0px_rgba(0,0,0,0.15)] hover:bg-primary-hover active:scale-[0.97]",
-        secondary:
-          "bg-secondary text-secondary-foreground shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)] hover:bg-muted active:scale-[0.97]",
-        muted:
-          "bg-muted text-foreground shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)] hover:bg-[#333333] active:scale-[0.97]",
-        subtle:
-          "bg-[#232323] text-foreground shadow-[0px_0px_0px_1px_#333333] hover:bg-muted active:scale-[0.97]",
+        primary: "bg-primary text-primary-foreground hover:bg-primary-hover active:scale-[0.97]",
+        secondary: "bg-surface-raised text-secondary-foreground hover:bg-surface-active active:scale-[0.97]",
+        muted: "bg-surface-active text-foreground hover:bg-white/10 active:scale-[0.97]",
+        subtle: "bg-surface-hover text-foreground hover:bg-surface-raised active:scale-[0.97]",
         ghost: "text-subtle hover:bg-white/6 hover:text-foreground active:scale-[0.97]",
-        nav: "w-full justify-start rounded-lg text-sidebar-foreground hover:text-foreground data-[active=true]:bg-sidebar-primary data-[active=true]:text-foreground data-[active=true]:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
+        nav: "w-full justify-start rounded-lg text-sidebar-foreground hover:text-foreground data-[active=true]:bg-surface-raised data-[active=true]:text-foreground",
         item: "w-full items-start justify-start gap-3 rounded-lg text-left font-normal whitespace-normal text-foreground hover:bg-white/4",
         chip: "font-normal text-subtle hover:bg-surface-hover hover:text-foreground data-[active=true]:bg-surface-active data-[active=true]:text-foreground",
         link: "rounded-none text-foreground underline decoration-from-font underline-offset-2 hover:text-soft",

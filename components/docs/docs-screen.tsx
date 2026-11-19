@@ -471,7 +471,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
       </div>
 
       {phoneSearch && (
-        <div className={cn("flex shrink-0 items-center gap-2 px-3 md:hidden", level === "list" ? "border-border border-b py-2.5" : "pt-3")}>
+        <div className={cn("flex shrink-0 items-center gap-2 px-3 md:hidden", level === "list" ? "py-2.5" : "pt-3")}>
           {level === "list" && (
             <Button variant="secondary" size="icon" href="/docs" onClick={(event) => within(event, "/docs")} aria-label="Back to Docs">
               <ChevronLeftIcon aria-hidden className="size-3.5" />
@@ -483,7 +483,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
       )}
 
       {level === "list" && !phoneSearch && (
-        <header className="border-border shrink-0 border-b md:hidden">
+        <header className="shrink-0 md:hidden">
           <div className="flex items-center gap-2 px-3 py-2.5">
             <Button variant="secondary" size="icon" href="/docs" onClick={(event) => within(event, "/docs")} aria-label="Back to Docs">
               <ChevronLeftIcon aria-hidden className="size-3.5" />

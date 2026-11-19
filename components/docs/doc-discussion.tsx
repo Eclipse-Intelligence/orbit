@@ -60,7 +60,7 @@ export function DocDiscussionPanel({ discussion, title, phone, onClose }: { disc
   return (
     <DiscussionProvider discussion={discussion}>
       <div data-chat-room-pane className="flex min-h-0 flex-1 flex-col">
-        <div className={cn("flex shrink-0 items-center gap-2 px-5 pt-3 pb-2", phone && "border-border border-b px-3.5 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5")}>
+        <div className={cn("flex shrink-0 items-center gap-2 px-5 pt-3 pb-2", phone && "px-3.5 pt-[max(0.75rem,env(safe-area-inset-top))] pb-2.5")}>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <h3>Discussion</h3>
             {phone && <span className="caption-style text-subtle truncate">{title}</span>}

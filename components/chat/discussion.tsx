@@ -212,10 +212,8 @@ export function DiscussionThread({ discussion, backLabel }: { discussion: Discus
       ) : (
         <div role="log" aria-label="Thread replies" aria-live="polite" className="-mx-5 flex flex-col max-md:-mx-3.5">
           <ChatMessageRow message={root} continuation={false} inThread pane="thread" fullStamp />
-          <div className="caption-style text-subtle mx-5 my-2 flex items-center gap-2.5 max-md:mx-3.5" role="separator">
-            <span aria-hidden className="bg-line-subtle h-px flex-1" />
+          <div className="caption-style text-subtle mx-5 my-3 flex items-center justify-center gap-2.5 max-md:mx-3.5" role="separator">
             {root.replyCount === 1 ? "1 reply" : `${root.replyCount} replies`}
-            <span aria-hidden className="bg-line-subtle h-px flex-1" />
           </div>
           {timeline?.hasOlder && (
             <Button variant="ghost" size="sm" onClick={() => loadThread(threadId, "older")} className="hit mx-5 mb-1 self-start max-md:mx-3.5 max-md:h-11 md:pointer-coarse:mb-2">

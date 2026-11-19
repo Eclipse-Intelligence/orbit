@@ -3,30 +3,24 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 export const tagVariants = cva(
-  "inline-flex h-[22px] shrink-0 items-center justify-center whitespace-nowrap rounded-full border text-[14px] leading-none",
+  "inline-flex h-[22px] shrink-0 items-center gap-1.5 whitespace-nowrap text-[14px] leading-none text-soft before:size-1.5 before:shrink-0 before:rounded-full",
   {
     variants: {
       tone: {
-        blue: "border-(--tag-blue-border) bg-(--tag-blue-bg) text-(--tag-blue-text)",
-        purple:
-          "border-(--tag-purple-border) bg-(--tag-purple-bg) text-(--tag-purple-text)",
-        green:
-          "border-(--tag-green-border) bg-(--tag-green-bg) text-(--tag-green-text)",
-        moss: "border-(--tag-moss-border) bg-(--tag-moss-bg) text-(--tag-moss-text)",
-        red: "border-(--tag-red-border) bg-(--tag-red-bg) text-(--tag-red-text)",
-        orange:
-          "border-(--tag-orange-border) bg-(--tag-orange-bg) text-(--tag-orange-text)",
-        amber:
-          "border-(--tag-amber-border) bg-(--tag-amber-bg) text-(--tag-amber-text)",
-        teal: "border-(--tag-teal-border) bg-(--tag-teal-bg) text-(--tag-teal-text)",
-        yellow:
-          "border-(--tag-yellow-border) bg-(--tag-yellow-bg) text-(--tag-yellow-text)",
-        neutral:
-          "border-(--tag-neutral-border) bg-(--tag-neutral-bg) text-(--tag-neutral-text)",
+        blue: "before:bg-(--tag-blue-dot)",
+        purple: "before:bg-(--tag-purple-dot)",
+        green: "before:bg-(--tag-green-dot)",
+        moss: "before:bg-(--tag-moss-dot)",
+        red: "before:bg-(--tag-red-dot)",
+        orange: "before:bg-(--tag-orange-dot)",
+        amber: "before:bg-(--tag-amber-dot)",
+        teal: "before:bg-(--tag-teal-dot)",
+        yellow: "before:bg-(--tag-yellow-dot)",
+        neutral: "before:bg-faint",
       },
       size: {
-        md: "px-2",
-        sm: "px-1.5",
+        md: "pr-1.5",
+        sm: "pr-1",
       },
     },
     defaultVariants: {

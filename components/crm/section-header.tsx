@@ -51,7 +51,7 @@ export default function SectionHeader({
   const captureNew = pathname !== "/capture" && captureHasNew(capture, captureSeen);
 
   return (
-    <header className="border-border lg:bg-sidebar-accent shrink-0 border-b lg:h-(--header-height)">
+    <header className="after:from-background after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-4 after:bg-linear-to-b after:to-transparent relative z-10 shrink-0 lg:h-(--header-height)">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2.5 sm:flex-nowrap sm:px-4 sm:py-[14px] lg:h-full lg:py-0">
         <div className={cn("flex min-w-0 items-center gap-2", list ? "flex-1" : "flex-[1_1_auto]")}>
           <Button

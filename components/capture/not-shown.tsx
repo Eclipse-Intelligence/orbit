@@ -126,7 +126,7 @@ export default function NotShown({
       {open && (
         <div id={listId} ref={listRef} className="flex flex-col gap-3">
           {left.length > 0 && (
-            <ul className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
+            <ul className="bg-card border-line-strong flex flex-col overflow-hidden rounded-2xl border">
               {left.map((item) => (
                 <li key={item.key} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-3">
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -161,7 +161,7 @@ export default function NotShown({
           {shownRules.length > 0 && (
             <div className="flex flex-col gap-2">
               <h2 className="eyebrow-style text-subtle font-normal">Rules</h2>
-              <ul className="bg-card border-line-strong divide-line-strong flex flex-col divide-y overflow-hidden rounded-2xl border">
+              <ul className="bg-card border-line-strong flex flex-col overflow-hidden rounded-2xl border">
                 {shownRules.map((rule) => (
                   <li key={rule.sender} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5">
                     <span className="ui-style text-foreground min-w-0 flex-1 break-all">{rule.sender}</span>

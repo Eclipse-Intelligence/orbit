@@ -421,7 +421,7 @@ export function BlockEditor({
                         const set = (patch: Partial<typeof item>) =>
                           update(block.id, { items: block.items.map((entry, position) => (position === itemIndex ? { ...entry, ...patch } : entry)) });
                         return (
-                          <li key={itemIndex} className="border-border flex flex-col gap-2 border-t pt-3">
+                          <li key={itemIndex} className="flex flex-col gap-2 pt-3">
                             {field(`${block.id}-s${itemIndex}`, `Step ${itemIndex + 1}`, item.title, (title) => set({ title }), { maxLength: 300 })}
                             <div className="grid grid-cols-2 gap-3">
                               <div className="flex flex-col gap-1.5">
@@ -481,7 +481,7 @@ export function BlockEditor({
                 {text(block, "heading", "Heading")}
                 <ol className="flex flex-col gap-3">
                   {block.items.map((item, itemIndex) => (
-                    <li key={itemIndex} className="border-border flex flex-col gap-2 border-t pt-3">
+                    <li key={itemIndex} className="flex flex-col gap-2 pt-3">
                       {field(
                         `${block.id}-q${itemIndex}`,
                         `Question ${itemIndex + 1}`,
@@ -518,7 +518,7 @@ export function BlockEditor({
                         people: (current.type === "team" ? current.people : []).map((entry, position) => (position === personIndex ? { ...entry, ...patch } : entry)),
                       }));
                     return (
-                      <li key={key} className="border-border flex flex-col gap-2 border-t pt-3">
+                      <li key={key} className="flex flex-col gap-2 pt-3">
                         <div className="grid gap-3 sm:grid-cols-2">
                           {field(`${block.id}-n${personIndex}`, "Name", person.name, (name) => set({ name }), { maxLength: 200 })}
                           {field(`${block.id}-r${personIndex}`, "Role", person.role, (role) => set({ role }), { maxLength: 200 })}

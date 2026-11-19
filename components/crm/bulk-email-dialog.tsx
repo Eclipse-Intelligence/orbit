@@ -227,7 +227,7 @@ export default function BulkEmailDialog({
                 return (
                   <li
                     key={recipient.id}
-                    className="border-border flex items-start justify-between gap-3 border-b px-3 py-1.5 last:border-b-0"
+                    className="flex items-start justify-between gap-3 px-3 py-1.5"
                   >
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate text-[13px] leading-5">{recipient.name}</span>
@@ -255,7 +255,7 @@ export default function BulkEmailDialog({
               {skipped.map(({ recipient, reason }) => (
                 <li
                   key={`skipped-${recipient.id}`}
-                  className="border-border flex items-start justify-between gap-3 border-b px-3 py-1.5 last:border-b-0"
+                  className="flex items-start justify-between gap-3 px-3 py-1.5"
                 >
                   <span className="text-subtle truncate text-[13px] leading-5">
                     {recipient.name}

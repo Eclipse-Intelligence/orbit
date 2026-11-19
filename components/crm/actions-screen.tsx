@@ -552,7 +552,7 @@ export default function ActionsScreen({
           </Button>
         ))}
       </div>
-      <TaskPad clickup={clickup} members={members} viewerId={viewer.id} className="border-border border-b px-4 py-3" />
+      <TaskPad clickup={clickup} members={members} viewerId={viewer.id} className="px-4 py-3" />
       {message && (
         <p role="alert" className="caption-style text-danger px-4 pt-3">
           {message}

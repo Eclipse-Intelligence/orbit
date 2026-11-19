@@ -638,7 +638,7 @@ export default function CalendarScreen({
           </Button>
         }
       />
-      <div className="border-border flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2.5">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 py-2.5">
         <Button
           variant="secondary"
           size="icon"
@@ -772,7 +772,7 @@ export default function CalendarScreen({
               id="calendar-panel"
               aria-label="Calendars and tasks"
               data-task-drop=""
-              className="border-border hidden w-60 shrink-0 overflow-y-auto border-r px-2 pt-3 pb-8 lg:block"
+              className="hidden w-60 shrink-0 overflow-y-auto px-2 pt-3 pb-8 lg:block"
             >
               {menu(false)}
             </aside>
@@ -815,7 +815,7 @@ export default function CalendarScreen({
           )}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col md:hidden">
             {planning && (
-              <div className="border-border caption-style text-subtle flex items-center gap-3 border-b px-4 py-2.5">
+              <div className="caption-style text-subtle flex items-center gap-3 px-4 py-2.5">
                 <span role="status" className="min-w-0 flex-1">
                   Plan needs a wider screen.
                 </span>

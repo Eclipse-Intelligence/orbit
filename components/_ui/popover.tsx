@@ -33,7 +33,7 @@ function PopoverContent({
         sideOffset={sideOffset}
         collisionPadding={collisionPadding}
         className={cn(
-          "border-line-strong bg-popover text-popover-foreground data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97] data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=open]:ease-power3-out z-50 origin-(--radix-popover-content-transform-origin) overflow-hidden rounded-xl border shadow-overlay duration-200 outline-none data-[state=closed]:duration-150",
+          "border-line-subtle bg-popover text-popover-foreground data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97] data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=open]:ease-power3-out z-50 origin-(--radix-popover-content-transform-origin) overflow-hidden rounded-xl border shadow-overlay duration-200 outline-none data-[state=closed]:duration-150",
           className,
         )}
         {...props}

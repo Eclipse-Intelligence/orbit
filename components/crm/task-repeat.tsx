@@ -537,7 +537,7 @@ function RepeatChoices({
           {preset.label}
         </MenuOption>
       ))}
-      <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
+      <span aria-hidden className="bg-line-subtle mx-1 my-1 h-px" />
       <MenuOption checked={custom} active={active === "custom"} onSelect={onCustom} detail={null} icon={custom ? <CheckIcon aria-hidden className="size-3.5" /> : null}>
         <span className="flex items-center justify-between gap-2">
           Custom
@@ -683,7 +683,7 @@ export function RepeatMenu({ task, trigger, align = "start", onDeleted }: { task
           >
             {repeating && series && (
               <>
-                <span aria-hidden className="bg-line-strong mx-1 my-1 h-px" />
+                <span aria-hidden className="bg-line-subtle mx-1 my-1 h-px" />
                 <MenuOption
                   icon={<RepeatIcon aria-hidden className="text-subtle size-3.5" />}
                   detail={nextDetail(task.repeat?.next)}

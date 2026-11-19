@@ -492,7 +492,7 @@ export default function NoteView({
         hiddenOnPhone && "max-md:hidden",
       )}
     >
-      <header className={cn("border-border flex shrink-0 items-center gap-2 border-b px-3 py-2.5 md:hidden", focus && "border-transparent")}>
+      <header className="flex shrink-0 items-center gap-2 px-3 py-2.5 md:hidden">
         {!focus && (
           <Button variant="secondary" size="sm" href={backHref} onClick={(event) => within(event, backHref)} aria-label={`Back to ${backLabel}`} className="h-[30px] max-w-[45%] gap-1 pr-3 pl-2">
             <ChevronLeftIcon aria-hidden className="size-3.5 shrink-0" />
@@ -658,7 +658,7 @@ export default function NoteView({
           <aside
             aria-label={historyOpen ? "Version history" : "Backlinks and details"}
             className={cn(
-              "flex min-h-0 w-[16.5rem] shrink-0 flex-col overflow-y-auto border-l border-white/[0.05]",
+              "flex min-h-0 w-[16.5rem] shrink-0 flex-col overflow-y-auto",
               !railChosen && "hidden 2xl:flex",
               railChosen && "max-[90rem]:bg-background max-[90rem]:absolute max-[90rem]:inset-y-0 max-[90rem]:right-0 max-[90rem]:z-10 max-[90rem]:shadow-[-24px_0_48px_rgba(0,0,0,0.45)]",
             )}
@@ -671,7 +671,7 @@ export default function NoteView({
             aria-label="Discussion"
             data-quick-add-hide=""
             className={cn(
-              "flex min-h-0 w-[22rem] shrink-0 flex-col border-l border-white/[0.05]",
+              "flex min-h-0 w-[22rem] shrink-0 flex-col",
               !roomy && "bg-background absolute inset-y-0 right-0 z-10 max-w-[calc(100%-2rem)] shadow-[-24px_0_48px_rgba(0,0,0,0.45)]",
             )}
           >

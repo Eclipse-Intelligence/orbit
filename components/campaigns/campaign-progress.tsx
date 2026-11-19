@@ -110,7 +110,7 @@ function CampaignBlock({ progress, columns }: { progress: CampaignProgress; colu
   const [open, setOpen] = useState(false);
   const detailId = useId();
   return (
-    <li className={cn("border-border flex min-w-0 flex-col gap-2.5 not-first:border-t not-first:pt-3", columns && "lg:not-first:border-t-0 lg:not-first:pt-0")}>
+    <li className={cn("flex min-w-0 flex-col gap-2.5 not-first:pt-3", columns && "lg:not-first:pt-0")}>
       <button
         type="button"
         aria-expanded={open}

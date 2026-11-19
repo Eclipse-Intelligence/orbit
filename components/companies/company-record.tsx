@@ -231,7 +231,7 @@ export default function CompanyRecord({
             <div
               style={brandColor ? ({ "--brand": brandColor } as CSSProperties) : undefined}
               className={cn(
-                "relative flex flex-col shadow-[inset_0_-1px_0_var(--line-strong)]",
+                "relative flex flex-col",
                 brandColor && "bg-[linear-gradient(160deg,color-mix(in_srgb,var(--brand)_26%,transparent)_0%,transparent_55%)]",
               )}
             >

@@ -55,7 +55,7 @@ const FILTER_TABS: { id: ProspectFilter; label: string }[] = [
 
 function Section({ title, action, children, className }: { title?: string; action?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={cn("border-border flex flex-col gap-3.5 border-b px-4 py-5 last:border-b-0 sm:px-5", className)}>
+    <section className={cn("flex flex-col gap-3.5 px-4 py-5 sm:px-5", className)}>
       {(title || action) && (
         <div className="flex min-h-[30px] flex-wrap items-center justify-between gap-2">
           {title && <h2 className="eyebrow-style">{title}</h2>}
@@ -186,7 +186,7 @@ function Steps({ campaign }: { campaign: CampaignDetail }) {
         <li
           key={`${step.step}:${step.variant ?? ""}`}
           className={cn(
-            "border-border ui-style grid grid-cols-[2rem_minmax(0,1fr)_auto] items-baseline gap-3 border-t py-2",
+            "ui-style grid grid-cols-[2rem_minmax(0,1fr)_auto] items-baseline gap-3 py-2",
             linkedin ? "md:grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem]" : "md:grid-cols-[2rem_minmax(0,1fr)_4.5rem_4.5rem_4.5rem]",
           )}
         >
@@ -265,7 +265,7 @@ function LeadStatuses({ campaign }: { campaign: CampaignDetail }) {
   return (
     <dl aria-label="Lead statuses" className="ui-style flex flex-col">
       {items.map((item) => (
-        <div key={item.key} className="border-border flex items-baseline justify-between gap-4 border-b py-1.5 last:border-b-0">
+        <div key={item.key} className="flex items-baseline justify-between gap-4 py-1.5">
           <dt className="text-soft min-w-0 truncate">{item.label}</dt>
           <dd className="tabular-nums">{number(campaign.stats[item.key])}</dd>
         </div>
@@ -372,7 +372,7 @@ function EmailProspects({ prospects }: { prospects: ProspectPage }) {
         return (
           <li
             key={row.id}
-            className="border-border relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t px-4 py-2 transition-colors duration-150 hover:bg-white/3 sm:px-5 md:grid-cols-[minmax(0,1.3fr)_8rem_minmax(0,1fr)]"
+            className="relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2 transition-colors duration-150 hover:bg-white/3 sm:px-5 md:grid-cols-[minmax(0,1.3fr)_8rem_minmax(0,1fr)]"
           >
             <span className="flex min-w-0 items-center gap-2.5">
               <Monogram name={row.name} />
@@ -426,7 +426,7 @@ function LinkedinProspects({ prospects, campaignId, canImport }: { prospects: Pr
           <li
             key={row.id}
             className={cn(
-              "border-border relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t px-4 py-2 transition-colors duration-150 hover:bg-white/3 sm:px-5",
+              "relative grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2 transition-colors duration-150 hover:bg-white/3 sm:px-5",
               LINKEDIN_GRID,
             )}
           >

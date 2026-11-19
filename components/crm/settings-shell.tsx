@@ -54,7 +54,7 @@ export default function SettingsShell({
       <SettingsHashRedirect />
       <SectionHeader title="Settings" viewer={viewer} />
       <div className="flex min-h-0 flex-1">
-        <nav aria-label="Settings sections" className="border-border hidden w-[15em] shrink-0 overflow-y-auto border-r lg:block">
+        <nav aria-label="Settings sections" className="hidden w-[15em] shrink-0 overflow-y-auto lg:block">
           <div className="flex flex-col gap-5 p-3">
             {groups.map((group) => (
               <div key={group.kind} className="flex flex-col gap-1">
@@ -70,7 +70,7 @@ export default function SettingsShell({
                           className={cn(
                             "text-sidebar-foreground hover:text-foreground focus-visible:ring-ring/60 flex h-[30px] items-center rounded-lg px-2 text-[14px] leading-none transition-colors duration-150 outline-none focus-visible:ring-2",
                             active &&
-                              "bg-sidebar-primary text-foreground shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
+                              "bg-surface-raised text-foreground",
                           )}
                         >
                           {item.label}
@@ -89,7 +89,7 @@ export default function SettingsShell({
               {groups.map((group) => (
                 <div key={group.kind} className="flex flex-col">
                   <GroupHeading group={group} workspace={workspace} phone />
-                  <ul className="divide-border flex flex-col divide-y">
+                  <ul className="flex flex-col">
                     {group.items.map((item) => (
                       <li key={item.href}>
                         <Link

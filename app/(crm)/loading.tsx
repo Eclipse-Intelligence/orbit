@@ -3,7 +3,7 @@ const ROW_WIDTHS = ["w-[38%]", "w-[52%]", "w-[44%]", "w-[60%]", "w-[34%]", "w-[4
 export default function CrmLoading() {
   return (
     <section role="status" aria-label="Loading" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="border-border lg:bg-sidebar-accent flex shrink-0 items-center gap-3 border-b px-3 py-2.5 sm:px-4 sm:py-[14px] lg:h-(--header-height) lg:py-0">
+      <div className="flex shrink-0 items-center gap-3 px-3 py-2.5 sm:px-4 sm:py-[14px] lg:h-(--header-height) lg:py-0">
         <div className="bg-muted h-[30px] w-[30px] shrink-0 rounded-lg lg:hidden" />
         <div className="bg-muted h-4 w-32 rounded-md" />
         <div className="ml-auto flex gap-2">
@@ -12,14 +12,14 @@ export default function CrmLoading() {
           <div className="bg-muted hidden h-[30px] w-28 rounded-lg sm:block" />
         </div>
       </div>
-      <div className="border-border flex shrink-0 gap-2 border-b px-4 py-3">
+      <div className="flex shrink-0 gap-2 px-4 py-3">
         <div className="bg-muted h-7 w-20 rounded-full" />
         <div className="bg-muted h-7 w-24 rounded-full" />
         <div className="bg-muted h-7 w-16 rounded-full" />
       </div>
       <ul aria-hidden className="flex flex-col motion-safe:animate-pulse">
         {ROW_WIDTHS.map((width, index) => (
-          <li key={index} className="border-border flex items-center gap-3 border-b px-4 py-3.5">
+          <li key={index} className="flex items-center gap-3 px-4 py-3.5">
             <div className="bg-muted size-6 shrink-0 rounded-full" />
             <div className={`bg-muted h-3.5 rounded-md ${width}`} />
             <div className="bg-muted ml-auto hidden h-3.5 w-20 rounded-md sm:block" />

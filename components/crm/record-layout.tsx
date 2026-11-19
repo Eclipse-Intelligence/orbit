@@ -21,9 +21,9 @@ export default function RecordLayout({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto pb-20 lg:grid lg:grid-cols-[minmax(360px,2fr)_minmax(0,3fr)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden lg:pb-0">
-      <div className="border-border min-w-0 lg:overflow-y-auto lg:border-r">
+      <div className="min-w-0 lg:overflow-y-auto">
         {summary}
-        <div className="border-line-strong border-b px-4 py-2 lg:hidden">
+        <div className="px-4 py-2 lg:hidden">
           <QuietTabs
             label="Show"
             items={[

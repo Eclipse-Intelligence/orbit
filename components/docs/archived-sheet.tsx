@@ -167,7 +167,7 @@ export default function ArchivedSheet() {
             </section>
           )}
           {data?.formerMembers && data.formerMembers.length > 0 && (
-            <section aria-labelledby="former-members" className="border-line-strong mt-2 border-t px-2 pt-4">
+            <section aria-labelledby="former-members" className="mt-4 px-2 pt-4">
               <h2 id="former-members" className="eyebrow-style text-subtle pb-1 text-[11px]">
                 Former members&apos; notes
               </h2>

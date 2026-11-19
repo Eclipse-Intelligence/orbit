@@ -258,7 +258,7 @@ function AttachmentViewer({ file, open, onOpenChange }: { file: AttachmentFile; 
       }}
     >
       <SheetContent side="bottom" aria-describedby={undefined} className="inset-0 h-dvh max-h-none rounded-none border-t-0 pt-[env(safe-area-inset-top)] shadow-none">
-        <header className="border-line-strong flex h-14 shrink-0 items-center gap-2 border-b pr-[max(0.75rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))]">
+        <header className="flex h-14 shrink-0 items-center gap-2 pr-[max(0.75rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))]">
           <SheetClose asChild>
             <Button variant="secondary" size="sm" className="gap-1 pr-3">
               <ChevronLeftIcon aria-hidden className="size-3.5" />
@@ -269,7 +269,7 @@ function AttachmentViewer({ file, open, onOpenChange }: { file: AttachmentFile; 
           <AttachmentDownload file={file} loaded={loaded} onError={setError} />
         </header>
         {error && (
-          <p role="alert" className="caption-style text-danger border-line-strong border-b px-4 py-2 text-center">
+          <p role="alert" className="caption-style text-danger px-4 py-2 text-center">
             {error}
           </p>
         )}

@@ -218,7 +218,7 @@ export default function ContactsScreen({
       >
         <li
           className={cn(
-            "caption-style text-subtle border-border group hidden border-b px-2.5 py-2",
+            "caption-style text-subtle group hidden px-2.5 py-2",
             GRID_CLASS,
           )}
         >
@@ -330,7 +330,7 @@ function ContactRow({
       data-row-href={contactHref(contact.id)}
       className={cn(
         KEYBOARD_ROW_CLASS,
-        "border-border group relative flex min-h-12 items-center gap-3 border-b px-2.5 py-2 transition-colors duration-150 hover:bg-white/3 data-[selected=true]:bg-white/5",
+        "group relative flex min-h-12 items-center gap-3 px-2.5 py-2 transition-colors duration-150 hover:bg-white/3 data-[selected=true]:bg-white/5",
         GRID_CLASS,
       )}
     >

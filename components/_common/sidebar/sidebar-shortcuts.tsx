@@ -33,7 +33,7 @@ export default function SidebarShortcuts() {
           aria-keyshortcuts="Shift+?"
           className={cn(
             "group text-sidebar-foreground hover:text-foreground focus-visible:ring-ring/60 ease-power3-out flex h-[30px] w-full cursor-pointer items-center gap-1.5 rounded-lg px-2 text-[14px] leading-none font-medium outline-none transition-[background-color,color,box-shadow] duration-150 focus-visible:ring-2",
-            "data-[state=open]:bg-sidebar-primary data-[state=open]:text-foreground data-[state=open]:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
+            "data-[state=open]:bg-surface-raised data-[state=open]:text-foreground",
           )}
         >
           <KeyboardIcon

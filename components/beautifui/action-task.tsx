@@ -309,7 +309,7 @@ function ActionTask({
       data-list-row={keyboard ? "" : undefined}
       data-task-id={task.id}
       tabIndex={keyboard ? -1 : undefined}
-      className={cn(keyboard && KEYBOARD_ROW_CLASS, "border-border @container relative overflow-hidden border-b", expanded && "bg-white/[0.025]")}
+      className={cn(keyboard && KEYBOARD_ROW_CLASS, "@container relative overflow-hidden rounded-lg", expanded && "bg-white/[0.025]")}
     >
       {offset !== 0 && (
         <span
@@ -393,7 +393,7 @@ function ActionTask({
                 )}
                 {repeats && <RepeatIcon aria-hidden className="hidden size-3 shrink-0 text-(--tag-purple-text) @xl:block" />}
                 {due ? (
-                  <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="gap-1 text-[12px]">
+                  <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="text-[12px]">
                     {task.dueHasTime && due.kind !== "none" && <ClockIcon aria-hidden className="size-3 shrink-0" />}
                     {due.label}
                   </Tag>

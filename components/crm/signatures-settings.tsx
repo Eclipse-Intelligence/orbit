@@ -30,7 +30,7 @@ function SignatureEditor({ sender }: { sender: Sender }) {
   }
 
   return (
-    <div className="border-border flex flex-col gap-2 border-b pb-4 last:border-b-0 last:pb-0">
+    <div className="flex flex-col gap-2 pb-4 last:pb-0">
       <label htmlFor={id} className="text-[14px] leading-5">
         {sender.email}
         {sender.primary && <span className="caption-style text-subtle"> · default</span>}

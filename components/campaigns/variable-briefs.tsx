@@ -52,7 +52,7 @@ export default function VariableBriefs({ campaignId, briefs, canEdit }: { campai
     return (
       <ul className="flex flex-col">
         {briefs.map((item) => (
-          <li key={item.name} className={cn(ROW, "border-border ui-style border-t py-2 first:border-t-0")}>
+          <li key={item.name} className={cn(ROW, "ui-style py-2")}>
             <span className="font-mono text-[12px] text-(--tag-purple-text) md:pt-0.5">{item.name}</span>
             <span className={cn("wrap-anywhere", !item.brief && "text-subtle")}>{item.brief || "No brief"}</span>
             <span className="text-subtle tabular-nums">{item.maxLength === null ? "" : `${item.maxLength.toLocaleString("en-GB")} max`}</span>

@@ -130,7 +130,7 @@ export default function CompaniesTable({
     />
   );
   return (
-    <div className="border-border flex min-h-0 flex-1 flex-col border-t">
+    <div className="flex min-h-0 flex-1 flex-col">
       {columnMessage && (
         <p role={columnMessage.error ? "alert" : "status"} className={cn("caption-style px-4 py-2", columnMessage.error ? "text-danger" : "text-subtle")}>
           {columnMessage.text}
