@@ -27,6 +27,7 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
   const [toast, setToast] = useState<Toast | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pending = useRef(new Map<string, Promise<string | null>>());
+  const ticked = useRef(new Map<string, string>());
   const latest = useRef(onChanged);
   useEffect(() => {
     latest.current = onChanged;
@@ -68,6 +69,7 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
             return null;
           }
           const doneId = result.doneId;
+          ticked.current.set(reminder.id, doneId);
           setHeld((current) => (current[reminder.id] ? { ...current, [reminder.id]: { ...current[reminder.id], doneId } } : current));
           changed();
           return doneId;
@@ -94,8 +96,9 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
   const undo = useCallback(
     async (reminderId: string) => {
       const work = pending.current.get(reminderId);
-      const doneId = work ? await work : null;
+      const doneId = (work ? await work : null) ?? ticked.current.get(reminderId) ?? null;
       pending.current.delete(reminderId);
+      ticked.current.delete(reminderId);
       setToast((current) => (current?.reminderId === reminderId ? null : current));
       if (!doneId) {
         setHeld((current) => without(current, reminderId));
