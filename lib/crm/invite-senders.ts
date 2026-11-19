@@ -375,7 +375,7 @@ export function personalCalendars(senders: InviteSenderCandidate[]) {
   return senders.filter((sender) => sender.kind === "microsoft");
 }
 
-async function lastPersonalCalendar(db: Db, actor: UserActor, calendars: InviteSenderCandidate[]) {
+export async function lastPersonalCalendar(db: Db, actor: UserActor, calendars: InviteSenderCandidate[]) {
   const last = await db.query<{ calendar_id: string; connection_id: string | null }>(
     `select calendar_id, connection_id from crm.calendar_events
      where user_id = $1 and created_by_orbit and task_id is null and reminder_id is null

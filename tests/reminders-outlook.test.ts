@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { calendarAlerts } from "@/lib/calendar-alerts";
-import { storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
+import { listPeopleMet, storeGrantedScopes, syncCalendar } from "@/lib/crm/calendar";
 import { listCalendarItems } from "@/lib/crm/calendars";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
-import { saveMailbox } from "@/lib/crm/inbox";
+import { disconnectMailbox, saveMailbox } from "@/lib/crm/inbox";
+import { lastPersonalCalendar, type InviteSenderCandidate } from "@/lib/crm/invite-senders";
 import { cancelInvite, REMINDER_BLOCK_EVENT } from "@/lib/crm/invites";
 import { addPadTask } from "@/lib/crm/pad-task";
 import { readPlanContext } from "@/lib/crm/plan-schedule";
@@ -15,9 +16,10 @@ import { busyFor } from "@/lib/crm/task-due";
 import type { UserActor } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { offerTimes } from "@/lib/mail/scheduling";
 import { savePushSubscription, type PushSender } from "@/lib/push";
 import { TASK_BLOCK_NOTE, TASK_BLOCK_PROPERTY, type GraphEvent } from "@/lib/microsoft/calendar";
-import { createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const WRITE_SCOPES = "https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Mail.Read offline_access";
 const MINUTE = 60_000;
@@ -56,6 +58,7 @@ class FakeOutlook {
   failCreate = 0;
   loseCreateResponses = 0;
   failPatchWith: number | null = null;
+  failCreateWith: number | null = null;
   failDeleteWith: number | null = null;
   hidden = new Set<string>();
 
@@ -79,6 +82,7 @@ class FakeOutlook {
         this.failCreate -= 1;
         return json({ error: { code: "ServiceUnavailable", message: "Busy" } }, 503);
       }
+      if (this.failCreateWith) return json({ error: { code: "TooManyRequests", message: "Slow down" } }, this.failCreateWith);
       const existing = [...this.events.entries()].find(([, event]) => event.transactionId && event.transactionId === body?.transactionId);
       if (existing) {
         if (this.loseCreateResponses > 0) {
@@ -192,6 +196,37 @@ async function connect(actor: UserActor) {
     [actor.workspaceId, actor.userId, id],
   );
   return id;
+}
+
+async function reconnect(actor: UserActor) {
+  await saveMailbox(actor, {
+    email: "mark@reminder-blocks.test",
+    refreshToken: "refresh-token",
+    accessToken: "access-token",
+    expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+  });
+  const connection = await admin().query<{ id: string }>("select id from crm.mailbox_connections where user_id = $1", [actor.userId]);
+  await withActor(actor, (db) => storeGrantedScopes(db, actor, connection.rows[0].id, WRITE_SCOPES));
+}
+
+function londonClock(at: number) {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(at));
+}
+
+function londonLocal(at: number) {
+  return `${dayKeyAt(new Date(at))}T${londonClock(at)}`;
+}
+
+async function asRole(role: string, sql: string, values: unknown[] = []) {
+  const client = await getAdminPool().connect();
+  try {
+    await client.query("begin");
+    await client.query(`set local role ${role}`);
+    return await client.query(sql, values);
+  } finally {
+    await client.query("rollback").catch(() => undefined);
+    client.release();
+  }
 }
 
 function dayAhead(days: number) {
@@ -499,6 +534,82 @@ describe("Block time in Outlook", () => {
 describe("retries and duplicates", () => {
   useServerlessPool();
 
+  it("removes the event after Microsoft is reconnected, without waiting out the back-off", async () => {
+    await connect(mark);
+    const reminder = await blocked(mark, "Boiler service");
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.equal(outlook.events.size, 1);
+    await disconnectMailbox(mark, outlook.fetch);
+    await completeReminder(mark, reminder.id);
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+      await readyNow(reminder.id);
+      await syncReminderBlocks({ fetchImpl: outlook.fetch });
+    }
+    assert.equal(outlook.events.size, 1, "nothing can be removed while disconnected");
+    const waiting = await admin().query<{ retry_at: Date; waiting: boolean }>("select retry_at, waiting from crm.reminder_outlook_queue where reminder_id = $1", [reminder.id]);
+    assert.ok(new Date(waiting.rows[0].retry_at).getTime() > Date.now());
+    assert.equal(waiting.rows[0].waiting, true);
+    await reconnect(mark);
+    await syncCalendar(mark, { fetchImpl: outlook.fetch, force: true });
+    assert.equal(outlook.events.size, 0);
+    assert.equal(await queued(reminder.id), null);
+  });
+
+  it("wakes parked and backed-off entries when write access is newly confirmed", async () => {
+    const reminder = await blocked(mark, "Boiler service");
+    await admin().query(
+      "insert into crm.reminder_outlook_queue (reminder_id, user_id, refused, retry_at, attempts) values ($1, $2, true, 'infinity', 4) on conflict (reminder_id) do update set refused = true, retry_at = 'infinity', attempts = 4",
+      [reminder.id, mark.userId],
+    );
+    await admin().query("select private.queue_reminder_blocks($1, now(), false)", [mark.userId]);
+    const parked = await admin().query<{ refused: boolean; retry_at: string }>("select refused, retry_at::text from crm.reminder_outlook_queue where reminder_id = $1", [reminder.id]);
+    assert.deepEqual(parked.rows[0], { refused: true, retry_at: "infinity" }, "only a fresh confirmation wakes a parked entry");
+    await admin().query("select private.queue_reminder_blocks($1, now(), true)", [mark.userId]);
+    const woken = await admin().query<{ refused: boolean; attempts: number; retry_at: Date | null }>("select refused, attempts, retry_at from crm.reminder_outlook_queue where reminder_id = $1", [reminder.id]);
+    assert.deepEqual(woken.rows[0], { refused: false, attempts: 0, retry_at: null });
+  });
+
+  it("stops writing to a mailbox that answers 429 for the rest of the run", async () => {
+    await connect(mark);
+    const first = await blocked(mark, "Boiler service");
+    const second = await blocked(mark, "Dentist", 4);
+    outlook.failCreateWith = 429;
+    const run = await syncReminderBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(run.throttled, 2);
+    assert.equal(outlook.writes().filter((call) => call.method === "POST").length, 1);
+    assert.ok((await queued(first.id))?.retry_at);
+    assert.ok((await queued(second.id))?.retry_at);
+    outlook.failCreateWith = null;
+    outlook.calls = [];
+    const throttled = new Set([mark.userId]);
+    await readyNow(first.id);
+    await readyNow(second.id);
+    await syncReminderBlocks({ fetchImpl: outlook.fetch, throttled });
+    assert.equal(outlook.writes().length, 0, "a person throttled earlier in the run gets no writes");
+    await readyNow(first.id);
+    await readyNow(second.id);
+    await syncReminderBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(outlook.events.size, 2);
+  });
+
+  it("keeps the event's clock time across a clock change", async () => {
+    await connect(mark);
+    const year = new Date().getUTCFullYear() + 1;
+    let day = 31;
+    while (new Date(Date.UTC(year, 2, day)).getUTCDay() !== 0) day -= 1;
+    const before = `${year}-03-${String(day - 1).padStart(2, "0")}`;
+    const reminder = (await createReminder(mark, { title: "Stand-up prep", dueAt: `${before}T09:00`, blocksTime: true, durationMinutes: 30, repeat: { every: "day" } })).reminder;
+    await syncReminderBlocks({ fetchImpl: outlook.fetch });
+    assert.equal(outlook.only().start, `${before}T09:00:00.000Z`);
+    const ticked = await completeReminder(mark, reminder.id, { dueOn: reminder.dueOn });
+    await syncReminderBlocks({ fetchImpl: outlook.fetch });
+    const moved = outlook.only();
+    assert.equal(moved.start, ticked.reminder.dueAt);
+    assert.equal(londonClock(Date.parse(moved.start)), "09:00");
+    assert.equal(londonClock(Date.parse(moved.end)), "09:30");
+    assert.equal(Date.parse(moved.start) - Date.parse(`${before}T09:00:00.000Z`), 23 * HOUR);
+  });
+
   it("retries a failed create and writes one event", async () => {
     await connect(mark);
     const reminder = await blocked(mark, "Boiler service");
@@ -570,6 +681,36 @@ describe("retries and duplicates", () => {
 });
 
 describe("whose reminder an event can point at", () => {
+  useServerlessPool();
+
+  it("keeps the queue and its functions away from agents and signed-out callers", async () => {
+    const reminder = await blocked(mark, "Boiler service");
+    for (const role of ["crm_agent", "anon", "authenticated"]) {
+      await assert.rejects(asRole(role, "select * from crm.reminder_outlook_queue"), /permission denied/, role);
+      await assert.rejects(asRole(role, "update crm.reminder_outlook_queue set retry_at = null"), /permission denied/, role);
+      await assert.rejects(asRole(role, "select * from private.claim_reminder_blocks(null, null, 10)"), /permission denied/, role);
+      await assert.rejects(asRole(role, "select private.reminder_block_gone($1, 'x')", [reminder.id]), /permission denied/, role);
+      await assert.rejects(asRole(role, "select private.queue_reminder_blocks($1, now(), true)", [mark.userId]), /permission denied/, role);
+    }
+  });
+
+  it("never lets an agent attach a reminder to an event", async () => {
+    const { actor: agent } = await createAgent(mark.workspaceId, ["admin"]);
+    const reminder = await blocked(mark, "Boiler service");
+    await connect(mark);
+    const calendar = await admin().query<{ id: string; connection_id: string }>("select id, connection_id from crm.calendars where user_id = $1", [mark.userId]);
+    await assert.rejects(
+      withActor(agent, (db) =>
+        db.query(
+          `insert into crm.calendar_events (workspace_id, calendar_id, connection_id, user_id, provider_event_id, subject, starts_at, ends_at, reminder_id)
+           values ($1, $2, $3, $4, 'agent', 'Block', now(), now() + interval '30 minutes', $5)`,
+          [mark.workspaceId, calendar.rows[0].id, calendar.rows[0].connection_id, mark.userId, reminder.id],
+        ),
+      ),
+      /permission denied|row-level security|own reminder/,
+    );
+    await assert.rejects(asRole("crm_agent", "update crm.calendar_events set reminder_id = $1", [reminder.id]), /permission denied/);
+  });
   it("never lets anyone link an event to another person's reminder, owners and admins included", async () => {
     const jane = await createUser(`jane${seq}@reminder-blocks.test`, "Jane");
     await admin().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'admin')", [mark.workspaceId, jane.userId]);
@@ -628,6 +769,40 @@ describe("whose reminder an event can point at", () => {
 });
 
 describe("other readers skip a reminder's event", () => {
+  useServerlessPool();
+
+  it("counts Block time as busy once in Mail's offered times, written to Outlook or not", async () => {
+    const offered = await offerTimes(mark, "Times: [[times]]");
+    assert.ok(offered.slots.length > 0);
+    const slot = offered.slots[0];
+    const reminder = (await createReminder(mark, { title: "Boiler service", dueAt: londonLocal(slot), blocksTime: true, durationMinutes: 60 })).reminder;
+    assert.equal((await offerTimes(mark, "Times: [[times]]")).slots.includes(slot), false, "busy without Outlook");
+    await connect(mark);
+    await syncReminderBlocks({ fetchImpl: outlook.fetch });
+    assert.ok(await mirror(reminder.id));
+    assert.equal((await offerTimes(mark, "Times: [[times]]")).slots.includes(slot), false);
+    await updateReminder(mark, reminder.id, { blocksTime: false });
+    await admin().query("update crm.calendar_events set block_written_at = now() where reminder_id = $1", [reminder.id]);
+    assert.equal((await offerTimes(mark, "Times: [[times]]")).slots.includes(slot), true, "the Outlook copy alone is never busy");
+  });
+
+  it("keeps it out of People you've met and the last personal calendar", async () => {
+    await connect(mark);
+    const reminder = await blocked(mark, "Boiler service");
+    await syncReminderBlocks({ fetchImpl: outlook.fetch });
+    const event = (await mirror(reminder.id))!;
+    await admin().query(`update crm.calendar_events set attendees = '[{"name": "Client", "email": "client@acme-reminders.test"}]'::jsonb where id = $1`, [event.id]);
+    assert.equal((await listPeopleMet(mark)).some((person) => person.email === "client@acme-reminders.test"), false);
+    const calendar = await admin().query<{ id: string }>("select calendar_id as id from crm.calendar_events where id = $1", [event.id]);
+    const candidates = [{ address: "mark@reminder-blocks.test", primary: true, calendar: { id: calendar.rows[0].id } }] as unknown as InviteSenderCandidate[];
+    await admin().query("update crm.calendar_events set attendees = '[]'::jsonb where id = $1", [event.id]);
+    assert.equal(await withActor(mark, (db) => lastPersonalCalendar(db, mark, candidates)), null);
+    await admin().query(`update crm.calendar_events set reminder_id = null, attendees = '[{"name": "Client", "email": "client@acme-reminders.test"}]'::jsonb where id = $1`, [event.id]);
+    assert.equal((await listPeopleMet(mark)).some((person) => person.email === "client@acme-reminders.test"), true);
+    await admin().query("update crm.calendar_events set attendees = '[]'::jsonb where id = $1", [event.id]);
+    assert.equal(await withActor(mark, (db) => lastPersonalCalendar(db, mark, candidates)), "mark@reminder-blocks.test");
+  });
+
   it("keeps it out of Calendar, meeting alerts, Plan, busy times and the meeting tools", async () => {
     await connect(mark);
     await admin().query("insert into crm.booking_pages (workspace_id, user_id, slug, enabled) values ($1, $2, $3, true)", [mark.workspaceId, mark.userId, `reminders-${seq}`]);
@@ -651,7 +826,9 @@ describe("other readers skip a reminder's event", () => {
     assert.equal(context.reminders.filter((item) => item.title === "Boiler service").length, 1);
     const busy = await admin().query<{ starts_at: Date }>("select * from private.booking_busy($1, now() - interval '1 hour', now() + interval '1 day')", [mark.userId]);
     assert.equal(busy.rowCount, 1, "booking counts the reminder once");
-    assert.deepEqual(await busyFor(mark, mark.userId, new Date(Date.now() - HOUR), 1), []);
+    assert.deepEqual(await busyFor(mark, mark.userId, new Date(Date.now() - HOUR), 1), [
+      { start: Date.parse(reminder.dueAt!), end: Date.parse(reminder.dueAt!) + 30 * MINUTE },
+    ]);
     await assert.rejects(cancelInvite(mark, event.id, null, { fetchImpl: outlook.fetch }), (error: unknown) => error instanceof CrmError && error.message === REMINDER_BLOCK_EVENT);
     await admin().query("update crm.calendar_events set reminder_id = null where id = $1", [event.id]);
     await calendarAlerts(mark, { send });

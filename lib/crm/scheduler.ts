@@ -330,12 +330,6 @@ export async function handleCronRequest(
     console.error("Meta lead backup failed", redactedError(error));
   }
   try {
-    const { syncReminderBlocks } = await import("@/lib/crm/reminder-outlook");
-    await syncReminderBlocks({ deadline: Math.min(Date.now() + 8_000, received + CRON_BUDGET_MS + 6_000) });
-  } catch (error) {
-    console.error("Outlook reminder blocks failed", error);
-  }
-  try {
     const { deliverDueWebhooks } = await import("@/lib/crm/webhooks");
     await deliverDueWebhooks();
   } catch (error) {

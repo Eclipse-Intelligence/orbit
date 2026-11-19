@@ -1,6 +1,19 @@
 set lock_timeout = '5s';
 
-alter table crm.calendar_events add column if not exists reminder_id uuid references crm.reminders (id) on delete set null;
+alter table crm.calendar_events add column if not exists reminder_id uuid;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'calendar_events_reminder_id_fkey' and conrelid = 'crm.calendar_events'::regclass
+  ) then
+    alter table crm.calendar_events
+      add constraint calendar_events_reminder_id_fkey
+      foreign key (reminder_id) references crm.reminders (id) on delete set null not valid;
+  end if;
+end;
+$$;
 
 grant update (reminder_id) on crm.calendar_events to authenticated;
 
@@ -71,6 +84,7 @@ create table if not exists crm.reminder_outlook_queue (
   attempts integer not null default 0,
   retry_at timestamptz,
   refused boolean not null default false,
+  waiting boolean not null default false,
   event_ref text,
   create_key uuid,
   create_sent_at timestamptz,
@@ -263,12 +277,13 @@ as $$
   update crm.reminder_outlook_queue
   set claimed_at = null,
       event_ref = p_ref,
+      waiting = false,
       create_key = null,
       create_sent_at = null
   where reminder_id = p_reminder_id;
 $$;
 
-create or replace function private.defer_reminder_block(p_reminder_id uuid, p_pending_at timestamptz, p_refused boolean, p_refused_key uuid default null)
+create or replace function private.defer_reminder_block(p_reminder_id uuid, p_pending_at timestamptz, p_refused boolean, p_refused_key uuid default null, p_waiting boolean default false)
 returns void
 language sql
 security definer
@@ -276,6 +291,7 @@ set search_path = ''
 as $$
   update crm.reminder_outlook_queue
   set claimed_at = null,
+      waiting = p_waiting,
       attempts = case when pending_at = p_pending_at then attempts + 1 else attempts end,
       refused = case when pending_at = p_pending_at then p_refused else refused end,
       retry_at = case
@@ -327,13 +343,19 @@ as $$
   where id = p_reminder_id and blocks_time;
 $$;
 
-create or replace function private.queue_reminder_blocks(p_user_id uuid, p_now timestamptz)
+drop function if exists private.queue_reminder_blocks(uuid, timestamptz);
+create or replace function private.queue_reminder_blocks(p_user_id uuid, p_now timestamptz, p_fresh boolean)
 returns integer
 language sql
 security definer
 set search_path = ''
 as $$
-  with wanted as (
+  with woken as (
+    update crm.reminder_outlook_queue
+    set retry_at = null, attempts = 0, refused = false, waiting = false
+    where user_id = p_user_id and (p_fresh or waiting)
+    returning 1
+  ), wanted as (
     select r.id, r.user_id
     from crm.reminders r
     where r.user_id = p_user_id
@@ -350,7 +372,7 @@ as $$
     on conflict (reminder_id) do nothing
     returning 1
   )
-  select count(*)::integer from added
+  select ((select count(*) from added) + (select count(*) from woken))::integer
 $$;
 
 create or replace function private.reminder_blocks_pending(p_reminder_ids uuid[])
@@ -422,22 +444,22 @@ revoke all on function private.claim_reminder_blocks(uuid[], uuid, integer) from
 revoke all on function private.begin_reminder_block_create(uuid) from public;
 revoke all on function private.link_reminder_block(uuid, text) from public;
 revoke all on function private.settle_reminder_block(uuid, timestamptz, text, boolean) from public;
-revoke all on function private.defer_reminder_block(uuid, timestamptz, boolean, uuid) from public;
+revoke all on function private.defer_reminder_block(uuid, timestamptz, boolean, uuid, boolean) from public;
 revoke all on function private.hold_reminder_block(uuid, interval) from public;
 revoke all on function private.release_reminder_block(uuid) from public;
 revoke all on function private.reminder_block_gone(uuid, text) from public;
-revoke all on function private.queue_reminder_blocks(uuid, timestamptz) from public;
+revoke all on function private.queue_reminder_blocks(uuid, timestamptz, boolean) from public;
 revoke all on function private.reminder_blocks_pending(uuid[]) from public;
 grant execute on function private.booking_busy(uuid, timestamptz, timestamptz) to crm_app;
 grant execute on function private.claim_reminder_blocks(uuid[], uuid, integer) to crm_app;
 grant execute on function private.begin_reminder_block_create(uuid) to crm_app;
 grant execute on function private.link_reminder_block(uuid, text) to crm_app;
 grant execute on function private.settle_reminder_block(uuid, timestamptz, text, boolean) to crm_app;
-grant execute on function private.defer_reminder_block(uuid, timestamptz, boolean, uuid) to crm_app;
+grant execute on function private.defer_reminder_block(uuid, timestamptz, boolean, uuid, boolean) to crm_app;
 grant execute on function private.hold_reminder_block(uuid, interval) to crm_app;
 grant execute on function private.release_reminder_block(uuid) to crm_app;
 grant execute on function private.reminder_block_gone(uuid, text) to crm_app;
-grant execute on function private.queue_reminder_blocks(uuid, timestamptz) to crm_app;
+grant execute on function private.queue_reminder_blocks(uuid, timestamptz, boolean) to crm_app;
 grant execute on function private.reminder_blocks_pending(uuid[]) to crm_app;
 
 reset lock_timeout;
@@ -445,3 +467,5 @@ reset lock_timeout;
 create unique index concurrently if not exists calendar_events_reminder_key
   on crm.calendar_events (reminder_id)
   where reminder_id is not null;
+
+alter table crm.calendar_events validate constraint calendar_events_reminder_id_fkey;

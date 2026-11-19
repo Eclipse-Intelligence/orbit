@@ -845,17 +845,24 @@ async function databaseNow() {
 }
 
 async function flushBlocks(actor: UserActor, connectionId: string, scope: string | null, context: SyncContext) {
+  let fresh = false;
   try {
     const { flushTaskBlocks } = await import("@/lib/crm/task-outlook");
     const granted = scope ?? (await withActor(actor, (db) => readGrantedScopes(db, connectionId)));
-    await flushTaskBlocks(actor, connectionId, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS });
+    await flushTaskBlocks(actor, connectionId, granted, {
+      fetchImpl: context.fetchImpl,
+      deadline: context.deadline - CALENDAR_RESERVE_MS,
+      noted: (noted) => {
+        fresh = noted;
+      },
+    });
   } catch (error) {
     console.error("Outlook task blocks failed", error);
   }
   try {
     const { flushReminderBlocks } = await import("@/lib/crm/reminder-outlook");
     const granted = scope ?? (await withActor(actor, (db) => readGrantedScopes(db, connectionId)));
-    await flushReminderBlocks(actor, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS });
+    await flushReminderBlocks(actor, granted, { fetchImpl: context.fetchImpl, deadline: context.deadline - CALENDAR_RESERVE_MS, fresh });
   } catch (error) {
     console.error("Outlook reminder blocks failed", error);
   }

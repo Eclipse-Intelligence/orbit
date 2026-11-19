@@ -76,8 +76,8 @@ async function settle(row: ReminderBlockRow, ref: string | null, dropEvent = fal
   await query("select private.settle_reminder_block($1, $2, $3, $4)", [row.reminder_id, row.pending_at, ref, dropEvent]);
 }
 
-async function defer(row: ReminderBlockRow, refused = false, refusedKey: string | null = null) {
-  await query("select private.defer_reminder_block($1, $2, $3, $4)", [row.reminder_id, row.pending_at, refused, refusedKey]).catch((error) =>
+async function defer(row: ReminderBlockRow, refused = false, refusedKey: string | null = null, waiting = false) {
+  await query("select private.defer_reminder_block($1, $2, $3, $4, $5)", [row.reminder_id, row.pending_at, refused, refusedKey, waiting]).catch((error) =>
     console.error("Deferring a reminder block failed", error),
   );
 }
@@ -217,7 +217,7 @@ async function writeBlock(outlook: Outlook, row: ReminderBlockRow, plan: Extract
       await settle(row, null);
       return "turned_off";
     }
-    await defer(row);
+    await defer(row, false, null, failure === "orbit_only");
     return failed(failure);
   }
   return stored(outlook, row, ref, plan.title, plan, "updated");
@@ -229,7 +229,7 @@ async function removeBlock(outlook: Outlook, row: ReminderBlockRow, ref: string,
   } catch (error) {
     const failure = graphFailure(error);
     if (failure !== "gone") {
-      await defer(row);
+      await defer(row, false, null, failure === "orbit_only");
       return failed(failure);
     }
   }
@@ -251,7 +251,7 @@ async function runRow(row: ReminderBlockRow, plan: ReminderBlockPlan, access: Ac
       await settle(row, null);
       return "orbit_only";
     }
-    await defer(row);
+    await defer(row, false, null, true);
     return "orbit_only";
   }
   if (plan.kind === "remove") return removeBlock(access, row, plan.ref, fetchImpl);
@@ -376,9 +376,13 @@ export async function syncReminderBlocks(
   return result;
 }
 
-export async function flushReminderBlocks(actor: UserActor, scope: string | null, options: { fetchImpl?: typeof fetch; deadline?: number; now?: number } = {}) {
+export async function flushReminderBlocks(
+  actor: UserActor,
+  scope: string | null,
+  options: { fetchImpl?: typeof fetch; deadline?: number; now?: number; fresh?: boolean } = {},
+) {
   if (grantsCalendarWrite(scope) === true) {
-    await query("select private.queue_reminder_blocks($1, $2)", [actor.userId, new Date(options.now ?? Date.now()).toISOString()]);
+    await query("select private.queue_reminder_blocks($1, $2, $3)", [actor.userId, new Date(options.now ?? Date.now()).toISOString(), Boolean(options.fresh)]);
   }
   return syncReminderBlocks({ userId: actor.userId, fetchImpl: options.fetchImpl, deadline: options.deadline, now: options.now });
 }

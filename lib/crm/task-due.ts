@@ -116,7 +116,12 @@ export async function busyFor(actor: Actor, ownerId: string | null | undefined, 
          from crm.calendar_events e
          where e.user_id = $1 and not e.is_cancelled and e.task_id is null and e.reminder_id is null and coalesce(lower(e.show_as), 'busy') <> 'free'
            and e.starts_at < $3 and e.ends_at > $2
-         order by e.starts_at
+         union all
+         select r.due_at, r.due_at + make_interval(mins => r.duration_minutes)
+         from crm.reminders r
+         where r.user_id = $1 and r.blocks_time and r.due_at is not null and r.completed_at is null
+           and r.due_at < $3 and r.due_at + make_interval(mins => r.duration_minutes) > $2
+         order by starts_at
          limit 5000`,
         [actor.userId, from.toISOString(), to.toISOString()],
       );
