@@ -138,7 +138,7 @@ export function DiscussionComposer({
       placeholder={parentId ? "Reply…" : noun === "note" ? NOTE_PLACEHOLDER : DISCUSSION_PLACEHOLDER}
       label={parentId ? "Reply in thread" : noun === "note" ? "Note" : "Comment"}
       sendLabel={parentId ? "Send reply" : noun === "note" ? "Send note" : "Send comment"}
-      compact
+      scope="thread"
       restoreOnFailure
       hideFailure={prompting}
       fallbackDraft={discussion.keptDraft?.parentId === parentId ? discussion.keptDraft : null}

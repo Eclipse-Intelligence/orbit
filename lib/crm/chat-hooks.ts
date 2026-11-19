@@ -255,6 +255,7 @@ export async function postViaHook(
       via: null,
       clientKey: null,
       body: row.body ?? "",
+      format: "plain",
       mentions: [],
       replyCount: 0,
       lastReplyAt: null,

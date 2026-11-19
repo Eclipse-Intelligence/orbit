@@ -45,6 +45,7 @@ export function chatMessage(message: ChatMessage) {
     ...(message.via ? { via: { workflowId: message.via.workflowId, name: message.via.name } } : {}),
     ...(message.hook ? { fromWebhook: true, webhook: { title: message.hook.title, url: message.hook.url, formatted: message.hook.block } } : {}),
     text: message.deletedAt ? null : message.body,
+    format: message.format,
     deleted: Boolean(message.deletedAt),
     mentions: message.mentions,
     replies: message.replyCount,
@@ -139,9 +140,9 @@ async function chatTarget(actor: UserActor, input: ChatTargetInput, key: string 
 }
 
 export async function postChat(actor: UserActor, input: ChatTargetInput & { text: unknown; key?: unknown }, options: PostOptions = {}) {
-  const body = checkChatPost(input.text);
+  const body = checkChatPost(input.text, "markdown");
   const key = cleanKey(input.key);
   const target = await chatTarget(actor, input, key, options);
-  const posted = await postMessage(actor, { conversationId: target.conversationId, parentId: target.parentId, body, clientKey: key ?? undefined }, { charge: target.charge });
+  const posted = await postMessage(actor, { conversationId: target.conversationId, parentId: target.parentId, body, format: "markdown", clientKey: key ?? undefined }, { charge: target.charge });
   return { posted: !posted.duplicate, duplicate: posted.duplicate, conversationId: posted.message.conversationId, message: chatMessage(posted.message) };
 }

@@ -365,6 +365,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       copyLink,
       send: (input) => send(input),
       memberNames: NO_NAMES,
+      discussion: true,
     }),
     [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, send],
   );

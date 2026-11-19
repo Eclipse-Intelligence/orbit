@@ -236,6 +236,21 @@ describe("task discussions", () => {
     await refused(postMessage(sam, { conversationId, body: `${tag(olly)} have a look` }), /Tag people in this task's workspace/);
   });
 
+  it("never tags anyone onto a task from inside code", async () => {
+    const task = await newTask("Write the import script");
+    const { conversationId } = await openDiscussion(sam, { kind: "task", id: task.id });
+    const posted = (await postMessage(sam, { conversationId, body: `Use \`${tag(priya)}\` in the template\n\`\`\`\n${tag(ada)}\n\`\`\``, format: "markdown" })).message;
+    assert.deepEqual(posted.mentions, []);
+    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id] ?? [], [mark.userId]);
+    assert.deepEqual(await alertsFor(priya), []);
+    assert.deepEqual(await alertsFor(ada), []);
+    await refused(postMessage(sam, { conversationId, body: `\`${tag(olly)}\`` }), /Tag people in this task's workspace/);
+    await postMessage(sam, { conversationId, body: `\`${tag(olly)}\``, format: "markdown" });
+    const edited = await editMessage(sam, posted.id, `**${tag(priya)}** please check`, { format: "markdown" });
+    assert.deepEqual(edited.mentions, [priya.userId]);
+    assert.deepEqual((await listTaskParticipants(sam, [task.id]))[task.id]?.sort(), [mark.userId, priya.userId].sort());
+  });
+
   it("alerts people who can already see the task when they are mentioned", async () => {
     const task = await newTask("Ask Mark about v4");
     const { conversationId } = await openDiscussion(sam, {
@@ -453,6 +468,7 @@ describe("discussion helpers", () => {
       author: { id: "u", name: "U" },
       clientKey: null,
       body: "x",
+      format: "plain",
       mentions: [],
       via: null,
       hook: null,

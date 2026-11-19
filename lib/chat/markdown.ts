@@ -1,0 +1,484 @@
+import { mentionsIn, type Mention, type MentionKind } from "@/lib/mentions";
+import { trimUrl } from "@/lib/text-links";
+
+export type ChatFormat = "plain" | "markdown";
+
+export const CHAT_FORMATS: readonly ChatFormat[] = ["plain", "markdown"];
+
+export type Inline =
+  | { type: "text"; text: string }
+  | { type: "mention"; mention: Mention }
+  | { type: "code"; text: string }
+  | { type: "url"; href: string; text: string }
+  | { type: "link"; href: string; children: Inline[] }
+  | { type: "bold" | "italic" | "strike"; children: Inline[] };
+
+export type Block =
+  | { type: "paragraph"; children: Inline[] }
+  | { type: "code"; text: string }
+  | { type: "quote"; children: Inline[] }
+  | { type: "list"; ordered: boolean; start: number; items: Inline[][] };
+
+export type MarkRange = { start: number; end: number };
+
+export type FormatKind = "bold" | "italic" | "strike" | "link" | "bullets" | "numbers" | "code" | "codeBlock" | "quote";
+
+export type FormatSpan = MarkRange & { kind: FormatKind };
+
+type Collect = { marks: MarkRange[]; codes: MarkRange[]; spans: FormatSpan[] } | null;
+
+type Fence = { open: number; closeAt: number; end: number; closed: boolean };
+
+const MENTION = /@\[([^\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):([0-9a-f-]{36})\)/y;
+const URL_AT = /https?:\/\/[^\s<>"]+/iy;
+const LINK_AT = /\[([^[\]\n]{1,500})\]\(((?:https?:\/\/|mailto:)(?:[^\s()<>"]|\([^\s()<>"]*\))+)\)/iy;
+const WORD = /[\p{L}\p{N}]/u;
+const SPACE = /\s/;
+const FENCE = "```";
+const LANGUAGE = /^[A-Za-z0-9+#.-]{1,20}$/;
+const BULLET = /^([-*•])[ \t]+/;
+const NUMBERED = /^(\d{1,9})[.)][ \t]+/;
+const QUOTE = /^>(?:[ \t]|$)/;
+const MARKERS = ["***", "**", "~~", "*", "_"] as const;
+const URL_TAIL = /[*~]+$/;
+
+type Marker = (typeof MARKERS)[number];
+
+function isWord(char: string | undefined) {
+  return char !== undefined && WORD.test(char);
+}
+
+function isSpace(char: string | undefined) {
+  return char === undefined || SPACE.test(char);
+}
+
+function stickyMatch(pattern: RegExp, src: string, at: number) {
+  pattern.lastIndex = at;
+  return pattern.exec(src);
+}
+
+function mentionAt(src: string, at: number, to: number) {
+  const found = stickyMatch(MENTION, src, at);
+  if (!found || at + found[0].length > to) return null;
+  return { end: at + found[0].length, mention: { name: found[1], kind: found[2] as MentionKind, id: found[3] } };
+}
+
+function codeSpanAt(src: string, at: number, to: number) {
+  const close = src.indexOf("`", at + 1);
+  if (close <= at + 1 || close >= to) return -1;
+  if (src.slice(at + 1, close).includes("\n")) return -1;
+  return close;
+}
+
+function urlAt(src: string, at: number, from: number, to: number) {
+  if (at > from && (isWord(src[at - 1]) || src[at - 1] === "/")) return null;
+  const found = stickyMatch(URL_AT, src, at);
+  if (!found) return null;
+  const url = trimUrl(src.slice(at, Math.min(at + found[0].length, to)).replace(URL_TAIL, ""));
+  if (!/^https?:\/\/./i.test(url)) return null;
+  return url;
+}
+
+function linkAt(src: string, at: number, to: number) {
+  const found = stickyMatch(LINK_AT, src, at);
+  if (!found || at + found[0].length > to) return null;
+  return { end: at + found[0].length, labelEnd: at + 1 + found[1].length, href: found[2] };
+}
+
+function opens(src: string, at: number, from: number, marker: Marker) {
+  const next = src[at + marker.length];
+  if (isSpace(next)) return false;
+  if (marker.length === 1 && (next === marker || (at > from && isWord(src[at - 1])))) return false;
+  return true;
+}
+
+function closes(src: string, at: number, to: number, marker: Marker) {
+  if (isSpace(src[at - 1])) return false;
+  const after = at + marker.length < to ? src[at + marker.length] : undefined;
+  if (marker.length === 1 && (isWord(after) || after === marker || src[at - 1] === marker)) return false;
+  return true;
+}
+
+function atomicEnd(src: string, at: number, from: number, to: number) {
+  const char = src[at];
+  if (char === "`") {
+    const close = codeSpanAt(src, at, to);
+    if (close > 0) return close + 1;
+  }
+  if (char === "@") {
+    const mention = mentionAt(src, at, to);
+    if (mention) return mention.end;
+  }
+  if (char === "[") {
+    const link = linkAt(src, at, to);
+    if (link) return link.end;
+  }
+  if (char === "h" || char === "H") {
+    const url = urlAt(src, at, from, to);
+    if (url) return at + url.length;
+  }
+  return -1;
+}
+
+function openStars(src: string, start: number, end: number, from: number) {
+  let single = false;
+  let double = false;
+  let at = start;
+  while (at < end) {
+    const skip = atomicEnd(src, at, from, end);
+    if (skip > 0) {
+      at = skip;
+      continue;
+    }
+    if (src[at] !== "*") {
+      at += 1;
+      continue;
+    }
+    let run = at;
+    while (run < end && src[run] === "*") run += 1;
+    const size = run - at;
+    if (size % 2 === 1) single = !single;
+    if (size >= 2) double = !double;
+    at = run;
+  }
+  return { single, double };
+}
+
+function starRunCloser(src: string, at: number, start: number, to: number, from: number, marker: Marker) {
+  let run = at;
+  while (run < to && src[run] === "*") run += 1;
+  const size = run - at;
+  if (marker === "*") {
+    if (size === 1) return { close: at > start && closes(src, at, to, marker) ? at : -1, next: run };
+    const last = run - 1;
+    const fits = size >= 3 && !isSpace(src[at - 1]) && !isWord(run < to ? src[run] : undefined);
+    return { close: fits && openStars(src, start, at, from).double ? last : -1, next: run };
+  }
+  if (size < marker.length) return { close: -1, next: run };
+  if (size > marker.length && openStars(src, start, at, from).single) {
+    const last = run - marker.length;
+    return { close: closes(src, last, to, marker) ? last : -1, next: run };
+  }
+  return { close: at > start && closes(src, at, to, marker) ? at : -1, next: run };
+}
+
+function findCloser(src: string, start: number, to: number, from: number, marker: Marker) {
+  let at = start;
+  while (at < to) {
+    const char = src[at];
+    if (char === "\n") return -1;
+    if (char === "h" || char === "H") {
+      const url = urlAt(src, at, from, to);
+      if (url) {
+        const tail = at + url.length - marker.length;
+        if (url.endsWith(marker) && tail > start && closes(src, tail, to, marker)) return tail;
+        at += url.length;
+        continue;
+      }
+    }
+    const skip = atomicEnd(src, at, from, to);
+    if (skip > 0) {
+      at = skip;
+      continue;
+    }
+    if (char === "*" && marker.startsWith("*")) {
+      const found = starRunCloser(src, at, start, to, from, marker);
+      if (found.close >= 0) return found.close;
+      at = found.next;
+      continue;
+    }
+    if (at + marker.length <= to && src.startsWith(marker, at) && at > start && closes(src, at, to, marker)) return at;
+    at += 1;
+  }
+  return -1;
+}
+
+const EMPHASIS: Record<Exclude<Marker, "***">, "bold" | "italic" | "strike"> = { "**": "bold", "~~": "strike", "*": "italic", _: "italic" };
+
+function emphasisAt(src: string, at: number, from: number, to: number) {
+  for (const marker of MARKERS) {
+    if (at + marker.length > to || !src.startsWith(marker, at) || !opens(src, at, from, marker)) continue;
+    const close = findCloser(src, at + marker.length, to, from, marker);
+    if (close > 0) return { marker, close };
+  }
+  return null;
+}
+
+function parseInline(src: string, from: number, to: number, collect: Collect, inLink = false): Inline[] {
+  const out: Inline[] = [];
+  let text = "";
+  const flush = () => {
+    if (text) out.push({ type: "text", text });
+    text = "";
+  };
+  let at = from;
+  while (at < to) {
+    const char = src[at];
+    if (char === "@") {
+      const mention = mentionAt(src, at, to);
+      if (mention) {
+        flush();
+        out.push({ type: "mention", mention: mention.mention });
+        at = mention.end;
+        continue;
+      }
+    }
+    if (char === "`") {
+      const close = codeSpanAt(src, at, to);
+      if (close > 0) {
+        flush();
+        out.push({ type: "code", text: src.slice(at + 1, close) });
+        collect?.marks.push({ start: at, end: at + 1 }, { start: close, end: close + 1 });
+        collect?.codes.push({ start: at, end: close + 1 });
+        collect?.spans.push({ kind: "code", start: at, end: close + 1 });
+        at = close + 1;
+        continue;
+      }
+    }
+    if (!inLink && (char === "h" || char === "H")) {
+      const url = urlAt(src, at, from, to);
+      if (url) {
+        flush();
+        out.push({ type: "url", href: url, text: url });
+        at += url.length;
+        continue;
+      }
+    }
+    if (!inLink && char === "[") {
+      const link = linkAt(src, at, to);
+      if (link) {
+        flush();
+        out.push({ type: "link", href: link.href, children: parseInline(src, at + 1, link.labelEnd, collect, true) });
+        collect?.marks.push({ start: at, end: at + 1 }, { start: link.labelEnd, end: link.end });
+        collect?.spans.push({ kind: "link", start: at, end: link.end });
+        at = link.end;
+        continue;
+      }
+    }
+    const emphasis = emphasisAt(src, at, from, to);
+    if (emphasis) {
+      const { marker, close } = emphasis;
+      const size = marker.length;
+      flush();
+      const children = parseInline(src, at + size, close, collect, inLink);
+      out.push(marker === "***" ? { type: "bold", children: [{ type: "italic", children }] } : { type: EMPHASIS[marker], children });
+      collect?.marks.push({ start: at, end: at + size }, { start: close, end: close + size });
+      if (marker === "***") collect?.spans.push({ kind: "bold", start: at, end: close + size }, { kind: "italic", start: at, end: close + size });
+      else collect?.spans.push({ kind: EMPHASIS[marker], start: at, end: close + size });
+      at = close + size;
+      continue;
+    }
+    text += char;
+    at += 1;
+  }
+  flush();
+  return out;
+}
+
+type Line = { start: number; end: number; text: string };
+
+function splitLines(src: string): Line[] {
+  const lines: Line[] = [];
+  let start = 0;
+  for (;;) {
+    const end = src.indexOf("\n", start);
+    if (end < 0) {
+      lines.push({ start, end: src.length, text: src.slice(start) });
+      return lines;
+    }
+    lines.push({ start, end, text: src.slice(start, end) });
+    start = end + 1;
+  }
+}
+
+function fenceAt(src: string, start: number): Fence | null {
+  if (!src.startsWith(FENCE, start)) return null;
+  let search = start + FENCE.length;
+  for (;;) {
+    const close = src.indexOf(FENCE, search);
+    if (close < 0) {
+      const newline = src.indexOf("\n", start);
+      const opening = src.slice(start + FENCE.length, newline < 0 ? src.length : newline).trim();
+      if (opening !== "" && !LANGUAGE.test(opening)) return null;
+      return { open: start, closeAt: src.length, end: src.length, closed: false };
+    }
+    let after = close + FENCE.length;
+    while (src[after] === "`") after += 1;
+    const tail = src.indexOf("\n", after);
+    const lineEnd = tail < 0 ? src.length : tail;
+    if (src.slice(after, lineEnd).trim() === "") {
+      const closeAt = after - FENCE.length;
+      return { open: start, closeAt, end: lineEnd, closed: true };
+    }
+    search = close + 1;
+  }
+}
+
+function fenceContent(src: string, fence: Fence) {
+  let from = fence.open + FENCE.length;
+  let language: MarkRange | null = null;
+  const newline = src.indexOf("\n", from);
+  if (newline >= 0 && newline < fence.closeAt) {
+    const first = src.slice(from, newline).trim();
+    if (first === "" || LANGUAGE.test(first)) {
+      language = { start: from, end: newline };
+      from = newline + 1;
+    }
+  }
+  let to = fence.closeAt;
+  if (to > from && src[to - 1] === "\n") to -= 1;
+  return { from, to, language };
+}
+
+function fences(src: string) {
+  const found: Fence[] = [];
+  const lines = splitLines(src);
+  let index = 0;
+  while (index < lines.length) {
+    const fence = fenceAt(src, lines[index].start);
+    if (!fence) {
+      index += 1;
+      continue;
+    }
+    found.push(fence);
+    while (index < lines.length && lines[index].start <= fence.end) index += 1;
+  }
+  return found;
+}
+
+function parseBlocks(src: string, collect: Collect): Block[] {
+  const blocks: Block[] = [];
+  const lines = splitLines(src);
+  let paragraph: Line[] = [];
+  const flushParagraph = () => {
+    while (paragraph.length && paragraph[0].text.trim() === "") paragraph.shift();
+    while (paragraph.length && paragraph[paragraph.length - 1].text.trim() === "") paragraph.pop();
+    if (paragraph.length) blocks.push({ type: "paragraph", children: parseInline(src, paragraph[0].start, paragraph[paragraph.length - 1].end, collect) });
+    paragraph = [];
+  };
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    const fence = fenceAt(src, line.start);
+    if (fence) {
+      flushParagraph();
+      const content = fenceContent(src, fence);
+      collect?.marks.push({ start: fence.open, end: fence.open + FENCE.length });
+      if (content.language) collect?.marks.push(content.language);
+      if (fence.closed) collect?.marks.push({ start: fence.closeAt, end: fence.closeAt + FENCE.length });
+      collect?.codes.push({ start: fence.open, end: fence.end });
+      collect?.spans.push({ kind: "codeBlock", start: fence.open, end: fence.end });
+      blocks.push({ type: "code", text: src.slice(content.from, content.to) });
+      while (index < lines.length && lines[index].start <= fence.end) index += 1;
+      continue;
+    }
+    if (QUOTE.test(line.text)) {
+      flushParagraph();
+      const children: Inline[] = [];
+      const first = line.start;
+      let last = line.end;
+      while (index < lines.length && QUOTE.test(lines[index].text) && !src.startsWith(FENCE, lines[index].start)) {
+        const current = lines[index];
+        const prefix = QUOTE.exec(current.text)![0].length;
+        collect?.marks.push({ start: current.start, end: current.start + 1 });
+        if (children.length) children.push({ type: "text", text: "\n" });
+        children.push(...parseInline(src, current.start + prefix, current.end, collect));
+        last = current.end;
+        index += 1;
+      }
+      collect?.spans.push({ kind: "quote", start: first, end: last });
+      blocks.push({ type: "quote", children });
+      continue;
+    }
+    const bullet = BULLET.exec(line.text);
+    const numbered = bullet ? null : NUMBERED.exec(line.text);
+    if (bullet || numbered) {
+      flushParagraph();
+      const ordered = Boolean(numbered);
+      const pattern = ordered ? NUMBERED : BULLET;
+      const items: Inline[][] = [];
+      const start = numbered ? Number(numbered[1]) : 1;
+      const first = line.start;
+      let last = line.end;
+      while (index < lines.length) {
+        const found = pattern.exec(lines[index].text);
+        if (!found) break;
+        items.push(parseInline(src, lines[index].start + found[0].length, lines[index].end, collect));
+        last = lines[index].end;
+        index += 1;
+      }
+      collect?.spans.push({ kind: ordered ? "numbers" : "bullets", start: first, end: last });
+      blocks.push({ type: "list", ordered, start, items });
+      continue;
+    }
+    paragraph.push(line);
+    index += 1;
+  }
+  flushParagraph();
+  return blocks;
+}
+
+export function parseMarkdown(src: string): Block[] {
+  return parseBlocks(src, null);
+}
+
+function collected(src: string) {
+  const collect = { marks: [] as MarkRange[], codes: [] as MarkRange[], spans: [] as FormatSpan[] };
+  parseBlocks(src, collect);
+  return collect;
+}
+
+export function markdownMarks(src: string): MarkRange[] {
+  return collected(src)
+    .marks.filter((mark) => mark.end > mark.start)
+    .sort((left, right) => left.start - right.start);
+}
+
+export function codeRanges(src: string): MarkRange[] {
+  return collected(src).codes;
+}
+
+export function formatsAt(src: string, start: number, end = start): Set<FormatKind> {
+  const active = new Set<FormatKind>();
+  if (fenceRangeAt(src, start, end)) active.add("codeBlock");
+  for (const span of collected(src).spans) {
+    if (span.kind === "codeBlock") continue;
+    const block = span.kind === "quote" || span.kind === "bullets" || span.kind === "numbers";
+    if (block ? start >= span.start && end <= span.end : start > span.start && end < span.end) active.add(span.kind);
+  }
+  return active;
+}
+
+function inlineMentions(nodes: Inline[], found: Mention[]) {
+  for (const node of nodes) {
+    if (node.type === "mention") found.push(node.mention);
+    else if (node.type === "bold" || node.type === "italic" || node.type === "strike" || node.type === "link") inlineMentions(node.children, found);
+  }
+}
+
+export function formatMentions(body: string, format: ChatFormat): Mention[] {
+  if (format !== "markdown") return mentionsIn(body);
+  const found: Mention[] = [];
+  for (const block of parseMarkdown(body)) {
+    if (block.type === "paragraph" || block.type === "quote") inlineMentions(block.children, found);
+    else if (block.type === "list") for (const item of block.items) inlineMentions(item, found);
+  }
+  return found;
+}
+
+export function cleanFormat(value: unknown, fallback: ChatFormat = "plain"): ChatFormat {
+  return value === "markdown" || value === "plain" ? value : fallback;
+}
+
+export function fenceRangeAt(text: string, start: number, end = start) {
+  for (const fence of fences(text)) {
+    const inside = start > fence.open + FENCE.length - 1 && (fence.closed ? end <= fence.closeAt : end <= fence.end);
+    if (inside) return { ...fence, content: fenceContent(text, fence) };
+  }
+  return null;
+}
+
+export function insideCodeFence(text: string, caret: number) {
+  const fence = fenceRangeAt(text, caret);
+  return Boolean(fence && caret >= fence.open + FENCE.length);
+}

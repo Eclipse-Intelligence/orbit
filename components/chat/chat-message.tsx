@@ -6,9 +6,8 @@ import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import Tag from "@/components/_ui/tag";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
-import MentionInput from "@/components/assistant/mention-input";
 import { AvatarStack, ChatAvatar, useChat, type ChatPane } from "@/components/chat/chat-context";
-import { focusComposer } from "@/components/chat/composer";
+import { ComposerBox, focusComposer } from "@/components/chat/composer";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
@@ -40,8 +39,8 @@ type Props = {
   tabStop?: boolean;
 };
 
-function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void }) {
-  const { edit } = useChat();
+function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPane; onDone: () => void }) {
+  const { edit, discussion } = useChat();
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -62,41 +61,41 @@ function EditBox({ message, onDone }: { message: ChatMessage; onDone: () => void
   }
 
   return (
-    <div ref={box} className="flex flex-col gap-2 py-1">
-      <div className="border-line-strong bg-secondary focus-within:border-ring rounded-xl border px-3 py-1.5">
-        <MentionInput
-          id={`chat-edit-${id}`}
-          inputRef={input}
-          value={value}
-          mentions={mentions}
-          placeholder="Message"
-          ariaLabel="Edit message"
-          autoFocus
-          autoSize={200}
-          onChange={(next, kept) => {
-            setValue(next);
-            setMentions(kept);
-          }}
-          onSubmit={() => void save()}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              done();
-            }
-          }}
-        />
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="caption-style text-subtle max-sm:hidden">Enter to save, Esc to cancel</span>
-        <span className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={done} className="hit max-md:h-11">
-          Cancel
-        </Button>
-        <Button variant="primary" size="sm" disabled={!value.trim() || saving} onClick={() => void save()} className="hit max-md:h-11">
-          Save
-        </Button>
-      </div>
+    <div ref={box} className="flex flex-col gap-1 py-1">
+      <ComposerBox
+        id={`chat-edit-${id}`}
+        inputRef={input}
+        value={value}
+        mentions={mentions}
+        placeholder="Message"
+        label="Edit message"
+        submitVerb="save"
+        scope={pane === "room" && !discussion ? "room" : "thread"}
+        autoFocus
+        actions={
+          <span className="flex items-center gap-2 pointer-coarse:gap-3">
+            <Button variant="ghost" size="sm" onMouseDown={(event) => event.preventDefault()} onClick={done} className="hit max-md:h-11">
+              Cancel
+            </Button>
+            <Button variant="primary" size="sm" disabled={!value.trim() || saving} onMouseDown={(event) => event.preventDefault()} onClick={() => void save()} className="hit max-md:h-11">
+              Save
+            </Button>
+          </span>
+        }
+        onChange={(next, kept) => {
+          setValue(next);
+          setMentions(kept);
+        }}
+        onSubmit={() => void save()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            done();
+          }
+        }}
+      />
+      <span className="caption-style text-subtle px-1 max-sm:hidden">Enter to save, Esc to cancel</span>
     </div>
   );
 }
@@ -240,11 +239,11 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         {deleted ? (
           <p className="text-subtle italic">Message deleted</p>
         ) : isEditing ? (
-          <EditBox message={message} onDone={() => setEditing(null)} />
+          <EditBox message={message} pane={pane} onDone={() => setEditing(null)} />
         ) : message.hook ? (
           <HookCardBody card={message.hook} body={message.body} />
         ) : (
-          <MessageBody body={message.body} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
+          <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
         )}
         {message.editedAt && !deleted && !isEditing && <span className="caption-style text-faint">Edited</span>}
         {error && (

@@ -207,6 +207,15 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "chat-prev", label: "Previous conversation", group: "Chat", combos: [{ key: "ArrowUp", alt: true }], whileTyping: true },
   { id: "chat-next", label: "Next conversation", group: "Chat", combos: [{ key: "ArrowDown", alt: true }], whileTyping: true },
   { id: "chat-send", label: "Send (Shift Enter adds a line)", group: "Chat", combos: [{ key: "Enter" }], whileTyping: true },
+  { id: "chat-send-code", label: "Send from inside a code block", group: "Chat", combos: [{ key: "Enter", mod: true }] },
+  { id: "chat-bold", label: "Bold", group: "Chat", combos: [{ key: "b", mod: true }] },
+  { id: "chat-italic", label: "Italic", group: "Chat", combos: [{ key: "i", mod: true }] },
+  { id: "chat-strike", label: "Strikethrough", group: "Chat", combos: [{ key: "x", mod: true, shift: true }] },
+  { id: "chat-link", label: "Link", group: "Chat", combos: [{ key: "k", mod: true }] },
+  { id: "chat-code", label: "Code", group: "Chat", combos: [{ key: "c", mod: true, shift: true }] },
+  { id: "chat-numbers", label: "Numbered list", group: "Chat", combos: [{ key: "7", mod: true, shift: true }] },
+  { id: "chat-bullets", label: "Bulleted list", group: "Chat", combos: [{ key: "8", mod: true, shift: true }] },
+  { id: "chat-quote", label: "Quote", group: "Chat", combos: [{ key: "9", mod: true, shift: true }] },
 
   { id: "docs-search", label: "Search docs", group: "Docs", combos: [{ key: "f", mod: true, shift: true }], whileTyping: true, palette: true, keywords: "find notes text" },
   { id: "docs-daily", label: "Today's daily note", group: "Docs", sequence: ["g", "d"], palette: true, keywords: "journal today docs" },
@@ -257,6 +266,17 @@ export function comboMatches(combo: Combo, event: KeyEventLike, mac: boolean) {
   }
   if (Boolean(combo.shift) !== event.shiftKey) return false;
   return key === normalKey(combo.key);
+}
+
+export function physicalComboMatches(combo: Combo, event: KeyEventLike & { code?: string }, mac: boolean) {
+  const mod = mac ? event.metaKey : event.ctrlKey;
+  const other = mac ? event.ctrlKey : event.metaKey;
+  if (Boolean(combo.mod) !== mod || other) return false;
+  if (Boolean(combo.alt) !== event.altKey || Boolean(combo.shift) !== event.shiftKey) return false;
+  const wanted = normalKey(combo.key);
+  if (event.code && /^[a-z]$/.test(wanted)) return event.code === `Key${wanted.toUpperCase()}`;
+  if (event.code && /^[0-9]$/.test(wanted)) return event.code === `Digit${wanted}`;
+  return normalKey(event.key) === wanted;
 }
 
 export function matchingShortcuts(event: KeyEventLike, mac: boolean) {

@@ -89,7 +89,9 @@ describe("Post to Chat workflow step", () => {
     assert.equal(posted.author.id, mark.userId);
     assert.deepEqual(posted.via, { workflowId, name: "Won deals" });
     assert.deepEqual(posted.mentions, [sam.userId]);
-    const stored = await sql("select via_workflow_id, via_workflow_name, client_key from crm.chat_messages where id = $1", [posted.id]);
+    assert.equal(posted.format, "plain");
+    const stored = await sql("select via_workflow_id, via_workflow_name, client_key, format from crm.chat_messages where id = $1", [posted.id]);
+    assert.equal(stored.rows[0].format, "plain");
     assert.equal(stored.rows[0].via_workflow_id, workflowId);
     assert.equal(stored.rows[0].via_workflow_name, "Won deals");
     assert.equal(stored.rows[0].client_key, runStepKey(started.runId, "post_to_chat_1"));

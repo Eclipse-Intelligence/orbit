@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { searchMentionsAction } from "@/app/(crm)/search";
 import type { MentionOption } from "@/lib/crm/mention-search";
 import { liveMentions, type Mention, type MentionKind } from "@/lib/mentions";
-import { stripMention } from "@/lib/task-pad";
+import { pickedMention, stripMention } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 
 const KIND_LABELS: Record<MentionKind, string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal", member: "Teammate" };
@@ -74,6 +74,7 @@ export default function MentionInput({
   autoSize,
   onKeyDown: onKey,
   onBlur,
+  markdown,
 }: {
   id: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -93,6 +94,7 @@ export default function MentionInput({
   autoSize?: number;
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onBlur?: () => void;
+  markdown?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [found, setFound] = useState<{ query: string; options: MentionOption[] }>({ query: "", options: [] });
@@ -123,15 +125,14 @@ export default function MentionInput({
   }, [open, kinds]);
 
   function refresh(text: string, caret: number, known: Mention[] = mentions) {
-    const found = stripMention(text, caret);
+    const found = stripMention(text, caret, { afterMarkers: markdown });
     const tagged = found && [...known, ...picked.current].some((mention) => text.startsWith(`@${mention.name}`, found.start));
     setOpen(found && !tagged ? found : null);
   }
 
   function pick(option: MentionOption) {
     if (!open) return;
-    const after = value.slice(open.end).replace(/^\s+/, "");
-    const inserted = `@${option.name} `;
+    const { inserted, after } = pickedMention(option.name, value.slice(open.end), { afterMarkers: markdown });
     const next = `${value.slice(0, open.start)}${inserted}${after}`;
     const caret = open.start + inserted.length;
     const chosen: Mention = { kind: option.kind, id: option.id, name: option.name };

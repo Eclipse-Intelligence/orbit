@@ -1,6 +1,7 @@
 "use server";
 
 import { getUserActor } from "@/lib/auth/user";
+import type { ChatFormat } from "@/lib/chat/markdown";
 import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatPost, ChatResult } from "@/lib/chat/types";
 import {
   addRoomMembers,
@@ -58,12 +59,12 @@ export async function openDmAction(userId: string): Promise<ChatResult<{ convers
   return run("Couldn't open the conversation. Try again.", async (actor) => ({ conversation: await openDm(actor, userId) }));
 }
 
-export async function postMessageAction(input: { conversationId: string; parentId?: string | null; body: string; clientKey: string }): Promise<ChatResult<ChatPost>> {
+export async function postMessageAction(input: { conversationId: string; parentId?: string | null; body: string; format?: ChatFormat; clientKey: string }): Promise<ChatResult<ChatPost>> {
   return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}));
 }
 
-export async function editMessageAction(id: string, body: string): Promise<ChatResult<{ message: ChatMessage }>> {
-  return run("Couldn't save the message. Try again.", async (actor) => ({ message: await editMessage(actor, id, body) }));
+export async function editMessageAction(id: string, body: string, format?: ChatFormat): Promise<ChatResult<{ message: ChatMessage }>> {
+  return run("Couldn't save the message. Try again.", async (actor) => ({ message: await editMessage(actor, id, body, { format }) }));
 }
 
 export async function deleteMessageAction(id: string): Promise<ChatResult<{ deleted: true }>> {

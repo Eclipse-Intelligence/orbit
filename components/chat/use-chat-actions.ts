@@ -4,9 +4,11 @@ import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "re
 import { deleteMessageAction, editMessageAction, postMessageAction } from "@/app/(crm)/chat/actions";
 import { chatJoined, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
+import { encodeChatMentions } from "@/lib/chat/compose";
+import { formatMentions, type ChatFormat } from "@/lib/chat/markdown";
 import { isLocal, newerCursor, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
 import type { ChatMessage, ChatNeedsShare } from "@/lib/chat/types";
-import { encodeMentions, mentionsIn, type Mention } from "@/lib/mentions";
+import type { Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
 
 export const SEND_FAILED = "Couldn't send. Try again.";
@@ -23,12 +25,12 @@ export type ChatTimelineActions = {
   markThreadRead: (rootId: string, upTo: string | null) => void;
 };
 
-export function memberIds(body: string) {
-  return [...new Set(mentionsIn(body).filter((mention) => mention.kind === "member").map((mention) => mention.id.toLowerCase()))];
+export function memberIds(body: string, format: ChatFormat = "markdown") {
+  return [...new Set(formatMentions(body, format).filter((mention) => mention.kind === "member").map((mention) => mention.id.toLowerCase()))];
 }
 
 export function messageBody(text: string, mentions: Mention[]) {
-  return encodeMentions(text, mentions).trim();
+  return encodeChatMentions(text, mentions).trim();
 }
 
 export function useChatActions(
@@ -119,7 +121,7 @@ export function useChatActions(
   const deliver = useCallback(
     async (message: ChatMessage) => {
       const clientKey = message.clientKey ?? "";
-      const result = await postMessageAction({ conversationId: message.conversationId, parentId: message.parentId, body: message.body, clientKey }).catch(() => ({
+      const result = await postMessageAction({ conversationId: message.conversationId, parentId: message.parentId, body: message.body, format: message.format, clientKey }).catch(() => ({
         error: SEND_FAILED,
       }));
       if ("ok" in result && result.ok) {
@@ -150,8 +152,8 @@ export function useChatActions(
     async (message: ChatMessage, text: string, mentions: Mention[]) => {
       const body = messageBody(text, mentions);
       if (!body || body === message.body) return true;
-      dispatch({ type: "edited", message: { ...message, body, mentions: memberIds(body), editedAt: new Date().toISOString() } });
-      const result = await editMessageAction(message.id, body).catch(() => ({ error: "Couldn't save the message. Try again." }));
+      dispatch({ type: "edited", message: { ...message, body, format: "markdown", mentions: memberIds(body), editedAt: new Date().toISOString() } });
+      const result = await editMessageAction(message.id, body, "markdown").catch(() => ({ error: "Couldn't save the message. Try again." }));
       if ("ok" in result && result.ok) {
         dispatch({ type: "edited", message: result.message });
         return true;

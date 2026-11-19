@@ -77,6 +77,7 @@ export function localMessage(input: { clientKey: string; conversationId: string;
     via: null,
     clientKey: input.clientKey,
     body: input.body,
+    format: "markdown",
     mentions: input.mentions,
     replyCount: 0,
     lastReplyAt: null,
