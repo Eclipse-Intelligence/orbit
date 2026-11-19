@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import ChatMessageRow from "@/components/chat/chat-message";
+import SystemLine from "@/components/chat/system-line";
 import { useChat, type ChatPane } from "@/components/chat/chat-context";
 import { dayLabel, dayOf } from "@/lib/chat/format";
 import { isLocal, startsGroup } from "@/lib/chat/timeline";
@@ -32,6 +33,7 @@ export default function MessageList({
   focusId,
   bottomSignal = 0,
   loadError = null,
+  readOnly = false,
   header,
   empty,
   label,
@@ -51,6 +53,7 @@ export default function MessageList({
   focusId: string | null;
   bottomSignal?: number;
   loadError?: string | null;
+  readOnly?: boolean;
   header?: ReactNode;
   empty?: ReactNode;
   label: string;
@@ -139,7 +142,7 @@ export default function MessageList({
         node.scrollTop = node.scrollHeight;
       } else if (prepended) node.scrollTop = previous.top + (node.scrollHeight - previous.height);
       else if (appended && (previous.atBottom || ownNew)) node.scrollTop = node.scrollHeight;
-      if (appended && last && previous.last !== null && (last.author.id !== viewer.id || last.via) && !isLocal(last)) arrived = last;
+      if (appended && last && previous.last !== null && last.kind === "message" && (last.author.id !== viewer.id || last.via) && !isLocal(last)) arrived = last;
     }
     snapshot.current = { ...snapshot.current, first, last: last?.id ?? null };
     report(node);
@@ -208,7 +211,7 @@ export default function MessageList({
     if (node) node.scrollTo({ top: node.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }
 
-  const lastIndex = messages.length - 1;
+  const lastIndex = messages.findLastIndex((message) => message.kind === "message");
   const rows = messages.map((message, index) => {
     const previous = index > 0 ? messages[index - 1] : null;
     const day = dayOf(message.createdAt);
@@ -242,7 +245,19 @@ export default function MessageList({
                   {dayLabel(message.createdAt, now)}
                 </div>
               )}
-              <ChatMessageRow message={message} continuation={continuation} inThread={pane !== "room"} pane={pane} highlighted={highlight === message.id} tabStop={index === lastIndex} />
+              {message.kind === "event" ? (
+                <SystemLine message={message} />
+              ) : (
+                <ChatMessageRow
+                  message={message}
+                  continuation={continuation}
+                  inThread={pane !== "room"}
+                  pane={pane}
+                  readOnly={readOnly}
+                  highlighted={highlight === message.id}
+                  tabStop={index === lastIndex}
+                />
+              )}
             </Fragment>
           ))}
         </div>

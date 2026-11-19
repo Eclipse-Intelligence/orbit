@@ -9,6 +9,7 @@ import { conversationLevel, NotifyItems } from "@/components/chat/notify-menu";
 import { chatLocationHref, type ChatView } from "@/lib/chat/routes";
 import type { ChatConversation, ChatSidebar } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
+import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import BellOffIcon from "@/public/assets/images/chat/bell-off.svg";
@@ -218,6 +219,44 @@ function Conversations({ list, activeId }: { list: ChatConversation[]; activeId:
   );
 }
 
+function ArchivedRooms({ rooms, activeId }: { rooms: { id: string; name: string }[]; activeId: string | null }) {
+  const holdsActive = rooms.some((room) => room.id === activeId);
+  const [open, setOpen] = useState(holdsActive);
+  const [held, setHeld] = useState(holdsActive);
+  if (held !== holdsActive) {
+    setHeld(holdsActive);
+    if (holdsActive) setOpen(true);
+  }
+  if (rooms.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-0.5 pt-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls="chat-archived-rooms"
+        className="text-subtle hover:bg-surface-hover hover:text-foreground flex h-[30px] w-full items-center gap-2 rounded-lg px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 max-md:h-11 max-md:text-[15px]"
+      >
+        <ChevronDownIcon aria-hidden className={cn("size-3 shrink-0 transition-transform duration-150 ease-power2-out", !open && "-rotate-90")} />
+        <span className="min-w-0 flex-1 truncate text-left">Archived</span>
+        <span className="text-faint tabular-nums">{rooms.length}</span>
+      </button>
+      {open && (
+        <ul id="chat-archived-rooms" className="flex flex-col gap-0.5">
+          {rooms.map((room) => (
+            <Item key={room.id} view={{ kind: "room", id: room.id }} active={room.id === activeId} unread={false}>
+              <span aria-hidden className="text-faint font-normal">
+                #
+              </span>
+              <span className="min-w-0 flex-1 truncate">{room.name}</span>
+            </Item>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function ChatList({
   sidebar,
   error,
@@ -276,8 +315,9 @@ export default function ChatList({
         {rooms.length > 0 ? (
           <Conversations list={rooms} activeId={activeId} />
         ) : (
-          sidebar && !starred.some((conversation) => conversation.kind === "room") && <p className="caption-style text-subtle px-2 pb-1">No rooms yet.</p>
+          sidebar && (sidebar.archived ?? []).length === 0 && !starred.some((conversation) => conversation.kind === "room") && <p className="caption-style text-subtle px-2 pb-1">No rooms yet.</p>
         )}
+        <ArchivedRooms rooms={sidebar?.archived ?? []} activeId={activeId} />
       </section>
       <section aria-labelledby="chat-dms">
         <Heading

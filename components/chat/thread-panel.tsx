@@ -39,6 +39,7 @@ export default function ThreadPanel({
   const messages = useMemo(() => timeline?.messages ?? [], [timeline]);
   const root = thread?.root ?? null;
   const where = thread?.conversation ?? conversation;
+  const archived = Boolean((conversation ?? thread?.conversation)?.archivedAt);
   const place = where ? (where.kind === "dm" ? where.name : roomLabel(where)) : "";
   const backLabel = where ? (where.kind === "dm" ? where.name : `# ${where.name}`) : "Chat";
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
@@ -60,7 +61,7 @@ export default function ThreadPanel({
 
   const header = root ? (
     <>
-      <ChatMessageRow message={root} continuation={false} inThread pane="thread" fullStamp />
+      <ChatMessageRow message={root} continuation={false} inThread pane="thread" fullStamp readOnly={archived} />
       <div className="caption-style text-subtle mx-4 my-3 flex items-center justify-center gap-2.5 max-md:mx-3.5" role="separator">
         {root.replyCount === 1 ? "1 reply" : `${root.replyCount} replies`}
       </div>
@@ -105,6 +106,7 @@ export default function ThreadPanel({
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={null}
+          readOnly={archived}
           header={header}
           label="Thread replies"
           onOlder={() => loadThread(rootId, "older")}
@@ -119,25 +121,29 @@ export default function ThreadPanel({
         </p>
       )}
       <div className="shrink-0 px-3 pb-3.5 max-md:px-2 max-md:pb-2">
-        <Composer
-          id={`chat-reply-${rootId}`}
-          conversationId={root?.conversationId ?? where?.id ?? ""}
-          parentId={rootId}
-          placeholder="Reply…"
-          label="Reply in thread"
-          sendLabel="Send reply"
-          scope="thread"
-          autoFocus
-          onEscape={onClose}
-          disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
-          onSend={(text, mentions) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions }) : Promise.resolve(null))}
-          onEditLast={() => {
-            const own = lastOwnMessage(messages, viewer.id);
-            if (!own) return false;
-            setEditing({ id: own.id, pane: "thread" });
-            return true;
-          }}
-        />
+        {archived ? (
+          <p className="bg-surface-raised ui-style text-soft rounded-[10px] px-3 py-2.5">This room is archived.</p>
+        ) : (
+          <Composer
+            id={`chat-reply-${rootId}`}
+            conversationId={root?.conversationId ?? where?.id ?? ""}
+            parentId={rootId}
+            placeholder="Reply…"
+            label="Reply in thread"
+            sendLabel="Send reply"
+            scope="thread"
+            autoFocus
+            onEscape={onClose}
+            disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
+            onSend={(text, mentions) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions }) : Promise.resolve(null))}
+            onEditLast={() => {
+              const own = lastOwnMessage(messages, viewer.id);
+              if (!own) return false;
+              setEditing({ id: own.id, pane: "thread" });
+              return true;
+            }}
+          />
+        )}
       </div>
     </div>
   );

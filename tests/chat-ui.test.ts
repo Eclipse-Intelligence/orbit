@@ -36,6 +36,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     id: input.id ?? `aaaaaaaa-aaaa-4aaa-8aaa-${String(sequence).padStart(12, "0")}`,
     conversationId: ROOM,
     parentId: null,
+    kind: "message",
     author: { id: SAM, name: "Sam Okafor" },
     via: null,
     clientKey: null,
@@ -225,9 +226,10 @@ describe("chat timeline", () => {
 describe("chat sidebar badge", () => {
   const sidebar: ChatSidebar = {
     conversations: [
-      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
-      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0, notify: "default", muteMentions: false, starred: false },
+      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
+      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0, notify: "default", muteMentions: false, starred: false },
     ],
+    archived: [],
     threads: { unread: 0, mentions: 0 },
     unreadConversations: 1,
     mentioned: true,
@@ -474,9 +476,10 @@ describe("chat notify and unread state", () => {
   it("updates one conversation's settings and clears every unread count", () => {
     const sidebar: ChatSidebar = {
       conversations: [
-        { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
-        { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 2, mentions: 0, notify: "default", muteMentions: false, starred: false },
+        { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
+        { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 2, mentions: 0, notify: "default", muteMentions: false, starred: false },
       ],
+      archived: [],
       threads: { unread: 1, mentions: 1 },
       unreadConversations: 2,
       mentioned: true,

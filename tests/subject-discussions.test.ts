@@ -465,6 +465,7 @@ describe("discussion helpers", () => {
       id: "a",
       conversationId: "c",
       parentId: null,
+      kind: "message",
       author: { id: "u", name: "U" },
       clientKey: null,
       body: "x",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
-import { chatWorkSettled, createRoom, deleteMessage, editMessage, leaveRoom, listConversations, listMessages, markConversationRead, postMessage } from "@/lib/crm/chat";
+import { chatWorkSettled, createRoom, deleteMessage, editMessage, leaveRoom, listConversations, listMessages, markConversationRead, postMessage, setRoomArchived } from "@/lib/crm/chat";
 import { createCompany } from "@/lib/crm/companies";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -286,6 +286,19 @@ describe("Post to Chat workflow step", () => {
     const workflowId = await flow("Mark's own", { roomId, roomName: "sales", body: "Hi" });
     await assert.rejects(postMessage(sam, { conversationId: roomId, body: "Pretending" }, { viaWorkflowId: workflowId }), /Only the workflow's owner can post from it\./);
     assert.equal((await sql("select count(*)::int as n from crm.chat_messages where body = 'Pretending'")).rows[0].n, 0);
+  });
+
+  it("fails with This room is archived. when the room is archived, found by id or by name", async () => {
+    const archived = (await createRoom(mark, { name: "q3-launch", memberIds: [sam.userId] })).id;
+    const byId = await flow("Archived by id", { roomId: archived, roomName: "q3-launch", body: "Too late" });
+    const byName = await flow("Archived by name", { roomName: "q3-launch", body: "Too late by name" });
+    await setRoomArchived(mark, archived, true);
+    for (const workflowId of [byId, byName]) {
+      const started = await startRun(mark, workflowId, { test: false, record: { type: "company", id: companyId } });
+      assert.equal(started.status, "failed");
+      assert.equal((await getRunSteps(mark, started.runId)).run.error, "post_to_chat_1: This room is archived.");
+    }
+    assert.ok(!(await sql("select 1 from crm.chat_messages where conversation_id = $1 and via_workflow_id is not null", [archived])).rowCount);
   });
 
   it("fails with a clear error and alerts the owner once they have left the room", async () => {

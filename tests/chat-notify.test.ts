@@ -17,6 +17,7 @@ import {
   openDm,
   postMessage,
   setConversationNotify,
+  updateRoom,
 } from "@/lib/crm/chat";
 import { createHook, postViaHook } from "@/lib/crm/chat-hooks";
 import { CrmError } from "@/lib/crm/errors";
@@ -437,6 +438,23 @@ describe("chat notification levels", () => {
       const posted = await postViaHook({ hookId: hook.id, authorization: `Bearer ${secret}`, body: JSON.stringify({ text: "before" }) });
       await sql("update crm.chat_conversations set archived_at = now() where id = $1", [closed]);
       assert.deepEqual((await sql("select user_id from private.chat_hook_listeners($1)", [posted.id])).rows, []);
+    });
+  });
+
+  describe("system lines", () => {
+    it("never show in All unreads and are never the Mark unread anchor", async () => {
+      const topics = await room("topics", [sam]);
+      const first = await post(sam, topics, "Before the topic");
+      await markConversationRead(mark, topics);
+      await updateRoom(sam, topics, { topic: "Q4 pipeline" });
+      const events = await sql("select id from crm.chat_messages where conversation_id = $1 and kind = 'event'", [topics]);
+      assert.equal(events.rows.length, 1);
+      assert.equal((await markConversationUnread(mark, topics, null)).messageId, first.message.id);
+      const group = (await listUnreads(mark)).groups.find((item) => item.conversation.id === topics);
+      assert.deepEqual(group?.messages.map((message) => message.id), [first.message.id]);
+      await refused(markConversationUnread(mark, topics, events.rows[0].id), /Message not found/);
+      await markConversationRead(mark, topics);
+      assert.equal((await listUnreads(mark)).groups.some((item) => item.conversation.id === topics), false);
     });
   });
 

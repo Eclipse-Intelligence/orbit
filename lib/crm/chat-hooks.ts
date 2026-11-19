@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX, CHAT_HOOK_NAME_MAX, type ChatHook, type ChatHookSecret, type ChatMessage } from "@/lib/chat/types";
-import { broadcastChat, chatBackground, hookCard } from "@/lib/crm/chat";
+import { archivedRoom, broadcastChat, chatBackground, hookCard } from "@/lib/crm/chat";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -21,7 +21,7 @@ type Stamp = Date | string;
 type HookRow = { id: string; name: string; created_by: string | null; paused_at: Stamp | null; last_used_at: Stamp | null; created_at: Stamp };
 
 type PostRow = {
-  status: "ok" | "not_found" | "unauthorised" | "paused" | "rate_limited";
+  status: "ok" | "not_found" | "unauthorised" | "archived" | "paused" | "rate_limited";
   message_id: string | null;
   conversation_id: string | null;
   author_name: string | null;
@@ -214,6 +214,7 @@ function idempotencyKey(header: string | null) {
 const REFUSALS = {
   not_found: () => new CrmError("not_found", "This webhook doesn't exist or was deleted.", 404),
   unauthorised: () => new CrmError("unauthorized", "Send this webhook's secret as Authorization: Bearer <secret>.", 401),
+  archived: () => archivedRoom(),
   paused: () => new CrmError("conflict", "This webhook is paused. Resume it in the room's settings.", 409),
   rate_limited: () => new CrmError("rate_limited", `This webhook can post ${HOOK_POSTS_PER_MINUTE} messages a minute. Try again shortly.`, 429),
 };
@@ -267,6 +268,7 @@ export async function postViaHook(
       id: row.message_id!,
       conversationId,
       parentId: null,
+      kind: "message",
       author: { id: null, name: row.author_name ?? "" },
       via: null,
       clientKey: null,
