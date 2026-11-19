@@ -381,6 +381,8 @@ describe("chat", () => {
       const again = await editMessage(mark, posted.message.id, `\`${tag(priya)}\``);
       assert.equal(again.format, "markdown");
       assert.deepEqual(again.mentions, []);
+      const odd = await editMessage(mark, posted.message.id, "Odd format asked", { format: "html" });
+      assert.equal(odd.format, "markdown");
       assert.equal((await stored(posted.message.id)).format, "markdown");
     });
 

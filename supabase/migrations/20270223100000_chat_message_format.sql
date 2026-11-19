@@ -14,3 +14,5 @@ alter table crm.chat_messages validate constraint chat_messages_format_check;
 
 grant insert (format) on crm.chat_messages to authenticated;
 grant update (format) on crm.chat_messages to authenticated;
+
+reset lock_timeout;

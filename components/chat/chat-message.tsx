@@ -40,7 +40,7 @@ type Props = {
 };
 
 function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPane; onDone: () => void }) {
-  const { edit } = useChat();
+  const { edit, discussion } = useChat();
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -69,7 +69,7 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
         mentions={mentions}
         placeholder="Message"
         label="Edit message"
-        scope={pane === "room" ? "room" : "thread"}
+        scope={pane === "room" && !discussion ? "room" : "thread"}
         autoFocus
         actions={
           <span className="flex items-center gap-2 pointer-coarse:gap-3">

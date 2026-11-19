@@ -8,7 +8,7 @@ import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { draftKey, formatBarDefault, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
 import { applyEdit, formatEdit, mentionEdit, type FormatAction, type TextEdit } from "@/lib/chat/compose";
-import { insideCodeFence, markdownMarks } from "@/lib/chat/markdown";
+import { formatsAt, insideCodeFence, markdownMarks, type FormatKind } from "@/lib/chat/markdown";
 import { CHAT_BODY_MAX } from "@/lib/chat/types";
 import { liveMentions, type Mention } from "@/lib/mentions";
 import { physicalComboMatches, SHORTCUT_BY_ID } from "@/lib/shortcuts";
@@ -81,31 +81,32 @@ function useFormatBar(userId: string, scope: FormatScope) {
   return [shown, (next: boolean) => writeFormatBar(userId, scope, next)] as const;
 }
 
-function ToolButton({ tool, onRun, phone }: { tool: Tool; onRun: (action: FormatAction) => void; phone?: boolean }) {
+function ToolButton({ tool, onRun, phone, active }: { tool: Tool; onRun: (action: FormatAction) => void; phone?: boolean; active: boolean }) {
   const hint = useShortcutHint(tool.shortcut);
   return (
     <Button
       variant="ghost"
       size="none"
       aria-label={tool.label}
+      aria-pressed={active}
       title={hint ? `${tool.label} (${hint})` : tool.label}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => onRun(tool.action)}
-      className={cn("shrink-0 rounded-md", phone ? "size-11" : "h-[26px] w-7 pointer-coarse:size-11")}
+      className={cn("aria-pressed:bg-surface-active aria-pressed:text-foreground shrink-0 rounded-md", phone ? "size-11" : "h-[26px] w-7 pointer-coarse:size-11")}
     >
       <tool.Icon aria-hidden className={phone ? "size-4" : "size-3.5"} />
     </Button>
   );
 }
 
-function Toolbar({ onRun, phone, className }: { onRun: (action: FormatAction) => void; phone?: boolean; className?: string }) {
+function Toolbar({ onRun, active, phone, className }: { onRun: (action: FormatAction) => void; active: Set<FormatKind>; phone?: boolean; className?: string }) {
   return (
     <div role="toolbar" aria-label="Formatting" className={cn("flex items-center gap-px", className)}>
       {TOOLS.map((group, index) => (
-        <div key={index} className="flex items-center gap-px">
+        <div key={index} className="flex shrink-0 items-center gap-px">
           {index > 0 && <span aria-hidden className="bg-line-strong mx-1 h-3.5 w-px shrink-0" />}
           {group.map((tool) => (
-            <ToolButton key={tool.action} tool={tool} onRun={onRun} phone={phone} />
+            <ToolButton key={tool.action} tool={tool} onRun={onRun} phone={phone} active={active.has(tool.action)} />
           ))}
         </div>
       ))}
@@ -171,6 +172,9 @@ export function ComposerBox({
   const { viewer } = useChat();
   const [shown, setShown] = useFormatBar(viewer.id, scope);
   const [focused, setFocused] = useState(false);
+  const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
+  const active = useMemo(() => (focused ? formatsAt(value, selection.start, selection.end) : new Set<FormatKind>()), [focused, value, selection]);
+  const inFence = focused && selection.start === selection.end && insideCodeFence(value, selection.start);
   const marks = useMemo(() => markdownMarks(value).map((mark) => ({ ...mark, className: MARK_CLASS })), [value]);
   const oneRow = Boolean(phoneAction);
 
@@ -187,6 +191,7 @@ export function ComposerBox({
     }
     if (inserted && area.value === applyEdit(value, edit)) {
       area.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+      setSelection({ start: edit.selectionStart, end: edit.selectionEnd });
       return;
     }
     const next = applyEdit(value, edit);
@@ -243,7 +248,14 @@ export function ComposerBox({
   const iconButton = "size-[30px] shrink-0 rounded-md pointer-coarse:size-11";
 
   return (
-    <div className="flex flex-col" onFocus={() => setFocused(true)} onBlur={blur}>
+    <div
+      className="flex flex-col"
+      onFocus={() => setFocused(true)}
+      onBlur={blur}
+      onSelect={(event) => {
+        if (event.target instanceof HTMLTextAreaElement) setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
+      }}
+    >
       <div
         data-chat-composer={composer ? "" : undefined}
         className={cn(
@@ -255,7 +267,7 @@ export function ComposerBox({
           if (event.target === event.currentTarget) inputRef.current?.focus();
         }}
       >
-        {shown && <Toolbar onRun={run} className="border-line-subtle border-b px-1.5 py-1 max-md:hidden" />}
+        {shown && <Toolbar onRun={run} active={active} className="border-line-subtle overflow-x-auto overscroll-contain border-b px-1.5 py-1 max-md:hidden" />}
         <div className="flex items-end gap-2">
           <div className={cn("min-w-0 flex-1 px-3.5 pt-2.5 pb-1", oneRow && "max-md:py-[9px] max-md:pl-4")}>
             <MentionInput
@@ -268,6 +280,7 @@ export function ComposerBox({
               ariaLabel={label}
               autoFocus={autoFocus}
               autoSize={GROW_MAX_PX}
+              markdown
               onChange={onChange}
               onSubmit={onSubmit}
               onBlur={onBlur}
@@ -288,10 +301,15 @@ export function ComposerBox({
           {actions}
         </div>
       </div>
+      {inFence && (
+        <p role="status" className="caption-style text-faint px-1 pt-1 text-right max-md:hidden">
+          {isMac() ? "⌘ Enter" : "Ctrl Enter"} to send
+        </p>
+      )}
       {focused && (
         <div className="bg-popover border-line-subtle -mx-2 mt-2 flex items-center gap-0.5 overflow-x-auto overscroll-contain border-t px-1.5 py-1 md:hidden">
           <FormatToggle shown={shown} onToggle={() => setShown(!shown)} phone />
-          {shown && <Toolbar onRun={run} phone />}
+          {shown && <Toolbar onRun={run} active={active} phone />}
         </div>
       )}
     </div>

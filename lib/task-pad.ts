@@ -1487,13 +1487,15 @@ export function backspaceKeeps(marks: PadMark[], caret: number, selectionEnd: nu
   return caret === selectionEnd && marks.some((mark) => (mark.kind === "when" || mark.kind === "reminder") && mark.end === caret);
 }
 
-export function stripMention(text: string, caret: number) {
+export function stripMention(text: string, caret: number, options: { afterMarkers?: boolean } = {}) {
   const before = text.slice(0, caret);
   const at = before.lastIndexOf("@");
   if (at < 0) return null;
   const query = before.slice(at + 1);
   if (/\s{2,}|\n/.test(query) || query.length > 40) return null;
-  if (at > 0 && !/\s/.test(before[at - 1])) return null;
+  let edge = at;
+  if (options.afterMarkers) while (edge > 0 && /[*_~]/.test(before[edge - 1])) edge -= 1;
+  if (edge > 0 && !/\s/.test(before[edge - 1])) return null;
   return { start: at, end: caret, query };
 }
 

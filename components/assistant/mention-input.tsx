@@ -74,6 +74,7 @@ export default function MentionInput({
   autoSize,
   onKeyDown: onKey,
   onBlur,
+  markdown,
 }: {
   id: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -93,6 +94,7 @@ export default function MentionInput({
   autoSize?: number;
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onBlur?: () => void;
+  markdown?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [found, setFound] = useState<{ query: string; options: MentionOption[] }>({ query: "", options: [] });
@@ -123,7 +125,7 @@ export default function MentionInput({
   }, [open, kinds]);
 
   function refresh(text: string, caret: number, known: Mention[] = mentions) {
-    const found = stripMention(text, caret);
+    const found = stripMention(text, caret, { afterMarkers: markdown });
     const tagged = found && [...known, ...picked.current].some((mention) => text.startsWith(`@${mention.name}`, found.start));
     setOpen(found && !tagged ? found : null);
   }
@@ -131,7 +133,7 @@ export default function MentionInput({
   function pick(option: MentionOption) {
     if (!open) return;
     const after = value.slice(open.end).replace(/^\s+/, "");
-    const inserted = `@${option.name} `;
+    const inserted = markdown && /^[*_~`]/.test(after) ? `@${option.name}` : `@${option.name} `;
     const next = `${value.slice(0, open.start)}${inserted}${after}`;
     const caret = open.start + inserted.length;
     const chosen: Mention = { kind: option.kind, id: option.id, name: option.name };

@@ -3,8 +3,9 @@ import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import MessageBody from "@/components/chat/message-body";
-import { applyEdit, formatEdit, mentionEdit } from "@/lib/chat/compose";
-import { cleanFormat, formatMentions, insideCodeFence, markdownMarks, parseMarkdown } from "@/lib/chat/markdown";
+import { applyEdit, encodeChatMentions, formatEdit, mentionEdit } from "@/lib/chat/compose";
+import { cleanFormat, formatMentions, formatsAt, insideCodeFence, markdownMarks, parseMarkdown } from "@/lib/chat/markdown";
+import { stripMention } from "@/lib/task-pad";
 import { physicalComboMatches, SHORTCUT_BY_ID } from "@/lib/shortcuts";
 
 const SAM = "33333333-3333-4333-8333-333333333333";
@@ -149,7 +150,7 @@ describe("chat composer formatting", () => {
   it("makes links, lists, quotes and code", () => {
     assert.equal(run("see docs", 4, 8, "link").next, "see [docs](https://)");
     assert.equal(run("see docs", 4, 8, "link").caret, "see [docs](https://".length);
-    assert.equal(run("https://a.test", 0, 14, "link").next, "[](https://a.test)");
+    assert.deepEqual(run("https://a.test", 0, 14, "link"), { next: "[https://a.test](https://a.test)", selected: "https://a.test", caret: 1 });
     assert.equal(run("one\ntwo", 0, 7, "bullets").next, "- one\n- two");
     assert.equal(run("- one\n- two", 0, 11, "bullets").next, "one\ntwo");
     assert.equal(run("one\ntwo", 1, 5, "numbers").next, "1. one\n2. two");
@@ -175,5 +176,114 @@ describe("chat composer formatting", () => {
     for (const id of ["chat-bold", "chat-italic", "chat-strike", "chat-link", "chat-code", "chat-numbers", "chat-bullets", "chat-quote", "chat-send-code"]) {
       assert.equal(SHORTCUT_BY_ID.get(id)?.group, "Chat", id);
     }
+  });
+});
+
+describe("chat Markdown review fixes", () => {
+  function linksIn(markup: string) {
+    return [...markup.matchAll(/<a href="([^"]*)"/g)].map((match) => match[1]);
+  }
+
+  it("keeps every emphasis marker out of a bare URL or a link next to it", () => {
+    for (const [marker, tag] of [
+      ["**", "strong"],
+      ["_", "em"],
+      ["*", "em"],
+      ["~~", "s"],
+    ] as const) {
+      for (const inside of ["https://x.com/path", "see https://x.com", "[docs](https://x.com/a_b)"]) {
+        const markup = html(`${marker}${inside}${marker} after`);
+        assert.match(markup, new RegExp(`<${tag}[^>]*>`), `${marker}${inside}${marker}`);
+        for (const href of linksIn(markup)) assert.doesNotMatch(href, /[*~]|_$/, `${marker}${inside}${marker} gave ${href}`);
+        assert.ok(!markup.includes(`${marker} after`), `${marker}${inside}${marker} left a marker`);
+      }
+    }
+    assert.deepEqual(linksIn(html("https://x.com/a** and https://y.com~~")), ["https://x.com/a", "https://y.com"]);
+  });
+
+  it("never puts a link inside a link", () => {
+    for (const body of ["[https://bank.com](https://evil.example)", "[mail jo@x.com](https://x.com)", "[**https://a.com**](https://b.com)"]) {
+      const markup = html(body);
+      assert.equal(linksIn(markup).length, 1, body);
+      assert.doesNotMatch(markup, /<a [^>]*>(?:(?!<\/a>).)*<a /, body);
+    }
+    assert.match(html("[https://bank.com](https://evil.example)"), /<a href="https:\/\/evil.example"[^>]*>https:\/\/bank.com<\/a>/);
+  });
+
+  it("reads ***both*** as bold italic and links with one level of brackets", () => {
+    assert.match(html("***both*** ok"), /<strong class="font-semibold"><em>both<\/em><\/strong> ok/);
+    assert.deepEqual(linksIn(html("[Mercury](https://en.wikipedia.org/wiki/Mercury_(planet)) is hot")), ["https://en.wikipedia.org/wiki/Mercury_(planet)"]);
+  });
+
+  it("only treats ``` at the start of a line as a fence", () => {
+    assert.equal(insideCodeFence("use ``` for code", 16), false);
+    assert.equal(insideCodeFence("use ``` for code and ``` again", 30), false);
+    assert.equal(insideCodeFence("```\ncode", 8), true);
+    assert.equal(insideCodeFence("```\ncode\n```\nafter", 18), false);
+  });
+
+  it("knows which formats the caret is in", () => {
+    const text = "**bold _it_** `c` [l](https://x.com)\n> q\n- a";
+    assert.deepEqual([...formatsAt(text, 8)].sort(), ["bold", "italic"]);
+    assert.deepEqual([...formatsAt(text, 15)], ["code"]);
+    assert.deepEqual([...formatsAt(text, 20)], ["link"]);
+    assert.deepEqual([...formatsAt(text, text.indexOf("q"))], ["quote"]);
+    assert.deepEqual([...formatsAt(text, text.length)], ["bullets"]);
+    assert.deepEqual([...formatsAt("```\nx\n```", 5)], ["codeBlock"]);
+    assert.deepEqual([...formatsAt("```\nstill typing", 16)], ["codeBlock"]);
+    assert.equal(formatsAt("```\nx\n```", 9).size, 0);
+    assert.equal(formatsAt("plain", 2).size, 0);
+  });
+
+  it("encodes a tag outside code even when the same name appears in code first", () => {
+    const sam = { kind: "member" as const, id: SAM, name: "Sam Okafor" };
+    assert.equal(encodeChatMentions("`@Sam Okafor` then @Sam Okafor", [sam]), `\`@Sam Okafor\` then @[Sam Okafor](member:${SAM})`);
+    assert.equal(encodeChatMentions("```\n@Sam Okafor\n```\n@Sam Okafor", [sam]), `\`\`\`\n@Sam Okafor\n\`\`\`\n@[Sam Okafor](member:${SAM})`);
+    assert.equal(encodeChatMentions("`@Sam Okafor`", [sam]), "`@Sam Okafor`");
+    const short = { kind: "member" as const, id: PRIYA, name: "Sam" };
+    assert.equal(encodeChatMentions("@Sam Okafor and @Sam", [sam, short]), `@[Sam Okafor](member:${SAM}) and @[Sam](member:${PRIYA})`);
+  });
+});
+
+describe("chat composer review fixes", () => {
+  function run(value: string, start: number, end: number, action: Parameters<typeof formatEdit>[3]) {
+    const edit = formatEdit(value, start, end, action);
+    const next = applyEdit(value, edit);
+    return { next, selected: next.slice(edit.selectionStart, edit.selectionEnd), caret: edit.selectionStart };
+  }
+
+  it("wraps and unwraps each line of a multi-line selection", () => {
+    for (const [action, marker] of [
+      ["bold", "**"],
+      ["italic", "_"],
+      ["strike", "~~"],
+    ] as const) {
+      const wrapped = run("one\n\n two", 0, 9, action).next;
+      assert.equal(wrapped, `${marker}one${marker}\n\n ${marker}two${marker}`);
+      assert.equal(run(wrapped, 0, wrapped.length, action).next, "one\n\n two");
+      assert.ok(parseMarkdown(wrapped).every((block) => block.type !== "paragraph" || block.children.every((node) => node.type !== "text" || !node.text.includes(marker))), action);
+    }
+  });
+
+  it("keeps the caret where it was when a list or quote is added without a selection", () => {
+    assert.deepEqual(run("first\nsecond line", 9, 9, "bullets"), { next: "first\n- second line", selected: "", caret: 11 });
+    assert.deepEqual(run("first\n1. second", 12, 12, "numbers"), { next: "first\nsecond", selected: "", caret: 9 });
+    assert.equal(run("say this", 3, 3, "quote").caret, 5);
+  });
+
+  it("unwraps a code block when the caret is already in one", () => {
+    assert.deepEqual(run("before\n```\nline one\nline two\n```\nafter", 14, 14, "codeBlock"), { next: "before\nline one\nline two\nafter", selected: "line one\nline two", caret: 7 });
+    assert.equal(run("```\nopen block", 8, 8, "codeBlock").next, "open block");
+  });
+
+  it("starts a mention right after an opening marker, and only there", () => {
+    assert.equal(applyEdit("****", mentionEdit("****", 2, 2)), "**@**");
+    assert.equal(applyEdit("_", mentionEdit("_", 1, 1)), "_@");
+    assert.equal(applyEdit("word", mentionEdit("word", 4, 4)), "word @");
+    assert.deepEqual(stripMention("**@ma**", 5, { afterMarkers: true }), { start: 2, end: 5, query: "ma" });
+    assert.deepEqual(stripMention("hi _~@sa", 8, { afterMarkers: true }), { start: 5, end: 8, query: "sa" });
+    assert.equal(stripMention("x**@ma", 6, { afterMarkers: true }), null);
+    assert.equal(stripMention("**@ma", 5), null);
+    assert.deepEqual(stripMention("Call @Ac", 8), { start: 5, end: 8, query: "Ac" });
   });
 });

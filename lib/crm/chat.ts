@@ -1067,7 +1067,7 @@ async function ownMessage(db: Db, actor: UserActor, id: string) {
 export async function editMessage(actor: UserActor, id: string, body: unknown, options: { format?: unknown } = {}): Promise<ChatMessage> {
   const messageId = checkId(id, "message");
   const text = cleanBody(body);
-  const asked = options.format === undefined ? null : cleanFormat(options.format);
+  const asked = options.format === "plain" || options.format === "markdown" ? options.format : null;
   try {
     const followed = await query<{ user_id: string }>("select user_id from private.chat_message_followers($1, $2)", [actor.userId, messageId]);
     const followersBefore = new Set(followed.rows.map((row) => row.user_id));

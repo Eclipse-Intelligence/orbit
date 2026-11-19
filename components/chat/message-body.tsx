@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import LinkedText from "@/components/_ui/linked-text";
 import { recordHref } from "@/lib/docs/routes";
 import { parseMarkdown, type Block, type ChatFormat, type Inline } from "@/lib/chat/markdown";
@@ -39,11 +39,11 @@ function ExternalLink({ href, children }: { href: string; children: ReactNode })
   );
 }
 
-function renderInline(nodes: Inline[], viewer: Viewer): ReactNode[] {
+function renderInline(nodes: Inline[], viewer: Viewer, inLink = false): ReactNode[] {
   return nodes.map((node, index) => {
     switch (node.type) {
       case "text":
-        return <LinkedText key={index} text={node.text} />;
+        return inLink ? <Fragment key={index}>{node.text}</Fragment> : <LinkedText key={index} text={node.text} />;
       case "mention":
         return <MentionChip key={index} mention={node.mention} viewer={viewer} />;
       case "code":
@@ -61,19 +61,19 @@ function renderInline(nodes: Inline[], viewer: Viewer): ReactNode[] {
       case "link":
         return (
           <ExternalLink key={index} href={node.href}>
-            {renderInline(node.children, viewer)}
+            {renderInline(node.children, viewer, true)}
           </ExternalLink>
         );
       case "bold":
         return (
           <strong key={index} className="font-semibold">
-            {renderInline(node.children, viewer)}
+            {renderInline(node.children, viewer, inLink)}
           </strong>
         );
       case "italic":
-        return <em key={index}>{renderInline(node.children, viewer)}</em>;
+        return <em key={index}>{renderInline(node.children, viewer, inLink)}</em>;
       case "strike":
-        return <s key={index}>{renderInline(node.children, viewer)}</s>;
+        return <s key={index}>{renderInline(node.children, viewer, inLink)}</s>;
     }
   });
 }

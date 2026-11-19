@@ -4,10 +4,11 @@ import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "re
 import { deleteMessageAction, editMessageAction, postMessageAction } from "@/app/(crm)/chat/actions";
 import { chatJoined, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
+import { encodeChatMentions } from "@/lib/chat/compose";
 import { formatMentions, type ChatFormat } from "@/lib/chat/markdown";
 import { isLocal, newerCursor, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
 import type { ChatMessage, ChatNeedsShare } from "@/lib/chat/types";
-import { encodeMentions, type Mention } from "@/lib/mentions";
+import type { Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
 
 export const SEND_FAILED = "Couldn't send. Try again.";
@@ -29,7 +30,7 @@ export function memberIds(body: string, format: ChatFormat = "markdown") {
 }
 
 export function messageBody(text: string, mentions: Mention[]) {
-  return encodeMentions(text, mentions).trim();
+  return encodeChatMentions(text, mentions).trim();
 }
 
 export function useChatActions(
