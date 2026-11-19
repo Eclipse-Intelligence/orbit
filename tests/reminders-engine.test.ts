@@ -431,6 +431,33 @@ describe("reminders", () => {
       assert.equal(next.sent[0].title, "Pills");
     });
 
+    it("pushes once at its time when an early-ticked copy is reopened after the reminder is deleted", async () => {
+      await wipe(mark.userId);
+      const stretch = (await createReminder(mark, { title: "Stretch", dueAt: "2027-01-20T10:00", repeat: { every: "day" } }, { now: NOW })).reminder;
+      const ticked = await completeReminder(mark, stretch.id, { dueOn: "2027-01-20" }, { now: Date.parse("2027-01-20T09:00:00Z") });
+      await deleteReminder(mark, stretch.id);
+      const reopened = (await reopenReminder(mark, ticked.doneId!)).reminder;
+      assert.equal(reopened.dueAt, "2027-01-20T10:00:00.000Z");
+      const [first, second] = [pusher(), pusher()];
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-20T10:01:00Z"), send: first.send });
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-20T10:02:00Z"), send: second.send });
+      assert.equal(first.sent.length + second.sent.length, 1);
+      assert.equal(first.sent[0]?.title, "Stretch");
+    });
+
+    it("pushes once at its time after an early tick and Undo", async () => {
+      await wipe(mark.userId);
+      const water = (await createReminder(mark, { title: "Water", dueAt: "2027-01-20T10:00", repeat: { every: "day" } }, { now: NOW })).reminder;
+      const ticked = await completeReminder(mark, water.id, { dueOn: "2027-01-20" }, { now: Date.parse("2027-01-20T09:00:00Z") });
+      const undone = (await reopenReminder(mark, ticked.doneId!)).reminder;
+      assert.equal(undone.dueAt, "2027-01-20T10:00:00.000Z");
+      const [first, second] = [pusher(), pusher()];
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-20T10:01:00Z"), send: first.send });
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-20T10:02:00Z"), send: second.send });
+      assert.equal(first.sent.length + second.sent.length, 1);
+      assert.equal(first.sent[0]?.title, "Water");
+    });
+
     it("releases a failed morning push so the next run sends it", async () => {
       await wipe(mark.userId);
       await createReminder(mark, { title: "Bins out", dueOn: "2027-01-15" }, { now: NOW - 6 * 60 * MINUTE });
