@@ -1,9 +1,11 @@
 import { ShownError, notSetUp } from "@/lib/crm/errors";
+import { MEDIA_TYPES } from "@/lib/media-types";
 import { logUpstream } from "@/lib/upstream";
+
+export { MEDIA_TYPES };
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 export const KNOWLEDGE_MAX_BYTES = 50 * 1024 * 1024;
 export const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
-export const MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
 const BUCKETS: Record<"attachments" | "knowledge" | "media", { id: string; limit: number; public: boolean; types?: string[] }> = {
   attachments: { id: "email-attachments", limit: ATTACHMENT_MAX_BYTES, public: false },
@@ -137,6 +139,41 @@ export async function removeObjects(paths: string[], fetchImpl: typeof fetch = f
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw await failure(response, "remove the attachments");
+}
+
+export type StoredObject = { contentType: string | null; size: number | null };
+
+export async function objectExists(path: string, fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments"): Promise<StoredObject | null> {
+  const response = await fetchImpl(endpoint(`/object/${BUCKETS[bucket].id}/${path}`), {
+    method: "HEAD",
+    headers: headers(),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status === 400 || response.status === 404) return null;
+  if (!response.ok) throw await failure(response, "check the file");
+  const length = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+  const type = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() || null;
+  return { contentType: type, size: Number.isFinite(length) ? length : null };
+}
+
+export async function signedDownloadUrl(path: string, options: { download?: string; expiresIn?: number } = {}, fetchImpl: typeof fetch = fetch, bucket: Bucket = "attachments") {
+  const response = await fetchImpl(endpoint(`/object/sign/${BUCKETS[bucket].id}/${path}`), {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({ expiresIn: options.expiresIn ?? 60 }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw await failure(response, "open the file");
+  const body = (await response.json()) as { signedURL?: string; signedUrl?: string };
+  const signed = body.signedURL ?? body.signedUrl;
+  if (!signed) throw new StorageError("Couldn't open the file. Try again.");
+  const url = new URL(endpoint(signed));
+  if (options.download !== undefined) url.searchParams.set("download", options.download);
+  return url.toString();
+}
+
+export function bucketForId(id: string): Bucket | null {
+  return (Object.keys(BUCKETS) as Bucket[]).find((key) => BUCKETS[key].id === id) ?? null;
 }
 
 export function publicObjectUrl(path: string, bucket: Bucket = "media") {

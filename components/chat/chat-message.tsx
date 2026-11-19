@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import Tag from "@/components/_ui/tag";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
+import { MessageAttachments, UploadQueue } from "@/components/chat/attachments";
 import { AvatarStack, ChatAvatar, useChat, type ChatPane } from "@/components/chat/chat-context";
 import { ComposerBox, focusComposer } from "@/components/chat/composer";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
@@ -53,11 +54,14 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
   const [value, setValue] = useState(() => plainMentions(message.body));
   const [mentions, setMentions] = useState<Mention[]>(() => mentionsIn(message.body));
   const [saving, setSaving] = useState(false);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const kept = message.attachments.filter((file) => !removed.includes(file.id));
+  const empty = !value.trim() && kept.length === 0;
 
   async function save() {
-    if (!value.trim() || saving) return;
+    if (empty || saving) return;
     setSaving(true);
-    if (await edit(message, value, mentions)) done();
+    if (await edit(message, value, mentions, removed)) done();
     else setSaving(false);
   }
 
@@ -73,12 +77,21 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
         submitVerb="save"
         scope={pane === "room" && !discussion ? "room" : "thread"}
         autoFocus
+        queue={
+          kept.length > 0 ? (
+            <UploadQueue
+              files={kept.map((file) => ({ key: file.id, name: file.name, size: file.size, contentType: file.contentType, preview: null, status: "done", progress: 1, id: file.id, width: file.width, height: file.height }))}
+              onRemove={(id) => setRemoved((current) => [...current, id])}
+              onRetry={() => undefined}
+            />
+          ) : null
+        }
         actions={
           <span className="flex items-center gap-2 pointer-coarse:gap-3">
             <Button variant="ghost" size="sm" onMouseDown={(event) => event.preventDefault()} onClick={done} className="hit max-md:h-11">
               Cancel
             </Button>
-            <Button variant="primary" size="sm" disabled={!value.trim() || saving} onMouseDown={(event) => event.preventDefault()} onClick={() => void save()} className="hit max-md:h-11">
+            <Button variant="primary" size="sm" disabled={empty || saving} onMouseDown={(event) => event.preventDefault()} onClick={() => void save()} className="hit max-md:h-11">
               Save
             </Button>
           </span>
@@ -244,7 +257,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         ) : message.hook ? (
           <HookCardBody card={message.hook} body={message.body} />
         ) : (
-          <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
+          <>
+            {message.body && <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />}
+            <MessageAttachments message={message} />
+          </>
         )}
         {message.editedAt && !deleted && !isEditing && <span className="caption-style text-faint">Edited</span>}
         {error && (

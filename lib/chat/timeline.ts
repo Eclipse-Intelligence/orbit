@@ -1,4 +1,4 @@
-import type { ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
+import type { ChatAttachment, ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
 import { EMPTY_HOOK_CARD } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
@@ -68,7 +68,16 @@ export function isLocal(message: { id: string }) {
   return message.id.startsWith(LOCAL_PREFIX);
 }
 
-export function localMessage(input: { clientKey: string; conversationId: string; parentId: string | null; author: ChatPerson; body: string; mentions: string[]; at: string }): ChatMessage {
+export function localMessage(input: {
+  clientKey: string;
+  conversationId: string;
+  parentId: string | null;
+  author: ChatPerson;
+  body: string;
+  mentions: string[];
+  at: string;
+  attachments?: ChatAttachment[];
+}): ChatMessage {
   return {
     id: localId(input.clientKey),
     conversationId: input.conversationId,
@@ -87,6 +96,7 @@ export function localMessage(input: { clientKey: string; conversationId: string;
     deletedAt: null,
     createdAt: input.at,
     hook: null,
+    attachments: input.attachments ?? [],
   };
 }
 
@@ -137,7 +147,7 @@ export function replaceMessage(list: ChatMessage[], message: ChatMessage) {
 }
 
 export function blankDeleted(message: ChatMessage): ChatMessage {
-  return { ...message, body: "", mentions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
+  return { ...message, body: "", mentions: [], attachments: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
 }
 
 export function removeRoot(list: ChatMessage[], id: string) {

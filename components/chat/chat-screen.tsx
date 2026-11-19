@@ -19,7 +19,7 @@ import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit"
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
 import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, loadsLatestFirst, localMessage, needsCatchUp, newestServerId, type ChatState } from "@/lib/chat/timeline";
-import type { ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
+import type { ChatAttachment, ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -196,10 +196,12 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const { loadRoom, loadMessages, loadThread, deliver } = actions;
 
   const send = useCallback(
-    (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; discardOnFailure?: boolean }) => {
+    (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; attachments?: ChatAttachment[]; discardOnFailure?: boolean }) => {
       const body = messageBody(input.text, input.mentions);
-      if (!body || !input.conversationId) return Promise.resolve(null);
+      const attachments = input.attachments ?? [];
+      if ((!body && attachments.length === 0) || !input.conversationId) return Promise.resolve(null);
       const message = localMessage({
+        attachments,
         clientKey: newClientKey(),
         conversationId: input.conversationId,
         parentId: input.parentId,

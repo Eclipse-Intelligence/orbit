@@ -145,12 +145,14 @@ export function DiscussionComposer({
       autoFocus={autoFocus}
       disabled={prompting || (Boolean(parentId) && (!root || Boolean(root.deletedAt && root.replyCount === 0)))}
       onEscape={onEscape}
-      onSend={(text, mentions) =>
+      uploadTo={discussion.ensureConversation}
+      onSend={(text, mentions, attachments) =>
         discussion.context.send({
           conversationId: discussion.conversationId ?? "",
           parentId,
           text,
           mentions,
+          attachments,
         })
       }
       onEditLast={() => {

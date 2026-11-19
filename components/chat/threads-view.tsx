@@ -76,7 +76,8 @@ function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean })
               sendLabel="Send reply"
               scope="thread"
               restoreOnFailure
-              onSend={(text, mentions) => send({ conversationId: card.conversation.id, parentId: card.root.id, text, mentions, discardOnFailure: true })}
+              uploadTo={() => Promise.resolve({ id: card.conversation.id, error: null })}
+              onSend={(text, mentions, attachments) => send({ conversationId: card.conversation.id, parentId: card.root.id, text, mentions, attachments, discardOnFailure: true })}
             />
           </div>
         </>

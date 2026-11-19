@@ -473,6 +473,7 @@ describe("discussion helpers", () => {
       mentions: [],
       via: null,
       hook: null,
+      attachments: [],
       replyCount: 0,
       lastReplyAt: null,
       replyAuthors: [],

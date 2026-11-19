@@ -17,6 +17,12 @@ export const CHAT_CLIENT_KEY_MAX = 100;
 export const CHAT_HOOK_NAME_MAX = 80;
 export const CHAT_TOPIC_MAX = 250;
 export const CHAT_ARCHIVED = "This room is archived.";
+export const CHAT_FILES_MAX = 10;
+export const CHAT_FILE_MAX_BYTES = 25 * 1024 * 1024;
+
+export type ChatAttachment = { id: string; name: string; contentType: string; size: number; width: number | null; height: number | null };
+
+export type ChatUpload = { id: string; name: string; contentType: string; size: number; uploadUrl: string };
 
 export type ChatHookCard = { title: string | null; url: string | null; block: boolean };
 
@@ -72,6 +78,7 @@ export type ChatMessage = {
   deletedAt: string | null;
   createdAt: string;
   hook: ChatHookCard | null;
+  attachments: ChatAttachment[];
 };
 
 export type ChatRoot = { id: string; replyCount: number; lastReplyAt: string | null; replyAuthors: ChatPerson[] };

@@ -11,6 +11,7 @@ import {
   CHAT_ROOM_NAME_MAX,
   CHAT_TOPIC_MAX,
   EMPTY_HOOK_CARD,
+  type ChatAttachment,
   type ChatConversation,
   type ChatDiscussion,
   type ChatHookCard,
@@ -32,6 +33,8 @@ import {
   type ChatThreads,
 } from "@/lib/chat/types";
 import { discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
+import { filesTitle } from "@/lib/chat/files";
+import { checkUploads, cleanAttachmentIds, removeChatAttachments } from "@/lib/crm/chat-attachments";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
@@ -67,6 +70,7 @@ type MessageRow = {
   created_at: Stamp;
   reply_authors: ChatPerson[] | null;
   hook: { title?: unknown; url?: unknown; block?: unknown } | null;
+  attachments: ChatAttachment[] | null;
 };
 
 type ConversationRow = {
@@ -129,7 +133,13 @@ function messageColumns(alias = "m") {
         order by latest desc
         limit 3
       ) a
-    ), '[]'::json) else '[]'::json end as reply_authors`;
+    ), '[]'::json) else '[]'::json end as reply_authors,
+    case when ${alias}.attachment_count > 0 and ${alias}.deleted_at is null then coalesce((
+      select json_agg(json_build_object('id', f.id, 'name', f.name, 'contentType', f.content_type, 'size', f.size, 'width', f.width, 'height', f.height)
+        order by array_position(${alias}.attachment_ids, f.id))
+      from crm.chat_attachments f
+      where f.message_id = ${alias}.id
+    ), '[]'::json) else '[]'::json end as attachments`;
 }
 
 function toMessage(row: MessageRow, viewerId: string): ChatMessage {
@@ -151,6 +161,7 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     deletedAt: iso(row.deleted_at),
     createdAt: iso(row.created_at),
     hook: row.deleted_at && row.hook ? { ...EMPTY_HOOK_CARD } : hookCard(row.hook),
+    attachments: row.deleted_at ? [] : (row.attachments ?? []),
   };
 }
 
@@ -262,9 +273,9 @@ function pageSize(limit: unknown, fallback = CHAT_PAGE_SIZE) {
   return Math.min(CHAT_PAGE_MAX, Math.max(1, value));
 }
 
-function cleanBody(body: unknown) {
+function cleanBody(body: unknown, options: { allowEmpty?: boolean } = {}) {
   const text = typeof body === "string" ? body.replace(NUL, "").replace(/\r\n?/g, "\n").trim() : "";
-  if (!text) throw new CrmError("invalid_input", "Write a message first.", 400, { field: "body" });
+  if (!text && !options.allowEmpty) throw new CrmError("invalid_input", "Write a message first.", 400, { field: "body" });
   if (text.length > CHAT_BODY_MAX) throw new CrmError("invalid_input", "Keep messages to 10,000 characters.", 400, { field: "body" });
   return text;
 }
@@ -918,7 +929,7 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
   });
 }
 
-type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown };
+type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown; attachmentIds?: unknown };
 
 function chatHref(conversationId: string, message: ChatMessage) {
   return message.parentId ? `/chat/${conversationId}?thread=${message.parentId}` : `/chat/${conversationId}?message=${message.id}`;
@@ -972,7 +983,7 @@ function postAlerts(actor: UserActor, conversation: ConversationRow, members: Me
             tag,
             body: null,
             key: `chat:dm:${conversation.id}:${millis(other.last_read_at)}`,
-            title: `${name} sent you a message`,
+            title: !message.body.trim() && message.attachments.length > 0 ? `${name} sent you ${filesTitle(message.attachments.length)}` : `${name} sent you a message`,
           }),
         );
       }
@@ -1039,15 +1050,29 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
   return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
-export async function postMessage(actor: UserActor, input: PostInput, options: { viaWorkflowId?: string; charge?: () => Promise<void> } = {}): Promise<ChatPost> {
+export async function postMessage(
+  actor: UserActor,
+  input: PostInput,
+  options: { viaWorkflowId?: string; charge?: () => Promise<void>; fetchImpl?: typeof fetch } = {},
+): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
-  const body = cleanBody(input.body);
+  const attachmentIds = cleanAttachmentIds(input.attachmentIds);
+  if (attachmentIds.length > 0 && (options.viaWorkflowId || options.charge)) throw new CrmError("invalid_input", "Only people can attach files.", 400, { field: "files" });
+  const body = cleanBody(input.body, { allowEmpty: attachmentIds.length > 0 });
   const clientKey = cleanClientKey(input.clientKey);
   const format = cleanFormat(input.format);
   const mentions = memberMentions(body, format);
   const repeatCheck = options.charge ? body : undefined;
   try {
+    if (attachmentIds.length > 0) {
+      const earlier = await withActor(actor, async (db) => {
+        await readConversation(db, actor, conversationId);
+        return existingPost(db, actor, clientKey, conversationId, parentId);
+      });
+      if (earlier) return earlier;
+      await checkUploads(actor, conversationId, attachmentIds, options.fetchImpl);
+    }
     if (options.charge) {
       const before = await withActor(actor, async (db) => {
         const conversation = await readConversation(db, actor, conversationId);
@@ -1070,11 +1095,11 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
       }
       const via = options.viaWorkflowId ?? null;
       const inserted = await db.query<{ id: string }>(
-        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions${via ? ", via_workflow_id" : ""})
-         values ($1, $2, $3, $4, $5, $6, $7::uuid[]${via ? ", $8" : ""})
+        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions, attachment_ids${via ? ", via_workflow_id" : ""})
+         values ($1, $2, $3, $4, $5, $6, $7::uuid[], $8::uuid[]${via ? ", $9" : ""})
          on conflict on constraint chat_messages_author_client_key do nothing
          returning id`,
-        [conversationId, parentId, actor.userId, clientKey, body, format, mentions, ...(via ? [via] : [])],
+        [conversationId, parentId, actor.userId, clientKey, body, format, mentions, attachmentIds, ...(via ? [via] : [])],
       );
       if (!inserted.rows[0]) {
         const raced = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
@@ -1136,16 +1161,19 @@ async function ownMessage(db: Db, actor: UserActor, id: string) {
   return message;
 }
 
-export async function editMessage(actor: UserActor, id: string, body: unknown, options: { format?: unknown } = {}): Promise<ChatMessage> {
+export async function editMessage(actor: UserActor, id: string, body: unknown, options: { format?: unknown; removeAttachmentIds?: unknown } = {}): Promise<ChatMessage> {
   const messageId = checkId(id, "message");
-  const text = cleanBody(body);
+  const text = cleanBody(body, { allowEmpty: true });
+  const removing = cleanAttachmentIds(options.removeAttachmentIds);
   const asked = options.format === "plain" || options.format === "markdown" ? options.format : null;
   try {
+    await removeChatAttachments(actor, messageId, removing, text);
     const followed = await query<{ user_id: string }>("select user_id from private.chat_message_followers($1, $2)", [actor.userId, messageId]);
     const followersBefore = new Set(followed.rows.map((row) => row.user_id));
     return await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
       if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
+      if (!text && current.attachments.length === 0) throw new CrmError("invalid_input", "Delete the message instead.", 400, { field: "body" });
       const conversation = await readConversation(db, actor, current.conversationId);
       const format = asked ?? current.format;
       const mentions = memberMentions(text, format);

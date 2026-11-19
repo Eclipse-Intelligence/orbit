@@ -9,7 +9,7 @@ import { draftKey, newClientKey, readDraft, writeDraft } from "@/lib/chat/client
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
 import type { ChatLocation } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, type ChatAction, type ChatState, type ThreadState, type Timeline } from "@/lib/chat/timeline";
-import type { ChatDiscussion, ChatMessage, ChatNeedsShare, ChatPerson, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
+import type { ChatAttachment, ChatDiscussion, ChatMessage, ChatNeedsShare, ChatPerson, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 
 const TIMEOUT_MS = 15_000;
@@ -26,7 +26,7 @@ const NOWHERE: ChatLocation = {
 };
 const NO_NAMES = new Map<string, string>();
 
-export type NeedsSharePrompt = ChatNeedsShare & { parentId: string | null; text: string; mentions: Mention[] };
+export type NeedsSharePrompt = ChatNeedsShare & { parentId: string | null; text: string; mentions: Mention[]; attachments: ChatAttachment[] };
 
 export type Discussion = {
   subject: ChatSubject;
@@ -34,6 +34,7 @@ export type Discussion = {
   composerVersion: number;
   keptDraft: { parentId: string | null; text: string; mentions: Mention[] } | null;
   settleNeedsShare: (added: boolean) => void;
+  ensureConversation: () => Promise<{ id: string | null; error: string | null }>;
   context: ChatContextValue;
   conversationId: string | null;
   draftId: string;
@@ -270,9 +271,10 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
   }, [subject, loadMessages]);
 
   const send = useCallback(
-    async (input: { parentId: string | null; text: string; mentions: Mention[] }) => {
+    async (input: { parentId: string | null; text: string; mentions: Mention[]; attachments?: ChatAttachment[] }) => {
       const body = messageBody(input.text, input.mentions);
-      if (!body) return null;
+      const attachments = input.attachments ?? [];
+      if (!body && attachments.length === 0) return null;
       const asked = latest.current.subjectKey;
       const opened = await ensureConversation();
       if (!opened.id) return opened.error;
@@ -282,6 +284,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
         mentions: [],
       });
       const message = localMessage({
+        attachments,
         clientKey: newClientKey(),
         conversationId: opened.id,
         parentId: input.parentId,
@@ -304,7 +307,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       dispatch({ type: "discard", message });
       if (latest.current.subjectKey !== asked) return error;
       writeDraft(draftKey(viewer.id, draftSubjectKey(subject), input.parentId), { text: input.text, mentions: input.mentions });
-      if (refused.canAdd) setNeedsShare({ ...refused, parentId: input.parentId, text: input.text, mentions: input.mentions });
+      if (refused.canAdd) setNeedsShare({ ...refused, parentId: input.parentId, text: input.text, mentions: input.mentions, attachments });
       return error;
     },
     [deliver, ensureConversation, subject, viewer],
@@ -321,7 +324,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       writeDraft(key, added ? { text: "", mentions: [] } : current);
       setKeptDraft(added ? null : { parentId: prompt.parentId, ...current });
       setComposerVersion((version) => version + 1);
-      if (added && current.text.trim()) void send({ parentId: prompt.parentId, text: current.text, mentions: current.mentions });
+      if (added && (current.text.trim() || prompt.attachments.length > 0)) void send({ parentId: prompt.parentId, text: current.text, mentions: current.mentions, attachments: prompt.attachments });
     },
     [needsShare, send, subject, viewer.id],
   );
@@ -379,6 +382,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
     composerVersion,
     keptDraft,
     settleNeedsShare,
+    ensureConversation,
     context,
     conversationId,
     draftId,
