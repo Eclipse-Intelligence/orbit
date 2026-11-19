@@ -265,9 +265,22 @@ describe("chat topics, system lines and archive", () => {
       assert.equal((await sql("select archived_at from crm.chat_conversations where id = $1", [room.id])).rows[0].archived_at, null);
     });
 
-    it("lets an owner of any workspace archive an unlinked room they're in", async () => {
-      const room = await createRoom(sam, { name: "unlinked", memberIds: [olly.userId] });
-      assert.ok((await setRoomArchived(olly, room.id, true)).archivedAt);
+    it("leaves an unlinked room to its creator, even against owners of other workspaces", async () => {
+      const room = await createRoom(sam, { name: "unlinked", memberIds: [olly.userId, mark.userId] });
+      assert.equal((await getRoom(olly, room.id)).canArchive, false);
+      assert.equal((await getRoom(mark, room.id)).canArchive, false);
+      await refused(setRoomArchived(olly, room.id, true), /Only the room's creator or a workspace owner can archive it\./);
+      await refused(setRoomArchived(mark, room.id, true), /Only the room's creator or a workspace owner can archive it\./);
+      assert.ok((await setRoomArchived(sam, room.id, true)).archivedAt);
+      await refused(setRoomArchived(mark, room.id, false), /Only the room's creator or a workspace owner can unarchive it\./);
+      assert.equal((await setRoomArchived(sam, room.id, false)).archivedAt, null);
+    });
+
+    it("refuses a missing archive choice", async () => {
+      const room = await createRoom(sam, { name: "undecided", memberIds: [mark.userId] });
+      await assert.rejects(getAdminPool().query("select private.chat_set_archived($1, $2, null)", [sam.userId, room.id]), /Choose archive or unarchive\./);
+      assert.equal((await sql("select archived_at from crm.chat_conversations where id = $1", [room.id])).rows[0].archived_at, null);
+      assert.equal((await sql("select count(*)::int as n from crm.chat_messages where conversation_id = $1", [room.id])).rows[0].n, 0);
     });
   });
 
@@ -276,6 +289,7 @@ describe("chat topics, system lines and archive", () => {
     let rootId: string;
     let priyaMessage: string;
     let hook: { id: string; secret: string };
+    let hookMessage: string;
 
     before(async () => {
       setLiveTesting({ batch: async () => undefined });
@@ -285,6 +299,7 @@ describe("chat topics, system lines and archive", () => {
       priyaMessage = (await postMessage(priya, { conversationId: roomId, body: "Notes are in the doc" })).message.id;
       const created = await createHook(sam, roomId, "Alerts");
       hook = { id: created.hook.id, secret: created.secret };
+      hookMessage = (await postViaHook({ hookId: hook.id, authorization: `Bearer ${hook.secret}`, body: JSON.stringify({ text: "Deploy finished" }) })).id;
       await chatWorkSettled();
       await setRoomArchived(sam, roomId, true);
     });
@@ -295,11 +310,14 @@ describe("chat topics, system lines and archive", () => {
       const page = await listMessages(priya, roomId);
       assert.deepEqual(
         page.messages.map((message) => message.body),
-        ["Launch done. Thanks all", "Notes are in the doc", "archived this room"],
+        ["Launch done. Thanks all", "Notes are in the doc", "Deploy finished", "archived this room"],
       );
       assert.equal((await listThread(priya, rootId)).replies.length, 1);
       assert.equal((await searchMessages(priya, roomId, "doc")).messages.length, 1);
-      assert.equal((await listConversations(priya)).conversations.some((conversation) => conversation.id === roomId), false);
+      const sidebar = await listConversations(priya);
+      assert.equal(sidebar.conversations.some((conversation) => conversation.id === roomId), false);
+      assert.deepEqual(sidebar.archived.filter((room) => room.id === roomId), [{ id: roomId, name: "q3-launch" }]);
+      assert.equal((await listConversations(olly)).archived.some((room) => room.id === roomId), false);
       assert.equal((await listThreads(sam)).threads.some((thread) => thread.root.id === rootId), false);
       assert.deepEqual(await findMyRooms(priya, { id: roomId }), []);
       assert.deepEqual(await findMyRooms(priya, { name: "q3-launch" }, { archived: true }), [{ id: roomId, name: "q3-launch", workspaceId: null, archived: true }]);
@@ -330,10 +348,12 @@ describe("chat topics, system lines and archive", () => {
       await refusedArchived(postViaHook({ hookId: hook.id, authorization: `Bearer ${hook.secret}`, body: JSON.stringify({ text: "Alert" }) }));
       await refused(postViaHook({ hookId: hook.id, authorization: "Bearer wrong", body: JSON.stringify({ text: "Alert" }) }), /Authorization: Bearer/);
       await assert.rejects(queryAsUser(priya.userId, "insert into crm.chat_messages (conversation_id, author_user_id, body) values ($1, $2, 'Raw')", [roomId, priya.userId]), /row-level security/);
+      await refusedArchived(deleteMessage(mark, hookMessage));
+      assert.equal((await sql("select deleted_at from crm.chat_messages where id = $1", [hookMessage])).rows[0].deleted_at, null);
       await refusedArchived(editMessage(priya, priyaMessage, "Edited"));
       await refusedArchived(deleteMessage(priya, priyaMessage));
       const bodies = (await sql("select body from crm.chat_messages where conversation_id = $1 order by created_at", [roomId])).rows.map((row) => row.body);
-      assert.deepEqual(bodies, ["Launch done. Thanks all", "Great work", "Notes are in the doc", "archived this room"]);
+      assert.deepEqual(bodies, ["Launch done. Thanks all", "Great work", "Notes are in the doc", "Deploy finished", "archived this room"]);
     });
 
     it("refuses rename, topic, add and remove, but lets people leave and the creator unarchive", async () => {

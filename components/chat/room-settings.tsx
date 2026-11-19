@@ -295,7 +295,7 @@ export default function RoomSettings({
               <section aria-labelledby="room-archive" className="flex flex-col gap-2">
                 <h3 id="room-archive">{archived ? "Archived" : "Archive"}</h3>
                 <p className="caption-style text-subtle">
-                  {archived ? "Members can read and search it, but no one can post." : "Archived rooms are read-only and hidden from Chat's list."}
+                  {archived ? "Members can still read it, but no one can post." : "Archived rooms are read-only and listed under Archived."}
                 </p>
                 <Button
                   variant="secondary"
@@ -345,7 +345,7 @@ export default function RoomSettings({
           open={archiving}
           onOpenChange={setArchiving}
           title={`Archive #${conversation.name}?`}
-          description="Members can still read and search it, but no one can post."
+          description="Members can still read it, but no one can post."
           confirmLabel="Archive"
           tone="neutral"
           onConfirm={() => setArchived(true)}

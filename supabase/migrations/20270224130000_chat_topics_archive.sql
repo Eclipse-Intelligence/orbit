@@ -192,13 +192,17 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_room crm.chat_conversations := private.chat_room_for_member(p_user, p_room, true);
+  v_room crm.chat_conversations;
   v_line uuid;
 begin
+  if p_archived is null then
+    raise exception 'Choose archive or unarchive.' using errcode = '22023';
+  end if;
+  v_room := private.chat_room_for_member(p_user, p_room, true);
   if v_room.created_by is distinct from p_user and not exists (
     select 1 from crm.workspace_members wm
     where wm.user_id = p_user and wm.role = 'owner'
-      and (v_room.workspace_id is null or wm.workspace_id = v_room.workspace_id)
+      and v_room.workspace_id is not null and wm.workspace_id = v_room.workspace_id
   ) then
     raise exception 'Only the room''s creator or a workspace owner can %.', case when p_archived then 'archive it' else 'unarchive it' end using errcode = '42501';
   end if;
@@ -335,6 +339,36 @@ $$;
 
 revoke all on function private.chat_hook_post(uuid, text, text, text, text, boolean, text, integer, integer) from public;
 grant execute on function private.chat_hook_post(uuid, text, text, text, text, boolean, text, integer, integer) to crm_app;
+
+create or replace function private.chat_delete_hook_message(p_user uuid, p_message uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_conversation uuid;
+  v_archived boolean;
+begin
+  select m.conversation_id, c.archived_at is not null into v_conversation, v_archived
+    from crm.chat_messages m
+    join crm.chat_conversations c on c.id = m.conversation_id and c.kind = 'room'
+    where m.id = p_message and m.hook is not null and m.deleted_at is null
+      and exists (select 1 from crm.chat_members cm where cm.conversation_id = m.conversation_id and cm.user_id = p_user)
+    for update of m;
+  if v_conversation is null then
+    raise exception 'Message not found.' using errcode = 'P0002';
+  end if;
+  if v_archived then
+    raise exception 'This room is archived.' using errcode = '22023';
+  end if;
+  update crm.chat_messages m set deleted_at = now(), hook = '{}'::jsonb where m.id = p_message;
+  return v_conversation;
+end;
+$$;
+
+revoke all on function private.chat_delete_hook_message(uuid, uuid) from public;
+grant execute on function private.chat_delete_hook_message(uuid, uuid) to crm_app;
 
 create or replace function private.chat_hook_auth(p_hook uuid, p_secret_hash text)
 returns text

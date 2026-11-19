@@ -142,7 +142,7 @@ export default function MessageList({
         node.scrollTop = node.scrollHeight;
       } else if (prepended) node.scrollTop = previous.top + (node.scrollHeight - previous.height);
       else if (appended && (previous.atBottom || ownNew)) node.scrollTop = node.scrollHeight;
-      if (appended && last && previous.last !== null && (last.author.id !== viewer.id || last.via) && !isLocal(last)) arrived = last;
+      if (appended && last && previous.last !== null && last.kind === "message" && (last.author.id !== viewer.id || last.via) && !isLocal(last)) arrived = last;
     }
     snapshot.current = { ...snapshot.current, first, last: last?.id ?? null };
     report(node);
@@ -211,7 +211,7 @@ export default function MessageList({
     if (node) node.scrollTo({ top: node.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }
 
-  const lastIndex = messages.length - 1;
+  const lastIndex = messages.findLastIndex((message) => message.kind === "message");
   const rows = messages.map((message, index) => {
     const previous = index > 0 ? messages[index - 1] : null;
     const day = dayOf(message.createdAt);

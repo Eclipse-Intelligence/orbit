@@ -124,25 +124,25 @@ export default function ThreadPanel({
         {archived ? (
           <p className="bg-surface-raised ui-style text-soft rounded-[10px] px-3 py-2.5">This room is archived.</p>
         ) : (
-            <Composer
-              id={`chat-reply-${rootId}`}
-              conversationId={root?.conversationId ?? where?.id ?? ""}
-              parentId={rootId}
-              placeholder="Reply…"
-              label="Reply in thread"
-              sendLabel="Send reply"
-              scope="thread"
-              autoFocus
-              onEscape={onClose}
-              disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
-              onSend={(text, mentions) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions }) : Promise.resolve(null))}
-              onEditLast={() => {
-                const own = lastOwnMessage(messages, viewer.id);
-                if (!own) return false;
-                setEditing({ id: own.id, pane: "thread" });
-                return true;
-              }}
-            />
+          <Composer
+            id={`chat-reply-${rootId}`}
+            conversationId={root?.conversationId ?? where?.id ?? ""}
+            parentId={rootId}
+            placeholder="Reply…"
+            label="Reply in thread"
+            sendLabel="Send reply"
+            scope="thread"
+            autoFocus
+            onEscape={onClose}
+            disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
+            onSend={(text, mentions) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions }) : Promise.resolve(null))}
+            onEditLast={() => {
+              const own = lastOwnMessage(messages, viewer.id);
+              if (!own) return false;
+              setEditing({ id: own.id, pane: "thread" });
+              return true;
+            }}
+          />
         )}
       </div>
     </div>

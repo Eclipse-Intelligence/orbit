@@ -44,6 +44,7 @@ export type ChatConversation = {
 
 export type ChatSidebar = {
   conversations: ChatConversation[];
+  archived: { id: string; name: string }[];
   threads: { unread: number; mentions: number };
   unreadConversations: number;
   mentioned: boolean;

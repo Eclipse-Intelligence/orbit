@@ -227,6 +227,7 @@ describe("chat sidebar badge", () => {
       { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1 },
       { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0 },
     ],
+    archived: [],
     threads: { unread: 0, mentions: 0 },
     unreadConversations: 1,
     mentioned: true,

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Button from "@/components/_ui/button";
+import Tag from "@/components/_ui/tag";
 import { setRoomArchivedAction } from "@/app/(crm)/chat/actions";
 import { AvatarStack, ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar, setChatViewing, useChatEvents } from "@/components/chat/chat-live";
@@ -43,7 +44,7 @@ function ArchivedBanner({ conversationId, canUnarchive }: { conversationId: stri
     <div className="flex flex-col gap-1.5 pt-1 pb-2">
       <div className="bg-surface-raised flex items-center gap-2.5 rounded-[10px] px-3 py-2.5">
         <ArchiveIcon aria-hidden className="text-soft size-3.5 shrink-0" />
-        <p className="ui-style text-soft min-w-0 flex-1">This room is archived. You can read and search it, but not post.</p>
+        <p className="ui-style text-soft min-w-0 flex-1">This room is archived. You can read it, but not post.</p>
         {canUnarchive && (
           <Button variant="secondary" size="sm" disabled={busy} onClick={() => void unarchive()} className="hit shrink-0 max-md:h-11">
             Unarchive
@@ -201,7 +202,11 @@ export default function RoomView({
               )}
               <span className="truncate">{info ? info.name : roomError ? "Conversation" : ""}</span>
             </h2>
-            {archived && <span className="bg-surface-active text-soft inline-flex h-5 shrink-0 items-center rounded-full px-[7px] text-[11.5px]">Archived</span>}
+            {archived && (
+              <Tag size="sm" className="h-5 text-[12px]">
+                Archived
+              </Tag>
+            )}
           </span>
           {topic && (
             <p title={topic} className="caption-style text-subtle max-w-[28em] truncate max-md:max-w-full">
