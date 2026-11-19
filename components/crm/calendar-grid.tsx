@@ -28,12 +28,14 @@ import {
   packColumns,
   wallMinutes,
 } from "@/lib/calendar-view";
+import { ReminderChipView, ReminderMarkerView, type ReminderHandlers } from "@/components/reminders/calendar-reminders";
 import { GridTaskBlock, UpcomingChip, type TaskBlockDrag, type TaskBlockHandlers } from "@/components/crm/calendar-task-block";
 import type { TaskDrag } from "@/hooks/use-task-drag";
 import { snapTime } from "@/lib/invite-rules";
 import type { CalendarItem } from "@/lib/crm/calendars";
 import { durationLabel } from "@/lib/crm/task-time";
 import { runLabel, type PreviewRun } from "@/lib/plan-preview";
+import { dayChips, dayMarkers, type ReminderChip, type ReminderMarker } from "@/lib/reminder-calendar";
 import { upcomingDayBlocks, type TaskBlock } from "@/lib/task-blocks";
 import { slotDayLabel, slotRange, type GridSlot } from "@/lib/task-drag";
 import { cn } from "@/lib/utils";
@@ -248,6 +250,9 @@ export default function CalendarGrid({
   proposalDrag,
   runs = [],
   chips = [],
+  reminderChips = [],
+  markers = [],
+  reminderHandlers,
   dayHref,
 }: {
   days: string[];
@@ -264,6 +269,9 @@ export default function CalendarGrid({
   proposalDrag?: TaskBlockDrag;
   runs?: PreviewRun[];
   chips?: TaskBlock[];
+  reminderChips?: ReminderChip[];
+  markers?: ReminderMarker[];
+  reminderHandlers?: ReminderHandlers;
   dayHref?: (day: string) => string;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -330,7 +338,9 @@ export default function CalendarGrid({
     }
   }
   const hasAllDay = days.some((key) => (allDay.get(key)?.length ?? 0) > 0);
-  const hasChips = Boolean(taskHandlers) && days.some((key) => upcomingDayBlocks(chips, key).length > 0);
+  const hasChips =
+    (Boolean(taskHandlers) && days.some((key) => upcomingDayBlocks(chips, key).length > 0)) ||
+    (Boolean(reminderHandlers) && days.some((key) => dayChips(reminderChips, key).length > 0));
   const nowMinutes = wallMinutes(current);
   const columns = {
     gridTemplateColumns: `56px repeat(${days.length}, minmax(0, 1fr))`,
@@ -371,11 +381,17 @@ export default function CalendarGrid({
           <>
             <div aria-hidden className="border-line-subtle border-t" />
             {days.map((key) => {
-              const dayChips = upcomingDayBlocks(chips, key);
-              const visibleChips = days.length > 1 ? dayChips.slice(0, CHIPS_SHOWN) : dayChips;
-              const more = dayChips.length - visibleChips.length;
+              const ownChips = reminderHandlers ? dayChips(reminderChips, key) : [];
+              const taskChips = taskHandlers ? upcomingDayBlocks(chips, key) : [];
+              const cap = days.length > 1 ? CHIPS_SHOWN : Infinity;
+              const visibleReminders = ownChips.slice(0, cap);
+              const visibleChips = taskChips.slice(0, Math.max(0, cap - visibleReminders.length));
+              const more = ownChips.length + taskChips.length - visibleReminders.length - visibleChips.length;
               return (
                 <div key={key} className="border-line-subtle flex min-w-0 flex-col gap-1 border-t border-l px-1 pt-1 pb-1.5 [@media(pointer:coarse)]:gap-6 [@media(pointer:coarse)]:py-3">
+                  {visibleReminders.map((chip) => (
+                    <ReminderChipView key={`reminder:${chip.id}`} chip={chip} onTick={reminderHandlers!.onTick} onOpen={reminderHandlers!.onOpen} />
+                  ))}
                   {visibleChips.map((block) => (
                     <UpcomingChip key={block.id} block={block} onOpen={taskHandlers!.onOpen} />
                   ))}
@@ -587,6 +603,10 @@ export default function CalendarGrid({
                       />
                     );
                   })}
+                {reminderHandlers &&
+                  dayMarkers(markers, key).map((marker) => (
+                    <ReminderMarkerView key={marker.id} marker={marker} top={marker.minutes * perMinute} onOpen={reminderHandlers.onOpen} />
+                  ))}
                 {drag?.slot?.day === key && (
                   <DropSlot slot={drag.slot} mode={drag.mode} perMinute={perMinute} last={days.length > 1 && key === days[days.length - 1]} />
                 )}

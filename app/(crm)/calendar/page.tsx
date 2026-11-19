@@ -4,6 +4,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { calendarRange, dateKey, parseDateKey, parseMode } from "@/lib/calendar-view";
 import { listCalendarGroups, listCalendarItems } from "@/lib/crm/calendars";
 import { getInviteSetup } from "@/lib/crm/invites";
+import { listCalendarReminders } from "@/lib/crm/reminders";
 import { readPlanner } from "@/lib/crm/task-blocks";
 
 export const dynamic = "force-dynamic";
@@ -27,7 +28,7 @@ export default async function CalendarPage({
   const date = parseDateKey(typeof resolved.date === "string" ? resolved.date : null) ?? today;
   const mode = parseMode(typeof resolved.view === "string" ? resolved.view : null);
   const range = calendarRange(date, mode ?? "week");
-  const [groups, items, invite, planner] = await Promise.all([
+  const [groups, items, invite, planner, reminders] = await Promise.all([
     listCalendarGroups(user),
     listCalendarItems(
       user,
@@ -39,6 +40,12 @@ export default async function CalendarPage({
     ),
     getInviteSetup(user),
     readPlanner(user, now),
+    listCalendarReminders(user, { from: range.days[0], to: range.days[range.days.length - 1] }, { now })
+      .then((result) => result.reminders)
+      .catch((error) => {
+        console.error("Calendar reminders failed", error);
+        return [];
+      }),
   ]);
 
   return (
@@ -59,6 +66,7 @@ export default async function CalendarPage({
       now={now}
       invite={invite}
       planner={planner}
+      reminders={reminders}
     />
   );
 }

@@ -157,6 +157,42 @@ async function archiveFollowUps() {
     .catch(() => null);
 }
 
+async function seedReminders(device) {
+  const db = await localAdmin("add reminders to check on Calendar: reminders belong to a person, so the agent token can't add them");
+  if (!db) return null;
+  const day = londonDay(1);
+  const stamp = `${device}${Date.now().toString(36)}`;
+  const add = (title, clock, blocks) =>
+    db
+      .query(
+        `insert into crm.reminders (user_id, title, due_on, due_at, blocks_time, duration_minutes)
+         select u.id, $2, $3::date, case when $4::text is null then null else ($3 || ' ' || $4)::timestamp at time zone 'Europe/London' end, $5, 30
+         from auth.users u where lower(u.email) = lower($1)
+         returning id`,
+        [env.DEV_USER_EMAIL, title, day, clock, blocks],
+      )
+      .then((result) => result.rows[0]?.id ?? null)
+      .catch(() => null);
+  const chip = await add(`Sweep chip ${stamp}`, null, false);
+  const marker = await add(`Sweep marker ${stamp}`, "11:00", false);
+  const block = await add(`Sweep block ${stamp}`, "14:00", true);
+  const ids = [chip, marker, block].filter(Boolean);
+  if (ids.length !== 3) {
+    await dropReminders(ids);
+    return null;
+  }
+  return { day, chip, marker, block, ids, titles: { chip: `Sweep chip ${stamp}`, marker: `Sweep marker ${stamp}`, block: `Sweep block ${stamp}` } };
+}
+
+async function readReminder(id) {
+  const result = await adminDb?.query("select completed_at, due_at, duration_minutes from crm.reminders where id = $1", [id]).catch(() => null);
+  return result?.rows[0] ?? null;
+}
+
+async function dropReminders(ids) {
+  if (ids.length > 0) await adminDb?.query("delete from crm.reminders where id = any($1::uuid[]) or repeat_of = any($1::uuid[])", [ids]).catch(() => null);
+}
+
 async function dropTasks(ids) {
   for (const id of ids) await api(`/tasks/${id}`, { method: "DELETE" });
 }
@@ -1269,6 +1305,39 @@ for (const [device, viewport] of [
   await reminderSheet.getByRole("button", { name: "Done", exact: true }).tap();
   await page.waitForTimeout(600);
   check(`${device} Done closes the reminders sheet`, !(await visible(reminderSheet)));
+  const onCalendar = await seedReminders(device);
+  if (onCalendar) {
+    try {
+      await goto(page, `${base}/calendar?date=${onCalendar.day}&view=day`);
+      await page.waitForTimeout(1800);
+      const chip = page.locator(`[data-reminder-chip="${onCalendar.chip}"]`).filter({ visible: true });
+      const marker = page.locator(`button[data-reminder-marker="${onCalendar.marker}"], [data-reminder-marker="${onCalendar.marker}"] button`).filter({ visible: true });
+      const reminderBlock = page.locator(`[data-task-block="reminder:${onCalendar.block}"]`).filter({ visible: true });
+      check(`${device} calendar shows a date-only reminder with a round tick`, (await visible(chip)) && (await visible(chip.getByRole("button", { name: /^Mark/ }))));
+      check(`${device} calendar shows a timed reminder as a marker`, await visible(marker));
+      check(`${device} calendar shows a Block time reminder as a block`, await visible(reminderBlock));
+      check(`${device} calendar with reminders no overflow`, await noHorizontalScroll());
+      await shot("calendar-reminders");
+      await chip.getByRole("button", { name: /^Mark/ }).tap();
+      await page.waitForTimeout(1200);
+      const undoToast = page.getByRole("status").filter({ hasText: "Marked done" });
+      check(`${device} ticking the chip hides it, with Undo`, !(await visible(chip)) && (await visible(undoToast)) && Boolean((await readReminder(onCalendar.chip))?.completed_at));
+      await shot("calendar-reminder-ticked");
+      await undoToast.getByRole("button", { name: "Undo" }).tap();
+      await page.waitForTimeout(1800);
+      check(`${device} Undo brings the chip back`, (await visible(chip)) && (await readReminder(onCalendar.chip))?.completed_at === null);
+      await marker.first().tap();
+      await page.waitForTimeout(900);
+      const opened = page.locator("[data-reminders-sheet]");
+      const titleShown = await opened.evaluate((node, title) => [...node.querySelectorAll("input, textarea")].some((field) => field.value === title), onCalendar.titles.marker).catch(() => false);
+      check(`${device} tapping a reminder opens it in the reminders sheet`, (await visible(opened.getByRole("switch", { name: "Block time" }))) && titleShown);
+      await shot("calendar-reminder-opened");
+      await opened.getByRole("button", { name: "Done", exact: true }).tap();
+      await page.waitForTimeout(500);
+    } finally {
+      await dropReminders(onCalendar.ids);
+    }
+  } else console.log(`skip ${device} calendar reminders (set DATABASE_ADMIN_URL to a local database)`);
   await page.getByRole("button", { name: /Account menu/ }).tap();
   await page.waitForTimeout(400);
   check(`${device} account menu opens`, await visible(page.getByRole("menuitem", { name: "Settings" })));
@@ -1341,6 +1410,46 @@ for (const width of [1100, 1280, 1440]) {
     check(`${device} the card comes back where it was left`, Boolean(moved && again && Math.abs(again.x - moved.x) < 2 && Math.abs(again.y - moved.y) < 2));
     await page.evaluate(() => localStorage.removeItem("orbit-reminders-card"));
     await page.keyboard.press("Escape");
+    const onCalendar = await seedReminders(device);
+    if (onCalendar) {
+      try {
+        await goto(page, `${base}/calendar?date=${onCalendar.day}&view=week`);
+        await page.waitForTimeout(1800);
+        const chip = page.locator(`[data-reminder-chip="${onCalendar.chip}"]`).filter({ visible: true });
+        const marker = page.locator(`[data-reminder-marker="${onCalendar.marker}"] button`).filter({ visible: true });
+        const reminderBlock = page.locator(`[data-task-block="reminder:${onCalendar.block}"]`).filter({ visible: true });
+        check(`${device} week view shows the date-only reminder chip`, (await visible(chip)) && (await visible(chip.getByRole("button", { name: /^Mark/ }))));
+        check(`${device} week view shows the timed reminder as a marker`, await visible(marker));
+        check(`${device} week view shows the Block time reminder as a block`, await visible(reminderBlock));
+        await page.screenshot({ path: path.join(out, `desktop-${width}-calendar-reminders.png`) });
+        await chip.getByRole("button", { name: /^Mark/ }).click();
+        await page.waitForTimeout(1200);
+        const undoToast = page.getByRole("status").filter({ hasText: "Marked done" });
+        check(`${device} ticking the chip hides it, with Undo`, !(await visible(chip)) && (await visible(undoToast)));
+        await undoToast.getByRole("button", { name: "Undo" }).click();
+        await page.waitForTimeout(1800);
+        check(`${device} Undo brings the chip back`, (await visible(chip)) && (await readReminder(onCalendar.chip))?.completed_at === null);
+        const from = await gridPoint(page, onCalendar.day, 14 * 60 + 10);
+        const to = await gridPoint(page, onCalendar.day, 15 * 60 + 10);
+        if (from && to) {
+          await mouseDrag(page, from, to);
+          await page.waitForTimeout(1800);
+          const after = await readReminder(onCalendar.block);
+          check(`${device} dragging a Block time reminder saves its new time`, londonClock(after?.due_at?.toISOString?.() ?? null) === "15:00", londonClock(after?.due_at?.toISOString?.() ?? null));
+          await page.screenshot({ path: path.join(out, `desktop-${width}-calendar-reminder-dragged.png`) });
+        } else check(`${device} found the reminder block to drag`, false);
+        await marker.first().click();
+        await page.waitForTimeout(800);
+        const card = page.locator("[data-reminders-card]");
+        const titleShown = await card.evaluate((node, title) => [...node.querySelectorAll("input, textarea")].some((field) => field.value === title), onCalendar.titles.marker).catch(() => false);
+        check(`${device} clicking a reminder opens the card on it`, (await visible(card.getByRole("switch", { name: "Block time" }))) && titleShown);
+        await page.screenshot({ path: path.join(out, `desktop-${width}-calendar-reminder-card.png`) });
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Escape");
+      } finally {
+        await dropReminders(onCalendar.ids);
+      }
+    } else console.log(`skip ${device} calendar reminders (set DATABASE_ADMIN_URL to a local database)`);
   }
   await goto(page, `${base}/tasks`);
   await page.waitForTimeout(1500);

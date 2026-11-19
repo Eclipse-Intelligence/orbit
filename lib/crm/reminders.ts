@@ -25,7 +25,7 @@ import {
   type RepeatPattern,
   type RepeatRule,
 } from "@/lib/task-repeat";
-import { readDateTime } from "@/lib/time";
+import { appTimeZone, readDateTime } from "@/lib/time";
 
 export const PEOPLE_ONLY = "Reminders belong to a person. Use a personal token.";
 export const MAX_OPEN_REMINDERS = 500;
@@ -259,6 +259,45 @@ export async function listReminders(actor: Actor, options: ReminderQuery = {}) {
          and (not $4 or (due_on is not null and ($5::date is null or due_on >= $5::date) and ($6::date is null or due_on <= $6::date)))
        order by completed_at desc nulls first, due_on nulls last, due_at nulls first, created_at, id`,
       [person.userId, options.includeDone === true, DONE_DAYS, ranged, options.from ?? null, options.to ?? null],
+    );
+    return { reminders: result.rows.map(toReminder) };
+  });
+}
+
+export const MAX_CALENDAR_DAYS = 62;
+
+export async function listCalendarReminders(actor: Actor, range: { from: string; to: string }, options: { now?: number } = {}) {
+  const person = personOf(actor, "crm:read");
+  if (!isDayKey(range.from)) invalid("from takes a day, such as 2026-11-20.", "from");
+  if (!isDayKey(range.to)) invalid("to takes a day, such as 2026-11-20.", "to");
+  if (range.to < range.from || range.to > shiftDay(range.from, MAX_CALENDAR_DAYS)) invalid(`Ask for up to ${MAX_CALENDAR_DAYS} days at a time.`, "to");
+  const day = today(options.now);
+  return withActor(person, async (db) => {
+    const result = await db.query<Row>(
+      `select ${COLUMNS} from crm.reminders
+       where user_id = $1 and completed_at is null and due_on is not null
+         and ((due_on >= $2::date and due_on <= $3::date) or due_on < $4::date)
+       order by due_on, due_at nulls first, created_at, id`,
+      [person.userId, range.from, range.to, day],
+    );
+    return { reminders: result.rows.map(toReminder) };
+  });
+}
+
+export async function listDayReminders(actor: Actor, day: string, options: { now?: number } = {}) {
+  const person = personOf(actor, "crm:read");
+  if (!isDayKey(day)) invalid("day takes a day, such as 2026-11-20.", "day");
+  const current = today(options.now);
+  return withActor(person, async (db) => {
+    const result = await db.query<Row>(
+      `select ${COLUMNS} from crm.reminders
+       where user_id = $1
+         and (
+           (completed_at is null and (due_on = $2::date or ($2::date = $3::date and due_on < $2::date)))
+           or (completed_at is not null and (completed_at at time zone $4)::date = $2::date)
+         )
+       order by completed_at nulls first, due_on, due_at nulls first, created_at, id`,
+      [person.userId, day, current, appTimeZone()],
     );
     return { reminders: result.rows.map(toReminder) };
   });

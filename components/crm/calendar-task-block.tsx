@@ -46,7 +46,7 @@ export function taskBlockLabel(block: TaskBlock) {
   return [
     block.title,
     allDay ? null : `${formatTime(block.startsAt)} to ${formatTime(block.endsAt)}`,
-    block.upcoming ? (allDay ? "all day, upcoming, repeats" : "upcoming, repeats") : block.proposed ? "proposed by Plan" : allDay ? "all day, task, repeats" : "task",
+    block.reminder ? "reminder" : block.upcoming ? (allDay ? "all day, upcoming, repeats" : "upcoming, repeats") : block.proposed ? "proposed by Plan" : allDay ? "all day, task, repeats" : "task",
     block.done ? "done" : null,
     block.overdue ? "overdue" : null,
     block.clash ? `clashes with ${block.clash}` : null,
@@ -98,7 +98,7 @@ function Detail({ block }: { block: TaskBlock }) {
   }
   const parts: ReactNode[] = clashing(block)
     ? [<span key="clash" className="text-(--tag-amber-text)">Clashes with {block.clash}</span>]
-    : [block.overdue ? <span key="overdue" className="text-danger font-medium">Overdue</span> : null, block.person, block.workspaceName];
+    : [block.overdue ? <span key="overdue" className="text-danger font-medium">Overdue</span> : null, block.reminder ? "Reminder" : null, block.person, block.workspaceName];
   if (block.task.dueHasTime) parts.push(<span key="duration" className="tabular-nums">{durationLabel(block.durationMinutes)}</span>);
   return (
     <>

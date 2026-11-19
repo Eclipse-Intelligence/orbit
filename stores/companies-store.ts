@@ -25,7 +25,11 @@ type CompaniesState = {
   remindersAsked: number;
   remindersFocus: boolean;
   remindersDue: number | null;
+  remindersDetail: string | null;
+  remindersStamp: { count: number; by: string };
   openReminders: (focus?: boolean) => void;
+  openReminder: (id: string) => void;
+  touchReminders: (by: string) => void;
   setRemindersOpen: (open: boolean) => void;
   setRemindersDue: (count: number) => void;
   openProfile: () => void;
@@ -66,7 +70,11 @@ export const useCompaniesStore = create<CompaniesState>((set) => ({
   remindersAsked: 0,
   remindersFocus: false,
   remindersDue: null,
-  openReminders: (focus = true) => set((state) => ({ remindersOpen: true, remindersAsked: state.remindersAsked + 1, remindersFocus: focus })),
+  remindersDetail: null,
+  remindersStamp: { count: 0, by: "" },
+  openReminders: (focus = true) => set((state) => ({ remindersOpen: true, remindersAsked: state.remindersAsked + 1, remindersFocus: focus, remindersDetail: null })),
+  openReminder: (id) => set((state) => ({ remindersOpen: true, remindersAsked: state.remindersAsked + 1, remindersFocus: false, remindersDetail: id })),
+  touchReminders: (by) => set((state) => ({ remindersStamp: { count: state.remindersStamp.count + 1, by } })),
   setRemindersOpen: (remindersOpen) => set({ remindersOpen }),
   setRemindersDue: (remindersDue) => set({ remindersDue }),
   openProfile: () => set({ profileOpen: true }),

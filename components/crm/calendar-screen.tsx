@@ -36,6 +36,12 @@ import { setCalendarVisibleAction } from "@/app/(crm)/calendar/actions";
 import { applyPlanAction, planAction } from "@/app/(crm)/calendar/plan-actions";
 import PlanPanel, { type PlanPanelHandlers } from "@/components/crm/calendar-plan";
 import { placeTaskAction } from "@/app/(crm)/records";
+import { updateReminderAction } from "@/app/(crm)/reminders";
+import { ReminderUndoToast, useReminderTicks } from "@/components/reminders/use-reminder-ticks";
+import type { ReminderHandlers } from "@/components/reminders/calendar-reminders";
+import type { Reminder } from "@/lib/crm/reminders";
+import { isReminderTaskId, movedReminder, placeReminders, reminderBusy, reminderIdOf, withoutTicked } from "@/lib/reminder-calendar";
+import { useCompaniesStore } from "@/stores/companies-store";
 import {
   dateKey,
   mergeDuplicateEvents,
@@ -82,6 +88,7 @@ import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 const MOVE_FAILED = "Couldn't move the task. Try again.";
 const PLAN_FAILED = "Couldn't plan your tasks. Try again.";
 const APPLY_FAILED = "Couldn't put the tasks on your calendar. Try again.";
+const REMINDER_MOVE_FAILED = "Couldn't move the reminder. Try again.";
 
 type Placed = Record<string, { task: Task; seq: number; saved: boolean }>;
 
@@ -265,6 +272,7 @@ export default function CalendarScreen({
   now,
   invite,
   planner,
+  reminders,
 }: {
   viewer: Viewer;
   today: string;
@@ -275,6 +283,7 @@ export default function CalendarScreen({
   now: number;
   invite: InviteSetup;
   planner: Planner;
+  reminders: Reminder[];
 }) {
   const router = useRouter();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -352,6 +361,58 @@ export default function CalendarScreen({
     router.refresh();
   }
 
+  const openReminder = useCompaniesStore((state) => state.openReminder);
+  const touchReminders = useCompaniesStore((state) => state.touchReminders);
+  const reminderStamp = useCompaniesStore((state) => state.remindersStamp);
+  useEffect(() => {
+    if (reminderStamp.count > 0 && reminderStamp.by !== "calendar") router.refresh();
+  }, [reminderStamp, router]);
+  const ticks = useReminderTicks({ by: "calendar", onChanged: () => router.refresh() });
+  const { settle: settleTicks } = ticks;
+  useEffect(() => {
+    settleTicks(reminders);
+  }, [reminders, settleTicks]);
+  const [shifted, setShifted] = useState<Record<string, { reminder: Reminder; seq: number; pending: boolean }>>({});
+  const [remindersSeen, setRemindersSeen] = useState(reminders);
+  if (remindersSeen !== reminders) {
+    setRemindersSeen(reminders);
+    const stillMoving = Object.fromEntries(Object.entries(shifted).filter(([, entry]) => entry.pending));
+    if (Object.keys(stillMoving).length !== Object.keys(shifted).length) setShifted(stillMoving);
+  }
+  const shiftSeq = useRef(0);
+  const liveReminders = withoutTicked(
+    reminders.map((reminder) => shifted[reminder.id]?.reminder ?? reminder),
+    ticks.held,
+  );
+  const moveReminder = (task: Task, placement: DropPlacement) => {
+    const id = reminderIdOf(task.id);
+    const current = id ? liveReminders.find((reminder) => reminder.id === id) : null;
+    if (!id || !current || placement.dateOnly === true) return;
+    const seq = (shiftSeq.current += 1);
+    setError(null);
+    setShifted((list) => ({ ...list, [id]: { reminder: movedReminder(current, placement.at, placement.durationMinutes), seq, pending: true } }));
+    void updateReminderAction(id, { dueAt: new Date(placement.at).toISOString(), durationMinutes: placement.durationMinutes })
+      .catch(() => ({ error: REMINDER_MOVE_FAILED }))
+      .then((result) => {
+        if ("error" in result) {
+          setShifted((list) => {
+            if (list[id]?.seq !== seq) return list;
+            const rest = { ...list };
+            delete rest[id];
+            return rest;
+          });
+          setError(result.error || REMINDER_MOVE_FAILED);
+          return;
+        }
+        setShifted((list) => (list[id]?.seq === seq ? { ...list, [id]: { reminder: result.reminder, seq, pending: false } } : list));
+        touchReminders("calendar");
+        router.refresh();
+      });
+  };
+  const reminderHandlers: ReminderHandlers = {
+    onTick: (reminder) => ticks.tick(reminder),
+    onOpen: (reminder) => openReminder(reminder.id),
+  };
   const { sections, toggle: toggleSection } = useCalendarSections();
   const [placed, setPlaced] = useState<Placed>({});
   const [moved, setMoved] = useState<Record<string, { startsAt: string; endsAt: string; durationMinutes: number; pending: boolean }>>({});
@@ -442,6 +503,10 @@ export default function CalendarScreen({
   };
   const moveUpcoming = useUpcomingMove(today);
   const place = (task: Task, placement: DropPlacement) => {
+    if (isReminderTaskId(task.id)) {
+      moveReminder(task, placement);
+      return;
+    }
     if (isUpcomingTaskId(task.id)) {
       const block = upcoming.find((item) => item.task.id === task.id);
       if (!block || placement.dateOnly === true) return;
@@ -496,6 +561,11 @@ export default function CalendarScreen({
     onPlace: place,
     onCarry: () => setDrawerOpen(false),
     onOpen: (task, from) => {
+      const reminderId = reminderIdOf(task.id);
+      if (reminderId) {
+        openReminder(reminderId);
+        return;
+      }
       const block = isUpcomingTaskId(task.id) ? upcoming.find((item) => item.task.id === task.id) : null;
       if (block) {
         setOpener(from);
@@ -508,7 +578,7 @@ export default function CalendarScreen({
   const blockDrag: TaskBlockDrag | undefined = gridDrag && !planning ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const proposalDrag: TaskBlockDrag | undefined = gridDrag && !planLoading && !applying ? { onPickUp: pickUpBlock, onResize: resizeBlock } : undefined;
   const heldFromList = drag?.source === "list" ? drag.task.id : null;
-  const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed && !planning && !isUpcomingTaskId(drag.task.id) ? drag : null;
+  const droppingBack = drag?.source === "block" && drag.mode === "move" && drag.armed && !planning && !isUpcomingTaskId(drag.task.id) && !isReminderTaskId(drag.task.id) ? drag : null;
   const { done, complete: markDone, reopen } = useTaskDone(tasks);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [keptTask, setKeptTask] = useState<Task | null>(null);
@@ -525,10 +595,18 @@ export default function CalendarScreen({
   const shownTask = panelTask ?? keptTask;
   const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
   const proposedIds = new Set(preview?.entries.map((entry) => entry.taskId) ?? []);
+  const busy = [...shown, ...reminderBusy(liveReminders)];
   const blocks = taskBlocks(
     tasks.filter((task) => !proposedIds.has(task.id)),
-    { viewerId: viewer.id, now, meetings: shown, workspaces: planner.workspaces, done },
+    { viewerId: viewer.id, now, meetings: busy, workspaces: planner.workspaces, done },
   );
+  const placedReminders = placeReminders(liveReminders, {
+    days: days.includes(date) ? days : [...days, date],
+    today,
+    viewerId: viewer.id,
+    workspaceId: viewer.workspaceId ?? "",
+    meetings: shown,
+  });
   const expanded = useMemo(() => {
     const range = rangeDays(date, desktopMode);
     const first = range[0] < date ? range[0] : date;
@@ -540,18 +618,18 @@ export default function CalendarScreen({
     const placedBlock = shift
       ? { ...block, startsAt: shift.startsAt, endsAt: shift.endsAt, durationMinutes: shift.durationMinutes, task: { ...block.task, dueAt: shift.startsAt, dueDate: dateKey(shift.startsAt), durationMinutes: shift.durationMinutes } }
       : block;
-    return placedBlock.task.dueHasTime ? { ...placedBlock, clash: clashWith(Date.parse(placedBlock.startsAt), Date.parse(placedBlock.endsAt), shown) } : placedBlock;
+    return placedBlock.task.dueHasTime ? { ...placedBlock, clash: clashWith(Date.parse(placedBlock.startsAt), Date.parse(placedBlock.endsAt), busy) } : placedBlock;
   });
   const upcomingTimed = upcoming.filter((block) => block.task.dueHasTime);
   const upcomingDays = [...openDayChips(tasks.filter((task) => !done.has(task.id)), viewer.id, planner.workspaces), ...upcoming.filter((block) => !block.task.dueHasTime)];
-  const shownBlocks = [...blocks, ...upcomingTimed];
+  const shownBlocks = [...blocks, ...upcomingTimed, ...placedReminders.blocks];
   const [upcomingOpen, setUpcomingOpen] = useState<TaskBlock | null>(null);
   const proposals =
     preview && planning
       ? previewBlocks(preview, tasks, {
           workspaces: planner.workspaces,
           meetings: shown,
-          blocks: [...blocks.filter((block) => !block.done), ...upcomingTimed].map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
+          blocks: [...blocks.filter((block) => !block.done), ...upcomingTimed, ...placedReminders.blocks].map((block) => ({ title: block.title, startsAt: block.startsAt, endsAt: block.endsAt })),
         })
       : [];
   const clashes = Object.fromEntries(proposals.flatMap((block) => (block.clash ? [[block.task.id, block.clash]] : [])));
@@ -564,6 +642,10 @@ export default function CalendarScreen({
   };
   const taskHandlers: TaskBlockHandlers = {
     onOpen: (block: TaskBlock, from: HTMLElement | null) => {
+      if (block.reminder) {
+        openReminder(block.reminder.id);
+        return;
+      }
       setOpener(from);
       if (block.upcoming) {
         setUpcomingOpen(block);
@@ -571,7 +653,7 @@ export default function CalendarScreen({
       }
       setOpenTaskId(block.task.id);
     },
-    onComplete: (block: TaskBlock) => markDone(block.task),
+    onComplete: (block: TaskBlock) => (block.reminder ? ticks.tick(block.reminder) : markDone(block.task)),
   };
   const calendarCount = groups.reduce((total, group) => total + group.calendars.length, 0);
   const openTaskCount = tasks.filter((task) => !task.completedAt && !done.has(task.id)).length;
@@ -760,9 +842,9 @@ export default function CalendarScreen({
           ))}
         </span>
       </div>
-      {error && (
+      {(error || ticks.error) && (
         <p role="alert" className="caption-style text-danger px-4 pt-2">
-          {error}
+          {error ?? ticks.error}
         </p>
       )}
       <NoticeContext.Provider value={setNotice}>
@@ -792,6 +874,9 @@ export default function CalendarScreen({
               onSlot={(day, time) => startInvite({ date: day, time })}
               blocks={shownBlocks}
               chips={upcomingDays}
+              reminderChips={placedReminders.chips}
+              markers={placedReminders.markers}
+              reminderHandlers={reminderHandlers}
               dayHref={(day) => calendarHref(day, "day")}
               taskHandlers={taskHandlers}
               drag={drag}
@@ -834,6 +919,9 @@ export default function CalendarScreen({
               blocks={shownBlocks}
               chips={upcomingDays}
               taskHandlers={taskHandlers}
+              reminderChips={placedReminders.chips}
+              markers={placedReminders.markers}
+              reminderHandlers={reminderHandlers}
             />
           </div>
         </KeyboardList>
@@ -847,6 +935,7 @@ export default function CalendarScreen({
         onSent={setNotice}
       />
       <InviteNotice message={notice} onDone={clearNotice} />
+      <ReminderUndoToast toast={ticks.toast} onUndo={(id) => void ticks.undo(id)} />
       {drag?.mode === "move" && <LiftedTask drag={drag} />}
       {press && <PressRing press={press} />}
       <UpcomingDialog

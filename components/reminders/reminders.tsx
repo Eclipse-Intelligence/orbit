@@ -149,6 +149,9 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
   const openReminders = useCompaniesStore((state) => state.openReminders);
   const setOpen = useCompaniesStore((state) => state.setRemindersOpen);
   const setDue = useCompaniesStore((state) => state.setRemindersDue);
+  const askedDetail = useCompaniesStore((state) => state.remindersDetail);
+  const stamp = useCompaniesStore((state) => state.remindersStamp);
+  const touch = useCompaniesStore((state) => state.touchReminders);
   const wide = useWide();
   const viewport = useViewport();
   const today = useToday();
@@ -184,7 +187,10 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
       setDetailError(null);
       setDoneOpen(false);
     }
-    if (open && seen.asked !== asked) setDetailId(null);
+    if (open && seen.asked !== asked) {
+      setDetailId(askedDetail);
+      setDetailError(null);
+    }
     setSeen({ open, asked });
   }
 
@@ -198,6 +204,10 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
   useEffect(() => {
     void load();
   }, [open, asked, load]);
+
+  useEffect(() => {
+    if (stamp.count > 0 && stamp.by !== "card") void load();
+  }, [stamp, load]);
 
   useEffect(() => {
     const refresh = () => {
@@ -266,6 +276,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
         const doneId = result.doneId;
         setHeld((current) => (current[reminder.id] ? { ...current, [reminder.id]: { ...current[reminder.id], doneId } } : current));
         setReminders((list) => replaced(list, result.reminder));
+        touch("card");
         return doneId;
       });
     ticking.current.set(reminder.id, pending);
@@ -292,6 +303,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
       return;
     }
     setReminders((list) => replaced(list?.filter((item) => item.id === result.reminder.id || item.id !== target) ?? null, result.reminder));
+    touch("card");
   }
 
   function undoToast() {
@@ -326,6 +338,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
         return;
       }
       setReminders((list) => replaced(list, result.reminder));
+      touch("card");
     });
   }
 
@@ -340,7 +353,9 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
       gone.current.delete(id);
       setError(result?.error ?? "Couldn't delete the reminder. Try again.");
       void load();
+      return;
     }
+    touch("card");
   }
 
   function turnIntoTask() {
@@ -368,6 +383,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
     back();
     setReminders((list) => list?.filter((item) => item.id !== id) ?? list);
     setToast({ id: Date.now(), kind: "note", message: "Task added" });
+    touch("card");
   }
 
   async function retryRemove(id: string) {
@@ -443,7 +459,10 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
 
   const list = (
     <>
-      <ReminderAdd ref={add} today={today} large={large} draft={draft} onDraft={setDraft} onAdded={(reminder) => setReminders((current) => replaced(current ?? [], reminder))} />
+      <ReminderAdd ref={add} today={today} large={large} draft={draft} onDraft={setDraft} onAdded={(reminder) => {
+          setReminders((current) => replaced(current ?? [], reminder));
+          touch("card");
+        }} />
       {error && (
         <p role="alert" className="caption-style text-danger px-4 pb-1">
           {error}
