@@ -749,7 +749,7 @@ describe("campaigns through HeyReach", () => {
 
     it("reads the steps once after the parser change, not on every sync", async () => {
       const state = (await sql<{ state: Record<string, unknown> }>("select sync_state as state from crm.campaigns where id = $1", [foundersId]))[0].state;
-      assert.equal(state.sequenceFormat, 2);
+      assert.equal(state.sequenceFormat, 3);
       eclipse.calls.length = 0;
       await syncCampaigns({ workspaceId: owner.workspaceId, deadline: Date.now() + 60_000, fetchImpl });
       assert.equal(eclipse.calls.filter((call) => call.path === "/campaign/GetCampaignSequence").length, 0, "a second sync doesn't read the steps again");

@@ -387,8 +387,12 @@ export function heyReachSteps(body: unknown): SequenceStep[] {
     const kind = stepKind(node);
     if (!kind) continue;
     const payload = record(node.payload);
-    const message = text(list(payload.messages)[0]) ?? text(payload.fallbackMessage) ?? "";
-    steps.push({ step: steps.length + 1, variant: null, subject: kind, body: message, delayDays: delayDays(node) ?? null });
+    const variants = list(payload.messages).map((item) => text(item)).filter((item): item is string => Boolean(item));
+    const bodies = variants.length > 0 ? variants : [text(payload.fallbackMessage) ?? ""];
+    const step = (steps.at(-1)?.step ?? 0) + 1;
+    bodies.forEach((body, index) => {
+      steps.push({ step, variant: bodies.length > 1 ? String.fromCharCode(65 + index) : null, subject: kind, body, delayDays: delayDays(node) ?? null });
+    });
   }
   return steps;
 }

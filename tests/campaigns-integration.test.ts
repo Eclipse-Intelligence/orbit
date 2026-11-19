@@ -159,6 +159,28 @@ describe("campaign integration upgrade", () => {
           [2, "Message", "Thanks", 2],
         ],
       );
+      const ab = heyReachSteps({
+        nodeType: "VIEW_PROFILE",
+        actionDelay: 0,
+        actionDelayUnit: "DAY",
+        unconditionalNode: {
+          nodeType: "CONNECTION_REQUEST",
+          actionDelay: 1,
+          actionDelayUnit: "DAY",
+          payload: { fallbackMessage: "Hi there", messages: ["Hi {FIRST_NAME}, version A", "Hi {FIRST_NAME}, version B"] },
+          conditionalNode: { nodeType: "MESSAGE", actionDelay: 1, actionDelayUnit: "DAY", payload: { fallbackMessage: "Thanks", messages: ["Thanks {FIRST_NAME}"] }, unconditionalNode: { nodeType: "END" } },
+          unconditionalNode: { nodeType: "END" },
+        },
+      });
+      assert.deepEqual(
+        ab.map((step) => [step.step, step.variant, step.subject, step.body]),
+        [
+          [1, null, "View profile", ""],
+          [2, "A", "Invite", "Hi {FIRST_NAME}, version A"],
+          [2, "B", "Invite", "Hi {FIRST_NAME}, version B"],
+          [3, null, "Message", "Thanks {FIRST_NAME}"],
+        ],
+      );
       const reason = providerReason(JSON.stringify({ errorMessage: `Lead jane@acme.test (https://www.linkedin.com/in/jane) rejected for api_key=${KEY}` }), [KEY]);
       assert.ok(reason);
       assert.doesNotMatch(reason!, /jane@acme|linkedin\.com\/in\/jane|hr_key/);
