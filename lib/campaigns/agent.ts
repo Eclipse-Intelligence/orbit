@@ -4,6 +4,7 @@ import { addedLine } from "@/lib/campaigns/format";
 import { removeProspect, setCampaignPaused, setProspectCategory, setProspectPaused, startCampaign } from "@/lib/campaigns/manage";
 import { addCompanyContacts, addProspects, type AddResult } from "@/lib/campaigns/prospects";
 import { replyToProspect } from "@/lib/campaigns/replies";
+import { compactProgress } from "@/lib/campaigns/progress";
 import { campaignSenderNames } from "@/lib/campaigns/senders";
 import { doNotContactFor } from "@/lib/campaigns/suppression";
 import { getProspectThread } from "@/lib/campaigns/threads";
@@ -92,8 +93,10 @@ export async function readCampaigns(actor: Actor, input: CampaignReadInput) {
           page: input.page ?? undefined,
         }),
       };
-    case "thread":
-      return { thread: await getProspectThread(actor, await resolveProspect(actor, input)) };
+    case "thread": {
+      const thread = await getProspectThread(actor, await resolveProspect(actor, input));
+      return { thread: { ...thread, progress: compactProgress(thread.progress) } };
+    }
     case "activity":
       return listCampaignActivity(actor, {
         channel,

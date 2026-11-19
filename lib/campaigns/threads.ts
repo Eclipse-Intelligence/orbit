@@ -2,6 +2,7 @@ import { connectedContext, providerError, type ProviderOptions } from "@/lib/cam
 import { leadRef, readProspectRef } from "@/lib/campaigns/manage";
 import { saveThread, threadFetched } from "@/lib/campaigns/messages";
 import { personProspectIds } from "@/lib/campaigns/people";
+import { progressIn, type CampaignProgress } from "@/lib/campaigns/progress";
 import { linkedinReplyPermission } from "@/lib/campaigns/replies";
 import { mailboxParts } from "@/lib/campaigns/thread-view";
 import { doNotContactIn, type DoNotContact } from "@/lib/campaigns/suppression";
@@ -92,6 +93,7 @@ export type ProspectThread = {
   variables: ThreadVariable[];
   fetchedAt: string | null;
   doNotContact: DoNotContact | null;
+  progress: CampaignProgress[];
 };
 
 type PersonRow = {
@@ -325,6 +327,8 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
     }
     const latestInbound = messages.rows.find((message) => message.direction === "inbound" && !message.automatic);
     const fetched = rows.map((row) => row.thread_fetched_at?.getTime() ?? 0).reduce((top, value) => Math.max(top, value), 0);
+    const doNotContact = await doNotContactIn(db, actor, { prospectId: opened.id });
+    const progress = await progressIn(db, actor.workspaceId, ids);
     return {
       prospectId: opened.id,
       person: { name: opened.name, contactId: opened.contact_id, companyName: opened.company_name, email: rows.find((row) => row.email)?.email ?? null, linkedin: rows.find((row) => row.linkedin)?.linkedin ?? null },
@@ -335,7 +339,8 @@ export async function getProspectThread(actor: Actor, prospectId: string): Promi
       defaultChannel: latestInbound?.channel ?? opened.channel,
       variables: variablesOf(opened),
       fetchedAt: fetched ? new Date(fetched).toISOString() : null,
-      doNotContact: await doNotContactIn(db, actor, { prospectId: opened.id }),
+      doNotContact,
+      progress,
     };
   });
 }
