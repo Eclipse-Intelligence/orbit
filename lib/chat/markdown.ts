@@ -484,9 +484,10 @@ export function insideCodeFence(text: string, caret: number) {
 }
 
 function inlineUsesRoom(nodes: Inline[]): boolean {
-  return nodes.some((node) => {
-    if (node.type === "text") return mentionsRoom(node.text);
-    if (node.type === "bold" || node.type === "italic" || node.type === "strike" || node.type === "link") return inlineUsesRoom(node.children);
+  return nodes.some((node, index) => {
+    const glued = index > 0 && (nodes[index - 1].type === "code" || nodes[index - 1].type === "mention" || nodes[index - 1].type === "url");
+    if (node.type === "text") return mentionsRoom(glued ? `x${node.text}` : node.text);
+    if (node.type === "bold" || node.type === "italic" || node.type === "strike") return inlineUsesRoom(node.children);
     return false;
   });
 }

@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from "react-dom";
 import { searchMentionsAction } from "@/app/(crm)/search";
 import type { MentionOption } from "@/lib/crm/mention-search";
-import { liveMentions, roomMentionRanges, type Mention, type MentionKind } from "@/lib/mentions";
+import { liveMentions, roomMentionRanges, roomOfferPlace, type Mention, type MentionKind } from "@/lib/mentions";
 import { pickedMention, stripMention } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 
@@ -184,10 +184,10 @@ export default function MentionInput({
     }
   }
 
-  const offerRoom = Boolean(roomMention && open && "room".startsWith(open.query.toLowerCase()));
-  const searched = open && found.query === open.query ? found.options : [];
-  const roomFirst = open?.query.toLowerCase() === "room";
-  const options = offerRoom ? (roomFirst ? [ROOM_OPTION, ...searched] : [...searched, ROOM_OPTION]) : searched;
+  const searchedNow = Boolean(open && found.query === open.query);
+  const searched = searchedNow ? found.options : [];
+  const roomPlace = roomMention && open ? roomOfferPlace(open.query, searchedNow) : null;
+  const options = roomPlace === "first" ? [ROOM_OPTION, ...searched] : roomPlace === "last" ? [...searched, ROOM_OPTION] : searched;
   const roomMarks = roomMention ? roomMentionRanges(value).map((range) => ({ ...range, className: MENTION_CLASS })) : [];
   const pieces = highlightPieces(value, mentions, [...roomMarks, ...marks]);
   const listId = `${id}-mentions`;

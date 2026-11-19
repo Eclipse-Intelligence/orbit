@@ -85,6 +85,12 @@ export function roomMentionRanges(text: string) {
   return ranges;
 }
 
+export function roomOfferPlace(query: string, searched: boolean): "first" | "last" | null {
+  const typed = query.toLowerCase();
+  if (typed === "room") return "first";
+  return searched && "room".startsWith(typed) ? "last" : null;
+}
+
 export function peopleMentioned(ids: string[]) {
   return ids.filter((id) => id !== ROOM_SENTINEL);
 }

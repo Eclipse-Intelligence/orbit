@@ -27,7 +27,7 @@ import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
 import { usesRoomMention } from "@/lib/chat/markdown";
 import { readNeeded } from "@/lib/chat/timeline";
-import { mentionsRoom, ROOM_SENTINEL, stripRoomMention } from "@/lib/mentions";
+import { mentionsRoom, ROOM_SENTINEL, roomOfferPlace, stripRoomMention } from "@/lib/mentions";
 import { chatBody } from "@/lib/workflows/engine";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -265,6 +265,13 @@ describe("chat notification levels", () => {
       assert.equal(usesRoomMention("```\n@room\n```", "plain"), true);
       assert.equal(usesRoomMention("- @room", "markdown"), true);
       assert.equal(usesRoomMention("\u00a0@room", "plain"), false);
+      assert.equal(usesRoomMention("`user`@room", "markdown"), false);
+      assert.equal(usesRoomMention("[@room](https://x.com)", "markdown"), false);
+      assert.equal(usesRoomMention("**[@room](https://x.com)**", "markdown"), false);
+      assert.equal(usesRoomMention("`user` @room", "markdown"), true);
+      assert.equal(usesRoomMention("**`user`** **@room**", "markdown"), true);
+      const glued = await post(mark, coded, "`user`@room and [@room](https://x.com)", { format: "markdown" });
+      assert.equal(glued.message.everyone, false);
     });
 
     it("refuses @room in a thread reply and on an edit of one", async () => {
@@ -397,6 +404,50 @@ describe("chat notification levels", () => {
       const events = broadcasts.filter((message) => message.topic === personTopic(sam.userId)).map((message) => message.payload as ChatLiveEvent);
       assert.ok(events.some((event) => event.type === "thread-read" && event.messageId === root.message.id));
       assert.ok(!events.some((event) => event.type === "thread-read" && event.messageId === old.message.id));
+    });
+  });
+
+  describe("mark everything read", () => {
+    it("leaves another person's conversation and thread read marks alone", async () => {
+      const shared = await room("shared-reads", [sam, priya]);
+      const root = await post(sam, shared, "Root");
+      await post(priya, shared, "Reply", { parentId: root.message.id });
+      await post(sam, shared, "Unread for everyone else");
+      const others = async () =>
+        (
+          await sql(
+            `select 'member' as kind, conversation_id as id, user_id, last_read_at from crm.chat_members where user_id <> $1
+             union all
+             select 'thread', message_id, user_id, last_read_at from crm.chat_thread_reads where user_id <> $1
+             order by 1, 2, 3`,
+            [mark.userId],
+          )
+        ).rows;
+      const before = await others();
+      await markAllChatRead(mark);
+      assert.deepEqual(await others(), before);
+      assert.equal((await sidebarEntry(mark, shared)).unread, 0);
+      assert.equal((await sidebarEntry(priya, shared)).unread, 2);
+    });
+
+    it("never alerts from a webhook in an archived room", async () => {
+      const closed = await room("closed-hooks", [sam]);
+      await setConversationNotify(sam, closed, { notify: "all" });
+      const { hook, secret } = await createHook(mark, closed, "Deploys");
+      const posted = await postViaHook({ hookId: hook.id, authorization: `Bearer ${secret}`, body: JSON.stringify({ text: "before" }) });
+      await sql("update crm.chat_conversations set archived_at = now() where id = $1", [closed]);
+      assert.deepEqual((await sql("select user_id from private.chat_hook_listeners($1)", [posted.id])).rows, []);
+    });
+  });
+
+  describe("@room in the picker", () => {
+    it("waits for the people search unless the query is exactly room", () => {
+      assert.equal(roomOfferPlace("ro", false), null);
+      assert.equal(roomOfferPlace("ro", true), "last");
+      assert.equal(roomOfferPlace("", true), "last");
+      assert.equal(roomOfferPlace("Room", false), "first");
+      assert.equal(roomOfferPlace("rooms", true), null);
+      assert.equal(roomOfferPlace("sam", true), null);
     });
   });
 

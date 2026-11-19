@@ -25,7 +25,7 @@ set search_path = ''
 as $$
   select cm.user_id, cm.last_read_at, c.name
   from crm.chat_messages m
-  join crm.chat_conversations c on c.id = m.conversation_id and c.kind = 'room'
+  join crm.chat_conversations c on c.id = m.conversation_id and c.kind = 'room' and c.archived_at is null
   join crm.chat_members cm on cm.conversation_id = c.id
   where m.id = p_message and m.hook is not null and m.parent_id is null and m.deleted_at is null and cm.notify = 'all'
 $$;
