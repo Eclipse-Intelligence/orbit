@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { runTool } from "@/lib/assistant/tools";
-import { campaignProgress, compactProgress, eventSlots, type CampaignProgress, type CompactProgress } from "@/lib/campaigns/progress";
+import { buildProgress, campaignProgress, compactProgress, eventSlots, type CampaignProgress, type CompactProgress, type ProgressEvent } from "@/lib/campaigns/progress";
 import { getProspectThread } from "@/lib/campaigns/threads";
 import { createContact } from "@/lib/crm/contacts";
 import type { UserActor } from "@/lib/crm/types";
@@ -132,9 +132,9 @@ describe("campaign progress", () => {
       providerState: { status: "in_sequence", connection: "accepted", messaging: "replied" },
       repliedAt: "2026-11-19T09:41:00Z",
     });
-    await event(ids.priyaLinkedin, "invite_sent", "2026-11-13T10:00:00Z");
-    await event(ids.priyaLinkedin, "invite_accepted", "2026-11-14T10:00:00Z");
-    await event(ids.priyaLinkedin, "message_sent", "2026-11-15T10:00:00Z", { step: 1 });
+    await event(ids.priyaLinkedin, "invite_sent", "2026-11-13T10:00:00Z", { webhook: true });
+    await event(ids.priyaLinkedin, "invite_accepted", "2026-11-14T10:00:00Z", { webhook: true });
+    await event(ids.priyaLinkedin, "message_sent", "2026-11-15T10:00:00Z", { webhook: true });
     await event(ids.priyaLinkedin, "replied", "2026-11-19T09:41:00Z");
 
     ids.priyaEmail = await prospect(owner, {
@@ -328,9 +328,145 @@ describe("campaign progress", () => {
       { step: null, variant: null, occurred_at: at("2026-11-15T09:59:00Z"), from_webhook: true },
     ]);
     assert.deepEqual(
-      slots.map((slot) => slot.at?.toISOString()),
-      ["2026-11-15T09:59:00.000Z", "2026-11-17T10:00:00.000Z"],
+      slots.map((slot) => slot.at?.toISOString() ?? null),
+      ["2026-11-15T09:59:00.000Z", null],
     );
+    const shared = eventSlots([
+      { step: 1, variant: null, occurred_at: at("2026-11-15T10:00:00Z"), from_webhook: false },
+      { step: 1, variant: null, occurred_at: at("2026-11-15T09:58:00Z"), from_webhook: true },
+    ]);
+    assert.deepEqual(shared.map((slot) => slot.at?.toISOString()), ["2026-11-15T09:58:00.000Z"]);
     assert.deepEqual(compactProgress([]), []);
+  });
+
+  describe("HeyReach rules", () => {
+    type Row = Parameters<typeof buildProgress>[0];
+
+    const row = (sequence: string[], state: Record<string, unknown>, extra: Partial<Row> = {}): Row => ({
+      id: "p1",
+      campaign_id: "c1",
+      campaign_name: "LinkedIn",
+      channel: "linkedin",
+      provider: "heyreach",
+      campaign_status: "active",
+      sequence: sequence.map((subject, index) => ({ step: index + 1, variant: null, subject, body: "", delayDays: 1 })),
+      state: "pushed",
+      skip_reason: null,
+      lead_status: "in_progress",
+      provider_state: state,
+      replied_at: null,
+      stop_requested_at: null,
+      stopped_at: null,
+      stop_reason: null,
+      sender_name: "Mark Ridgeon",
+      mailbox: null,
+      mailbox_owner: null,
+      ...extra,
+    });
+    const ev = (kind: ProgressEvent["kind"], at: string, step: number | null, webhook: boolean): ProgressEvent => ({ prospect_id: "p1", kind, step, variant: null, occurred_at: new Date(at), from_webhook: webhook });
+    const build = (input: Row, events: ProgressEvent[]) => buildProgress(input, events, [input], OPTIONS);
+
+    it("keys message slots by step whatever the origin", () => {
+      const progress = build(row(["Invite", "Message", "Message"], { status: "in_sequence", connection: "accepted", messaging: "sent" }), [
+        ev("invite_sent", "2026-11-01T09:00:00Z", null, true),
+        ev("invite_accepted", "2026-11-02T09:00:00Z", null, true),
+        ev("message_sent", "2026-11-03T09:00:00Z", 1, false),
+        ev("message_sent", "2026-11-10T09:00:00Z", 2, true),
+      ]);
+      assert.deepEqual(shape(progress).slice(1), [
+        ["Message", "done", ""],
+        ["Message", "current", "10 Nov"],
+      ]);
+      assert.equal(progress.counts.messages, 2);
+      const both = build(row(["Invite", "Message", "Message"], { status: "in_sequence", connection: "accepted", messaging: "sent" }), [
+        ev("message_sent", "2026-11-03T09:00:00Z", 1, true),
+        ev("message_sent", "2026-11-10T09:00:00Z", 2, true),
+      ]);
+      assert.deepEqual(both.steps.slice(1).map((step) => step.text), ["3 Nov", "10 Nov"]);
+    });
+
+    it("treats polled actions as done without a date and dates nothing from them", () => {
+      const progress = build(row(["Invite", "Message", "Message"], { status: "in_sequence", connection: "accepted", messaging: "sent" }), [
+        ev("invite_sent", "2026-11-13T10:00:00Z", null, false),
+        ev("invite_accepted", "2026-11-14T10:00:00Z", null, false),
+        ev("message_sent", "2026-11-15T10:00:00Z", 1, false),
+      ]);
+      assert.deepEqual(shape(progress), [
+        ["Invite", "done", "accepted"],
+        ["Message", "current", ""],
+        ["Message", "next", "next"],
+      ]);
+      assert.ok(progress.steps.every((step) => step.at === null && step.due === null));
+    });
+
+    it("never shows a step done when the provider's state says that action hasn't happened", () => {
+      const sequences = [
+        ["View profile", "Invite", "Message", "Like post"],
+        ["Invite", "Message", "Message", "Like post"],
+        ["InMail", "Follow", "Message"],
+        ["Invite", "View profile", "Like post", "Follow"],
+      ];
+      const eventSets = [
+        [],
+        [ev("post_liked", "2026-11-08T09:00:00Z", null, true)],
+        [ev("followed", "2026-11-08T09:00:00Z", null, true), ev("profile_viewed", "2026-11-07T09:00:00Z", null, true)],
+        [ev("invite_sent", "2026-11-01T09:00:00Z", null, true), ev("post_liked", "2026-11-08T09:00:00Z", null, true)],
+      ];
+      for (const connection of ["none", "sent", "accepted"]) {
+        for (const messaging of ["none", "sent", "replied"]) {
+          for (const sequence of sequences) {
+            for (const events of eventSets) {
+              for (const status of ["in_sequence", "finished"]) {
+                const progress = build(row(sequence, { status, connection, messaging }), events);
+                const label = `${connection}/${messaging}/${status} ${sequence.join(",")} with ${events.map((item) => item.kind).join(",") || "no events"}`;
+                const hasMessage = events.some((item) => item.kind === "message_sent" || item.kind === "inmail_sent");
+                for (const step of progress.steps) {
+                  const done = step.state === "done" || step.state === "current";
+                  if (connection === "none" && step.label === "Invite") assert.ok(!done, `invite done: ${label}`);
+                  if (messaging === "none" && !hasMessage && (step.label === "Message" || step.label === "InMail")) assert.ok(!done, `message done: ${label}`);
+                }
+                const unaccepted = progress.steps.findIndex((step) => step.label === "Invite" && !step.text.includes("accepted"));
+                if (connection !== "accepted" && unaccepted >= 0) {
+                  for (const step of progress.steps.slice(unaccepted + 1)) {
+                    const own = events.some((item) => item.kind === ({ "Like post": "post_liked", "View profile": "profile_viewed", Follow: "followed" } as Record<string, string>)[step.label]);
+                    const stated = (step.label === "Message" || step.label === "InMail") && messaging !== "none";
+                    if (!own && !stated) assert.ok(step.state !== "done" && step.state !== "current", `inferred across an unaccepted invite: ${label}`);
+                  }
+                }
+                assert.equal(progress.counts.messages, hasMessage ? 1 : messaging === "none" ? 0 : 1, `messages: ${label}`);
+              }
+            }
+          }
+        }
+      }
+      const crossed = build(row(["Invite", "Message", "Message", "Like post"], { status: "in_sequence", connection: "sent", messaging: "none" }), [
+        ev("invite_sent", "2026-11-01T09:00:00Z", null, true),
+        ev("post_liked", "2026-11-08T09:00:00Z", null, true),
+      ]);
+      assert.deepEqual(crossed.steps.slice(1, 3).map((step) => step.state), ["next", "later"]);
+      assert.equal(crossed.counts.messages, 0);
+    });
+
+    it("gives no date to a next step that may never run", () => {
+      const otherBranch = build(row(["Invite", "View profile", "Like post", "Follow"], { status: "in_sequence", connection: "accepted", messaging: "sent" }), [
+        ev("invite_sent", "2026-11-01T09:00:00Z", null, true),
+        ev("invite_accepted", "2026-11-02T09:00:00Z", null, true),
+        ev("message_sent", "2026-11-03T09:00:00Z", null, true),
+      ]);
+      const next = otherBranch.steps.find((step) => step.state === "next")!;
+      assert.equal(next.text, "next");
+      assert.equal(next.due, null);
+
+      const repeated = build(row(["View profile", "Invite", "Message", "View profile"], { status: "in_sequence", connection: "accepted", messaging: "sent" }), [
+        ev("profile_viewed", "2026-11-01T09:00:00Z", null, true),
+        ev("invite_sent", "2026-11-02T09:00:00Z", null, true),
+        ev("invite_accepted", "2026-11-03T09:00:00Z", null, true),
+        ev("message_sent", "2026-11-04T09:00:00Z", null, true),
+      ]);
+      assert.deepEqual(repeated.steps[3], { step: 4, label: "View profile", variant: null, state: "next", at: null, due: null, text: "next" });
+
+      const plain = build(row(["Invite", "View profile", "Message"], { status: "in_sequence", connection: "sent", messaging: "none" }), [ev("invite_sent", "2026-11-18T09:00:00Z", null, true)]);
+      assert.equal(plain.steps[1].text, "around 19 Nov");
+    });
   });
 });

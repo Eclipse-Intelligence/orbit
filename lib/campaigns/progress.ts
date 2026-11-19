@@ -41,7 +41,7 @@ export type CampaignProgress = {
 
 export type CompactProgress = { prospectId: string; campaign: string; channel: CampaignChannel; status: string; stage: string; steps: string[]; counts: string };
 
-type ProgressRow = {
+export type ProgressRow = {
   id: string;
   campaign_id: string;
   campaign_name: string;
@@ -141,23 +141,25 @@ function plannedSteps(sequence: unknown): PlannedStep[] {
 
 type Slot = { at: Date | null; variant: string | null };
 
-export function eventSlots(events: Pick<ProgressEvent, "step" | "variant" | "occurred_at" | "from_webhook">[]): Slot[] {
-  const webhook = events.filter((event) => event.from_webhook).sort((a, b) => a.occurred_at.getTime() - b.occurred_at.getTime());
-  const stepped = new Map<number, Pick<ProgressEvent, "variant" | "occurred_at">>();
-  const loose: Pick<ProgressEvent, "variant" | "occurred_at">[] = [];
+type SlotEvent = Pick<ProgressEvent, "step" | "variant" | "occurred_at" | "from_webhook">;
+
+export function eventSlots(events: SlotEvent[]): Slot[] {
+  const byTime = (a: SlotEvent, b: SlotEvent) => a.occurred_at.getTime() - b.occurred_at.getTime();
+  const stepped = new Map<number, SlotEvent>();
   for (const event of events) {
-    if (event.from_webhook) continue;
-    if (event.step && event.step > 0) {
-      const found = stepped.get(event.step);
-      if (!found || event.occurred_at < found.occurred_at) stepped.set(event.step, event);
-    } else loose.push(event);
+    if (!event.step || event.step < 1) continue;
+    const found = stepped.get(event.step);
+    if (!found || (event.from_webhook && !found.from_webhook) || (event.from_webhook === found.from_webhook && event.occurred_at < found.occurred_at)) stepped.set(event.step, event);
   }
-  loose.sort((a, b) => a.occurred_at.getTime() - b.occurred_at.getTime());
-  const count = Math.max(webhook.length, stepped.size ? Math.max(...stepped.keys()) : 0, loose.length);
+  const loose = events.filter((event) => !event.step || event.step < 1);
+  const looseWebhook = loose.filter((event) => event.from_webhook).sort(byTime);
+  const loosePolled = loose.filter((event) => !event.from_webhook).sort(byTime);
+  const count = Math.max(stepped.size ? Math.max(...stepped.keys()) : 0, looseWebhook.length, loosePolled.length);
   const slots: Slot[] = [];
   for (let index = 0; index < count; index += 1) {
-    const event = webhook[index] ?? stepped.get(index + 1) ?? loose[index] ?? null;
-    slots.push({ at: event?.occurred_at ?? null, variant: event?.variant ?? null });
+    const candidates = [stepped.get(index + 1), looseWebhook[index], loosePolled[index]].filter((event): event is SlotEvent => Boolean(event));
+    const event = candidates.find((item) => item.from_webhook) ?? candidates[0] ?? null;
+    slots.push({ at: event?.from_webhook ? event.occurred_at : null, variant: event?.variant ?? null });
   }
   return slots;
 }
@@ -260,14 +262,21 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
     delayDays: plan.delayDays,
   }));
 
+  const offPath = { strayEvents: false };
+  const kindSlots = new Map<CampaignEventKind, Slot[]>();
+  const slotsOf = (kind: CampaignEventKind) => {
+    if (!kindSlots.has(kind)) kindSlots.set(kind, eventSlots(ofKind(kind)));
+    return kindSlots.get(kind)!;
+  };
+  const kindPosition: number[] = [];
+  const messageEvents = () => slotsOf("message_sent").length + slotsOf("inmail_sent").length;
+  const contradicted = (built: Built) =>
+    (built.kind === "Invite" && state.connection === "none") ||
+    ((built.kind === "Message" || built.kind === "InMail") && state.messaging === "none" && messageEvents() === 0);
+
   if (linkedin) {
-    const slots = new Map<CampaignEventKind, Slot[]>();
     const used = new Map<CampaignEventKind, number>();
-    const slotsOf = (kind: CampaignEventKind) => {
-      if (!slots.has(kind)) slots.set(kind, eventSlots(ofKind(kind)));
-      return slots.get(kind)!;
-    };
-    const accepts = eventSlots(ofKind("invite_accepted"));
+    const accepts = slotsOf("invite_accepted");
     let invites = 0;
     let messages = 0;
     steps.forEach((built, index) => {
@@ -275,6 +284,7 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
       if (!kind) return;
       const position = used.get(kind) ?? 0;
       used.set(kind, position + 1);
+      kindPosition[index] = position;
       const slot = slotsOf(kind)[position];
       if (slot) {
         built.done = true;
@@ -295,7 +305,12 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
         if (messages === 0 && (state.messaging === "sent" || state.messaging === "replied")) built.done = true;
         messages += 1;
       }
+      if (contradicted(built)) built.done = false;
     });
+    for (const kind of new Set(Object.values(STEP_EVENTS))) {
+      if (slotsOf(kind).length > (used.get(kind) ?? 0)) offPath.strayEvents = true;
+    }
+    if (slotsOf("invite_accepted").length > (used.get("invite_sent") ?? 0)) offPath.strayEvents = true;
   } else {
     const sent = ofKind("sent");
     planned.forEach((plan, index) => {
@@ -308,8 +323,15 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
     if (row.lead_status === "completed" && !replied && !row.stopped_at) for (const built of steps) built.done = true;
   }
 
+  const evidenced = steps.findLastIndex((built) => built.done);
+  if (linkedin) {
+    const blocking = steps.findIndex((built) => built.kind === "Invite" && !built.accepted && state.connection !== "accepted");
+    for (let index = 0; index < evidenced; index += 1) {
+      const crosses = blocking >= 0 && index > blocking;
+      if (!crosses && !contradicted(steps[index])) steps[index].done = true;
+    }
+  } else for (let index = 0; index < evidenced; index += 1) steps[index].done = true;
   const lastDone = steps.findLastIndex((built) => built.done);
-  for (let index = 0; index < lastDone; index += 1) steps[index].done = true;
 
   if (replied && lastDone >= 0) {
     const repliedAt = row.replied_at;
@@ -337,6 +359,9 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
     nextShown = true;
     if (status === "paused") return { ...base, state: "next", at: null, due: null, text: "paused" };
     if (linkedin && built.kind === "Message" && waitingInvite) return { ...base, state: "next", at: null, due: null, text: "after they accept" };
+    const kind = STEP_EVENTS[built.kind];
+    const repeated = linkedin && kind !== undefined && (kindPosition[index] ?? 0) >= 1 && slotsOf(kind).length >= 1;
+    if (linkedin && (offPath.strayEvents || repeated)) return { ...base, state: "next", at: null, due: null, text: "next" };
     const previous = index > 0 ? steps[index - 1] : null;
     const from = previous ? [previous.at, previous.acceptedAt].filter((at): at is Date => Boolean(at)).sort((a, b) => b.getTime() - a.getTime())[0] : null;
     if (!from) return { ...base, state: "next", at: null, due: null, text: "next" };
@@ -355,11 +380,8 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
 
   const counts: ProgressCounts = linkedin
     ? {
-        accepted: steps.some((built) => built.accepted) || ofKind("invite_accepted").length > 0 || state.connection === "accepted",
-        messages: Math.max(
-          eventSlots(ofKind("message_sent")).length + eventSlots(ofKind("inmail_sent")).length,
-          steps.filter((built) => built.done && (built.kind === "Message" || built.kind === "InMail")).length,
-        ),
+        accepted: ofKind("invite_accepted").length > 0 || state.connection === "accepted",
+        messages: Math.max(messageEvents(), state.messaging === "sent" || state.messaging === "replied" ? 1 : 0),
         replied,
       }
     : { opens: ofKind("opened").length, clicks: ofKind("clicked").length };
