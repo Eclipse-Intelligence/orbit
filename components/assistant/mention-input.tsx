@@ -130,7 +130,7 @@ export default function MentionInput({
 
   function refresh(text: string, caret: number, known: Mention[] = mentions) {
     const found = stripMention(text, caret, { afterMarkers: markdown });
-    const tagged = found && ((roomMention && /^@room\s/i.test(text.slice(found.start))) || [...known, ...picked.current].some((mention) => text.startsWith(`@${mention.name}`, found.start)));
+    const tagged = found && [...known, ...picked.current].some((mention) => text.startsWith(`@${mention.name}`, found.start));
     setOpen(found && !tagged ? found : null);
   }
 
@@ -140,6 +140,7 @@ export default function MentionInput({
     const next = `${value.slice(0, open.start)}${inserted}${after}`;
     const caret = open.start + inserted.length;
     if (option === ROOM_OPTION) {
+      picked.current = [...picked.current.slice(-20), ROOM_OPTION];
       onChange(next, liveMentions(next, mentions));
     } else {
       const chosen: Mention = { kind: option.kind, id: option.id, name: option.name };
@@ -184,7 +185,9 @@ export default function MentionInput({
   }
 
   const offerRoom = Boolean(roomMention && open && "room".startsWith(open.query.toLowerCase()));
-  const options = [...(offerRoom ? [ROOM_OPTION] : []), ...(open && found.query === open.query ? found.options : [])];
+  const searched = open && found.query === open.query ? found.options : [];
+  const roomFirst = open?.query.toLowerCase() === "room";
+  const options = offerRoom ? (roomFirst ? [ROOM_OPTION, ...searched] : [...searched, ROOM_OPTION]) : searched;
   const roomMarks = roomMention ? roomMentionRanges(value).map((range) => ({ ...range, className: MENTION_CLASS })) : [];
   const pieces = highlightPieces(value, mentions, [...roomMarks, ...marks]);
   const listId = `${id}-mentions`;

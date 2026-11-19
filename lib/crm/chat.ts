@@ -42,9 +42,9 @@ import { isUuid } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { addTaskParticipantsInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
-import { cleanFormat, formatMentions, type ChatFormat } from "@/lib/chat/markdown";
+import { cleanFormat, formatMentions, usesRoomMention, type ChatFormat } from "@/lib/chat/markdown";
 import { query, type Db } from "@/lib/db/pool";
-import { mentionsRoom, ROOM_MENTION_MAX_MEMBERS, ROOM_MENTION_SQL } from "@/lib/mentions";
+import { peopleMentioned, ROOM_MENTION_MAX_MEMBERS, ROOM_SENTINEL } from "@/lib/mentions";
 import { publishLiveBatch, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
 import { sharedThreadHref } from "@/lib/mail/share-types";
@@ -147,7 +147,8 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     clientKey: row.author_user_id === viewerId ? row.client_key : null,
     body: row.body,
     format: cleanFormat(row.format),
-    mentions: row.mentions ?? [],
+    mentions: peopleMentioned(row.mentions ?? []),
+    everyone: (row.mentions ?? []).includes(ROOM_SENTINEL),
     replyCount: row.reply_count,
     lastReplyAt: iso(row.last_reply_at),
     replyAuthors: row.reply_authors ?? [],
@@ -238,7 +239,7 @@ const CONVERSATIONS_SQL = `
     from (
       select 1 from crm.chat_messages m
       where m.conversation_id = c.id and m.parent_id is null and m.deleted_at is null
-        and m.created_at > me.last_read_at and (m.author_user_id is distinct from me.user_id or m.via_workflow_name is not null) and (me.user_id = any(m.mentions) or (c.kind = 'room' and m.hook is null and m.body ~* '${ROOM_MENTION_SQL}'))
+        and m.created_at > me.last_read_at and (m.author_user_id is distinct from me.user_id or m.via_workflow_name is not null) and (me.user_id = any(m.mentions) or (c.kind = 'room' and '${ROOM_SENTINEL}'::uuid = any(m.mentions)))
       limit ${CHAT_COUNT_CAP}
     ) u
   ) mentioned
@@ -265,11 +266,11 @@ function cleanBody(body: unknown) {
   return text;
 }
 
-function memberMentions(body: string, format: ChatFormat) {
+function memberMentions(body: string, format: ChatFormat, everyone = false) {
   const ids = formatMentions(body, format)
-    .filter((mention) => mention.kind === "member" && isUuid(mention.id))
+    .filter((mention) => mention.kind === "member" && isUuid(mention.id) && mention.id !== ROOM_SENTINEL)
     .map((mention) => mention.id.toLowerCase());
-  const unique = [...new Set(ids)];
+  const unique = [...new Set(ids), ...(everyone ? [ROOM_SENTINEL] : [])];
   if (unique.length > MENTION_MAX) throw new CrmError("invalid_input", "Tag up to 50 people in one message.", 400, { field: "body" });
   return unique;
 }
@@ -924,8 +925,8 @@ function takesMentions(conversation: ConversationRow, member: Pick<MemberRow, "n
   return !(memberLevel(conversation, member) === "mute" && member.mute_mentions);
 }
 
-function roomWide(conversation: ConversationRow, message: Pick<ChatMessage, "body" | "hook" | "via">) {
-  return conversation.kind === "room" && !message.hook && !message.via && mentionsRoom(message.body);
+function roomWide(conversation: ConversationRow, message: Pick<ChatMessage, "everyone" | "parentId" | "hook" | "via">) {
+  return conversation.kind === "room" && !message.parentId && !message.hook && !message.via && message.everyone === true;
 }
 
 function mentionAlert(actor: UserActor, conversation: ConversationRow, message: ChatMessage, recipients: string[], options: { everyone?: boolean } = {}) {
@@ -1030,18 +1031,20 @@ const ROOM_MENTION_REFUSED = () => new CrmError("invalid_input", "Agents and wor
 export function checkChatPost(body: unknown, format: ChatFormat) {
   const text = cleanBody(body);
   memberMentions(text, format);
-  if (mentionsRoom(text)) throw ROOM_MENTION_REFUSED();
+  if (usesRoomMention(text, format)) throw ROOM_MENTION_REFUSED();
   return text;
 }
 
-async function checkRoomMention(db: Db, conversation: ConversationRow, body: string, allowed: boolean) {
-  if (!mentionsRoom(body)) return;
+async function checkRoomMention(db: Db, conversation: ConversationRow, parentId: string | null, body: string, format: ChatFormat, allowed: boolean) {
+  if (!usesRoomMention(body, format)) return false;
   if (!allowed) throw ROOM_MENTION_REFUSED();
   if (conversation.kind !== "room") throw new CrmError("invalid_input", "@room only works in rooms.", 400, { field: "body" });
+  if (parentId) throw new CrmError("invalid_input", "@room only works in the main room.", 400, { field: "body" });
   const counted = await db.query<{ count: number }>("select count(*)::integer as count from crm.chat_members where conversation_id = $1", [conversation.id]);
   if ((counted.rows[0]?.count ?? 0) > ROOM_MENTION_MAX_MEMBERS) {
     throw new CrmError("invalid_input", `@room works in rooms of up to ${ROOM_MENTION_MAX_MEMBERS} people. Tag people instead.`, 400, { field: "body" });
   }
+  return true;
 }
 
 async function existingPost(db: Db, actor: UserActor, clientKey: string, conversationId: string, parentId: string | null, body?: string): Promise<ChatPost | null> {
@@ -1061,9 +1064,10 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
   const body = cleanBody(input.body);
   const clientKey = cleanClientKey(input.clientKey);
   const format = cleanFormat(input.format);
-  const mentions = memberMentions(body, format);
   const roomMention = options.roomMention === true && !options.viaWorkflowId;
-  if (mentionsRoom(body) && !roomMention) throw ROOM_MENTION_REFUSED();
+  const everyone = usesRoomMention(body, format);
+  if (everyone && !roomMention) throw ROOM_MENTION_REFUSED();
+  const mentions = memberMentions(body, format, everyone);
   const repeatCheck = options.charge ? body : undefined;
   try {
     if (options.charge) {
@@ -1078,8 +1082,8 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
       const conversation = await readConversation(db, actor, conversationId);
       const earlier = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
       if (earlier) return earlier;
-      await checkRoomMention(db, conversation, body, roomMention);
-      const tagged = await tagFromDiscussion(db, actor, conversation, mentions);
+      await checkRoomMention(db, conversation, parentId, body, format, roomMention);
+      const tagged = await tagFromDiscussion(db, actor, conversation, peopleMentioned(mentions));
       if (conversation.kind === "dm") {
         const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
         if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
@@ -1162,14 +1166,14 @@ export async function editMessage(actor: UserActor, id: string, body: unknown, o
       if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
       const conversation = await readConversation(db, actor, current.conversationId);
       const format = asked ?? current.format;
-      const mentions = memberMentions(text, format);
-      await checkRoomMention(db, conversation, text, options.roomMention === true);
+      const usesRoom = await checkRoomMention(db, conversation, current.parentId, text, format, options.roomMention === true);
+      const mentions = memberMentions(text, format, usesRoom);
       const before = new Set(current.mentions);
       const tagged = await tagFromDiscussion(
         db,
         actor,
         conversation,
-        mentions.filter((person) => !before.has(person)),
+        peopleMentioned(mentions).filter((person) => !before.has(person)),
       );
       const updated = await db.query("update crm.chat_messages set body = $2, format = $5, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId, format]);
       if ((updated.rowCount ?? 0) === 0) throw notFound("message");
@@ -1179,7 +1183,7 @@ export async function editMessage(actor: UserActor, id: string, body: unknown, o
       const added = conversation.kind === "room" ? listening.filter((member) => !before.has(member.user_id) && message.mentions.includes(member.user_id)).map((member) => member.user_id) : [];
       const addedSet = new Set(added);
       const everyone =
-        roomWide(conversation, message) && !mentionsRoom(current.body) ? listening.filter((member) => !before.has(member.user_id) && !addedSet.has(member.user_id)).map((member) => member.user_id) : [];
+        roomWide(conversation, message) && !current.everyone ? listening.filter((member) => !before.has(member.user_id) && !addedSet.has(member.user_id)).map((member) => member.user_id) : [];
       afterPost(
         db,
         members.map((member) => member.user_id),
@@ -1305,14 +1309,22 @@ export async function markAllChatRead(actor: UserActor): Promise<{ conversations
        returning me.conversation_id, me.last_read_at`,
       [actor.userId],
     );
-    await db.query(
+    const threads = await db.query<{ message_id: string; conversation_id: string; last_read_at: Stamp }>(
       `update crm.chat_thread_reads t set last_read_at = clock_timestamp()
        from crm.chat_messages r
-       where t.user_id = $1 and r.id = t.message_id and r.last_reply_at > t.last_read_at`,
+       join crm.chat_conversations c on c.id = r.conversation_id and c.kind in ('room', 'dm') and c.archived_at is null
+       where t.user_id = $1 and r.id = t.message_id and r.last_reply_at > t.last_read_at
+       returning t.message_id, r.conversation_id, t.last_read_at`,
       [actor.userId],
     );
     const reads = result.rows.map((row) => ({ conversationId: row.conversation_id, lastReadAt: iso(row.last_read_at) }));
-    afterChatCommit(db, () => publish(reads.map((read) => eventFor(actor.userId, { type: "read", ...read }))));
+    const threadReads = threads.rows.map((row) => ({ conversationId: row.conversation_id, messageId: row.message_id, lastReadAt: iso(row.last_read_at) }));
+    afterChatCommit(db, () =>
+      publish([
+        ...reads.map((read) => eventFor(actor.userId, { type: "read", ...read })),
+        ...threadReads.map((read) => eventFor(actor.userId, { type: "thread-read", ...read })),
+      ]),
+    );
     return { conversations: reads.length };
   });
 }

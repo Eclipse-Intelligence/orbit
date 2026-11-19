@@ -137,7 +137,7 @@ export function replaceMessage(list: ChatMessage[], message: ChatMessage) {
 }
 
 export function blankDeleted(message: ChatMessage): ChatMessage {
-  return { ...message, body: "", mentions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
+  return { ...message, body: "", mentions: [], everyone: false, hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
 }
 
 export function removeRoot(list: ChatMessage[], id: string) {
@@ -439,6 +439,10 @@ export function sidebarRead(sidebar: ChatSidebar, conversationId: string): ChatS
     unreadConversations: conversations.filter((conversation) => conversation.unread > 0).length,
     mentioned: sidebar.threads.mentions > 0 || conversations.some((conversation) => conversation.mentions > 0 || (conversation.kind === "dm" && conversation.unread > 0)),
   };
+}
+
+export function readNeeded(sent: Map<string, string | null>, key: string, upTo: string | null) {
+  return upTo === null || !sent.has(key) || sent.get(key) !== upTo;
 }
 
 export function sidebarNotify(sidebar: ChatSidebar, conversationId: string, change: ChatNotifyInput): ChatSidebar {

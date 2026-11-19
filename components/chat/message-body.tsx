@@ -13,7 +13,7 @@ const RECORD = "text-foreground underline decoration-violet/70 underline-offset-
 const LINK = "text-soft underline decoration-white/35 underline-offset-[3px] [overflow-wrap:anywhere] hover:text-foreground hover:decoration-current";
 const BODY = "text-foreground text-[14px] leading-[22px] whitespace-pre-wrap [overflow-wrap:anywhere]";
 
-type Viewer = { viewerId: string; names?: Map<string, string> };
+type Viewer = { viewerId: string; names?: Map<string, string>; everyone?: boolean };
 
 function MentionChip({ mention, viewer }: { mention: Mention; viewer: Viewer }) {
   if (mention.kind === "member") {
@@ -30,8 +30,8 @@ function MentionChip({ mention, viewer }: { mention: Mention; viewer: Viewer }) 
   );
 }
 
-function RoomText({ text }: { text: string }) {
-  const ranges = roomMentionRanges(text);
+function RoomText({ text, everyone }: { text: string; everyone?: boolean }) {
+  const ranges = everyone ? roomMentionRanges(text) : [];
   if (ranges.length === 0) return <LinkedText text={text} />;
   const pieces: ReactNode[] = [];
   let cursor = 0;
@@ -61,7 +61,7 @@ function renderInline(nodes: Inline[], viewer: Viewer, inLink = false): ReactNod
   return nodes.map((node, index) => {
     switch (node.type) {
       case "text":
-        return inLink ? <Fragment key={index}>{node.text}</Fragment> : <RoomText key={index} text={node.text} />;
+        return inLink ? <Fragment key={index}>{node.text}</Fragment> : <RoomText key={index} text={node.text} everyone={viewer.everyone} />;
       case "mention":
         return <MentionChip key={index} mention={node.mention} viewer={viewer} />;
       case "code":
@@ -132,21 +132,23 @@ export default function MessageBody({
   format = "plain",
   viewerId,
   names,
+  everyone,
   className,
 }: {
   body: string;
   format?: ChatFormat;
   viewerId: string;
   names?: Map<string, string>;
+  everyone?: boolean;
   className?: string;
 }) {
-  const viewer = { viewerId, names };
+  const viewer = { viewerId, names, everyone };
   if (format === "markdown") {
     return <div className={cn(BODY, "flex flex-col gap-1", className)}>{parseMarkdown(body).map((block, index) => renderBlock(block, index, viewer))}</div>;
   }
   return (
     <div className={cn(BODY, className)}>
-      {splitMentions(body).map((piece, index) => ("mention" in piece ? <MentionChip key={index} mention={piece.mention} viewer={viewer} /> : <RoomText key={index} text={piece.text} />))}
+      {splitMentions(body).map((piece, index) => ("mention" in piece ? <MentionChip key={index} mention={piece.mention} viewer={viewer} /> : <RoomText key={index} text={piece.text} everyone={viewer.everyone} />))}
     </div>
   );
 }

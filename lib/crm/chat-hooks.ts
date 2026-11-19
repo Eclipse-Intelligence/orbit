@@ -5,7 +5,8 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { hashToken } from "@/lib/crm/tokens";
-import type { UserActor } from "@/lib/crm/types";
+import { alertMembers } from "@/lib/alerts";
+import type { AgentActor, UserActor } from "@/lib/crm/types";
 import { query, type Db } from "@/lib/db/pool";
 
 export const HOOK_BODY_MAX_BYTES = 32 * 1024;
@@ -217,6 +218,21 @@ const REFUSALS = {
   rate_limited: () => new CrmError("rate_limited", `This webhook can post ${HOOK_POSTS_PER_MINUTE} messages a minute. Try again shortly.`, 429),
 };
 
+async function alertListeners(hookId: string, message: ChatMessage) {
+  const listeners = await query<{ user_id: string; last_read_at: Stamp; room_name: string | null }>("select user_id, last_read_at, room_name from private.chat_hook_listeners($1)", [message.id]);
+  if (listeners.rows.length === 0) return;
+  const hook: AgentActor = { type: "agent", agentId: hookId, agentName: message.author.name, credentialId: hookId, workspaceId: "", scopes: [] };
+  const byKey = new Map<string, string[]>();
+  for (const listener of listeners.rows) {
+    const key = `chat:room:${message.conversationId}:${new Date(listener.last_read_at).getTime()}`;
+    byKey.set(key, [...(byKey.get(key) ?? []), listener.user_id]);
+  }
+  const title = `${message.author.name || "A webhook"} posted in #${listeners.rows[0].room_name ?? ""}`.slice(0, 200);
+  for (const [key, recipients] of byKey) {
+    await alertMembers(hook, recipients, { source: "chat", href: `/chat/${message.conversationId}?message=${message.id}`, tag: `chat:${message.conversationId}`, body: null, key, title }, { recipientsVerified: true, includeSelf: true });
+  }
+}
+
 export async function postViaHook(
   input: { hookId: string; authorization: string | null; idempotencyKey?: string | null; body: string },
   options: { perMinute?: number; windowSeconds?: number } = {},
@@ -267,6 +283,7 @@ export async function postViaHook(
     };
     const members = row.member_ids ?? [];
     chatBackground(() => broadcastChat(members, { type: "message", conversationId, message, root: null }));
+    chatBackground(() => alertListeners(input.hookId.toLowerCase(), message));
   }
   return { id: row.message_id!, conversationId, duplicate: row.duplicate };
 }

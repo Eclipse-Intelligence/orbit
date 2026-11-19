@@ -63,10 +63,10 @@ export function liveMentions(text: string, mentions: Mention[]) {
 
 export const ROOM_MENTION = "@room";
 export const ROOM_MENTION_MAX_MEMBERS = 50;
-export const ROOM_MENTION_SQL = `(^|[[:space:](*_~"''])@room([^A-Za-z0-9-]|$)`;
+export const ROOM_SENTINEL = "00000000-0000-0000-0000-000000000000";
 
-const ROOM_TOKEN = /(^|[\s(*_~"'])@room(?![A-Za-z0-9-])/i;
-const ROOM_TOKENS = /(^|[\s(*_~"'])@(room)(?![A-Za-z0-9-])/gi;
+const ROOM_TOKEN = /(^|[ \t\n\r\f\v(*_~"'])@room(?![A-Za-z0-9-])/i;
+const ROOM_TOKENS = /(^|[ \t\n\r\f\v(*_~"'])@(room)(?![A-Za-z0-9-])/gi;
 
 export function mentionsRoom(text: string) {
   return ROOM_TOKEN.test(text);
@@ -83,4 +83,8 @@ export function roomMentionRanges(text: string) {
     ranges.push({ start, end: start + ROOM_MENTION.length });
   }
   return ranges;
+}
+
+export function peopleMentioned(ids: string[]) {
+  return ids.filter((id) => id !== ROOM_SENTINEL);
 }

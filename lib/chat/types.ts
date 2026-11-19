@@ -73,6 +73,7 @@ export type ChatMessage = {
   body: string;
   format: ChatFormat;
   mentions: string[];
+  everyone?: boolean;
   replyCount: number;
   lastReplyAt: string | null;
   replyAuthors: ChatPerson[];

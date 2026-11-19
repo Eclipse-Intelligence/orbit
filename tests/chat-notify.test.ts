@@ -25,7 +25,9 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
-import { mentionsRoom, stripRoomMention } from "@/lib/mentions";
+import { usesRoomMention } from "@/lib/chat/markdown";
+import { readNeeded } from "@/lib/chat/timeline";
+import { mentionsRoom, ROOM_SENTINEL, stripRoomMention } from "@/lib/mentions";
 import { chatBody } from "@/lib/workflows/engine";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -72,8 +74,8 @@ describe("chat notification levels", () => {
     return entry;
   }
 
-  function post(person: UserActor, conversationId: string, body: string, extra: { parentId?: string; roomMention?: boolean } = {}) {
-    return postMessage(person, { conversationId, parentId: extra.parentId, body, clientKey: key() }, { roomMention: extra.roomMention });
+  function post(person: UserActor, conversationId: string, body: string, extra: { parentId?: string; roomMention?: boolean; format?: "plain" | "markdown" } = {}) {
+    return postMessage(person, { conversationId, parentId: extra.parentId, body, format: extra.format, clientKey: key() }, { roomMention: extra.roomMention });
   }
 
   before(async () => {
@@ -199,6 +201,8 @@ describe("chat notification levels", () => {
       await setConversationNotify(priya, standup, { notify: "mute", muteMentions: true });
       const posted = await post(mark, standup, "@room standup in five", { roomMention: true });
       assert.deepEqual(posted.message.mentions, []);
+      assert.equal(posted.message.everyone, true);
+      assert.deepEqual((await sql("select mentions::text[] as mentions from crm.chat_messages where id = $1", [posted.message.id])).rows[0].mentions, [ROOM_SENTINEL]);
       assert.deepEqual(await titles(sam.userId), ["Mark mentioned @room in #standup"]);
       assert.deepEqual(await titles(priya.userId), []);
       assert.deepEqual(await titles(mark.userId), []);
@@ -245,6 +249,58 @@ describe("chat notification levels", () => {
       await post(mark, big, "email@room.test and @roomy are fine", { roomMention: false });
     });
 
+    it("treats a tag or @room inside Markdown code as text that neither alerts nor counts, anywhere", async () => {
+      const coded = await room("coded", [sam]);
+      const inline = await post(mark, coded, "Type `@room` to ping everyone", { format: "markdown" });
+      const fenced = await post(mark, coded, "```\n@room\n" + tag(sam) + "\n```", { format: "markdown" });
+      assert.deepEqual([inline.message.everyone, fenced.message.everyone, fenced.message.mentions], [false, false, []]);
+      const entry = await sidebarEntry(sam, coded);
+      assert.deepEqual([entry.unread, entry.mentions], [2, 0]);
+      assert.deepEqual(await titles(sam.userId), []);
+      const dm = await openDm(mark, sam.userId);
+      await post(mark, dm.id, "In a DM `@room` is fine", { format: "markdown" });
+      await postChat(mark, { conversationId: coded, text: "Agents can quote `@room` too" });
+      await refused(postChat(mark, { conversationId: coded, text: "But not **@room**" }), /can't use @room/);
+      assert.equal(usesRoomMention("`@room`", "markdown"), false);
+      assert.equal(usesRoomMention("```\n@room\n```", "plain"), true);
+      assert.equal(usesRoomMention("- @room", "markdown"), true);
+      assert.equal(usesRoomMention("\u00a0@room", "plain"), false);
+    });
+
+    it("refuses @room in a thread reply and on an edit of one", async () => {
+      const threaded = await room("threaded", [sam]);
+      const root = await post(sam, threaded, "Root");
+      await refused(post(mark, threaded, "@room look", { parentId: root.message.id, roomMention: true }), /@room only works in the main room\./);
+      const reply = await post(mark, threaded, "Reply", { parentId: root.message.id });
+      await refused(editMessage(mark, reply.message.id, "Reply @room", { roomMention: true }), /@room only works in the main room\./);
+    });
+
+    it("counts @room as one of the 50 mentions", async () => {
+      const crowd = await room("crowd", [sam]);
+      const people = Array.from({ length: 50 }, (_, index) => `@[P${index}](member:${String(index + 1).padStart(8, "0")}-0000-4000-8000-000000000000)`);
+      await post(mark, crowd, `${people.slice(0, 49).join(" ")} @room`, { roomMention: true });
+      await refused(post(mark, crowd, `${people.join(" ")} @room`, { roomMention: true }), /Tag up to 50 people/);
+    });
+
+    it("respects muted mentions when an edit adds a tag or @room", async () => {
+      const quiet = await room("quiet-edits", [sam, priya]);
+      await setConversationNotify(sam, quiet, { notify: "mute", muteMentions: true });
+      await setConversationNotify(priya, quiet, { notify: "mute" });
+      const posted = await post(mark, quiet, "Plain");
+      await editMessage(mark, posted.message.id, `Plain ${tag(sam)} ${tag(priya)}`, { roomMention: true });
+      const other = await post(mark, quiet, "Second");
+      await editMessage(mark, other.message.id, "Second @room", { roomMention: true });
+      assert.deepEqual(await titles(sam.userId), []);
+      assert.deepEqual(await titles(priya.userId), ["Mark mentioned you in #quiet-edits", "Mark mentioned @room in #quiet-edits"]);
+    });
+
+    it("counts @room only when the server flagged it, so raw text from workflows and elsewhere never counts", async () => {
+      const flows = await room("flows", [sam]);
+      await sql("insert into crm.chat_messages (conversation_id, author_user_id, client_key, body) values ($1, $2, 'wf-room', '@room raw text')", [flows, mark.userId]);
+      const entry = await sidebarEntry(sam, flows);
+      assert.deepEqual([entry.unread, entry.mentions], [1, 0]);
+    });
+
     it("strips @room from workflow posts and never counts it on hook messages", async () => {
       assert.equal(chatBody("Hi @room {{x}}", { x: "and @Room too" }), "Hi room and Room too");
       assert.equal(chatBody("**@room** (@room)", {}), "**room** (room)");
@@ -258,6 +314,21 @@ describe("chat notification levels", () => {
       assert.equal(entry.unread, 1);
       assert.equal(entry.mentions, 0);
       assert.deepEqual(await titles(sam.userId), []);
+    });
+
+    it("alerts members whose level is All when a webhook posts, once per unread burst", async () => {
+      const alerts = await room("alerts", [sam, priya]);
+      await setConversationNotify(priya, alerts, { notify: "all" });
+      const { hook, secret } = await createHook(mark, alerts, "Deploys");
+      const send = (text: string) => postViaHook({ hookId: hook.id, authorization: `Bearer ${secret}`, body: JSON.stringify({ text }) });
+      await send("one");
+      await send("two");
+      assert.deepEqual(await titles(priya.userId), ["Deploys posted in #alerts"]);
+      assert.deepEqual(await titles(sam.userId), []);
+      assert.deepEqual(await titles(mark.userId), []);
+      await markConversationRead(priya, alerts);
+      await send("three");
+      assert.equal((await titles(priya.userId)).length, 2);
     });
   });
 
@@ -306,11 +377,37 @@ describe("chat notification levels", () => {
         unreads.groups.find((group) => group.conversation.id === one)?.messages.map((message) => message.body),
         ["Unread one"],
       );
+      const archived = await room("archived", [sam]);
+      const old = await post(sam, archived, "Old root");
+      await post(mark, archived, "Old reply", { parentId: old.message.id });
+      await sql("update crm.chat_conversations set archived_at = now() where id = $1", [archived]);
+      const othersBefore = await sql("select conversation_id, last_read_at from crm.chat_members where user_id <> $1 order by 1, 2", [sam.userId]);
+      const otherThreadsBefore = await sql("select message_id, user_id, last_read_at from crm.chat_thread_reads where user_id <> $1 order by 1, 2", [sam.userId]);
+      const archivedBefore = await sql("select last_read_at from crm.chat_thread_reads where message_id = $1 and user_id = $2", [old.message.id, sam.userId]);
+      broadcasts = [];
       await markAllChatRead(sam);
       const sidebar = await listConversations(sam);
       assert.equal(sidebar.unreadConversations, 0);
       assert.deepEqual(sidebar.threads, { unread: 0, mentions: 0 });
       assert.deepEqual((await listUnreads(sam)).groups, []);
+      assert.deepEqual((await sql("select conversation_id, last_read_at from crm.chat_members where user_id <> $1 order by 1, 2", [sam.userId])).rows, othersBefore.rows);
+      assert.deepEqual((await sql("select message_id, user_id, last_read_at from crm.chat_thread_reads where user_id <> $1 order by 1, 2", [sam.userId])).rows, otherThreadsBefore.rows);
+      assert.deepEqual((await sql("select last_read_at from crm.chat_thread_reads where message_id = $1 and user_id = $2", [old.message.id, sam.userId])).rows, archivedBefore.rows);
+      await chatWorkSettled();
+      const events = broadcasts.filter((message) => message.topic === personTopic(sam.userId)).map((message) => message.payload as ChatLiveEvent);
+      assert.ok(events.some((event) => event.type === "thread-read" && event.messageId === root.message.id));
+      assert.ok(!events.some((event) => event.type === "thread-read" && event.messageId === old.message.id));
+    });
+  });
+
+  describe("read dedupe", () => {
+    it("always sends a read with no message, and skips only a repeat of the same message", () => {
+      const sent = new Map<string, string | null>([["room", "m1"], ["other", null]]);
+      assert.equal(readNeeded(sent, "room", "m1"), false);
+      assert.equal(readNeeded(sent, "room", "m2"), true);
+      assert.equal(readNeeded(sent, "room", null), true);
+      assert.equal(readNeeded(sent, "other", null), true);
+      assert.equal(readNeeded(sent, "new", "m1"), true);
     });
   });
 

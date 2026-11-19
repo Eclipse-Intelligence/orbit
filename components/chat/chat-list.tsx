@@ -48,7 +48,7 @@ const ROW = "hover:bg-surface-hover hover:text-foreground flex h-[30px] w-full i
 function useOpen(view: ChatView) {
   const { go } = useChat();
   return (event: MouseEvent<HTMLAnchorElement>) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
     go({ view, thread: null, message: null });
   };
@@ -133,7 +133,7 @@ function ConversationRow({ conversation, active, children }: { conversation: Cha
       >
         {children}
         {muted && <BellOffIcon aria-label="Muted" role="img" className="text-faint size-3 shrink-0 pointer-fine:group-hover/row:hidden pointer-fine:group-focus-within/row:hidden" />}
-        {unread && conversation.mentions === 0 && <span className="sr-only">, unread</span>}
+        {unread && conversation.kind === "room" && conversation.mentions === 0 && <span className="sr-only">, unread</span>}
       </a>
       <DropdownMenu open={menu} onOpenChange={setMenu} modal={false}>
         <DropdownMenuTrigger asChild>

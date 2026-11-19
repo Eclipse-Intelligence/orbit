@@ -15,7 +15,7 @@ import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 const SETTLE_MS = 500;
 
 function Group({ group, onRead }: { group: ChatUnreadGroup; onRead: (id: string) => void }) {
-  const { go, viewer } = useChat();
+  const { go, viewer, multi } = useChat();
   const { conversation, messages, more } = group;
   const count = messages.length + more;
   const open = () => go({ view: { kind: "room", id: conversation.id }, thread: null, message: messages[0]?.id ?? null });
@@ -23,11 +23,7 @@ function Group({ group, onRead }: { group: ChatUnreadGroup; onRead: (id: string)
   return (
     <article className="bg-surface-raised rounded-2xl pt-3 pb-2" aria-label={`Unread in ${roomLabel(conversation)}`}>
       <div className="flex items-center gap-2 px-4 pb-1.5 max-md:px-3 md:pointer-coarse:pb-3.5">
-        <button
-          type="button"
-          onClick={open}
-          className="ui-style hit flex min-w-0 items-center gap-2 rounded-md font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
-        >
+        <Button variant="link" size="none" onClick={open} className="ui-style hit text-foreground flex min-w-0 items-center gap-2 font-medium max-md:min-h-11">
           {conversation.kind === "dm" ? (
             <>
               <ChatAvatar person={conversation.dmUser ?? (other ? { id: other.id ?? conversation.id, name: other.name } : { id: conversation.id, name: conversation.name })} size="xs" />
@@ -41,7 +37,8 @@ function Group({ group, onRead }: { group: ChatUnreadGroup; onRead: (id: string)
               {conversation.name}
             </span>
           )}
-        </button>
+        </Button>
+        {multi && conversation.kind === "room" && conversation.workspaceName && <span className="caption-style text-faint shrink-0 max-sm:hidden">{conversation.workspaceName}</span>}
         <Tag tone="purple" size="sm" className="h-5 shrink-0 text-[12px]">
           {count >= 100 ? "99+" : count} new
         </Tag>

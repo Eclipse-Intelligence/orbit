@@ -196,14 +196,25 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
     }
   }, []);
 
-  const { loadRoom, loadMessages, loadThread, deliver, markRead, markAllRead } = actions;
+  const { loadRoom, loadMessages, loadThread, deliver, markAllRead } = actions;
   const markUnreadNow = actions.markUnread;
+  const markReadNow = actions.markRead;
+
+  const release = useCallback((conversationId: string) => setHeld((current) => (current?.conversationId === conversationId ? null : current)), []);
+
+  const markRead = useCallback(
+    (conversationId: string, upTo: string | null) => {
+      if (upTo === null) release(conversationId);
+      markReadNow(conversationId, upTo);
+    },
+    [markReadNow, release],
+  );
 
   const markUnread = useCallback(
     async (conversationId: string, messageId: string | null) => {
       const open = latest.current.location.view;
       const here = open.kind === "room" && open.id === conversationId;
-      if (here) setHeld({ conversationId, messageId: messageId ?? "" });
+      if (here) setHeld({ conversationId, messageId: "" });
       const marked = await markUnreadNow(conversationId, messageId);
       if (here) setHeld((current) => (current?.conversationId !== conversationId ? current : marked ? { conversationId, messageId: marked } : null));
       return marked;
@@ -365,6 +376,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
         dispatch({ type: "deleted", conversationId: event.conversationId, messageId: event.messageId, parentId: event.parentId, root: event.root });
         return;
       case "read":
+        release(event.conversationId);
         dispatch({ type: "read", conversationId: event.conversationId, lastReadAt: event.lastReadAt });
         return;
       case "unread":
@@ -442,8 +454,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const members = room?.members;
   const memberNames = useMemo(() => new Map((members ?? []).map((member) => [member.id.toLowerCase(), member.name])), [members]);
   const context = useMemo<ChatContextValue>(
-    () => ({ ...actions, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames }),
-    [actions, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames],
+    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames }),
+    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames],
   );
 
   const entry: ChatConversation | null = roomId ? (sidebar?.conversations.find((item) => item.id === roomId) ?? room?.conversation ?? null) : null;

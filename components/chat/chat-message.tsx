@@ -15,7 +15,7 @@ import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
 import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
-import { mentionsIn, mentionsRoom, plainMentions, type Mention } from "@/lib/mentions";
+import { mentionsIn, plainMentions, ROOM_MENTION_MAX_MEMBERS, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
@@ -42,8 +42,9 @@ type Props = {
 };
 
 function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPane; onDone: () => void }) {
-  const { edit, discussion } = useChat();
+  const { edit, discussion, conversation, memberNames } = useChat();
   const id = useId();
+  const roomMention = !discussion && pane === "room" && !message.parentId && conversation(message.conversationId)?.kind === "room" && memberNames.size <= ROOM_MENTION_MAX_MEMBERS;
   const input = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const done = () => {
@@ -73,6 +74,7 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
         label="Edit message"
         submitVerb="save"
         scope={pane === "room" && !discussion ? "room" : "thread"}
+        roomMention={roomMention}
         autoFocus
         actions={
           <span className="flex items-center gap-2 pointer-coarse:gap-3">
@@ -125,7 +127,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const error = local && message.clientKey ? failed[message.clientKey] : undefined;
   const isEditing = editing?.id === message.id && editing.pane === pane && !deleted;
   const mentionsMe =
-    (!own || Boolean(message.via)) && !deleted && (message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase()) || (!message.hook && !message.via && mentionsRoom(message.body)));
+    (!own || Boolean(message.via)) && !deleted && (message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase()) || message.everyone === true);
   const canReply = !inThread && !local && !deleted;
   const canEdit = own && !local && !deleted && !message.via;
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted;
@@ -254,7 +256,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         ) : message.hook ? (
           <HookCardBody card={message.hook} body={message.body} />
         ) : (
-          <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
+          <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} everyone={message.everyone} className={cn(error && "text-soft")} />
         )}
         {message.editedAt && !deleted && !isEditing && <span className="caption-style text-faint">Edited</span>}
         {error && (

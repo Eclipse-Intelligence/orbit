@@ -6,7 +6,7 @@ import { chatJoined, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { encodeChatMentions } from "@/lib/chat/compose";
 import { formatMentions, type ChatFormat } from "@/lib/chat/markdown";
-import { isLocal, newerCursor, oldestServerId, sidebarAllRead, sidebarNotify, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
+import { isLocal, newerCursor, oldestServerId, readNeeded, sidebarAllRead, sidebarNotify, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
 import type { ChatMessage, ChatNeedsShare, ChatNotifyInput } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -190,7 +190,7 @@ export function useChatActions(
   const markRead = useCallback(
     (conversationId: string, upTo: string | null) => {
       const key = conversationId;
-      if (reads.current.has(key) && reads.current.get(key) === upTo) return;
+      if (!readNeeded(reads.current, key, upTo)) return;
       reads.current.set(key, upTo);
       useCompaniesStore.getState().setChat((current) => (current ? sidebarRead(current, conversationId) : current));
       void chatApi
