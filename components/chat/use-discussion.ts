@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import { openDiscussionAction } from "@/app/(crm)/discussions";
 import type { ChatContextValue, ChatEditing } from "@/components/chat/chat-context";
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
+import { useEmojiPrefs } from "@/components/chat/reactions";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
 import { draftKey, newClientKey, readDraft, takeQueuedFiles, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
@@ -200,6 +201,9 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
           root: event.root,
         });
         return;
+      case "reaction":
+        dispatch({ type: "reactions", conversationId: event.conversationId, messageId: event.messageId, parentId: event.parentId, reactions: event.reactions, at: event.at });
+        return;
       case "thread-read":
         dispatch({
           type: "thread-read",
@@ -350,6 +354,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
     }
   }, [subject]);
 
+  const emoji = useEmojiPrefs(viewer.id);
   const context = useMemo<ChatContextValue>(
     () => ({
       ...actions,
@@ -369,9 +374,10 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       copyLink,
       send: (input) => send(input),
       memberNames: NO_NAMES,
+      emoji,
       discussion: true,
     }),
-    [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, send],
+    [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, send, emoji],
   );
 
   const loaded = timeline?.status === "ready" && !timeline.hasOlder;

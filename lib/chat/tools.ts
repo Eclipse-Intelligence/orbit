@@ -1,5 +1,6 @@
-import { CHAT_CLIENT_KEY_MAX, type ChatConversation, type ChatMessage } from "@/lib/chat/types";
-import { checkChatPost, getConversation, listChatPeople, listConversations, listMessages, listThread, openDm, ownPostWithKey, postMessage } from "@/lib/crm/chat";
+import { CHAT_CLIENT_KEY_MAX, type ChatConversation, type ChatMessage, type ChatReaction } from "@/lib/chat/types";
+import { chatEmoji, emojiByCode } from "@/lib/chat/emoji";
+import { checkChatPost, getConversation, listChatPeople, listConversations, listMessages, listThread, messageKind, openDm, ownPostWithKey, postMessage, reactToMessage } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -56,7 +57,12 @@ export function chatMessage(message: ChatMessage) {
     lastReplyAt: message.lastReplyAt,
     edited: Boolean(message.editedAt),
     at: message.createdAt,
+    reactions: chatReactions(message.reactions),
   };
+}
+
+function chatReactions(reactions: ChatReaction[]) {
+  return reactions.map((reaction) => ({ emoji: reaction.emoji, count: reaction.count, mine: reaction.mine, people: reaction.people.map((person) => ({ id: person.id, name: person.name })) }));
 }
 
 export async function chatPersonId(actor: UserActor, person: string) {
@@ -149,4 +155,13 @@ export async function postChat(actor: UserActor, input: ChatTargetInput & { text
   const target = await chatTarget(actor, input, key, options);
   const posted = await postMessage(actor, { conversationId: target.conversationId, parentId: target.parentId, body, format: "markdown", clientKey: key ?? undefined }, { charge: target.charge });
   return { posted: !posted.duplicate, duplicate: posted.duplicate, conversationId: posted.message.conversationId, message: chatMessage(posted.message) };
+}
+
+export async function reactChat(actor: UserActor, input: { messageId?: string | null; emoji: unknown; remove?: boolean }) {
+  if (!given(input.messageId)) throw new CrmError("invalid_input", "Pass the id of the message to react to.", 400, { field: "messageId" });
+  const emoji = chatEmoji(input.emoji) ?? emojiByCode(input.emoji);
+  if (!emoji) throw new CrmError("invalid_input", "Use one emoji, such as 👍 or :thumbsup:.", 400, { field: "emoji" });
+  chatOnly(await messageKind(actor, input.messageId));
+  const reacted = await reactToMessage(actor, input.messageId, emoji, { want: !input.remove });
+  return { changed: reacted.changed, messageId: reacted.messageId, emoji, reactions: chatReactions(reacted.reactions) };
 }

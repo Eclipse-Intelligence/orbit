@@ -5,11 +5,12 @@ import Button from "@/components/_ui/button";
 import MentionInput from "@/components/assistant/mention-input";
 import { UploadQueue } from "@/components/chat/attachments";
 import { useChat } from "@/components/chat/chat-context";
+import EmojiPopover from "@/components/chat/emoji-popover";
 import { attachmentQueued, queuedAttachment, useUploads, type QueuedFile, type UploadTarget } from "@/components/chat/use-uploads";
 import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
-import { draftKey, formatBarDefault, writeQueuedFiles, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
-import { applyEdit, formatEdit, mentionEdit, type FormatAction, type TextEdit } from "@/lib/chat/compose";
+import { draftKey, formatBarDefault, pushRecentEmoji, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, writeQueuedFiles, type FormatScope } from "@/lib/chat/client";
+import { applyEdit, formatEdit, mentionEdit, shortcodeAt, type FormatAction, type TextEdit } from "@/lib/chat/compose";
 import { pasteAttaches } from "@/lib/chat/files";
 import { formatsAt, insideCodeFence, markdownMarks, type FormatKind } from "@/lib/chat/markdown";
 import { CHAT_BODY_MAX, type ChatAttachment } from "@/lib/chat/types";
@@ -27,10 +28,15 @@ import LinkIcon from "@/public/assets/images/chat/link.svg";
 import BulletsIcon from "@/public/assets/images/chat/list-bullets.svg";
 import NumbersIcon from "@/public/assets/images/chat/list-numbers.svg";
 import QuoteIcon from "@/public/assets/images/chat/quote.svg";
+import SmileIcon from "@/public/assets/images/chat/smile.svg";
 import StrikeIcon from "@/public/assets/images/chat/strikethrough.svg";
 
 const GROW_MAX_PX = 200;
 const MARK_CLASS = "bg-transparent text-faint";
+const SHORTCODE_OPTIONS = 8;
+
+type EmojiLibrary = typeof import("@/lib/chat/emoji");
+type Shortcode = { start: number; end: number; query: string };
 
 type Tool = { action: FormatAction; label: string; shortcut: string; Icon: typeof BoldIcon };
 
@@ -185,7 +191,7 @@ export function ComposerBox({
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onBlur?: () => void;
 }) {
-  const { viewer } = useChat();
+  const { viewer, emoji: emojiPrefs } = useChat();
   const [shown, setShown] = useFormatBar(viewer.id, scope);
   const [focused, setFocused] = useState(false);
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
@@ -193,6 +199,37 @@ export function ComposerBox({
   const inFence = focused && selection.start === selection.end && insideCodeFence(value, selection.start);
   const marks = useMemo(() => markdownMarks(value).map((mark) => ({ ...mark, className: MARK_CLASS })), [value]);
   const oneRow = Boolean(phoneAction);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [phoneEmojiOpen, setPhoneEmojiOpen] = useState(false);
+  const [library, setLibrary] = useState<EmojiLibrary | null>(null);
+  const [code, setCode] = useState<Shortcode | null>(null);
+  const [codeIndex, setCodeIndex] = useState(0);
+  const dismissed = useRef<number | null>(null);
+  const codeOptions = useMemo(() => {
+    if (!code || !library) return [];
+    return library.searchEmoji(code.query, SHORTCODE_OPTIONS).map((item) => ({ emoji: library.withTone(item.emoji, emojiPrefs.tone), name: item.codes[0] }));
+  }, [code, library, emojiPrefs.tone]);
+  const codeOpen = codeOptions.length > 0;
+
+  function track(text: string, caret: number) {
+    const found = shortcodeAt(text, caret);
+    if (found && dismissed.current === found.start) return setCode(null);
+    if (!found) dismissed.current = null;
+    if (code && found && code.start === found.start && code.end === found.end && code.query === found.query) return;
+    setCode(found);
+    setCodeIndex(0);
+    if (found && !library) void import("@/lib/chat/emoji").then(setLibrary).catch(() => undefined);
+  }
+
+  function insertEmoji(emoji: string, range?: { start: number; end: number }) {
+    const area = inputRef.current;
+    if (!area) return;
+    const start = range?.start ?? area.selectionStart;
+    const end = range?.end ?? area.selectionEnd;
+    pushRecentEmoji(viewer.id, emoji);
+    setCode(null);
+    apply({ start, end, text: emoji, selectionStart: start + emoji.length, selectionEnd: start + emoji.length });
+  }
 
   function apply(edit: TextEdit) {
     const area = inputRef.current;
@@ -232,6 +269,25 @@ export function ComposerBox({
       onKeyDown?.(event);
       return;
     }
+    if (codeOpen && code) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setCodeIndex((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + codeOptions.length) % codeOptions.length);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+        event.preventDefault();
+        insertEmoji(codeOptions[codeIndex]?.emoji ?? codeOptions[0].emoji, code);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        dismissed.current = code.start;
+        setCode(null);
+        return;
+      }
+    }
     const mac = isMac();
     const mod = mac ? event.metaKey : event.ctrlKey;
     if (mod && !event.altKey) {
@@ -267,20 +323,42 @@ export function ComposerBox({
   function blur(event: FocusEvent<HTMLDivElement>) {
     if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
     setFocused(false);
+    setCode(null);
   }
 
   const iconButton = "size-[30px] shrink-0 rounded-md pointer-coarse:size-11";
 
   return (
     <div
-      className="flex flex-col"
+      className="relative flex flex-col"
       onFocus={() => setFocused(true)}
       onBlur={blur}
       onPaste={paste}
       onSelect={(event) => {
-        if (event.target instanceof HTMLTextAreaElement) setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
+        if (!(event.target instanceof HTMLTextAreaElement)) return;
+        setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
+        if (event.target.selectionStart === event.target.selectionEnd) track(event.target.value, event.target.selectionStart);
+        else setCode(null);
       }}
     >
+      {codeOpen && (
+        <ul role="listbox" aria-label="Emoji" className="bg-popover border-line-strong shadow-overlay absolute bottom-full left-0 z-30 mb-1.5 w-[260px] max-w-full rounded-xl border p-1">
+          {codeOptions.map((option, index) => (
+            <li key={option.emoji} role="option" aria-selected={index === codeIndex}>
+              <button
+                type="button"
+                tabIndex={-1}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => code && insertEmoji(option.emoji, code)}
+                className={cn("flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] pointer-coarse:min-h-11", index === codeIndex ? "bg-surface-active" : "hover:bg-surface-hover")}
+              >
+                <span className="text-[16px] leading-none">{option.emoji}</span>
+                <span className="truncate">:{option.name}:</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div
         data-chat-composer={composer ? "" : undefined}
         data-chat-queued={queued ? "" : undefined}
@@ -308,17 +386,34 @@ export function ComposerBox({
               autoFocus={autoFocus}
               autoSize={GROW_MAX_PX}
               markdown
-              onChange={onChange}
+              onChange={(next, kept) => {
+                onChange(next, kept);
+                track(next, inputRef.current?.selectionStart ?? next.length);
+              }}
               onSubmit={onSubmit}
               onBlur={onBlur}
               onKeyDown={keyDown}
             />
           </div>
-          {oneRow && <div className="shrink-0 p-[3px] md:hidden">{phoneAction}</div>}
+          {oneRow && (
+            <div className="flex shrink-0 items-center gap-0.5 p-[3px] pointer-coarse:gap-2 md:hidden">
+              <EmojiPopover open={phoneEmojiOpen} onOpenChange={setPhoneEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} trigger>
+                <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className="hit text-soft aria-expanded:text-foreground size-[38px] rounded-full">
+                  <SmileIcon aria-hidden className="size-4" />
+                </Button>
+              </EmojiPopover>
+              {phoneAction}
+            </div>
+          )}
         </div>
         {queue}
         <div className={cn("flex items-center gap-0.5 px-1.5 pt-0.5 pb-1.5", oneRow && "max-md:hidden")}>
           {attach}
+          <EmojiPopover open={emojiOpen} onOpenChange={setEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} align="start" trigger>
+            <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className={cn(iconButton, "aria-expanded:bg-surface-active aria-expanded:text-foreground")}>
+              <SmileIcon aria-hidden className="size-3.5" />
+            </Button>
+          </EmojiPopover>
           <Button variant="ghost" size="none" aria-label="Mention someone" title="Mention someone" onMouseDown={(event) => event.preventDefault()} onClick={mention} className={iconButton}>
             <AtIcon aria-hidden className="size-3.5" />
           </Button>

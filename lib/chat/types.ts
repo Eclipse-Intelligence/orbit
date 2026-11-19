@@ -15,6 +15,7 @@ export const CHAT_COUNT_CAP = 100;
 export const CHAT_ROOM_NAME_MAX = 80;
 export const CHAT_CLIENT_KEY_MAX = 100;
 export const CHAT_HOOK_NAME_MAX = 80;
+export const CHAT_REACTION_MAX = 20;
 export const CHAT_TOPIC_MAX = 250;
 export const CHAT_ARCHIVED = "This room is archived.";
 export const CHAT_FILES_MAX = 10;
@@ -56,6 +57,8 @@ export type ChatSidebar = {
   mentioned: boolean;
 };
 
+export type ChatReaction = { emoji: string; count: number; mine: boolean; people: ChatPerson[] };
+
 export type ChatVia = { workflowId: string | null; name: string };
 
 export type ChatMessageKind = "message" | "event";
@@ -79,6 +82,8 @@ export type ChatMessage = {
   createdAt: string;
   hook: ChatHookCard | null;
   attachments: ChatAttachment[];
+  reactions: ChatReaction[];
+  reactionsAt?: string;
 };
 
 export type ChatRoot = { id: string; replyCount: number; lastReplyAt: string | null; replyAuthors: ChatPerson[] };
@@ -126,6 +131,8 @@ export type ChatSearchResult = { messages: ChatMessage[] };
 
 export type ChatPost = { message: ChatMessage; root: ChatRoot | null; duplicate: boolean };
 
+export type ChatReacted = { conversationId: string; messageId: string; parentId: string | null; emoji: string; present: boolean; changed: boolean; reactions: ChatReaction[]; at: string };
+
 export type ChatLiveEvent =
   | { type: "message"; conversationId: string; message: ChatMessage; root: ChatRoot | null; subject?: ChatSubject }
   | { type: "edit"; conversationId: string; message: ChatMessage }
@@ -133,7 +140,8 @@ export type ChatLiveEvent =
   | { type: "read"; conversationId: string; lastReadAt: string }
   | { type: "thread-read"; conversationId: string; messageId: string; lastReadAt: string }
   | { type: "conversation"; conversationId: string }
-  | { type: "removed"; conversationId: string };
+  | { type: "removed"; conversationId: string }
+  | { type: "reaction"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string };
 
 export type ChatTyping = { conversationId: string; user: ChatPerson; typing: boolean };
 

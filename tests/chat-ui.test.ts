@@ -51,6 +51,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     hook: null,
     attachments: [],
     ...input,
+    reactions: input.reactions ?? [],
   };
 }
 

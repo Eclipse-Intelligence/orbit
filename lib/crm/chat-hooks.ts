@@ -267,6 +267,7 @@ export async function postViaHook(
       createdAt: iso(row.created_at)!,
       hook: hookCard(row.hook),
       attachments: [],
+      reactions: [],
     };
     const members = row.member_ids ?? [];
     chatBackground(() => broadcastChat(members, { type: "message", conversationId, message, root: null }));

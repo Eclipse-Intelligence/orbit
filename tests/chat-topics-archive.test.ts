@@ -85,6 +85,7 @@ function event(overrides: Partial<ChatMessage>): ChatMessage {
     hook: null,
     attachments: [],
     ...overrides,
+    reactions: overrides.reactions ?? [],
   };
 }
 
