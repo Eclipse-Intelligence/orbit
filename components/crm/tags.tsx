@@ -100,7 +100,7 @@ export function TagChip({
     );
   }
   return (
-    <span className={classes}>
+    <span className={cn(classes, onRemove && "bg-surface-raised gap-1 rounded-md pr-0.5 pl-1.5")}>
       {label}
       {onRemove && (
         <button
@@ -108,7 +108,7 @@ export function TagChip({
           aria-label={`Remove tag ${name}`}
           disabled={disabled}
           onClick={onRemove}
-          className="-mr-1 flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full opacity-70 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-40"
+          className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full opacity-70 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-40"
         >
           <XIcon aria-hidden className="size-3" />
         </button>

@@ -270,7 +270,7 @@ function CategoryPicker({ category, disabled, onChange }: { category: string | n
               {category}
             </Tag>
           ) : (
-            <Tag tone="neutral" size="sm" className="caption-style text-subtle border-dashed">
+            <Tag tone="neutral" size="sm" className="caption-style text-subtle rounded-md bg-surface-field px-1.5 before:hidden">
               Category
             </Tag>
           )}

@@ -26,7 +26,7 @@ export function listViews(sidebar: ChatSidebar | null): ChatView[] {
 function Badge({ count, accent, label }: { count: number; accent: boolean; label: string }) {
   if (count <= 0) return null;
   return (
-    <CountBadge className={cn(accent && "bg-primary text-primary-foreground border-transparent shadow-none")}>
+    <CountBadge className={cn(accent && "bg-primary text-primary-foreground")}>
       {count >= 100 ? "99+" : count}
       <span className="sr-only"> {label}</span>
     </CountBadge>

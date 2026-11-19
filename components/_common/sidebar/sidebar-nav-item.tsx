@@ -70,7 +70,7 @@ export default function SidebarNavItem({
           </span>
         )}
         {count !== undefined && (
-          <CountBadge className={cn(accent && "bg-primary text-primary-foreground border-transparent shadow-none")}>
+          <CountBadge className={cn(accent && "bg-primary text-primary-foreground")}>
             {count}
             {countLabel && <span className="sr-only"> {countLabel}</span>}
           </CountBadge>

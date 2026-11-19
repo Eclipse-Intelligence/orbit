@@ -393,7 +393,7 @@ function ActionTask({
                 )}
                 {repeats && <RepeatIcon aria-hidden className="hidden size-3 shrink-0 text-(--tag-purple-text) @xl:block" />}
                 {due ? (
-                  <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="gap-1 text-[12px]">
+                  <Tag size="sm" tone={due.kind === "overdue" ? "red" : due.kind === "today" ? "amber" : "neutral"} className="text-[12px]">
                     {task.dueHasTime && due.kind !== "none" && <ClockIcon aria-hidden className="size-3 shrink-0" />}
                     {due.label}
                   </Tag>

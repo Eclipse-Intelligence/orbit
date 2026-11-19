@@ -16,7 +16,7 @@ export const tagVariants = cva(
         amber: "before:bg-(--tag-amber-dot)",
         teal: "before:bg-(--tag-teal-dot)",
         yellow: "before:bg-(--tag-yellow-dot)",
-        neutral: "before:hidden",
+        neutral: "before:bg-faint",
       },
       size: {
         md: "pr-1.5",

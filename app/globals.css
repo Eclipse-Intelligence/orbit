@@ -209,7 +209,7 @@
   --destructive: #f97373;
   --border: rgb(255 255 255 / 0.05);
   --input: rgb(255 255 255 / 0.08);
-  --ring: rgb(255 255 255 / 0.6);
+  --ring: #c8c8c8;
   --sidebar: #171717;
   --sidebar-foreground: #7f7f7f;
   --sidebar-primary: #2a2a2a;
@@ -234,7 +234,7 @@
   --status: #16c89e;
   --surface-panel: rgb(255 255 255 / 0.02);
   --surface-hover: rgb(255 255 255 / 0.035);
-  --surface-field: rgb(255 255 255 / 0.035);
+  --surface-field: rgb(255 255 255 / 0.04);
   --surface-raised: rgb(255 255 255 / 0.06);
   --surface-active: rgb(255 255 255 / 0.08);
   --surface-selected: color-mix(in srgb, var(--primary) 12%, transparent);
@@ -366,14 +366,14 @@
     --accent-foreground: #f9fbff;
     --border: rgb(255 255 255 / 0.05);
     --input: rgb(255 255 255 / 0.08);
-    --ring: rgb(255 255 255 / 0.6);
+    --ring: #c8c8c8;
     --line-strong: rgb(255 255 255 / 0.08);
     --subtle: #8c8c8c;
     --faint: #6a6a6a;
     --soft: #a4a4a4;
     --surface-panel: rgb(255 255 255 / 0.02);
     --surface-hover: rgb(255 255 255 / 0.035);
-    --surface-field: rgb(255 255 255 / 0.035);
+    --surface-field: rgb(255 255 255 / 0.04);
     --surface-raised: rgb(255 255 255 / 0.06);
     --surface-active: rgb(255 255 255 / 0.08);
     --line-subtle: rgb(255 255 255 / 0.06);
