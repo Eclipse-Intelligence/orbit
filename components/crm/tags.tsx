@@ -86,7 +86,6 @@ export function TagChip({
   const classes = cn(
     tagVariants({ tone: tagTone(name), size: "sm" }),
     size === "sm" ? "h-[18px] max-w-[10em] text-[11px]" : "h-[22px] max-w-[16em] text-[12px]",
-    "gap-0.5",
     className,
   );
   const label = <span className="truncate">{name}</span>;

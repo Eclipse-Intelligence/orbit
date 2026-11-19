@@ -116,7 +116,7 @@ function PickerField({
           aria-describedby={aria["aria-describedby"]}
           aria-label={aria["aria-label"]}
           className={cn(
-            "border-line-strong bg-secondary text-foreground focus-visible:border-ring ease-power3-out flex h-9 w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border px-3 text-left text-[14px] leading-none outline-none transition-[border-color] duration-150 disabled:cursor-not-allowed disabled:opacity-50 data-[invalid=true]:border-danger",
+            "border-transparent bg-surface-field text-foreground hover:bg-surface-hover focus-visible:bg-surface-raised ease-power3-out flex h-9 w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border px-3 text-left text-[14px] leading-none outline-none transition-[background-color,border-color] duration-150 disabled:cursor-not-allowed disabled:opacity-50 data-[invalid=true]:border-danger",
             className,
           )}
         >

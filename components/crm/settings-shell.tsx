@@ -70,7 +70,7 @@ export default function SettingsShell({
                           className={cn(
                             "text-sidebar-foreground hover:text-foreground focus-visible:ring-ring/60 flex h-[30px] items-center rounded-lg px-2 text-[14px] leading-none transition-colors duration-150 outline-none focus-visible:ring-2",
                             active &&
-                              "bg-sidebar-primary text-foreground shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
+                              "bg-surface-raised text-foreground",
                           )}
                         >
                           {item.label}

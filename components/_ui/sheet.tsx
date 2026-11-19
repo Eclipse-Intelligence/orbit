@@ -81,13 +81,13 @@ function SheetContent({
         className={cn(
           "bg-background text-foreground data-[state=closed]:animate-out data-[state=closed]:ease-power3-in data-[state=open]:animate-in data-[state=open]:ease-power3-out fixed z-50 flex w-full flex-col duration-350 outline-none data-[state=closed]:duration-250",
           side === "right" &&
-            "border-line-strong data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-dvh border-l",
+            "border-line-subtle data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-dvh border-l",
           side === "left" &&
-            "border-line-strong data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-dvh border-r",
+            "border-line-subtle data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-dvh border-r",
           "pb-[env(safe-area-inset-bottom)]",
           beside && "shadow-[-24px_0_48px_rgba(0,0,0,0.35)]",
           side === "bottom" &&
-            "border-line-strong shadow-overlay data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl border-t",
+            "border-line-subtle shadow-overlay data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 max-h-[85dvh] rounded-t-xl border-t",
           className,
         )}
         {...props}
@@ -103,7 +103,7 @@ function SheetHeader({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="sheet-header"
       className={cn(
-        "border-line-strong flex h-14 shrink-0 items-center justify-between gap-2 border-b px-6",
+        "border-line-subtle flex h-14 shrink-0 items-center justify-between gap-2 border-b px-6",
         className,
       )}
       {...props}
@@ -116,7 +116,7 @@ function SheetFooter({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="sheet-footer"
       className={cn(
-        "border-line-strong flex h-[62px] shrink-0 items-center justify-between gap-2 border-t px-6",
+        "border-line-subtle flex h-[62px] shrink-0 items-center justify-between gap-2 border-t px-6",
         className,
       )}
       {...props}

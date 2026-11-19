@@ -110,7 +110,7 @@ function TreeItem({
       }}
       className={cn(
         "group text-sidebar-foreground hover:text-foreground focus-visible:ring-ring/60 relative flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-[13.5px] leading-none outline-none focus-visible:ring-2",
-        "data-[active=true]:bg-sidebar-primary data-[active=true]:text-foreground data-[active=true]:shadow-[0px_0px_0px_1px_rgba(0,0,0,0.4),inset_0px_1px_0px_0px_rgba(255,255,255,0.1),inset_0px_0px_0px_1px_rgba(255,255,255,0.06)]",
+        "data-[active=true]:bg-surface-raised data-[active=true]:text-foreground",
         drag?.indicator === "inside" && "bg-white/[0.06] shadow-[inset_0_0_0_1px_var(--primary)]",
         className,
       )}
