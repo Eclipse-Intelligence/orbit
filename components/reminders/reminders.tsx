@@ -305,7 +305,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
   function back() {
     setDetailId(null);
     setDetailError(null);
-    window.requestAnimationFrame(() => add.current?.focus());
+    if (wide) window.requestAnimationFrame(() => add.current?.focus());
   }
 
   function save(change: ReminderInput) {
@@ -327,7 +327,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
   async function remove() {
     if (!detail) return;
     const id = detail.id;
-    setDetailId(null);
+    back();
     setReminders((list) => list?.filter((item) => item.id !== id) ?? list);
     const result = await deleteReminderAction(id).catch(() => null);
     if (!result || "error" in result) {
@@ -345,7 +345,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
   function converted() {
     const id = converting?.id;
     setConverting(null);
-    setDetailId(null);
+    back();
     if (id) setReminders((list) => list?.filter((item) => item.id !== id) ?? list);
     setToast({ id: Date.now(), kind: "note", message: "Task added" });
   }

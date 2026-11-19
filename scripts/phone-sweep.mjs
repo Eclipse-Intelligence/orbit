@@ -1233,7 +1233,7 @@ for (const [device, viewport] of [
   await page.waitForTimeout(800);
   const reminderSheet = page.locator("[data-reminders-sheet]");
   check(`${device} Reminders opens as a sheet from the menu`, await visible(reminderSheet.getByRole("heading", { name: "Reminders" })));
-  const reminderTitle = `Sweep reminder ${device}`;
+  const reminderTitle = "Sweep check";
   await reminderSheet.getByPlaceholder("Add a reminder").tap();
   await page.keyboard.type(`${reminderTitle} tomorrow`);
   await page.waitForTimeout(300);
@@ -1286,6 +1286,7 @@ for (const width of [1100, 1280, 1440]) {
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
   const device = `desktop ${width}`;
   if (width === 1280) {
+    const visible = async (locator) => (await locator.count()) > 0 && (await locator.first().isVisible());
     await goto(page, `${base}/mail`);
     await page.waitForTimeout(1500);
     await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null)?.blur());
@@ -1318,7 +1319,7 @@ for (const width of [1100, 1280, 1440]) {
     }
     await page.waitForTimeout(300);
     const moved = await reminderCard.boundingBox();
-    check(`${device} dragging the header moves the card`, Boolean(cardBox && moved && Math.abs(moved.x - (cardBox.x - 420)) < 4 && Math.abs(moved.y - (cardBox.y + 200)) < 4));
+    check(`${device} dragging the header moves the card`, Boolean(cardBox && headBox && moved && Math.abs(moved.x - (cardBox.x - 420)) < 4 && Math.abs(moved.y - (cardBox.y + 200 - headBox.height / 2)) < 4), moved ? `${Math.round(moved.x)},${Math.round(moved.y)}` : "");
     await page.screenshot({ path: path.join(out, `desktop-${width}-reminders.png`) });
     await reminderRow.getByRole("button", { name: /^Open/ }).click();
     await page.waitForTimeout(500);
