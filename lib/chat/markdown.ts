@@ -216,14 +216,19 @@ function fenceAt(src: string, start: number) {
   let search = start + FENCE.length;
   for (;;) {
     const close = src.indexOf(FENCE, search);
-    if (close < 0) return null;
+    if (close < 0) {
+      const newline = src.indexOf("\n", start);
+      const opening = src.slice(start + FENCE.length, newline < 0 ? src.length : newline).trim();
+      if (opening !== "" && !LANGUAGE.test(opening)) return null;
+      return { open: start, closeAt: src.length, end: src.length, closed: false };
+    }
     let after = close + FENCE.length;
     while (src[after] === "`") after += 1;
     const tail = src.indexOf("\n", after);
     const lineEnd = tail < 0 ? src.length : tail;
     if (src.slice(after, lineEnd).trim() === "") {
       const closeAt = after - FENCE.length;
-      return { open: start, closeAt, end: lineEnd };
+      return { open: start, closeAt, end: lineEnd, closed: true };
     }
     search = close + 1;
   }
@@ -260,7 +265,8 @@ function parseBlocks(src: string, marks: Marks): Block[] {
     const fence = fenceAt(src, line.start);
     if (fence) {
       flushParagraph();
-      marks?.push({ start: fence.open, end: fence.open + FENCE.length }, { start: fence.closeAt, end: fence.closeAt + FENCE.length });
+      marks?.push({ start: fence.open, end: fence.open + FENCE.length });
+      if (fence.closed) marks?.push({ start: fence.closeAt, end: fence.closeAt + FENCE.length });
       blocks.push({ type: "code", text: fenceText(src, fence.open, fence.closeAt, marks) });
       while (index < lines.length && lines[index].start <= fence.end) index += 1;
       continue;

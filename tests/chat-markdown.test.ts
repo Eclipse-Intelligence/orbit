@@ -51,11 +51,16 @@ describe("chat Markdown", () => {
     assert.deepEqual(ids(`\`${sam}\``, "plain"), [SAM]);
   });
 
-  it("drops a language name after the fence and keeps an unclosed fence as text", () => {
+  it("drops a language name after the fence and runs an unclosed fence to the end", () => {
     assert.deepEqual(parseMarkdown("```json\n{\"a\": 1}\n```"), [{ type: "code", text: '{"a": 1}' }]);
     assert.deepEqual(parseMarkdown("```one line```"), [{ type: "code", text: "one line" }]);
-    assert.deepEqual(parseMarkdown(`\`\`\`\nnot closed ${sam}`)[0].type, "paragraph");
-    assert.deepEqual(ids(`\`\`\`\nnot closed ${sam}`), [SAM]);
+    assert.deepEqual(parseMarkdown(`Here:\n\`\`\`\nnot closed ${sam}`), [
+      { type: "paragraph", children: [{ type: "text", text: "Here:" }] },
+      { type: "code", text: `not closed ${sam}` },
+    ]);
+    assert.deepEqual(ids(`\`\`\`\nnot closed ${sam}`), []);
+    assert.equal(parseMarkdown(`\`\`\`not a fence ${sam}`)[0].type, "paragraph");
+    assert.deepEqual(ids(`\`\`\`not a fence ${sam}`), [SAM]);
   });
 
   it("links URLs and Markdown links without italicising underscores in them", () => {

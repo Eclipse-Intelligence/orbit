@@ -185,10 +185,12 @@ export function ComposerBox({
     } catch {
       inserted = false;
     }
-    if (!inserted || area.value !== applyEdit(value, edit)) {
-      const next = applyEdit(value, edit);
-      onChange(next, liveMentions(next, mentions));
+    if (inserted && area.value === applyEdit(value, edit)) {
+      area.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+      return;
     }
+    const next = applyEdit(value, edit);
+    onChange(next, liveMentions(next, mentions));
     window.requestAnimationFrame(() => area.setSelectionRange(edit.selectionStart, edit.selectionEnd));
   }
 

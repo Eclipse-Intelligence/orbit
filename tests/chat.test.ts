@@ -386,8 +386,8 @@ describe("chat", () => {
 
     it("lets a member set the format only on their own message", async () => {
       const posted = await postMessage(mark, { conversationId: room, body: "Mine", clientKey: "format-own" });
-      await assert.rejects(queryAsUser(sam.userId, "update crm.chat_messages set format = 'markdown' where id = $1 returning id", [posted.message.id]).then((result) => {
-        if (result.rows.length === 0) throw new Error("no rows");
+      await assert.rejects(queryAsUser(sam.userId, "update crm.chat_messages set format = 'markdown' where id = $1 returning id", [posted.message.id]).then((rows) => {
+        if (rows.length === 0) throw new Error("no rows");
       }));
       const own = await postMessage(sam, { conversationId: room, body: "Sam's", clientKey: "format-own-sam" });
       await assert.rejects(queryAsUser(sam.userId, "update crm.chat_messages set format = 'rich' where id = $1", [own.message.id]), /chat_messages_format_check/);
