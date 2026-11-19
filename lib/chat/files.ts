@@ -42,6 +42,11 @@ export function fileTone(name: string, contentType: string): FileTone {
   return "other";
 }
 
+export function pasteAttaches(types: readonly string[], fileCount: number) {
+  if (fileCount === 0) return false;
+  return !types.some((type) => type === "text/html" || type === "text/rtf");
+}
+
 export function filesTitle(count: number) {
   return count === 1 ? "a file" : `${count} files`;
 }

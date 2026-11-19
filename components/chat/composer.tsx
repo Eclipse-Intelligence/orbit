@@ -10,6 +10,7 @@ import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { draftKey, formatBarDefault, writeQueuedFiles, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
 import { applyEdit, formatEdit, mentionEdit, type FormatAction, type TextEdit } from "@/lib/chat/compose";
+import { pasteAttaches } from "@/lib/chat/files";
 import { formatsAt, insideCodeFence, markdownMarks, type FormatKind } from "@/lib/chat/markdown";
 import { CHAT_BODY_MAX, type ChatAttachment } from "@/lib/chat/types";
 import { liveMentions, type Mention } from "@/lib/mentions";
@@ -257,9 +258,8 @@ export function ComposerBox({
 
   function paste(event: ClipboardEvent<HTMLDivElement>) {
     if (!onPasteFiles) return;
-    if (Array.from(event.clipboardData?.types ?? []).includes("text/plain")) return;
     const files = Array.from(event.clipboardData?.files ?? []);
-    if (files.length === 0) return;
+    if (!pasteAttaches(Array.from(event.clipboardData?.types ?? []), files.length)) return;
     event.preventDefault();
     onPasteFiles(files);
   }

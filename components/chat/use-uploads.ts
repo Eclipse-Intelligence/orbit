@@ -161,6 +161,7 @@ export function useUploads(target: UploadTarget | undefined) {
   const take = useCallback(() => {
     const taken = latest.current.filter((file) => file.status === "done" && file.id);
     for (const file of latest.current) forget(file, { discard: false });
+    latest.current = [];
     setFiles([]);
     setNotice(null);
     return taken;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { pasteAttaches } from "@/lib/chat/files";
 import { dayLabel, shortWhen } from "@/lib/chat/format";
 import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseChatLocation } from "@/lib/chat/routes";
 import {
@@ -459,3 +460,13 @@ describe("chat review fixes", () => {
   });
 });
 
+
+describe("pasting files", () => {
+  it("attaches files unless the clipboard holds rich text from an app like Office", () => {
+    assert.equal(pasteAttaches(["Files", "text/plain"], 1), true);
+    assert.equal(pasteAttaches(["Files"], 2), true);
+    assert.equal(pasteAttaches(["text/plain", "text/html", "Files"], 1), false);
+    assert.equal(pasteAttaches(["text/plain", "text/rtf", "Files"], 1), false);
+    assert.equal(pasteAttaches(["text/plain"], 0), false);
+  });
+});
