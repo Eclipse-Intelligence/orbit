@@ -20,6 +20,7 @@ import {
   reminderInputOf,
   repeatWords,
   taskStartOf,
+  toggledBlock,
   withoutStaleBlock,
 } from "@/lib/reminders-card";
 import type { PadAiParse } from "@/lib/crm/task-pad";
@@ -328,6 +329,29 @@ describe("reminders card", () => {
       assert.equal(reminderInputOf(longer).durationMinutes, 45);
       const off = readAddLine(text, { kept: [], block: blockChoice(longer, false, 45) }, NOW);
       assert.deepEqual(reminderInputOf(off), { title: "Boiler service", dueAt: "2026-11-26T10:00:00.000Z" });
+    });
+
+    it("keeps a typed length when Block time is switched off and back on", () => {
+      const typed = "Call Sam at 3pm for 1 hour";
+      const start = { ...EMPTY_DRAFT, text: typed };
+      const first = readAddLine(typed, { kept: start.kept, block: start.block }, NOW);
+      assert.equal(first.durationMinutes, 60);
+      const off = toggledBlock(start, first);
+      const offReading = readAddLine(typed, { kept: off.kept, block: off.block }, NOW);
+      assert.equal(offReading.durationMinutes, null);
+      assert.equal(offReading.title, "Call Sam for 1 hour");
+      const on = toggledBlock(off, offReading);
+      const onReading = readAddLine(typed, { kept: on.kept, block: on.block }, NOW);
+      assert.equal(onReading.durationMinutes, 60);
+      assert.equal(onReading.title, "Call Sam");
+    });
+
+    it("switches Block time on and off without a typed length", () => {
+      const start = { ...EMPTY_DRAFT, text };
+      const on = toggledBlock(start, readAddLine(text, { kept: [], block: null }, NOW));
+      assert.equal(readAddLine(text, { kept: on.kept, block: on.block }, NOW).durationMinutes, 15);
+      const off = toggledBlock(on, readAddLine(text, { kept: on.kept, block: on.block }, NOW));
+      assert.equal(readAddLine(text, { kept: off.kept, block: off.block }, NOW).durationMinutes, null);
     });
 
     it("lets a typed length turn it on with that length", () => {

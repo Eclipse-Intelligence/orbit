@@ -183,6 +183,17 @@ export function blockChoice(reading: Pick<AddReading, "length" | "typedMinutes">
   return { on, minutes, typed: typedLength(reading.length, reading.typedMinutes) };
 }
 
+export function toggledBlock(draft: AddDraft, reading: AddReading): AddDraft {
+  const on = reading.durationMinutes !== null;
+  if (on && reading.length) {
+    const typed = reading.length.key;
+    return { ...draft, block: null, kept: draft.kept.includes(typed) ? draft.kept : [...draft.kept, typed] };
+  }
+  const typed = on ? null : readLength(draft.text);
+  if (typed && draft.kept.includes(typed.key)) return { ...draft, block: null, kept: draft.kept.filter((key) => key !== typed.key) };
+  return { ...draft, block: blockChoice(reading, !on, reading.blockMinutes) };
+}
+
 export function withoutStaleBlock(draft: AddDraft, now = new Date(), ai: AddChoices["ai"] = null): AddDraft {
   if (!draft.block) return draft;
   return readAddLine(draft.text, { kept: draft.kept, ai }, now).timed ? draft : { ...draft, block: null };

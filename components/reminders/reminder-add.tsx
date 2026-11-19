@@ -6,7 +6,7 @@ import Button from "@/components/_ui/button";
 import { DurationMenu } from "@/components/crm/task-timing";
 import { usePadAiRead, useReadWhenUnsure } from "@/hooks/use-pad-ai-read";
 import type { Reminder } from "@/lib/crm/reminders";
-import { addKeyFor, blockChoice, dayLabel, EMPTY_DRAFT, readAddLine, reminderInputOf, withoutStaleBlock, type AddDraft } from "@/lib/reminders-card";
+import { addKeyFor, blockChoice, dayLabel, EMPTY_DRAFT, readAddLine, reminderInputOf, toggledBlock, withoutStaleBlock, type AddDraft } from "@/lib/reminders-card";
 import { backspaceKeeps, padDueHasTime } from "@/lib/task-pad";
 import { repeatChip } from "@/lib/task-repeat";
 import { cn } from "@/lib/utils";
@@ -51,13 +51,7 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
   }
 
   function toggleBlock() {
-    const on = reading.durationMinutes !== null;
-    if (on && reading.length) {
-      const typed = reading.length.key;
-      onDraft((current) => ({ ...current, block: null, kept: current.kept.includes(typed) ? current.kept : [...current.kept, typed] }));
-      return;
-    }
-    onDraft((current) => ({ ...current, block: blockChoice(reading, !on, reading.blockMinutes) }));
+    onDraft((current) => toggledBlock(current, reading));
   }
 
   function changeLength(minutes: number) {
@@ -204,7 +198,7 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
                       value={reading.durationMinutes}
                       onChange={changeLength}
                       onClosed={focusField}
-                      className={cn(CHIP, "text-soft hover:text-foreground gap-0.5 pl-0 hover:bg-transparent [&>svg]:size-3")}
+                      className={cn(CHIP, "hit text-soft hover:text-foreground gap-0.5 pl-0 hover:bg-transparent [&>svg]:size-3")}
                     />
                   )}
                 </span>
