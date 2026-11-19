@@ -10,6 +10,7 @@ import { ChatContext, type ChatContextValue, type ChatEditing, type ChatWorkspac
 import { NewMessageDialog, NewRoomDialog } from "@/components/chat/chat-dialogs";
 import ChatList, { listViews } from "@/components/chat/chat-list";
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
+import { useEmojiPrefs } from "@/components/chat/reactions";
 import RoomSettings from "@/components/chat/room-settings";
 import RoomView from "@/components/chat/room-view";
 import ThreadPanel from "@/components/chat/thread-panel";
@@ -385,6 +386,9 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       case "thread-read":
         dispatch({ type: "thread-read", rootId: event.messageId, lastReadAt: event.lastReadAt });
         return;
+      case "reaction":
+        dispatch({ type: "reactions", conversationId: event.conversationId, messageId: event.messageId, parentId: event.parentId, reactions: event.reactions, at: event.at });
+        return;
       case "conversation":
         if (latest.current.state.rooms[event.conversationId]) loadRoom(event.conversationId);
         return;
@@ -453,9 +457,10 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const room = roomForSettings;
   const members = room?.members;
   const memberNames = useMemo(() => new Map((members ?? []).map((member) => [member.id.toLowerCase(), member.name])), [members]);
+  const emoji = useEmojiPrefs(me.id);
   const context = useMemo<ChatContextValue>(
-    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames }),
-    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames],
+    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames, emoji }),
+    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames, emoji],
   );
 
   const entry: ChatConversation | null = roomId ? (sidebar?.conversations.find((item) => item.id === roomId) ?? room?.conversation ?? null) : null;

@@ -8,10 +8,13 @@ import Tag from "@/components/_ui/tag";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import { AvatarStack, ChatAvatar, useChat, type ChatPane } from "@/components/chat/chat-context";
 import { ComposerBox, focusComposer } from "@/components/chat/composer";
+import EmojiPopover from "@/components/chat/emoji-popover";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
+import Reactions from "@/components/chat/reactions";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
+import { pushRecentEmoji, QUICK_REACTIONS } from "@/lib/chat/client";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
 import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
@@ -21,6 +24,7 @@ import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.s
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import CopyIcon from "@/public/assets/images/assistant/copy.svg";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
+import SmilePlusIcon from "@/public/assets/images/chat/smile-plus.svg";
 import EditIcon from "@/public/assets/images/workflows/edit.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
 import ReplyIcon from "@/public/assets/images/mail/reply.svg";
@@ -105,9 +109,9 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
   );
 }
 
-function ToolButton({ label, title, onClick, children }: { label: string; title?: string; onClick: () => void; children: React.ReactNode }) {
+function ToolButton({ label, title, onClick, children, className }: { label: string; title?: string; onClick: () => void; children: React.ReactNode; className?: string }) {
   return (
-    <Button variant="ghost" size="icon-sm" aria-label={label} title={title ?? label} onClick={onClick}>
+    <Button variant="ghost" size="icon-sm" aria-label={label} title={title ?? label} onClick={onClick} className={className}>
       {children}
     </Button>
   );
@@ -115,8 +119,11 @@ function ToolButton({ label, title, onClick, children }: { label: string; title?
 
 function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop, readOnly = false }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, copyLink, openThread, memberNames, markUnread, discussion } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion } = chat;
   const unreadHint = useShortcutHint("chat-mark-unread");
+  const [picking, setPicking] = useState(false);
+  const quick = chat.emoji.recent.slice(0, QUICK_REACTIONS);
+  const pickRequested = useRef(false);
   const pressed = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -133,6 +140,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const canEdit = own && !local && !deleted && !message.via && !readOnly;
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted && (!readOnly || local);
   const canMarkUnread = pane === "room" && !discussion && !inThread && !message.parentId && !local && !deleted && message.kind !== "event";
+  const canReact = !local && !deleted && !readOnly;
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
@@ -269,6 +277,9 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             </Button>
           </div>
         )}
+        {!local && !deleted && !isEditing && (
+          <Reactions message={message} viewerId={viewer.id} readOnly={!canReact} onToggle={(emoji) => react(message, emoji)} onAdd={() => setPicking(true)} />
+        )}
         {!inThread && message.replyCount > 0 && (
           <button
             type="button"
@@ -284,7 +295,21 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         )}
       </div>
       {!isEditing && !local && !deleted && (
-        <div className="bg-popover border-line-strong shadow-overlay absolute -top-3.5 right-4 hidden items-center gap-0.5 rounded-[10px] border p-0.5 group-focus-within:flex group-hover:flex [@media(pointer:coarse)]:!hidden">
+        <div
+          className={cn(
+            "bg-popover border-line-strong shadow-overlay absolute -top-3.5 right-4 hidden items-center gap-0.5 rounded-[10px] border p-0.5 group-focus-within:flex group-hover:flex [@media(pointer:coarse)]:!hidden",
+            picking && "flex",
+          )}
+        >
+          {quick.slice(0, 3).map((emoji) => (
+            <ToolButton key={emoji} label={`React with ${emoji}`} onClick={() => react(message, emoji)} className="text-[15px] leading-none">
+              {emoji}
+            </ToolButton>
+          ))}
+          <span aria-hidden className="bg-line-strong mx-0.5 h-4 w-px" />
+          <ToolButton label="Add reaction" onClick={() => setPicking(true)}>
+            <SmilePlusIcon aria-hidden className="size-3.5" />
+          </ToolButton>
           {canReply && (
             <ToolButton label="Reply in thread" title="Reply in thread (R)" onClick={() => openThread(message.conversationId, message.id)}>
               <ReplyIcon aria-hidden className="size-3.5" />
@@ -317,6 +342,18 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           </Button>
         </div>
       )}
+      {canReact && picking && (
+        <EmojiPopover
+          open={picking}
+          onOpenChange={setPicking}
+          onPick={(emoji) => {
+            pushRecentEmoji(viewer.id, emoji);
+            react(message, emoji);
+          }}
+        >
+          <span aria-hidden className="pointer-events-none absolute top-0 right-4 size-px" />
+        </EmojiPopover>
+      )}
       <span role="status" className="sr-only">
         {copied ? "Link copied" : ""}
       </span>
@@ -333,6 +370,12 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           side="bottom"
           className="gap-1 px-2 pt-2"
           onCloseAutoFocus={(event) => {
+            if (pickRequested.current) {
+              pickRequested.current = false;
+              event.preventDefault();
+              setPicking(true);
+              return;
+            }
             if (!editRequested.current) return;
             editRequested.current = false;
             event.preventDefault();
@@ -341,6 +384,29 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         >
           <SheetTitle className="sr-only">Message actions</SheetTitle>
           <SheetDescription className="sr-only">Actions for this message</SheetDescription>
+          {canReact && (
+            <div role="group" aria-label="Reactions" className="flex items-center justify-between gap-1 px-2 pt-1 pb-2.5">
+              {quick.map((emoji) => (
+                <Button
+                  key={emoji}
+                  variant="ghost"
+                  size="none"
+                  aria-label={`React with ${emoji}`}
+                  aria-pressed={message.reactions.some((reaction) => reaction.emoji === emoji && reaction.mine)}
+                  onClick={() => act(() => react(message, emoji))}
+                  className="bg-surface-raised aria-pressed:bg-surface-selected size-12 rounded-full text-[22px] leading-none"
+                >
+                  {emoji}
+                </Button>
+              ))}
+              <Button variant="ghost" size="none" aria-label="Add reaction" onClick={() => {
+                  pickRequested.current = true;
+                  setMenu(false);
+                }} className="bg-surface-raised text-soft size-12 rounded-full">
+                <SmilePlusIcon aria-hidden className="size-5" />
+              </Button>
+            </div>
+          )}
           {canReply && (
             <SheetAction onClick={() => act(() => openThread(message.conversationId, message.id))} icon={<ReplyIcon aria-hidden className="size-4" />}>
               Reply in thread

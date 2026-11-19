@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "react";
-import { deleteMessageAction, editMessageAction, markAllReadAction, markUnreadAction, postMessageAction, setNotifyAction } from "@/app/(crm)/chat/actions";
-import { chatJoined, refreshChatSidebar } from "@/components/chat/chat-live";
+import { deleteMessageAction, editMessageAction, markAllReadAction, markUnreadAction, postMessageAction, reactAction, setNotifyAction } from "@/app/(crm)/chat/actions";
+import { chatJoined, echoChatEvent, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { encodeChatMentions } from "@/lib/chat/compose";
 import { formatMentions, type ChatFormat } from "@/lib/chat/markdown";
@@ -12,6 +12,7 @@ import type { Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
 
 export const SEND_FAILED = "Couldn't send. Try again.";
+const REACT_FAILED = "Couldn't react. Try again.";
 
 export type ChatTimelineActions = {
   loadRoom: (conversationId: string) => void;
@@ -21,6 +22,7 @@ export type ChatTimelineActions = {
   retry: (message: ChatMessage) => void;
   edit: (message: ChatMessage, text: string, mentions: Mention[]) => Promise<boolean>;
   remove: (message: ChatMessage) => Promise<boolean>;
+  react: (message: ChatMessage, emoji: string) => void;
   markRead: (conversationId: string, upTo: string | null) => void;
   markThreadRead: (rootId: string, upTo: string | null) => void;
   markUnread: (conversationId: string, messageId: string | null) => Promise<string | null>;
@@ -187,6 +189,27 @@ export function useChatActions(
     [dispatch, loadMessages, loadThread],
   );
 
+  const react = useCallback(
+    (message: ChatMessage, emoji: string) => {
+      if (isLocal(message) || message.deletedAt) return;
+      const place = { conversationId: message.conversationId, messageId: message.id, parentId: message.parentId };
+      const viewer = { id: userId, name: "" };
+      const mine = !message.reactions.some((reaction) => reaction.emoji === emoji && reaction.mine);
+      dispatch({ type: "my-reaction", ...place, emoji, viewer, mine });
+      void reactAction(message.id, emoji, mine)
+        .catch(() => ({ error: REACT_FAILED }))
+        .then((result) => {
+          if ("ok" in result && result.ok) {
+            echoChatEvent({ type: "reaction", conversationId: result.conversationId, messageId: result.messageId, parentId: result.parentId, reactions: result.reactions, at: result.at });
+            return;
+          }
+          dispatch({ type: "my-reaction", ...place, emoji, viewer, mine: !mine });
+          errorRef.current("error" in result ? result.error : REACT_FAILED);
+        });
+    },
+    [dispatch, userId],
+  );
+
   const markRead = useCallback(
     (conversationId: string, upTo: string | null) => {
       const key = conversationId;
@@ -259,7 +282,7 @@ export function useChatActions(
   }, []);
 
   return useMemo(
-    () => ({ loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, markRead, markThreadRead, markUnread, markAllRead, setNotify }),
-    [loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, markRead, markThreadRead, markUnread, markAllRead, setNotify],
+    () => ({ loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, react, markRead, markThreadRead, markUnread, markAllRead, setNotify }),
+    [loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, react, markRead, markThreadRead, markUnread, markAllRead, setNotify],
   );
 }
