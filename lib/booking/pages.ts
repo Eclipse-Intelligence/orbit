@@ -546,7 +546,7 @@ export async function loadBusy(userId: string, from: number, to: number, now = D
       end: new Date(row.ends_at).getTime(),
     })),
     ...seriesBusy(series, from, to, now),
-    ...laterBlocksBusy(blocks, from, to, dateKey(from - DAY), dateKey(to)),
+    ...laterBlocksBusy(blocks, from, to, dateKey(from - DAY), dateKey(to), dateKey(now)),
   ];
 }
 

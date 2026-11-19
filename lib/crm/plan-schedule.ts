@@ -155,6 +155,7 @@ export async function readPlanContextInDb(
           { dueOn: row.due_on, dueAt: new Date(row.due_at).toISOString(), durationMinutes: row.duration_minutes, rule: row.repeat_rule, ends: row.repeat_ends },
           today,
           lastDay,
+          today,
         ).map((block) => ({ title: row.title, startsAt: new Date(block.start).toISOString(), endsAt: new Date(block.end).toISOString() })),
       ),
     ],

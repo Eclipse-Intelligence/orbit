@@ -400,7 +400,7 @@ describe("later dates of a repeating Block time reminder", () => {
   });
 
   it("skips the current date and keeps 12:00 London across the clock change", () => {
-    const later = laterBlocks(block(), "2026-10-22", "2026-10-27");
+    const later = laterBlocks(block(), "2026-10-22", "2026-10-27", "2026-10-22");
     assert.deepEqual(later.map((item) => new Date(item.start).toISOString()), [
       "2026-10-24T11:00:00.000Z",
       "2026-10-25T12:00:00.000Z",
@@ -411,9 +411,18 @@ describe("later dates of a repeating Block time reminder", () => {
   });
 
   it("stops at an n times end, counting ticks already spent", () => {
-    assert.equal(laterBlocks(block({ ends: { count: 3 } }), "2026-10-22", "2026-10-31").length, 2);
-    assert.equal(laterBlocks(block({ ends: { count: 3, spent: 2 } }), "2026-10-22", "2026-10-31").length, 0);
-    assert.equal(laterBlocks(block({ ends: { until: "2026-10-25" } }), "2026-10-22", "2026-10-31").length, 2);
+    assert.equal(laterBlocks(block({ ends: { count: 3 } }), "2026-10-22", "2026-10-31", "2026-10-22").length, 2);
+    assert.equal(laterBlocks(block({ ends: { count: 3, spent: 2 } }), "2026-10-22", "2026-10-31", "2026-10-22").length, 0);
+    assert.equal(laterBlocks(block({ ends: { until: "2026-10-25" } }), "2026-10-22", "2026-10-31", "2026-10-22").length, 2);
+  });
+
+  it("counts the dates an overdue reminder will move to, never today or missed ones", () => {
+    const overdue = block({ dueOn: "2026-10-16", dueAt: "2026-10-16T11:00:00.000Z" });
+    const days = (items: { start: number }[]) => items.map((item) => new Date(item.start).toISOString().slice(0, 10));
+    assert.deepEqual(days(laterBlocks(overdue, "2026-10-19", "2026-10-22", "2026-10-19")), ["2026-10-20", "2026-10-21", "2026-10-22"]);
+    assert.deepEqual(days(laterBlocks({ ...overdue, ends: { count: 3 } }, "2026-10-19", "2026-10-31", "2026-10-19")), ["2026-10-20", "2026-10-21"]);
+    assert.deepEqual(days(laterBlocks({ ...overdue, ends: { count: 3, spent: 1 } }, "2026-10-19", "2026-10-31", "2026-10-19")), ["2026-10-20"]);
+    assert.deepEqual(days(laterBlocks({ ...overdue, ends: { until: "2026-10-21" } }, "2026-10-19", "2026-10-31", "2026-10-19")), ["2026-10-20", "2026-10-21"]);
   });
 });
 
@@ -602,6 +611,10 @@ describe("booking busy times from reminders", () => {
     await saveBookingPage(mark, page({ enabled: false }));
     const busy = await getAdminPool().query("select * from private.booking_busy($1, '2026-10-19T00:00:00Z', '2026-10-20T00:00:00Z')", [mark.userId]);
     assert.equal(busy.rowCount, 0);
+    const repeating = await createReminder(mark, { title: "Lunch", dueAt: "2026-10-23T12:00", blocksTime: true, durationMinutes: 30, repeat: { every: "day" } }, { now: Date.parse("2026-10-19T09:00:00Z") });
+    const repeats = await getAdminPool().query("select * from private.booking_reminder_repeats($1)", [mark.userId]);
+    assert.equal(repeats.rowCount, 0, "no repeating timings while the page is off");
+    await getAdminPool().query("delete from crm.reminders where id = $1", [repeating.reminder.id]);
     await saveBookingPage(mark, page());
   });
 
@@ -644,6 +657,11 @@ describe("booking busy times from reminders", () => {
     );
     assert.equal(definer.rows[0].prosecdef, true);
     assert.deepEqual(definer.rows[0].proconfig, ['search_path=""']);
+    const repeatDefiner = await admin.query<{ prosecdef: boolean; proconfig: string[] }>(
+      "select prosecdef, proconfig from pg_proc where oid = 'private.booking_reminder_repeats(uuid)'::regprocedure",
+    );
+    assert.equal(repeatDefiner.rows[0].prosecdef, true);
+    assert.deepEqual(repeatDefiner.rows[0].proconfig, ['search_path=""']);
     await assert.rejects(queryAsUser(sam.userId, "select * from private.booking_busy($1, now(), now() + interval '1 day')", [mark.userId]));
   });
 });
