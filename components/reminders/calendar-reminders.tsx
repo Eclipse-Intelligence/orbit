@@ -24,7 +24,7 @@ function RoundTick({ reminder, large, onTick }: { reminder: Reminder; large?: bo
       onClick={() => onTick(reminder)}
       className={cn(
         "group/tick focus-visible:ring-ring/60 flex shrink-0 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-2",
-        large ? "hit size-[22px]" : "size-5 [@media(pointer:coarse)]:size-8",
+        large ? "hit size-[22px]" : "hit relative size-5",
       )}
     >
       <span
@@ -41,7 +41,7 @@ function RoundTick({ reminder, large, onTick }: { reminder: Reminder; large?: bo
 export function ReminderChipView({ chip, onTick, onOpen }: ReminderHandlers & { chip: ReminderChip }) {
   const { reminder } = chip;
   return (
-    <div data-reminder-chip={reminder.id} className="bg-surface-raised @container flex h-5 w-full min-w-0 items-center rounded-md pr-1.5 text-[12px] leading-5 [@media(pointer:coarse)]:h-8">
+    <div data-reminder-chip={reminder.id} className="bg-surface-raised @container flex h-5 w-full min-w-0 items-center rounded-md pr-1.5 text-[12px] leading-5">
       <RoundTick reminder={reminder} onTick={onTick} />
       <button
         type="button"
@@ -49,7 +49,7 @@ export function ReminderChipView({ chip, onTick, onOpen }: ReminderHandlers & { 
         aria-label={chipLabel(chip)}
         title={chipLabel(chip)}
         onClick={() => onOpen(reminder)}
-        className="focus-visible:ring-ring/60 flex min-w-0 flex-1 cursor-pointer items-center gap-1 self-stretch rounded-md text-left outline-none focus-visible:ring-2"
+        className="focus-visible:ring-ring/60 flex min-w-0 flex-1 cursor-pointer items-center gap-1 self-stretch rounded-md text-left [@media(pointer:coarse)]:ml-3 outline-none focus-visible:ring-2"
       >
         <span className="text-foreground min-w-0 truncate">{reminder.title}</span>
         {chip.overdue && <span className="text-danger shrink-0 text-[11px] @max-[7rem]:hidden">· overdue</span>}
@@ -69,7 +69,7 @@ export function ReminderMarkerView({ marker, top, onOpen }: { marker: ReminderMa
         aria-label={`${reminder.title}, ${reminder.time ?? formatTime(reminder.dueAt!)}, reminder`}
         title={`${reminder.title}, ${reminder.time ?? ""}`}
         onClick={() => onOpen(reminder)}
-        className="focus-visible:ring-ring/60 pointer-events-auto relative flex max-w-[calc(100%-6px)] min-w-0 cursor-pointer items-center gap-1 outline-none focus-visible:ring-2"
+        className="focus-visible:ring-ring/60 hit pointer-events-auto relative flex max-w-[calc(100%-6px)] min-w-0 cursor-pointer items-center gap-1 outline-none focus-visible:ring-2"
       >
         <span aria-hidden className="bg-warning -ml-[3px] size-[7px] shrink-0 rounded-full" />
         <span className="min-w-0 truncate rounded-[5px] bg-[color-mix(in_srgb,var(--warning)_14%,#1b1b1b)] px-1.5 text-[11px] leading-4 text-[color-mix(in_srgb,var(--warning)_80%,white)]">

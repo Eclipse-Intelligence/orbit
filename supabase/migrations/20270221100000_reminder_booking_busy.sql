@@ -56,4 +56,34 @@ $$;
 revoke all on function private.booking_busy(uuid, timestamptz, timestamptz) from public;
 grant execute on function private.booking_busy(uuid, timestamptz, timestamptz) to crm_app;
 
+create or replace function private.booking_reminder_repeats(p_user_id uuid)
+returns table (due_on date, due_at timestamptz, duration_minutes integer, repeat_rule jsonb, repeat_ends jsonb)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from crm.booking_pages b where b.user_id = p_user_id and b.enabled) then
+    return;
+  end if;
+
+  return query
+  select r.due_on, r.due_at, r.duration_minutes, r.repeat_rule, r.repeat_ends
+  from crm.reminders r
+  where r.user_id = p_user_id
+    and r.blocks_time
+    and r.due_at is not null
+    and r.due_on is not null
+    and r.completed_at is null
+    and r.repeat_rule is not null
+    and r.repeat_ends is not null
+  order by r.due_at
+  limit 200;
+end;
+$$;
+
+revoke all on function private.booking_reminder_repeats(uuid) from public;
+grant execute on function private.booking_reminder_repeats(uuid) to crm_app;
+
 reset lock_timeout;

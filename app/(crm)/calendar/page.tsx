@@ -44,7 +44,7 @@ export default async function CalendarPage({
       .then((result) => result.reminders)
       .catch((error) => {
         console.error("Calendar reminders failed", error);
-        return [];
+        return null;
       }),
   ]);
 
@@ -66,7 +66,8 @@ export default async function CalendarPage({
       now={now}
       invite={invite}
       planner={planner}
-      reminders={reminders}
+      reminders={reminders ?? []}
+      remindersFailed={reminders === null}
     />
   );
 }

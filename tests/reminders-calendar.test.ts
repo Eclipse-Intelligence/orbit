@@ -10,7 +10,7 @@ import { SCOPES } from "@/lib/crm/scopes";
 import { wallInstant } from "@/lib/crm/task-time";
 import { createTask } from "@/lib/crm/tasks";
 import type { Task, UserActor } from "@/lib/crm/types";
-import { addWorkingDays, dayKeyAt } from "@/lib/crm/working-days";
+import { addWorkingDays, dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { saveMailbox } from "@/lib/crm/inbox";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import {
@@ -25,6 +25,8 @@ import {
   showsDayReminders,
   withoutTicked,
 } from "@/lib/reminder-calendar";
+import { laterBlocks, type RepeatingBlock } from "@/lib/reminder-repeat";
+import { createTickLedger } from "@/lib/reminder-ticks";
 import { clashWith, taskBlocks } from "@/lib/task-blocks";
 import { createAgent, createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -183,6 +185,18 @@ describe("placing reminders on the calendar", () => {
     assert.deepEqual(placed, { chips: [], markers: [], blocks: [] });
   });
 
+  it("puts a 00:30 marker in British Summer Time on its London day, not the UTC one", () => {
+    const early = timed("Feed the cat", "2026-07-15", "00:30");
+    assert.equal(early.dueAt, "2026-07-14T23:30:00.000Z");
+    const placed = place([early], ["2026-07-14", "2026-07-15"], "2026-07-13");
+    assert.deepEqual(placed.markers.map((item) => [item.day, item.minutes]), [["2026-07-15", 30]]);
+  });
+
+  it("shows a reminder due on the last day of the loaded range", () => {
+    const last = reminder({ title: "Last day", dueOn: WEEK[6] });
+    assert.deepEqual(place([last]).chips.map((chip) => chip.day), [WEEK[6]]);
+  });
+
   it("keeps a London day across the clock change", () => {
     const late = timed("Late call", "2026-10-25", "23:30");
     const placed = place([late], ["2026-10-24", "2026-10-25", "2026-10-26"], "2026-10-24");
@@ -219,14 +233,23 @@ describe("busy time from reminders", () => {
   const done = timed("Old block", "2026-11-20", "16:00", { blocksTime: true, durationMinutes: 60, completedAt: "2026-11-19T09:00:00.000Z" });
 
   it("counts open Block time reminders and never markers or done ones", () => {
-    const busy = reminderBusy([marker, block, done]);
+    const busy = reminderBusy([marker, block, done], TODAY);
     assert.deepEqual(busy, [
       { subject: "Dentist", startsAt: block.dueAt, endsAt: new Date(wallInstant("2026-11-20", 15, 0)).toISOString(), isAllDay: false, showAs: "busy" },
     ]);
   });
 
+  it("never counts an overdue Block time reminder at its old time", () => {
+    const old = timed("Missed physio", "2026-11-18", "14:00", { blocksTime: true, durationMinutes: 60 });
+    assert.deepEqual(reminderBusy([old], TODAY), []);
+    const atOldTime = taskBlocks([timedTask("Call Jane", new Date(wallInstant("2026-11-18", 14, 15)).toISOString())], { viewerId: VIEWER, now: Date.parse("2026-11-17T09:00:00Z"), meetings: reminderBusy([old], TODAY) });
+    assert.equal(atOldTime[0].clash, null);
+    assert.equal(reminderBusy([block], "2026-11-21").length, 0);
+    assert.equal(reminderBusy([block], "2026-11-20").length, 1, "today's block still counts");
+  });
+
   it("flags a task block that clashes with a Block time reminder, and not one under a marker", () => {
-    const busy = reminderBusy([marker, block]);
+    const busy = reminderBusy([marker, block], TODAY);
     const underMarker = taskBlocks([timedTask("Call Jane", marker.dueAt!)], { viewerId: VIEWER, now: Date.parse("2026-11-19T09:00:00Z"), meetings: busy });
     assert.equal(underMarker[0].clash, null);
     const underBlock = taskBlocks([timedTask("Call Jane", new Date(wallInstant("2026-11-20", 14, 30)).toISOString())], { viewerId: VIEWER, now: Date.parse("2026-11-19T09:00:00Z"), meetings: busy });
@@ -319,6 +342,24 @@ describe("reminders for Calendar and the daily note, from the database", () => {
     assert.ok(!owner.reminders.some((item) => item.title === "Sam's"), "an owner never sees a member's");
   });
 
+  it("reads London days in British Summer Time: the overdue cut-off, done that day and the range's last day", async () => {
+    const summerNow = Date.parse("2027-07-14T23:30:00Z");
+    const make = (title: string, input: Record<string, unknown>) => createReminder(mark, { title, ...input }, { now: summerNow - 20 * 86_400_000 });
+    await make("Due 14 July", { dueOn: "2027-07-14" });
+    await make("Due 26 July", { dueOn: "2027-07-26" });
+    const lateTick = (await make("Ticked after 00:00 London", { dueOn: "2027-07-10" })).reminder;
+    await getAdminPool().query("update crm.reminders set completed_at = '2027-07-14T23:30:00Z' where id = $1", [lateTick.id]);
+    const week = await listCalendarReminders(mark, { from: "2027-07-20", to: "2027-07-26" }, { now: summerNow });
+    const titles = week.reminders.map((item) => item.title);
+    assert.ok(titles.includes("Due 14 July"), "at 00:30 London on 15 July, 14 July is overdue");
+    assert.ok(titles.includes("Due 26 July"), "the range's last day is included");
+    const fifteenth = await listDayReminders(mark, "2027-07-15", { now: summerNow });
+    assert.ok(fifteenth.reminders.some((item) => item.title === "Due 14 July"), "today's note lists it as overdue");
+    assert.ok(fifteenth.reminders.some((item) => item.title === "Ticked after 00:00 London"), "done at 00:30 London counts for 15 July");
+    const fourteenth = await listDayReminders(mark, "2027-07-14", { now: summerNow });
+    assert.ok(!fourteenth.reminders.some((item) => item.title === "Ticked after 00:00 London"));
+  });
+
   it("refuses agent tokens, even with admin, and bad ranges", async () => {
     const admin = (await createAgent(mark.workspaceId, [...SCOPES], "Admin agent")).actor;
     await assert.rejects(listCalendarReminders(admin, { from: "2027-01-18", to: "2027-01-24" }), (error: unknown) => error instanceof CrmError && error.message === PEOPLE_ONLY);
@@ -345,6 +386,54 @@ describe("reminders for Calendar and the daily note, from the database", () => {
     const samsOwn = await listDayReminders(samHere, day, { now });
     assert.deepEqual(samsOwn.reminders.map((item) => item.title), ["Sam's today"], "opening Mark's shared note, Sam's rail reads only Sam's");
     assert.deepEqual(await queryAsUser(sam.userId, "select title from crm.reminders where user_id = $1", [mark.userId]), []);
+  });
+});
+
+describe("later dates of a repeating Block time reminder", () => {
+  const block = (overrides: Partial<RepeatingBlock> = {}): RepeatingBlock => ({
+    dueOn: "2026-10-23",
+    dueAt: "2026-10-23T11:00:00.000Z",
+    durationMinutes: 30,
+    rule: { freq: "daily", interval: 1 },
+    ends: { never: true },
+    ...overrides,
+  });
+
+  it("skips the current date and keeps 12:00 London across the clock change", () => {
+    const later = laterBlocks(block(), "2026-10-22", "2026-10-27");
+    assert.deepEqual(later.map((item) => new Date(item.start).toISOString()), [
+      "2026-10-24T11:00:00.000Z",
+      "2026-10-25T12:00:00.000Z",
+      "2026-10-26T12:00:00.000Z",
+      "2026-10-27T12:00:00.000Z",
+    ]);
+    assert.equal(later[0].end - later[0].start, 30 * 60_000);
+  });
+
+  it("stops at an n times end, counting ticks already spent", () => {
+    assert.equal(laterBlocks(block({ ends: { count: 3 } }), "2026-10-22", "2026-10-31").length, 2);
+    assert.equal(laterBlocks(block({ ends: { count: 3, spent: 2 } }), "2026-10-22", "2026-10-31").length, 0);
+    assert.equal(laterBlocks(block({ ends: { until: "2026-10-25" } }), "2026-10-22", "2026-10-31").length, 2);
+  });
+});
+
+describe("ticking a reminder twice", () => {
+  it("lets a failed or no-op tick be retried, and holds a tick in flight", async () => {
+    const ledger = createTickLedger();
+    let fail!: (value: string | null) => void;
+    const first = ledger.begin("r1", new Promise((resolve) => (fail = resolve)));
+    assert.equal(ledger.busy("r1"), true, "a tick in flight blocks a second one");
+    fail(null);
+    assert.equal(await first, null);
+    assert.equal(ledger.busy("r1"), false, "a no-op tick can be retried");
+    await ledger.begin("r1", Promise.reject(new Error("offline")));
+    assert.equal(ledger.busy("r1"), false, "a failed tick can be retried");
+    assert.equal(await ledger.begin("r1", Promise.resolve("copy-1")), "copy-1");
+    assert.equal(ledger.busy("r1"), true, "a tick that landed waits for fresh data");
+    ledger.release("r1");
+    assert.equal(ledger.busy("r1"), false);
+    assert.equal(await ledger.take("r1"), "copy-1", "Undo still finds the done copy after a refresh");
+    assert.equal(await ledger.take("r1"), null);
   });
 });
 
@@ -379,6 +468,34 @@ describe("Plan and clash checks count Block time reminders", () => {
     assert.ok(moved);
     const end = Date.parse(moved.at) + moved.durationMinutes * 60_000;
     assert.ok(end <= start || Date.parse(moved.at) >= start + 60 * 60_000, `Plan put the task at ${moved.at}, inside the Block time reminder`);
+  });
+
+  it("counts every later date of a repeating Block time reminder in Plan, the current date once, until its end", async () => {
+    const next = addWorkingDays(target, 1);
+    const atOn = (day: string, hour: number) => new Date(wallInstant(day, hour, 0)).toISOString();
+    await createReminder(mark, { title: "Daily standup", dueAt: atOn(target, 12), blocksTime: true, durationMinutes: 30, repeat: { every: "day" } });
+    await createReminder(mark, { title: "Twice only", dueAt: atOn(target, 13), blocksTime: true, durationMinutes: 30, repeat: { every: "day", ends: { after: 2 } } });
+    const context = await readPlanContext(mark, Date.now(), { store: false });
+    const starts = (title: string) => context.reminders.filter((item) => item.title === title).map((item) => item.startsAt);
+    assert.equal(starts("Daily standup").filter((start) => start === atOn(target, 12)).length, 1, "the current date once");
+    assert.ok(starts("Daily standup").includes(atOn(shiftDay(target, 1), 12)));
+    assert.ok(starts("Daily standup").includes(atOn(shiftDay(target, 5), 12)));
+    assert.deepEqual(starts("Twice only"), [atOn(target, 13), atOn(shiftDay(target, 1), 13)]);
+    const task = (await createTask(mark, { title: "Call the bank", dueDate: next })).body.task;
+    await assert.rejects(
+      scheduleTasks(mark, [{ taskId: task.id, at: `${next}T12:10` }], { mode: "agent", provenance: { operation: "schedule_tasks" } }),
+      (error: unknown) => error instanceof CrmError && /clashes with Daily standup/.test(error.message),
+    );
+  });
+
+  it("ignores a done Block time reminder in Plan and the clash check", async () => {
+    const done = (await createReminder(mark, { title: "Done physio", dueAt: at(16), blocksTime: true, durationMinutes: 60 })).reminder;
+    await completeReminder(mark, done.id);
+    const context = await readPlanContext(mark, Date.now(), { store: false });
+    assert.ok(!context.reminders.some((item) => item.title === "Done physio"));
+    const task = (await createTask(mark, { title: "Ring the bank", dueDate: target })).body.task;
+    const placed = await scheduleTasks(mark, [{ taskId: task.id, at: local(16, 15) }], { mode: "agent", provenance: { operation: "schedule_tasks" } });
+    assert.equal(placed[0].task.dueAt, at(16, 15));
   });
 
   it("refuses an agent's block over a Block time reminder but not over a marker", async () => {
@@ -455,6 +572,32 @@ describe("booking busy times from reminders", () => {
     ]);
   });
 
+  it("blocks every later date of a repeating Block time reminder, counts its current date once, and stops at its end", async () => {
+    const july = Date.parse("2027-07-12T08:00:00Z");
+    const window = { from: Date.parse("2027-07-13T00:00:00Z"), to: Date.parse("2027-07-17T00:00:00Z") };
+    const busyStarts = async (actor: UserActor) =>
+      (await loadBusy(actor.userId, window.from, window.to, july)).map((item) => new Date(item.start).toISOString()).sort();
+    const daily = (await createReminder(mark, { title: "Private lunch with Jo", dueAt: "2027-07-13T11:00:00.000Z", blocksTime: true, durationMinutes: 30, repeat: { every: "day" } }, { now: july })).reminder;
+    assert.deepEqual(await busyStarts(mark), ["2027-07-13T11:00:00.000Z", "2027-07-14T11:00:00.000Z", "2027-07-15T11:00:00.000Z", "2027-07-16T11:00:00.000Z"], "12:00 London in summer, the current date once");
+    const slots = await listSlots("mark", { month: "2027-07", timeZone: "Europe/London" }, { ip: freshIp(), now: july });
+    assert.ok(!slots.days["2027-07-15"].includes("2027-07-15T11:00:00.000Z"), "a later date is busy on the public page");
+    assert.ok(slots.days["2027-07-15"].includes("2027-07-15T12:00:00.000Z"));
+    assert.ok(!JSON.stringify(slots).includes("lunch"), "the public response never carries the title");
+    const repeats = await getAdminPool().query("select * from private.booking_reminder_repeats($1)", [mark.userId]);
+    assert.deepEqual(repeats.fields.map((field) => field.name), ["due_on", "due_at", "duration_minutes", "repeat_rule", "repeat_ends"]);
+
+    const twice = (await createReminder(sam, { title: "Sam's class", dueAt: "2027-07-13T11:00:00.000Z", blocksTime: true, durationMinutes: 30, repeat: { every: "day", ends: { after: 2 } } }, { now: july })).reminder;
+    assert.deepEqual(await busyStarts(sam), ["2027-07-13T11:00:00.000Z", "2027-07-14T11:00:00.000Z"], "an n times end stops it");
+    await completeReminder(sam, twice.id, { dueOn: "2027-07-13" }, { now: july });
+    assert.deepEqual(await busyStarts(sam), ["2027-07-14T11:00:00.000Z"], "after a tick only the last date is left");
+
+    await getAdminPool().query("update crm.reminders set completed_at = now() where id = $1", [daily.id]);
+    assert.deepEqual(await busyStarts(mark), [], "a done reminder stops it");
+    await getAdminPool().query("update crm.reminders set completed_at = null where id = $1", [daily.id]);
+    await getAdminPool().query("delete from crm.reminders where id = $1", [daily.id]);
+    assert.deepEqual(await busyStarts(mark), [], "a deleted reminder stops it");
+  });
+
   it("returns nothing once the booking page is off", async () => {
     await saveBookingPage(mark, page({ enabled: false }));
     const busy = await getAdminPool().query("select * from private.booking_busy($1, '2026-10-19T00:00:00Z', '2026-10-20T00:00:00Z')", [mark.userId]);
@@ -491,6 +634,11 @@ describe("booking busy times from reminders", () => {
        from unnest(array['crm_app', 'authenticated', 'anon', 'crm_agent']) as role`,
     );
     assert.deepEqual(Object.fromEntries(grants.rows.map((row) => [row.role, row.allowed])), { crm_app: true, authenticated: false, anon: false, crm_agent: false });
+    const repeatGrants = await admin.query<{ role: string; allowed: boolean }>(
+      `select role, has_function_privilege(role, 'private.booking_reminder_repeats(uuid)', 'execute') as allowed
+       from unnest(array['crm_app', 'authenticated', 'anon', 'crm_agent']) as role`,
+    );
+    assert.deepEqual(Object.fromEntries(repeatGrants.rows.map((row) => [row.role, row.allowed])), { crm_app: true, authenticated: false, anon: false, crm_agent: false });
     const definer = await admin.query<{ prosecdef: boolean; proconfig: string[] }>(
       "select prosecdef, proconfig from pg_proc where oid = 'private.booking_busy(uuid, timestamptz, timestamptz)'::regprocedure",
     );

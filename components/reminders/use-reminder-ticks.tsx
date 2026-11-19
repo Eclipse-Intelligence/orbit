@@ -5,6 +5,7 @@ import Button from "@/components/_ui/button";
 import { tickReminderAction, undoReminderAction } from "@/app/(crm)/reminders";
 import type { Reminder } from "@/lib/crm/reminders";
 import { settledTicks } from "@/lib/reminder-calendar";
+import { createTickLedger } from "@/lib/reminder-ticks";
 import type { HeldTick } from "@/lib/reminders-card";
 import { useCompaniesStore } from "@/stores/companies-store";
 
@@ -26,8 +27,7 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
   const [held, setHeld] = useState<Record<string, HeldTick>>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pending = useRef(new Map<string, Promise<string | null>>());
-  const ticked = useRef(new Map<string, string>());
+  const [ledger] = useState(createTickLedger);
   const latest = useRef(onChanged);
   useEffect(() => {
     latest.current = onChanged;
@@ -46,7 +46,7 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
 
   const tick = useCallback(
     (reminder: Reminder) => {
-      if (reminder.completedAt || pending.current.has(reminder.id)) return;
+      if (reminder.completedAt || ledger.busy(reminder.id)) return;
       setError(null);
       setHeld((current) => ({ ...current, [reminder.id]: { snapshot: reminder, doneId: null } }));
       setToast({ id: Date.now(), reminderId: reminder.id });
@@ -69,14 +69,13 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
             return null;
           }
           const doneId = result.doneId;
-          ticked.current.set(reminder.id, doneId);
           setHeld((current) => (current[reminder.id] ? { ...current, [reminder.id]: { ...current[reminder.id], doneId } } : current));
           changed();
           return doneId;
         });
-      pending.current.set(reminder.id, work);
+      void ledger.begin(reminder.id, work);
     },
-    [changed],
+    [changed, ledger],
   );
 
   const reopen = useCallback(
@@ -95,10 +94,7 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
 
   const undo = useCallback(
     async (reminderId: string) => {
-      const work = pending.current.get(reminderId);
-      const doneId = (work ? await work : null) ?? ticked.current.get(reminderId) ?? null;
-      pending.current.delete(reminderId);
-      ticked.current.delete(reminderId);
+      const doneId = await ledger.take(reminderId);
       setToast((current) => (current?.reminderId === reminderId ? null : current));
       if (!doneId) {
         setHeld((current) => without(current, reminderId));
@@ -107,16 +103,16 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
       await reopen(doneId);
       setHeld((current) => without(current, reminderId));
     },
-    [reopen],
+    [reopen, ledger],
   );
 
   const settle = useCallback((reminders: Reminder[]) => {
     setHeld((current) => {
       const next = settledTicks(current, reminders);
-      for (const id of Object.keys(current)) if (!(id in next)) pending.current.delete(id);
+      for (const id of Object.keys(current)) if (!(id in next)) ledger.release(id);
       return next;
     });
-  }, []);
+  }, [ledger]);
 
   return { held, toast, error, tick, undo, reopen, settle, clearError: () => setError(null) };
 }
@@ -124,7 +120,7 @@ export function useReminderTicks({ by, onChanged }: { by: string; onChanged: () 
 export function ReminderUndoToast({ toast, onUndo }: { toast: Toast | null; onUndo: (reminderId: string) => void }) {
   if (!toast) return null;
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-50 flex justify-center px-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-50 flex justify-center px-4">
       <div
         role="status"
         className="bg-surface-active shadow-overlay caption-style animate-in fade-in-0 slide-in-from-bottom-1 ease-power3-out pointer-events-auto flex max-w-full items-center gap-2.5 rounded-full py-1.5 pr-1.5 pl-3.5 backdrop-blur duration-200"

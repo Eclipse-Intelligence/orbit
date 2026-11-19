@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listDayRemindersAction } from "@/app/(crm)/reminders";
 import { ReminderTick } from "@/components/reminders/reminder-row";
-import { useReminderTicks } from "@/components/reminders/use-reminder-ticks";
+import { ReminderUndoToast, useReminderTicks } from "@/components/reminders/use-reminder-ticks";
 import type { Reminder } from "@/lib/crm/reminders";
 import { dayReminderRows, type DayReminderRow } from "@/lib/reminder-calendar";
 import { dayLabel, remindersToday, repeatWords } from "@/lib/reminders-card";
@@ -87,7 +87,7 @@ export default function DayReminders({ day, wrap }: { day: string; wrap: (count:
       )}
       <ul className="-mx-2 flex flex-col" data-day-reminders={day}>
         {rows.map((row) => (
-          <li key={row.key} data-reminder-row={row.reminder.title} className="flex items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-white/[0.04]">
+          <li key={row.key} data-reminder-row={row.reminder.title} className="flex items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-white/[0.04] [@media(pointer:coarse)]:py-3.5">
             <ReminderTick reminder={row.reminder} done={row.done} large={false} onToggle={() => toggle(row)} />
             <div className="relative flex min-w-0 flex-1 flex-col gap-0.5">
               {!row.done && (
@@ -106,6 +106,7 @@ export default function DayReminders({ day, wrap }: { day: string; wrap: (count:
           </li>
         ))}
       </ul>
+      <ReminderUndoToast toast={ticks.toast} onUndo={(id) => void ticks.undo(id)} />
     </>,
   );
 }

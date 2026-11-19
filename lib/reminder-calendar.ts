@@ -35,8 +35,8 @@ export function blocksCalendar(reminder: Reminder) {
   return !reminder.completedAt && reminder.blocksTime && Boolean(reminder.dueAt);
 }
 
-export function reminderBusy(reminders: Reminder[]): ClashCandidate[] {
-  return reminders.filter(blocksCalendar).map((reminder) => ({
+export function reminderBusy(reminders: Reminder[], today: string): ClashCandidate[] {
+  return reminders.filter((reminder) => blocksCalendar(reminder) && reminder.dueOn !== null && reminder.dueOn >= today).map((reminder) => ({
     subject: reminder.title,
     startsAt: reminder.dueAt!,
     endsAt: new Date(reminderEnd(reminder)!).toISOString(),

@@ -273,6 +273,7 @@ export default function CalendarScreen({
   invite,
   planner,
   reminders,
+  remindersFailed = false,
 }: {
   viewer: Viewer;
   today: string;
@@ -284,6 +285,7 @@ export default function CalendarScreen({
   invite: InviteSetup;
   planner: Planner;
   reminders: Reminder[];
+  remindersFailed?: boolean;
 }) {
   const router = useRouter();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -595,7 +597,7 @@ export default function CalendarScreen({
   const shownTask = panelTask ?? keptTask;
   const team = shownTask ? planner.teams.find((item) => item.id === shownTask.workspaceId) : null;
   const proposedIds = new Set(preview?.entries.map((entry) => entry.taskId) ?? []);
-  const busy = [...shown, ...reminderBusy(liveReminders)];
+  const busy = [...shown, ...reminderBusy(liveReminders, today)];
   const blocks = taskBlocks(
     tasks.filter((task) => !proposedIds.has(task.id)),
     { viewerId: viewer.id, now, meetings: busy, workspaces: planner.workspaces, done },
@@ -845,6 +847,11 @@ export default function CalendarScreen({
       {(error || ticks.error) && (
         <p role="alert" className="caption-style text-danger px-4 pt-2">
           {error ?? ticks.error}
+        </p>
+      )}
+      {remindersFailed && (
+        <p role="alert" className="caption-style text-danger px-4 pt-2">
+          {"Couldn't load reminders. Try again."}
         </p>
       )}
       <NoticeContext.Provider value={setNotice}>

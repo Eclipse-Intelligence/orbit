@@ -24,7 +24,8 @@ import { isBlockOverdue } from "@/lib/task-blocks";
 import { dayStartIso, DEFAULT_TASK_DURATION, isTaskDuration, localInstant, taskDueDay } from "@/lib/crm/task-time";
 import { listPlannerTasksInDb, scheduleTaskInDb } from "@/lib/crm/tasks";
 import { listOwnSeriesInDb } from "@/lib/crm/upcoming";
-import { upcomingBetween } from "@/lib/task-repeat";
+import { laterBlocks } from "@/lib/reminder-repeat";
+import { upcomingBetween, type RepeatEnds, type RepeatRule } from "@/lib/task-repeat";
 import type { Provenance, Task, UserActor } from "@/lib/crm/types";
 import { dayKeyAt, shiftDay } from "@/lib/crm/working-days";
 import { readWorkingHoursInDb } from "@/lib/crm/working-hours";
@@ -106,6 +107,15 @@ export async function readPlanContextInDb(
      limit 1000`,
     [actor.userId, from, to, coverFrom, coverTo],
   );
+  const repeatRows = await db.query<{ title: string; due_on: string; due_at: Date; duration_minutes: number; repeat_rule: RepeatRule; repeat_ends: RepeatEnds }>(
+    `select title, due_on::text as due_on, due_at, duration_minutes, repeat_rule, repeat_ends
+     from crm.reminders
+     where user_id = $1 and completed_at is null and blocks_time and due_at is not null and due_on is not null
+       and repeat_rule is not null and repeat_ends is not null
+     order by due_at
+     limit 200`,
+    [actor.userId],
+  );
   const tasks: Task[] = [];
   for (const target of actors) tasks.push(...(await listPlannerTasksInDb(db, target, now)));
   const series = await listOwnSeriesInDb(db, actor, actors.map((target) => target.workspaceId));
@@ -134,11 +144,20 @@ export async function readPlanContextInDb(
       myResponse: row.response_status,
     })),
     upcoming,
-    reminders: reminderRows.rows.map((row) => ({
-      title: row.title,
-      startsAt: new Date(row.due_at).toISOString(),
-      endsAt: new Date(new Date(row.due_at).getTime() + row.duration_minutes * 60_000).toISOString(),
-    })),
+    reminders: [
+      ...reminderRows.rows.map((row) => ({
+        title: row.title,
+        startsAt: new Date(row.due_at).toISOString(),
+        endsAt: new Date(new Date(row.due_at).getTime() + row.duration_minutes * 60_000).toISOString(),
+      })),
+      ...repeatRows.rows.flatMap((row) =>
+        laterBlocks(
+          { dueOn: row.due_on, dueAt: new Date(row.due_at).toISOString(), durationMinutes: row.duration_minutes, rule: row.repeat_rule, ends: row.repeat_ends },
+          today,
+          lastDay,
+        ).map((block) => ({ title: row.title, startsAt: new Date(block.start).toISOString(), endsAt: new Date(block.end).toISOString() })),
+      ),
+    ],
     preferences: learn ? await planPreferencesInDb(db, actor, actors, now, learn) : DEFAULT_PLAN_PREFERENCES,
   };
 }
