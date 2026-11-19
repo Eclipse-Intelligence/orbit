@@ -6,7 +6,7 @@ import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import { Input } from "@/components/_ui/input";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
-import { addRoomMembersAction, leaveRoomAction, removeRoomMemberAction, updateRoomAction } from "@/app/(crm)/chat/actions";
+import { addRoomMembersAction, leaveRoomAction, removeRoomMemberAction, setRoomArchivedAction, updateRoomAction } from "@/app/(crm)/chat/actions";
 import { ChatAvatar, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar } from "@/components/chat/chat-live";
 import { usePeople } from "@/components/chat/chat-dialogs";
@@ -14,7 +14,7 @@ import { workspaceRolesAction } from "@/app/(crm)/chat/roles";
 import type { WorkspaceRole } from "@/lib/crm/types";
 import PeopleField, { pickerOpen, type ChatCandidate } from "@/components/chat/people-field";
 import RoomHooks, { type HookSecrets } from "@/components/chat/room-hooks";
-import { CHAT_ROOM_NAME_MAX, type ChatRoom } from "@/lib/chat/types";
+import { CHAT_ROOM_NAME_MAX, CHAT_TOPIC_MAX, type ChatRoom } from "@/lib/chat/types";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 
 const ROLE_LABELS: Record<WorkspaceRole, string> = { owner: "Owner", admin: "Admin", member: "Member" };
@@ -49,18 +49,21 @@ export default function RoomSettings({
   adding: boolean;
   onLeft: () => void;
 }) {
-  const { viewer, multi, workspaces, loadRoom } = useChat();
-  const ids = { name: useId(), workspace: useId(), people: useId() };
+  const { viewer, multi, workspaces, loadRoom, loadMessages } = useChat();
+  const ids = { name: useId(), topic: useId(), workspace: useId(), people: useId() };
   const conversation = room.conversation;
+  const archived = Boolean(conversation.archivedAt);
   const [name, setName] = useState(conversation.name);
+  const [topic, setTopic] = useState(conversation.topic ?? "");
   const [workspaceId, setWorkspaceId] = useState(conversation.workspaceId ?? "");
-  const [seen, setSeen] = useState({ open, id: conversation.id, name: conversation.name, workspaceId: conversation.workspaceId });
+  const [seen, setSeen] = useState({ open, id: conversation.id, name: conversation.name, topic: conversation.topic, workspaceId: conversation.workspaceId });
   const [addOpen, setAddOpen] = useState(adding);
   const [picked, setPicked] = useState<ChatCandidate[]>([]);
   const [error, setError] = useState<{ area: "members" | "room"; text: string } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [hookSecrets, setHookSecrets] = useState<{ roomId: string; secrets: Record<string, string> }>({ roomId: conversation.id, secrets: {} });
   const secrets: HookSecrets = {
     secrets: hookSecrets.roomId === conversation.id ? hookSecrets.secrets : {},
@@ -72,9 +75,10 @@ export default function RoomSettings({
         return { roomId, secrets: kept };
       }),
   };
-  if (seen.open !== open || seen.id !== conversation.id || seen.name !== conversation.name || seen.workspaceId !== conversation.workspaceId) {
-    setSeen({ open, id: conversation.id, name: conversation.name, workspaceId: conversation.workspaceId });
+  if (seen.open !== open || seen.id !== conversation.id || seen.name !== conversation.name || seen.topic !== conversation.topic || seen.workspaceId !== conversation.workspaceId) {
+    setSeen({ open, id: conversation.id, name: conversation.name, topic: conversation.topic, workspaceId: conversation.workspaceId });
     setName(conversation.name);
+    setTopic(conversation.topic ?? "");
     setWorkspaceId(conversation.workspaceId ?? "");
     if (seen.open !== open) {
       setAddOpen(adding);
@@ -94,7 +98,8 @@ export default function RoomSettings({
   const candidates = people.people.filter((person) => !memberIds.has(person.id));
   const linked = workspaces.find((workspace) => workspace.id === workspaceId);
   const last = room.members.length <= 1;
-  const changed = name.trim() !== conversation.name || (multi && (workspaceId || null) !== conversation.workspaceId);
+  const topicChanged = topic.trim() !== (conversation.topic ?? "");
+  const changed = !archived && (name.trim() !== conversation.name || topicChanged || (multi && (workspaceId || null) !== conversation.workspaceId));
 
   async function run<T>(work: () => Promise<T>, done: (result: T) => void) {
     setBusy(true);
@@ -110,8 +115,9 @@ export default function RoomSettings({
   function save(event: FormEvent) {
     event.preventDefault();
     if (!changed || busy) return;
-    const input: { name?: string; workspaceId?: string | null } = {};
+    const input: { name?: string; workspaceId?: string | null; topic?: string | null } = {};
     if (name.trim() !== conversation.name) input.name = name;
+    if (topicChanged) input.topic = topic.trim() || null;
     if (multi && (workspaceId || null) !== conversation.workspaceId) input.workspaceId = workspaceId || null;
     void run(
       () => updateRoomAction(conversation.id, input).catch(() => ({ error: "Couldn't save the room. Try again." })),
@@ -119,6 +125,7 @@ export default function RoomSettings({
         if ("ok" in result && result.ok) {
           setStatus("Saved");
           loadRoom(conversation.id);
+          if (input.topic !== undefined) loadMessages(conversation.id, "newer");
           refreshChatSidebar();
         } else setError({ area: "room", text: "error" in result ? result.error : "Couldn't save the room. Try again." });
       },
@@ -145,6 +152,20 @@ export default function RoomSettings({
       (result) => {
         if ("ok" in result && result.ok) loadRoom(conversation.id);
         else setError({ area: "members", text: "error" in result ? result.error : "Couldn't remove them. Try again." });
+      },
+    );
+  }
+
+  function setArchived(next: boolean) {
+    const failed = next ? "Couldn't archive the room. Try again." : "Couldn't unarchive the room. Try again.";
+    void run(
+      () => setRoomArchivedAction(conversation.id, next).catch(() => ({ error: failed })),
+      (result) => {
+        if ("ok" in result && result.ok) {
+          loadRoom(conversation.id);
+          loadMessages(conversation.id, "newer");
+          refreshChatSidebar();
+        } else setError({ area: "room", text: "error" in result ? result.error : failed });
       },
     );
   }
@@ -182,14 +203,20 @@ export default function RoomSettings({
               <label htmlFor={ids.name} className="lead-style font-medium">
                 Name
               </label>
-              <Input id={ids.name} value={name} maxLength={CHAT_ROOM_NAME_MAX} onChange={(event) => setName(event.target.value)} className="max-md:h-11" />
+              <Input id={ids.name} value={name} maxLength={CHAT_ROOM_NAME_MAX} disabled={archived} onChange={(event) => setName(event.target.value)} className="max-md:h-11" />
+            </div>
+            <div className="flex flex-col gap-2">
+              <label htmlFor={ids.topic} className="lead-style font-medium">
+                Topic
+              </label>
+              <Input id={ids.topic} value={topic} maxLength={CHAT_TOPIC_MAX} disabled={archived} onChange={(event) => setTopic(event.target.value)} className="max-md:h-11" />
             </div>
             {multi && (
               <div className="flex flex-col gap-2">
                 <label htmlFor={ids.workspace} className="lead-style font-medium">
                   Workspace
                 </label>
-                <NativeSelect id={ids.workspace} value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} className="max-md:h-11">
+                <NativeSelect id={ids.workspace} value={workspaceId} disabled={archived} onChange={(event) => setWorkspaceId(event.target.value)} className="max-md:h-11">
                   <option value="">Not linked</option>
                   {workspaces.map((workspace) => (
                     <option key={workspace.id} value={workspace.id}>
@@ -208,12 +235,14 @@ export default function RoomSettings({
                   Members
                 </h3>
                 <span className="caption-style text-subtle mr-2 tabular-nums">{room.members.length}</span>
-                <Button variant="secondary" size="sm" onClick={() => setAddOpen((value) => !value)} aria-expanded={addOpen} className="hit max-md:h-11">
-                  <PlusIcon aria-hidden className="size-3" />
-                  Add people
-                </Button>
+                {!archived && (
+                  <Button variant="secondary" size="sm" onClick={() => setAddOpen((value) => !value)} aria-expanded={addOpen} className="hit max-md:h-11">
+                    <PlusIcon aria-hidden className="size-3" />
+                    Add people
+                  </Button>
+                )}
               </div>
-              {addOpen && (
+              {addOpen && !archived && (
                 <div className="flex flex-col gap-2 md:pointer-coarse:gap-3">
                   <label htmlFor={ids.people} className="sr-only">
                     People to add
@@ -251,7 +280,7 @@ export default function RoomSettings({
                         <span className="ui-style truncate">{member.name}</span>
                         {(notes || member.email) && <span className="caption-style text-subtle truncate">{notes || member.email}</span>}
                       </span>
-                      {!you && (
+                      {!you && !archived && (
                         <Button variant="ghost" size="sm" disabled={busy} onClick={() => remove(member.id)} aria-label={`Remove ${member.name}`} className="hit max-md:h-11">
                           Remove
                         </Button>
@@ -261,7 +290,24 @@ export default function RoomSettings({
                 })}
               </ul>
             </section>
-            <RoomHooks open={open} roomId={conversation.id} roomName={conversation.name} secrets={secrets} />
+            {!archived && <RoomHooks open={open} roomId={conversation.id} roomName={conversation.name} secrets={secrets} />}
+            {room.canArchive && (
+              <section aria-labelledby="room-archive" className="flex flex-col gap-2">
+                <h3 id="room-archive">{archived ? "Archived" : "Archive"}</h3>
+                <p className="caption-style text-subtle">
+                  {archived ? "Members can read and search it, but no one can post." : "Archived rooms are read-only and hidden from Chat's list."}
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => (archived ? setArchived(false) : setArchiving(true))}
+                  className="hit self-start max-md:h-11"
+                >
+                  {archived ? "Unarchive" : "Archive room"}
+                </Button>
+              </section>
+            )}
           </div>
           {error?.area === "room" && (
             <p role="alert" className="caption-style text-danger px-6 pt-3 max-md:px-4">
@@ -294,6 +340,15 @@ export default function RoomSettings({
           description={last ? "You're the last member, so the room and its messages are deleted." : "Anyone in the room can add you back."}
           confirmLabel={last ? "Leave and delete" : "Leave room"}
           onConfirm={leave}
+        />
+        <ConfirmDialog
+          open={archiving}
+          onOpenChange={setArchiving}
+          title={`Archive #${conversation.name}?`}
+          description="Members can still read and search it, but no one can post."
+          confirmLabel="Archive"
+          tone="neutral"
+          onConfirm={() => setArchived(true)}
         />
       </SheetContent>
     </Sheet>

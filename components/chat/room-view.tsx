@@ -2,13 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Button from "@/components/_ui/button";
+import { setRoomArchivedAction } from "@/app/(crm)/chat/actions";
 import { AvatarStack, ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
-import { setChatViewing, useChatEvents } from "@/components/chat/chat-live";
+import { refreshChatSidebar, setChatViewing, useChatEvents } from "@/components/chat/chat-live";
 import Composer from "@/components/chat/composer";
 import MessageList from "@/components/chat/message-list";
 import { useTyping } from "@/components/chat/use-typing";
 import { isLocal, lastOwnMessage, newestServerId, typingLine, type Timeline } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage, ChatRoom } from "@/lib/chat/types";
+import ArchiveIcon from "@/public/assets/images/chat/archive.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import SlidersIcon from "@/public/assets/images/chat/sliders.svg";
@@ -17,7 +19,44 @@ const HEADER_AVATARS = 4;
 
 function firstUnread(messages: ChatMessage[], lastReadAt: string | null, viewerId: string) {
   if (!lastReadAt) return null;
-  return messages.find((message) => !isLocal(message) && !message.deletedAt && (message.author.id !== viewerId || message.via) && message.createdAt > lastReadAt)?.id ?? null;
+  return messages.find((message) => !isLocal(message) && message.kind === "message" && !message.deletedAt && (message.author.id !== viewerId || message.via) && message.createdAt > lastReadAt)?.id ?? null;
+}
+
+function ArchivedBanner({ conversationId, canUnarchive }: { conversationId: string; canUnarchive: boolean }) {
+  const { loadRoom, loadMessages } = useChat();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function unarchive() {
+    setBusy(true);
+    setError(null);
+    const result = await setRoomArchivedAction(conversationId, false).catch(() => ({ error: "Couldn't unarchive the room. Try again." }));
+    setBusy(false);
+    if ("ok" in result && result.ok) {
+      loadRoom(conversationId);
+      loadMessages(conversationId, "newer");
+      refreshChatSidebar();
+    } else setError("error" in result ? result.error : "Couldn't unarchive the room. Try again.");
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 pt-1 pb-2">
+      <div className="bg-surface-raised flex items-center gap-2.5 rounded-[10px] px-3 py-2.5">
+        <ArchiveIcon aria-hidden className="text-soft size-3.5 shrink-0" />
+        <p className="ui-style text-soft min-w-0 flex-1">This room is archived. You can read and search it, but not post.</p>
+        {canUnarchive && (
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => void unarchive()} className="hit shrink-0 max-md:h-11">
+            Unarchive
+          </Button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="caption-style text-danger px-1">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export function useVisible() {
@@ -121,6 +160,8 @@ export default function RoomView({
 
   const title = info ? roomLabel(info) : "";
   const dm = info?.kind === "dm";
+  const archived = Boolean(info?.archivedAt);
+  const topic = dm ? null : (info?.topic ?? null);
   const placeholder = info ? `Message ${dm ? info.name : `#${info.name}`}` : "Message";
   const shownMembers = (members ?? []).slice(0, HEADER_AVATARS).map((member) => ({ id: member.id, name: member.name }));
 
@@ -148,16 +189,26 @@ export default function RoomView({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-5 max-md:h-auto max-md:px-3 max-md:py-2.5">
         <PhoneBack label="Chat" onClick={back} />
-        <h2 className="flex min-w-0 items-center gap-1 max-md:flex-1 max-md:justify-center">
-          {dm ? (
-            <ChatAvatar person={info?.dmUser ?? null} size="sm" className="mr-1 max-md:hidden" />
-          ) : (
-            <span aria-hidden className="text-faint">
-              #
-            </span>
+        <div className="flex min-w-0 flex-col max-md:flex-1 max-md:items-center">
+          <span className="flex max-w-full min-w-0 items-center gap-2">
+            <h2 className="flex min-w-0 items-center gap-1">
+              {dm ? (
+                <ChatAvatar person={info?.dmUser ?? null} size="sm" className="mr-1 max-md:hidden" />
+              ) : (
+                <span aria-hidden className="text-faint">
+                  #
+                </span>
+              )}
+              <span className="truncate">{info ? info.name : roomError ? "Conversation" : ""}</span>
+            </h2>
+            {archived && <span className="bg-surface-active text-soft inline-flex h-5 shrink-0 items-center rounded-full px-[7px] text-[11.5px]">Archived</span>}
+          </span>
+          {topic && (
+            <p title={topic} className="caption-style text-subtle max-w-[28em] truncate max-md:max-w-full">
+              {topic}
+            </p>
           )}
-          <span className="truncate">{info ? info.name : roomError ? "Conversation" : ""}</span>
-        </h2>
+        </div>
         {multi && !dm && info?.workspaceName && <span className="caption-style text-faint ml-1 shrink-0 max-md:hidden">{info.workspaceName}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-2 max-md:ml-0">
           {!dm && shownMembers.length > 0 && (
@@ -207,6 +258,7 @@ export default function RoomView({
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
           focusId={focusId}
+          readOnly={archived}
           empty={empty}
           label={title ? `Messages in ${title}` : "Messages"}
           onOlder={() => loadMessages(conversationId, "older")}
@@ -221,24 +273,30 @@ export default function RoomView({
         </p>
       )}
       <div className="flex shrink-0 flex-col px-4 pb-1.5 max-md:px-2 max-md:pb-2">
-        <TypingLine names={typing.names} />
-        <Composer
-          id={`chat-composer-${conversationId}`}
-          conversationId={conversationId}
-          parentId={null}
-          placeholder={placeholder}
-          label={placeholder}
-          autoFocus={!chat.location.thread}
-          disabled={!info}
-          onTyping={typing.send}
-          onSend={(text, mentions) => send({ conversationId, parentId: null, text, mentions })}
-          onEditLast={() => {
-            const own = lastOwnMessage(messages, viewer.id);
-            if (!own) return false;
-            setEditing({ id: own.id, pane: "room" });
-            return true;
-          }}
-        />
+        {archived ? (
+          <ArchivedBanner conversationId={conversationId} canUnarchive={room?.canArchive ?? false} />
+        ) : (
+          <>
+            <TypingLine names={typing.names} />
+            <Composer
+              id={`chat-composer-${conversationId}`}
+              conversationId={conversationId}
+              parentId={null}
+              placeholder={placeholder}
+              label={placeholder}
+              autoFocus={!chat.location.thread}
+              disabled={!info}
+              onTyping={typing.send}
+              onSend={(text, mentions) => send({ conversationId, parentId: null, text, mentions })}
+              onEditLast={() => {
+                const own = lastOwnMessage(messages, viewer.id);
+                if (!own) return false;
+                setEditing({ id: own.id, pane: "room" });
+                return true;
+              }}
+            />
+          </>
+        )}
       </div>
     </div>
   );

@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import ChatMessageRow from "@/components/chat/chat-message";
+import SystemLine from "@/components/chat/system-line";
 import { useChat, type ChatPane } from "@/components/chat/chat-context";
 import { dayLabel, dayOf } from "@/lib/chat/format";
 import { isLocal, startsGroup } from "@/lib/chat/timeline";
@@ -32,6 +33,7 @@ export default function MessageList({
   focusId,
   bottomSignal = 0,
   loadError = null,
+  readOnly = false,
   header,
   empty,
   label,
@@ -51,6 +53,7 @@ export default function MessageList({
   focusId: string | null;
   bottomSignal?: number;
   loadError?: string | null;
+  readOnly?: boolean;
   header?: ReactNode;
   empty?: ReactNode;
   label: string;
@@ -242,7 +245,19 @@ export default function MessageList({
                   {dayLabel(message.createdAt, now)}
                 </div>
               )}
-              <ChatMessageRow message={message} continuation={continuation} inThread={pane !== "room"} pane={pane} highlighted={highlight === message.id} tabStop={index === lastIndex} />
+              {message.kind === "event" ? (
+                <SystemLine message={message} />
+              ) : (
+                <ChatMessageRow
+                  message={message}
+                  continuation={continuation}
+                  inThread={pane !== "room"}
+                  pane={pane}
+                  readOnly={readOnly}
+                  highlighted={highlight === message.id}
+                  tabStop={index === lastIndex}
+                />
+              )}
             </Fragment>
           ))}
         </div>
