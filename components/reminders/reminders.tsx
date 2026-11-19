@@ -337,6 +337,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
     setReminders((list) => list?.filter((item) => item.id !== id) ?? list);
     const result = await deleteReminderAction(id).catch(() => null);
     if (!result || "error" in result) {
+      gone.current.delete(id);
       setError(result?.error ?? "Couldn't delete the reminder. Try again.");
       void load();
     }

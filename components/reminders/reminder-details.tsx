@@ -76,7 +76,7 @@ export default function ReminderDetails({
       setTitle(reminder.title);
       return;
     }
-    if (next === reminder.title || next === pending.current.sent) return;
+    if (next === reminder.title) return;
     pending.current.sent = next;
     save({ title: next });
   }

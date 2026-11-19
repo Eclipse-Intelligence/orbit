@@ -89,7 +89,7 @@ export type AddReading = {
   length: AddLength | null;
 };
 
-const LENGTH = /\bfor\s+(\d{1,3}(?:\.\d+)?)\s*(minutes?|mins?|m|hours?|hrs?|h)\b/i;
+const LENGTH = /\bfor\s+(\d{1,3}(?:\.\d+)?)\s*(minutes?|mins?|hours?|hrs?|h)\b/i;
 
 export function readLength(text: string): AddLength | null {
   const match = LENGTH.exec(text);

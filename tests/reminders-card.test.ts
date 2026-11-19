@@ -195,13 +195,21 @@ describe("reminders card", () => {
         ["Dentist tomorrow 9am for 30 minutes", 30],
         ["Dentist tomorrow 9am for 1.5 hours", 90],
         ["Dentist tomorrow 9am for 2h", 120],
-        ["Dentist tomorrow 9am for 45m", 45],
         ["Dentist for 45 min tomorrow 9am", 45],
       ];
       for (const [text, minutes] of cases) {
         const reading = readAddLine(text, blank, NOW);
         assert.deepEqual(reminderInputOf(reading), { title: "Dentist", dueAt: "2026-11-20T09:00:00.000Z", blocksTime: true, durationMinutes: minutes }, text);
         assert.equal(reading.length?.minutes, minutes, text);
+      }
+    });
+
+    it("never reads a bare m as minutes", () => {
+      for (const text of ["Swim for 100m tomorrow 7am", "Budget for 20m tomorrow 10am", "Sell shares for 5m tomorrow 9am"]) {
+        const reading = readAddLine(text, blank, NOW);
+        assert.equal(reading.length, null, text);
+        assert.equal(reminderInputOf(reading).blocksTime, undefined, text);
+        assert.match(reminderInputOf(reading).title ?? "", / for \d+m\b/, text);
       }
     });
 
