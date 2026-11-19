@@ -1,7 +1,7 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
-import { readRecentEmojiText, recentEmoji, subscribeEmojiPrefs } from "@/lib/chat/client";
+import { useMemo, useSyncExternalStore } from "react";
+import { readRecentEmojiText, readSkinTone, recentEmoji, subscribeEmojiPrefs } from "@/lib/chat/client";
 import { CHAT_REACTION_MAX, type ChatMessage, type ChatPerson, type ChatReaction } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 import SmilePlusIcon from "@/public/assets/images/chat/smile-plus.svg";
@@ -17,13 +17,20 @@ export function reactorNames(people: ChatPerson[], viewerId: string) {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-export function useQuickReactions(userId: string, count: number) {
+export type EmojiPrefs = { recent: string[]; tone: number };
+
+export function useEmojiPrefs(userId: string): EmojiPrefs {
   const text = useSyncExternalStore(
     subscribeEmojiPrefs,
     () => readRecentEmojiText(userId),
     () => "",
   );
-  return recentEmoji(text).slice(0, count);
+  const tone = useSyncExternalStore(
+    subscribeEmojiPrefs,
+    () => readSkinTone(userId),
+    () => 0,
+  );
+  return useMemo(() => ({ recent: recentEmoji(text), tone }), [text, tone]);
 }
 
 function Pill({ reaction, viewerId, onToggle }: { reaction: ChatReaction; viewerId: string; onToggle: () => void }) {
@@ -45,7 +52,7 @@ function Pill({ reaction, viewerId, onToggle }: { reaction: ChatReaction; viewer
       </button>
       <span
         aria-hidden
-        className="bg-popover border-line-strong shadow-overlay pointer-events-none absolute bottom-full left-0 z-20 mb-1.5 hidden w-max max-w-[22em] rounded-lg border px-2.5 py-1.5 text-[12px] group-hover/pill:block [@media(pointer:coarse)]:!hidden"
+        className="bg-popover border-line-strong shadow-overlay pointer-events-none absolute bottom-full left-0 z-20 mb-1.5 hidden w-max max-w-[22em] rounded-lg border px-2.5 py-1.5 text-[12px] group-focus-within/pill:block group-hover/pill:block [@media(pointer:coarse)]:!hidden"
       >
         {reaction.emoji} {names}
       </span>

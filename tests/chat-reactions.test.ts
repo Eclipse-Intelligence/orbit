@@ -5,7 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { chatEmoji, emojiByCode, searchEmoji, withTone } from "@/lib/chat/emoji";
 import { shortcodeAt } from "@/lib/chat/compose";
 import { DEFAULT_RECENT_EMOJI } from "@/lib/chat/client";
-import { applyReactions, chatReducer, EMPTY_CHAT, toggledReactions } from "@/lib/chat/timeline";
+import { applyReactions, chatReducer, EMPTY_CHAT, withMyReaction } from "@/lib/chat/timeline";
 import { CHAT_REACTION_MAX, type ChatLiveEvent, type ChatMessage } from "@/lib/chat/types";
 import {
   chatWorkSettled,
@@ -20,11 +20,13 @@ import {
 } from "@/lib/crm/chat";
 import { createCompany } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
+import { saveMailbox } from "@/lib/crm/inbox";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { personTopic } from "@/lib/docs/live/protocol";
+import { createDoc, shareDoc } from "@/lib/docs/store";
 import { createCrmMcpServer } from "@/server/mcp/server";
 import { createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -82,6 +84,12 @@ describe("emoji list", () => {
     assert.equal(shortcodeAt("Shipped :r", 10), null);
     assert.equal(shortcodeAt("Call at 10:30", 13), null);
     assert.equal(shortcodeAt("Shipped:ro", 10), null);
+    assert.equal(shortcodeAt("Run `npm :ro", 12), null);
+    assert.deepEqual(shortcodeAt("Run `npm` :ro", 13), { start: 10, end: 13, query: "ro" });
+    const fenced = "```\nconst a = :ro";
+    assert.equal(shortcodeAt(fenced, fenced.length), null);
+    const after = "```\ncode\n```\nDone :ro";
+    assert.deepEqual(shortcodeAt(after, after.length), { start: after.length - 3, end: after.length, query: "ro" });
     assert.equal(searchEmoji("ro")[0].codes.some((code) => code.startsWith("ro")), true);
     assert.equal(searchEmoji("rocket")[0].emoji, ROCKET);
     assert.equal(searchEmoji("tada")[0].emoji, TADA);
@@ -111,11 +119,12 @@ describe("reactions in the timeline", () => {
   } satisfies ChatMessage;
 
   it("toggles on and off locally and ignores an older live event", () => {
-    const on = toggledReactions([], TADA, me);
+    const on = withMyReaction([], TADA, me, true);
+    assert.equal(withMyReaction(on, TADA, me, true), on);
     assert.deepEqual(on, [{ emoji: TADA, count: 1, mine: true, people: [me] }]);
-    assert.deepEqual(toggledReactions(on, TADA, me), []);
+    assert.deepEqual(withMyReaction(on, TADA, me, false), []);
     const shared = [{ emoji: TADA, count: 1, mine: false, people: [{ id: "sam", name: "Sam" }] }];
-    assert.equal(toggledReactions(shared, TADA, me)[0].count, 2);
+    assert.equal(withMyReaction(shared, TADA, me, true)[0].count, 2);
     const newer = applyReactions([base], "m1", on, "2026-11-19T10:00:02.000Z");
     assert.deepEqual(applyReactions(newer, "m1", [], "2026-11-19T10:00:01.000Z"), newer);
     const state = chatReducer(
@@ -123,6 +132,19 @@ describe("reactions in the timeline", () => {
       { type: "reactions", conversationId: "c1", messageId: "m1", parentId: null, reactions: on, at: "2026-11-19T10:00:03.000Z" },
     );
     assert.deepEqual(state.timelines.c1.messages[0].reactions, on);
+    const timeline = state.timelines.c1;
+    const place = { conversationId: "c1", messageId: "m1", parentId: null };
+    const sam = { emoji: ROCKET, count: 1, mine: false, people: [{ id: "sam", name: "Sam" }] };
+    const added = chatReducer(state, { type: "my-reaction", ...place, emoji: TADA, viewer: me, mine: false });
+    assert.deepEqual(added.timelines.c1.messages[0].reactions, []);
+    const live = chatReducer(added, { type: "reactions", ...place, reactions: [sam], at: "2026-11-19T10:00:04.000Z" });
+    const rolledBack = chatReducer(live, { type: "my-reaction", ...place, emoji: TADA, viewer: me, mine: true });
+    assert.deepEqual(rolledBack.timelines.c1.messages[0].reactions.map((reaction) => reaction.emoji), [ROCKET, TADA]);
+    const edited = chatReducer(live, { type: "edited", message: { ...base, body: "Edited", reactions: [], editedAt: "2026-11-19T10:00:05.000Z" } });
+    assert.deepEqual(edited.timelines.c1.messages[0].reactions, [sam]);
+    assert.equal(edited.timelines.c1.messages[0].reactionsAt, "2026-11-19T10:00:04.000Z");
+    assert.equal(edited.timelines.c1.messages[0].body, "Edited");
+    assert.ok(timeline);
   });
 });
 
@@ -173,7 +195,8 @@ describe("reactions", () => {
     it("toggles a reaction on and off and shows who reacted in message reads", async () => {
       const { message } = await postMessage(sam, { conversationId: room, body: "Acme signed" });
       const added = await reactToMessage(mark, message.id, "\u{1F389}");
-      assert.equal(added.added, true);
+      assert.equal(added.present, true);
+      assert.equal(added.changed, true);
       assert.deepEqual(added.reactions, [{ emoji: TADA, count: 1, mine: true, people: [{ id: mark.userId, name: "Mark Ridgeon" }] }]);
       await reactToMessage(sam, message.id, TADA);
       const page = await listMessages(sam, room);
@@ -190,7 +213,7 @@ describe("reactions", () => {
         },
       ]);
       const removed = await reactToMessage(mark, message.id, TADA);
-      assert.equal(removed.added, false);
+      assert.equal(removed.present, false);
       assert.deepEqual(
         removed.reactions.map((reaction) => [reaction.emoji, reaction.count, reaction.mine]),
         [[TADA, 1, false]],
@@ -229,7 +252,7 @@ describe("reactions", () => {
       assert.equal(thread.replies[0].reactions[0].emoji, THUMBS);
       const dm = await openDm(mark, sam.userId);
       const { message } = await postMessage(mark, { conversationId: dm.id, body: "Private" });
-      assert.equal((await reactToMessage(sam, message.id, ROCKET)).added, true);
+      assert.equal((await reactToMessage(sam, message.id, ROCKET)).present, true);
       await refused(reactToMessage(priya, message.id, ROCKET), /Message not found\./);
     });
 
@@ -257,7 +280,7 @@ describe("reactions", () => {
       const { conversationId } = await openDiscussion(sam, { kind: "task", id: task.id });
       const { message } = await postMessage(sam, { conversationId, body: "Draft is in the doc" });
       broadcasts = [];
-      assert.equal((await reactToMessage(mark, message.id, THUMBS)).added, true);
+      assert.equal((await reactToMessage(mark, message.id, THUMBS)).present, true);
       await chatWorkSettled();
       assert.equal(reactionEvents(sam.userId).length, 1);
       assert.equal(reactionEvents(priya.userId).length, 0);
@@ -270,6 +293,67 @@ describe("reactions", () => {
       }
       const read = await listMessages(sam, conversationId);
       assert.equal(read.messages[0].reactions[0].people[0].id, mark.userId);
+    });
+
+    it("adds and removes only when asked, so parallel adds never undo each other", async () => {
+      const { message } = await postMessage(sam, { conversationId: room, body: "Both at once" });
+      const twice = await Promise.all([reactToMessage(mark, message.id, THUMBS, { want: true }), reactToMessage(mark, message.id, THUMBS, { want: true })]);
+      assert.deepEqual(twice.map((result) => result.changed).sort(), [false, true]);
+      assert.ok(twice.every((result) => result.present));
+      assert.equal((await sql("select count(*)::int as n from crm.chat_reactions where message_id = $1", [message.id])).rows[0].n, 1);
+      broadcasts = [];
+      const unchanged = await reactToMessage(mark, message.id, THUMBS, { want: true });
+      assert.equal(unchanged.changed, false);
+      await chatWorkSettled();
+      assert.equal(reactionEvents(sam.userId).length, 0);
+      const gone = await Promise.all([reactToMessage(mark, message.id, THUMBS, { want: false }), reactToMessage(mark, message.id, THUMBS, { want: false })]);
+      assert.deepEqual(gone.map((result) => result.changed).sort(), [false, true]);
+      assert.equal((await sql("select count(*)::int as n from crm.chat_reactions where message_id = $1", [message.id])).rows[0].n, 0);
+      const parallel = await Promise.all([1, 2, 3].map(() => mcp(mark, "chat_react", { message_id: message.id, emoji: TADA })));
+      assert.deepEqual(parallel.map((answer) => JSON.parse(answer.text).changed).sort(), [false, false, true]);
+      assert.equal((await sql("select count(*)::int as n from crm.chat_reactions where message_id = $1", [message.id])).rows[0].n, 1);
+    });
+
+    it("names reactors in a room that spans workspaces", async () => {
+      const rowan = await createUser("rowan@ridgeon.test", "Rowan Ridge");
+      await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [rowan.workspaceId, mark.userId]);
+      const mixed = (await createRoom(mark, { name: "partners", memberIds: [sam.userId, rowan.userId] })).id;
+      const { message } = await postMessage(mark, { conversationId: mixed, body: "Welcome both" });
+      await reactToMessage(rowan, message.id, TADA);
+      await reactToMessage(sam, message.id, TADA);
+      const forSam = (await listMessages(sam, mixed)).messages[0].reactions[0].people.map((person) => person.name);
+      assert.deepEqual(forSam, ["Rowan Ridge", "Sam Okafor"]);
+      const forRowan = (await listMessages(rowan, mixed)).messages[0].reactions[0].people.map((person) => person.name);
+      assert.deepEqual(forRowan, ["Rowan Ridge", "Sam Okafor"]);
+    });
+
+    it("keeps doc and shared email discussions to the people who can see them", async () => {
+      const doc = await createDoc(mark, { title: "Pricing review", content: "Notes", shared: true }, { operation: "reactions_test", source: "test" });
+      const { conversationId: docTalk } = await openDiscussion(sam, { kind: "doc", id: doc.id });
+      const { message: docNote } = await postMessage(sam, { conversationId: docTalk, body: "Is v4 final?" });
+      assert.equal((await reactToMessage(priya, docNote.id, THUMBS)).present, true);
+      await shareDoc(mark, doc.id, false, { operation: "reactions_test", source: "test" });
+      for (const outsider of [sam, priya, ada, olly]) {
+        await refused(reactToMessage(outsider, docNote.id, ROCKET), /Message not found\./);
+        assert.equal((await queryAsUser<{ n: number }>(outsider.userId, "select count(*)::int as n from crm.chat_reactions where message_id = $1", [docNote.id]))[0].n, 0);
+      }
+
+      await saveMailbox(mark, { email: "mark@react-mail.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(Date.now() + 3_600_000).toISOString() });
+      const source = (
+        await sql(
+          "insert into crm.mail_sources (workspace_id, user_id, email, connection_id) select $1, $2, 'mark@react-mail.test', id from crm.mailbox_connections where user_id = $2 returning id",
+          [mark.workspaceId, mark.userId],
+        )
+      ).rows[0].id as string;
+      const share = (await sql("insert into crm.mail_shares (owner_user_id, source_id, thread_key) values ($1, $2, 'thread-1') returning id", [mark.userId, source])).rows[0].id as string;
+      await sql("insert into crm.mail_share_members (share_id, user_id, added_by) values ($1, $2, $3)", [share, sam.userId, mark.userId]);
+      const { conversationId: mailTalk } = await openDiscussion(mark, { kind: "mail_thread", id: share });
+      const { message: mailNote } = await postMessage(mark, { conversationId: mailTalk, body: "Can you answer this one?" });
+      assert.equal((await reactToMessage(sam, mailNote.id, THUMBS)).present, true);
+      for (const outsider of [priya, ada, olly]) {
+        await refused(reactToMessage(outsider, mailNote.id, ROCKET), /Message not found\./);
+        assert.equal((await queryAsUser<{ n: number }>(outsider.userId, "select count(*)::int as n from crm.chat_reactions where message_id = $1", [mailNote.id]))[0].n, 0);
+      }
     });
 
     it("refuses deleted messages, archived conversations and emoji outside the list", async () => {
@@ -311,6 +395,10 @@ describe("reactions", () => {
       assert.equal((await sql("select count(*)::int as n from crm.chat_reactions where message_id = $1", [note.id])).rows[0].n, 0);
       const outsider = await mcp(olly, "chat_react", { message_id: message.id, emoji: THUMBS });
       assert.match(outsider.text, /^not_found: /);
+      const missing = await mcp(olly, "chat_react", { message_id: "00000000-0000-4000-8000-000000000000", emoji: THUMBS });
+      assert.deepEqual(outsider, missing);
+      const discussionForOutsider = await mcp(olly, "chat_react", { message_id: note.id, emoji: THUMBS });
+      assert.deepEqual(discussionForOutsider, missing);
       const nonsense = await mcp(mark, "chat_react", { message_id: message.id, emoji: "not an emoji" });
       assert.match(nonsense.text, /^invalid_input: /);
     });
@@ -328,7 +416,7 @@ describe("reactions", () => {
       assert.equal(failures.length, pool.length - CHAT_REACTION_MAX);
       for (const failure of failures) assert.match(((failure as PromiseRejectedResult).reason as Error).message, /up to 20 different reactions/);
       const existing = (await sql("select emoji from crm.chat_reactions where message_id = $1 and user_id = $2 limit 1", [message.id, mark.userId])).rows[0].emoji as string;
-      assert.equal((await reactToMessage(sam, message.id, existing)).added, true);
+      assert.equal((await reactToMessage(sam, message.id, existing)).present, true);
       await refused(reactToMessage(sam, message.id, ROCKET), /up to 20 different reactions/);
     });
   });

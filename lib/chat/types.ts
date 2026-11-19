@@ -115,7 +115,7 @@ export type ChatSearchResult = { messages: ChatMessage[] };
 
 export type ChatPost = { message: ChatMessage; root: ChatRoot | null; duplicate: boolean };
 
-export type ChatReacted = { conversationId: string; messageId: string; parentId: string | null; added: boolean; reactions: ChatReaction[]; at: string };
+export type ChatReacted = { conversationId: string; messageId: string; parentId: string | null; emoji: string; present: boolean; changed: boolean; reactions: ChatReaction[]; at: string };
 
 export type ChatLiveEvent =
   | { type: "message"; conversationId: string; message: ChatMessage; root: ChatRoot | null; subject?: ChatSubject }

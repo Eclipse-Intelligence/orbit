@@ -72,8 +72,8 @@ export async function deleteMessageAction(id: string): Promise<ChatResult<{ dele
   return run("Couldn't delete the message. Try again.", (actor) => deleteMessage(actor, id));
 }
 
-export async function reactAction(messageId: string, emoji: string): Promise<ChatResult<ChatReacted>> {
-  return run("Couldn't react. Try again.", (actor) => reactToMessage(actor, messageId, emoji));
+export async function reactAction(messageId: string, emoji: string, want?: boolean): Promise<ChatResult<ChatReacted>> {
+  return run("Couldn't react. Try again.", (actor) => reactToMessage(actor, messageId, emoji, { want: typeof want === "boolean" ? want : null }));
 }
 
 export async function listHooksAction(roomId: string): Promise<ChatResult<{ hooks: ChatHook[] }>> {

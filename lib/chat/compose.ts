@@ -1,4 +1,4 @@
-import { codeRanges, fenceRangeAt, type FormatKind } from "@/lib/chat/markdown";
+import { codeRanges, fenceRangeAt, insideCodeFence, type FormatKind } from "@/lib/chat/markdown";
 import type { Mention } from "@/lib/mentions";
 
 export type TextEdit = { start: number; end: number; text: string; selectionStart: number; selectionEnd: number };
@@ -176,5 +176,9 @@ export function shortcodeAt(text: string, caret: number): { start: number; end: 
   const found = SHORTCODE_TAIL.exec(text.slice(0, caret));
   if (!found) return null;
   const token = found[1];
-  return { start: caret - token.length, end: caret, query: token.slice(1).toLowerCase() };
+  const start = caret - token.length;
+  if (insideCodeFence(text, start)) return null;
+  const line = text.slice(text.lastIndexOf("\n", start - 1) + 1, start);
+  if ((line.match(/`/g)?.length ?? 0) % 2 === 1) return null;
+  return { start, end: caret, query: token.slice(1).toLowerCase() };
 }

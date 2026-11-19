@@ -1,6 +1,6 @@
 import { CHAT_CLIENT_KEY_MAX, type ChatConversation, type ChatMessage, type ChatReaction } from "@/lib/chat/types";
 import { chatEmoji, emojiByCode } from "@/lib/chat/emoji";
-import { checkChatPost, getConversation, listChatPeople, listConversations, listMessages, listThread, messagePlace, openDm, ownPostWithKey, postMessage, reactToMessage } from "@/lib/crm/chat";
+import { checkChatPost, getConversation, listChatPeople, listConversations, listMessages, listThread, messageKind, openDm, ownPostWithKey, postMessage, reactToMessage } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
@@ -157,9 +157,7 @@ export async function reactChat(actor: UserActor, input: { messageId?: string | 
   if (!given(input.messageId)) throw new CrmError("invalid_input", "Pass the id of the message to react to.", 400, { field: "messageId" });
   const emoji = chatEmoji(input.emoji) ?? emojiByCode(input.emoji);
   if (!emoji) throw new CrmError("invalid_input", "Use one emoji, such as 👍 or :thumbsup:.", 400, { field: "emoji" });
-  const place = chatOnly(await messagePlace(actor, input.messageId));
-  const mine = place.reactions.some((reaction) => reaction.emoji === emoji && reaction.mine);
-  if (mine !== Boolean(input.remove)) return { changed: false, messageId: input.messageId, emoji, reactions: chatReactions(place.reactions) };
-  const reacted = await reactToMessage(actor, input.messageId, emoji);
-  return { changed: true, messageId: reacted.messageId, emoji, reactions: chatReactions(reacted.reactions) };
+  chatOnly(await messageKind(actor, input.messageId));
+  const reacted = await reactToMessage(actor, input.messageId, emoji, { want: !input.remove });
+  return { changed: reacted.changed, messageId: reacted.messageId, emoji, reactions: chatReactions(reacted.reactions) };
 }

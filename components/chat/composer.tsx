@@ -7,7 +7,7 @@ import { useChat } from "@/components/chat/chat-context";
 import EmojiPopover from "@/components/chat/emoji-popover";
 import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
-import { draftKey, formatBarDefault, pushRecentEmoji, readDraft, readFormatBar, readSkinTone, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
+import { draftKey, formatBarDefault, pushRecentEmoji, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
 import { applyEdit, formatEdit, mentionEdit, shortcodeAt, type FormatAction, type TextEdit } from "@/lib/chat/compose";
 import { formatsAt, insideCodeFence, markdownMarks, type FormatKind } from "@/lib/chat/markdown";
 import { CHAT_BODY_MAX } from "@/lib/chat/types";
@@ -177,7 +177,7 @@ export function ComposerBox({
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onBlur?: () => void;
 }) {
-  const { viewer } = useChat();
+  const { viewer, emoji: emojiPrefs } = useChat();
   const [shown, setShown] = useFormatBar(viewer.id, scope);
   const [focused, setFocused] = useState(false);
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
@@ -186,15 +186,15 @@ export function ComposerBox({
   const marks = useMemo(() => markdownMarks(value).map((mark) => ({ ...mark, className: MARK_CLASS })), [value]);
   const oneRow = Boolean(phoneAction);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [phoneEmojiOpen, setPhoneEmojiOpen] = useState(false);
   const [library, setLibrary] = useState<EmojiLibrary | null>(null);
   const [code, setCode] = useState<Shortcode | null>(null);
   const [codeIndex, setCodeIndex] = useState(0);
   const dismissed = useRef<number | null>(null);
   const codeOptions = useMemo(() => {
     if (!code || !library) return [];
-    const tone = readSkinTone(viewer.id);
-    return library.searchEmoji(code.query, SHORTCODE_OPTIONS).map((item) => ({ emoji: library.withTone(item.emoji, tone), name: item.codes[0] }));
-  }, [code, library, viewer.id]);
+    return library.searchEmoji(code.query, SHORTCODE_OPTIONS).map((item) => ({ emoji: library.withTone(item.emoji, emojiPrefs.tone), name: item.codes[0] }));
+  }, [code, library, emojiPrefs.tone]);
   const codeOpen = codeOptions.length > 0;
 
   function track(text: string, caret: number) {
@@ -370,27 +370,25 @@ export function ComposerBox({
               onKeyDown={keyDown}
             />
           </div>
-          {oneRow && <div className="shrink-0 p-[3px] md:hidden">{phoneAction}</div>}
+          {oneRow && (
+            <div className="flex shrink-0 items-center gap-0.5 p-[3px] md:hidden">
+              <EmojiPopover open={phoneEmojiOpen} onOpenChange={setPhoneEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} trigger>
+                <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className="text-soft aria-expanded:text-foreground size-[38px] rounded-full">
+                  <SmileIcon aria-hidden className="size-4" />
+                </Button>
+              </EmojiPopover>
+              {phoneAction}
+            </div>
+          )}
         </div>
         <div className={cn("flex items-center gap-0.5 px-1.5 pt-0.5 pb-1.5", oneRow && "max-md:hidden")}>
           <Button variant="ghost" size="none" aria-label="Mention someone" title="Mention someone" onMouseDown={(event) => event.preventDefault()} onClick={mention} className={iconButton}>
             <AtIcon aria-hidden className="size-3.5" />
           </Button>
-          <EmojiPopover open={emojiOpen} onOpenChange={setEmojiOpen} userId={viewer.id} onPick={(emoji) => insertEmoji(emoji)} align="start">
-            <span className="inline-flex">
-              <Button
-                variant="ghost"
-                size="none"
-                aria-label="Emoji"
-                aria-expanded={emojiOpen}
-                title="Emoji"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setEmojiOpen(!emojiOpen)}
-                className={cn(iconButton, emojiOpen && "bg-surface-active text-foreground")}
-              >
-                <SmileIcon aria-hidden className="size-3.5" />
-              </Button>
-            </span>
+          <EmojiPopover open={emojiOpen} onOpenChange={setEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} align="start" trigger>
+            <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className={cn(iconButton, "aria-expanded:bg-surface-active aria-expanded:text-foreground")}>
+              <SmileIcon aria-hidden className="size-3.5" />
+            </Button>
           </EmojiPopover>
           <span aria-hidden className="bg-line-strong mx-1 h-4 w-px shrink-0 max-md:hidden" />
           <span className="max-md:hidden">

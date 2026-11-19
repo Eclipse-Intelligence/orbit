@@ -139,8 +139,9 @@ function reactionsColumn(alias: string) {
       select json_agg(json_build_object('emoji', g.emoji, 'people', g.people) order by g.first_at, g.emoji)
       from (
         select x.emoji, min(x.created_at) as first_at,
-          json_agg(json_build_object('id', x.user_id, 'name', coalesce(nullif(btrim(p.full_name), ''), p.email)) order by x.created_at, x.user_id) as people
+          json_agg(json_build_object('id', x.user_id, 'name', ${MEMBER_NAME("cm", "p")}) order by x.created_at, x.user_id) as people
         from crm.chat_reactions x
+        left join crm.chat_members cm on cm.conversation_id = ${alias}.conversation_id and cm.user_id = x.user_id
         left join crm.profiles p on p.id = x.user_id
         where x.message_id = ${alias}.id
         group by x.emoji
@@ -1188,28 +1189,31 @@ export async function deleteMessage(actor: UserActor, id: string): Promise<{ del
   }
 }
 
-export async function messagePlace(actor: UserActor, id: string): Promise<{ conversationId: string; kind: ChatKind; reactions: ChatReaction[] }> {
+export async function messageKind(actor: UserActor, id: string): Promise<{ conversationId: string; kind: ChatKind }> {
   const messageId = checkId(id, "message");
   return withActor(actor, async (db) => {
-    const result = await db.query<{ conversation_id: string; kind: ChatKind; reactions: ReactionRow[] | null }>(
-      `select m.conversation_id, c.kind, ${reactionsColumn("m")}
-       from crm.chat_messages m join crm.chat_conversations c on c.id = m.conversation_id
-       where m.id = $1`,
+    const result = await db.query<{ conversation_id: string; kind: ChatKind }>(
+      "select m.conversation_id, c.kind from crm.chat_messages m join crm.chat_conversations c on c.id = m.conversation_id where m.id = $1",
       [messageId],
     );
     const row = result.rows[0];
     if (!row) throw notFound("message");
-    return { conversationId: row.conversation_id, kind: row.kind, reactions: toReactions(row.reactions, actor.userId) };
+    return { conversationId: row.conversation_id, kind: row.kind };
   });
 }
 
-export async function reactToMessage(actor: UserActor, id: string, emoji: unknown): Promise<ChatReacted> {
+export async function reactToMessage(actor: UserActor, id: string, emoji: unknown, options: { want?: boolean | null } = {}): Promise<ChatReacted> {
   const messageId = checkId(id, "message");
   const value = chatEmoji(emoji);
   if (!value) throw new CrmError("invalid_input", "Pick an emoji from the list.", 400, { field: "emoji" });
-  let toggled: { added: boolean; conversation_id: string; parent_id: string | null; changed_at: Stamp };
+  let toggled: { present: boolean; changed: boolean; conversation_id: string; parent_id: string | null; changed_at: Stamp };
   try {
-    const result = await query<typeof toggled>("select added, conversation_id, parent_id, changed_at from private.chat_toggle_reaction($1, $2, $3)", [actor.userId, messageId, value]);
+    const result = await query<typeof toggled>("select present, changed, conversation_id, parent_id, changed_at from private.chat_toggle_reaction($1, $2, $3, $4)", [
+      actor.userId,
+      messageId,
+      value,
+      typeof options.want === "boolean" ? options.want : null,
+    ]);
     toggled = result.rows[0];
   } catch (error) {
     chatFailure(error);
@@ -1218,13 +1222,15 @@ export async function reactToMessage(actor: UserActor, id: string, emoji: unknow
     const result = await db.query<{ reactions: ReactionRow[] | null }>(`select ${reactionsColumn("m")} from crm.chat_messages m where m.id = $1`, [messageId]);
     const reactions = toReactions(result.rows[0]?.reactions ?? null, actor.userId);
     const at = iso(toggled.changed_at);
-    const members = await memberIds(db, toggled.conversation_id);
-    broadcastAfterCommit(
-      db,
-      members.map((member) => member.user_id),
-      { type: "reaction", conversationId: toggled.conversation_id, messageId, parentId: toggled.parent_id, reactions, at },
-    );
-    return { conversationId: toggled.conversation_id, messageId, parentId: toggled.parent_id, added: toggled.added, reactions, at };
+    if (toggled.changed) {
+      const members = await memberIds(db, toggled.conversation_id);
+      broadcastAfterCommit(
+        db,
+        members.map((member) => member.user_id),
+        { type: "reaction", conversationId: toggled.conversation_id, messageId, parentId: toggled.parent_id, reactions, at },
+      );
+    }
+    return { conversationId: toggled.conversation_id, messageId, parentId: toggled.parent_id, emoji: value, present: toggled.present, changed: toggled.changed, reactions, at };
   });
 }
 

@@ -3,10 +3,10 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "react";
 import { deleteMessageAction, editMessageAction, postMessageAction, reactAction } from "@/app/(crm)/chat/actions";
 import { chatJoined, echoChatEvent, refreshChatSidebar } from "@/components/chat/chat-live";
-import { chatApi, draftKey, pushRecentEmoji, readDraft, writeDraft } from "@/lib/chat/client";
+import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { encodeChatMentions } from "@/lib/chat/compose";
 import { formatMentions, type ChatFormat } from "@/lib/chat/markdown";
-import { isLocal, newerCursor, oldestServerId, sidebarRead, toggledReactions, type ChatAction, type ChatState } from "@/lib/chat/timeline";
+import { isLocal, newerCursor, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
 import type { ChatMessage, ChatNeedsShare } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -190,17 +190,17 @@ export function useChatActions(
     (message: ChatMessage, emoji: string) => {
       if (isLocal(message) || message.deletedAt) return;
       const place = { conversationId: message.conversationId, messageId: message.id, parentId: message.parentId };
-      const adding = !message.reactions.some((reaction) => reaction.emoji === emoji && reaction.mine);
-      if (adding) pushRecentEmoji(userId, emoji);
-      dispatch({ type: "reactions", ...place, reactions: toggledReactions(message.reactions, emoji, { id: userId, name: "" }) });
-      void reactAction(message.id, emoji)
+      const viewer = { id: userId, name: "" };
+      const mine = !message.reactions.some((reaction) => reaction.emoji === emoji && reaction.mine);
+      dispatch({ type: "my-reaction", ...place, emoji, viewer, mine });
+      void reactAction(message.id, emoji, mine)
         .catch(() => ({ error: REACT_FAILED }))
         .then((result) => {
           if ("ok" in result && result.ok) {
             echoChatEvent({ type: "reaction", conversationId: result.conversationId, messageId: result.messageId, parentId: result.parentId, reactions: result.reactions, at: result.at });
             return;
           }
-          dispatch({ type: "reactions", ...place, reactions: message.reactions });
+          dispatch({ type: "my-reaction", ...place, emoji, viewer, mine: !mine });
           errorRef.current("error" in result ? result.error : REACT_FAILED);
         });
     },

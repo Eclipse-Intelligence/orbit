@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/_ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 
 const EmojiPicker = dynamic(() => import("@/components/chat/emoji-picker"), {
   ssr: false,
@@ -13,30 +13,42 @@ const EmojiPicker = dynamic(() => import("@/components/chat/emoji-picker"), {
   ),
 });
 
+function coarsePointer() {
+  return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+}
+
 export default function EmojiPopover({
   open,
   onOpenChange,
-  userId,
   onPick,
+  trigger,
   side = "top",
   align = "end",
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  userId: string;
   onPick: (emoji: string) => void;
+  trigger?: boolean;
   side?: "top" | "bottom";
   align?: "start" | "end";
   children: ReactNode;
 }) {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverAnchor asChild>{children}</PopoverAnchor>
+      {trigger ? <PopoverTrigger asChild>{children}</PopoverTrigger> : <PopoverAnchor asChild>{children}</PopoverAnchor>}
       {open && (
-        <PopoverContent side={side} align={align} aria-label="Emoji" className="p-0" onCloseAutoFocus={(event) => event.preventDefault()}>
+        <PopoverContent
+          side={side}
+          align={align}
+          aria-label="Emoji"
+          className="p-0"
+          onOpenAutoFocus={(event) => {
+            if (coarsePointer()) event.preventDefault();
+          }}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
           <EmojiPicker
-            userId={userId}
             onPick={(emoji) => {
               onOpenChange(false);
               onPick(emoji);

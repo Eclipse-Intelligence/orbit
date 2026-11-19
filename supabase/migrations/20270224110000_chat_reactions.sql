@@ -22,8 +22,10 @@ create policy chat_reactions_select on crm.chat_reactions
 revoke all on crm.chat_reactions from anon, authenticated, crm_agent;
 grant select on crm.chat_reactions to authenticated;
 
-create or replace function private.chat_toggle_reaction(p_user uuid, p_message uuid, p_emoji text)
-returns table (added boolean, conversation_id uuid, parent_id uuid, changed_at timestamptz)
+drop function if exists private.chat_toggle_reaction(uuid, uuid, text);
+
+create or replace function private.chat_toggle_reaction(p_user uuid, p_message uuid, p_emoji text, p_want boolean)
+returns table (present boolean, changed boolean, conversation_id uuid, parent_id uuid, changed_at timestamptz)
 language plpgsql
 security definer
 set search_path = ''
@@ -31,7 +33,8 @@ as $$
 declare
   v_message crm.chat_messages;
   v_conversation crm.chat_conversations;
-  v_removed integer;
+  v_had boolean;
+  v_want boolean;
 begin
   select m.* into v_message from crm.chat_messages m where m.id = p_message for no key update;
   if not found then
@@ -52,21 +55,27 @@ begin
     raise exception 'That message was deleted.' using errcode = '22023';
   end if;
 
-  delete from crm.chat_reactions r where r.message_id = p_message and r.user_id = p_user and r.emoji = p_emoji;
-  get diagnostics v_removed = row_count;
-  if v_removed = 0 then
+  v_had := exists (select 1 from crm.chat_reactions r where r.message_id = p_message and r.user_id = p_user and r.emoji = p_emoji);
+  v_want := coalesce(p_want, not v_had);
+  if v_want = v_had then
+    return query select v_had, false, v_message.conversation_id, v_message.parent_id, clock_timestamp();
+    return;
+  end if;
+  if v_want then
     if not exists (select 1 from crm.chat_reactions r where r.message_id = p_message and r.emoji = p_emoji)
       and (select count(distinct r.emoji) from crm.chat_reactions r where r.message_id = p_message) >= 20 then
       raise exception 'A message can have up to 20 different reactions.' using errcode = '22023';
     end if;
     insert into crm.chat_reactions (message_id, user_id, emoji) values (p_message, p_user, p_emoji);
+  else
+    delete from crm.chat_reactions r where r.message_id = p_message and r.user_id = p_user and r.emoji = p_emoji;
   end if;
 
-  return query select v_removed = 0, v_message.conversation_id, v_message.parent_id, clock_timestamp();
+  return query select v_want, true, v_message.conversation_id, v_message.parent_id, clock_timestamp();
 end;
 $$;
 
-revoke all on function private.chat_toggle_reaction(uuid, uuid, text) from public;
-grant execute on function private.chat_toggle_reaction(uuid, uuid, text) to crm_app;
+revoke all on function private.chat_toggle_reaction(uuid, uuid, text, boolean) from public;
+grant execute on function private.chat_toggle_reaction(uuid, uuid, text, boolean) to crm_app;
 
 reset lock_timeout;

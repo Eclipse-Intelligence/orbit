@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/_ui/input";
-import { readRecentEmojiText, readSkinTone, recentEmoji, subscribeEmojiPrefs, writeSkinTone } from "@/lib/chat/client";
+import { useChat } from "@/components/chat/chat-context";
+import { writeSkinTone } from "@/lib/chat/client";
 import { CHAT_EMOJI, EMOJI_GROUPS, emojiName, searchEmoji, SKIN_TONE_LABELS, withTone } from "@/lib/chat/emoji";
 import { cn } from "@/lib/utils";
 
@@ -43,21 +44,14 @@ function Grid({ label, emojis, onPick, onShow }: { label: string; emojis: string
   );
 }
 
-export default function EmojiPicker({ userId, onPick }: { userId: string; onPick: (emoji: string) => void }) {
-  const recentText = useSyncExternalStore(
-    subscribeEmojiPrefs,
-    () => readRecentEmojiText(userId),
-    () => "",
-  );
-  const tone = useSyncExternalStore(
-    subscribeEmojiPrefs,
-    () => readSkinTone(userId),
-    () => 0,
-  );
+export default function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
+  const { viewer, emoji: prefs } = useChat();
+  const userId = viewer.id;
+  const tone = prefs.tone;
   const [query, setQuery] = useState("");
   const [shown, setShown] = useState<string | null>(null);
   const search = useRef<HTMLInputElement>(null);
-  const recent = useMemo(() => recentEmoji(recentText).slice(0, RECENT_SHOWN), [recentText]);
+  const recent = useMemo(() => prefs.recent.slice(0, RECENT_SHOWN), [prefs.recent]);
   const results = useMemo(() => (query.trim() ? searchEmoji(query, 90) : null), [query]);
   const toned = (emoji: string) => withTone(emoji, tone);
 

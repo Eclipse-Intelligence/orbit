@@ -11,8 +11,9 @@ import { ComposerBox, focusComposer } from "@/components/chat/composer";
 import EmojiPopover from "@/components/chat/emoji-popover";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
-import Reactions, { useQuickReactions } from "@/components/chat/reactions";
+import Reactions from "@/components/chat/reactions";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
+import { pushRecentEmoji, QUICK_REACTIONS } from "@/lib/chat/client";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
 import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
@@ -115,7 +116,8 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const chat = useChat();
   const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames } = chat;
   const [picking, setPicking] = useState(false);
-  const quick = useQuickReactions(viewer.id, 5);
+  const quick = chat.emoji.recent.slice(0, QUICK_REACTIONS);
+  const pickRequested = useRef(false);
   const pressed = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -320,7 +322,14 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         </div>
       )}
       {canReact && picking && (
-        <EmojiPopover open={picking} onOpenChange={setPicking} userId={viewer.id} onPick={(emoji) => react(message, emoji)}>
+        <EmojiPopover
+          open={picking}
+          onOpenChange={setPicking}
+          onPick={(emoji) => {
+            pushRecentEmoji(viewer.id, emoji);
+            react(message, emoji);
+          }}
+        >
           <span aria-hidden className="pointer-events-none absolute top-0 right-4 size-px" />
         </EmojiPopover>
       )}
@@ -340,6 +349,12 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           side="bottom"
           className="gap-1 px-2 pt-2"
           onCloseAutoFocus={(event) => {
+            if (pickRequested.current) {
+              pickRequested.current = false;
+              event.preventDefault();
+              setPicking(true);
+              return;
+            }
             if (!editRequested.current) return;
             editRequested.current = false;
             event.preventDefault();
@@ -363,7 +378,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
                   {emoji}
                 </Button>
               ))}
-              <Button variant="ghost" size="none" aria-label="Add reaction" onClick={() => act(() => setPicking(true))} className="bg-surface-raised text-soft size-12 rounded-full">
+              <Button variant="ghost" size="none" aria-label="Add reaction" onClick={() => {
+                  pickRequested.current = true;
+                  setMenu(false);
+                }} className="bg-surface-raised text-soft size-12 rounded-full">
                 <SmilePlusIcon aria-hidden className="size-5" />
               </Button>
             </div>

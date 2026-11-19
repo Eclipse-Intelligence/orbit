@@ -110,6 +110,7 @@ const RECENT_EMOJI_PREFIX = "chat-emoji-recent:";
 const SKIN_TONE_PREFIX = "chat-emoji-tone:";
 const EMOJI_PREFS_EVENT = "orbit-chat-emoji";
 const RECENT_EMOJI_KEPT = 18;
+export const QUICK_REACTIONS = 5;
 
 export const DEFAULT_RECENT_EMOJI = ["✅️", "\u{1F440}", "\u{1F44D}️", "\u{1F389}", "\u{1F602}", "❤️", "\u{1F64F}", "\u{1F680}", "\u{1F525}"];
 
@@ -131,7 +132,9 @@ export function recentEmoji(text: string) {
 }
 
 export function pushRecentEmoji(userId: string, emoji: string) {
-  const current = recentEmoji(readRecentEmojiText(userId)).filter((item) => item !== emoji);
+  const recent = recentEmoji(readRecentEmojiText(userId));
+  if (recent.slice(0, QUICK_REACTIONS).includes(emoji)) return;
+  const current = recent.filter((item) => item !== emoji);
   try {
     localStorage.setItem(`${RECENT_EMOJI_PREFIX}${userId}`, JSON.stringify([emoji, ...current].slice(0, RECENT_EMOJI_KEPT)));
   } catch {}
