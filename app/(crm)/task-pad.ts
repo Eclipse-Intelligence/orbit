@@ -3,9 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { getUserActor } from "@/lib/auth/user";
 import { actionError } from "@/lib/companies";
-import { createTaskWithClickUp } from "@/lib/crm/clickup";
 import { isUuid } from "@/lib/crm/mutate";
-import { isReminderMinutes } from "@/lib/crm/reminder-options";
+import { addPadTask, type PadTaskInput } from "@/lib/crm/pad-task";
 import {
   detectPadRecords,
   NO_PAD_DETECTION,
@@ -14,8 +13,6 @@ import {
   type PadOption,
   type PadSearchKind,
 } from "@/lib/crm/task-pad";
-import { isTaskDuration } from "@/lib/crm/task-time";
-import type { RepeatInput } from "@/lib/task-repeat";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { revalidateRecordPages } from "@/lib/revalidate";
 import { taskActorOrError } from "@/lib/crm/workspaces";
@@ -47,58 +44,14 @@ export async function searchLinksForTaskAction(taskId: string, kind: PadSearchKi
   }
 }
 
-function padLink(value: unknown) {
-  return typeof value === "string" && isUuid(value) ? value : null;
-}
-
-function padLinks(input: { companyId?: unknown; contactId?: unknown; opportunityId?: unknown }) {
-  return Object.fromEntries(
-    (["companyId", "contactId", "opportunityId"] as const).flatMap((key) => (input[key] === undefined ? [] : [[key, padLink(input[key])]])),
-  ) as { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
-}
-
-export async function addPadTaskAction(input: {
-  title: string;
-  dueAt: string | null;
-  remindMinutes: number | null;
-  companyId?: string | null;
-  contactId?: string | null;
-  opportunityId?: string | null;
-  clickupListId: string | null;
-  ownerId?: string | null;
-  durationMinutes?: number | null;
-  mailThreadKey?: string | null;
-  docIds?: string[];
-  repeat?: RepeatInput;
-  key?: string;
-}): Promise<{ ok?: boolean; error?: string; warning?: string }> {
+export async function addPadTaskAction(input: PadTaskInput): Promise<{ ok?: boolean; error?: string; warning?: string; reminderError?: string }> {
   const user = await getUserActor();
   if (!user) return { error: "Sign in again." };
   try {
-    const due = typeof input.dueAt === "string" && input.dueAt ? input.dueAt : null;
-    const timed = Boolean(due && due.includes("T"));
-    const created = await createTaskWithClickUp(
-      user,
-      {
-        title: typeof input.title === "string" ? input.title : "",
-        ...(timed ? { dueAt: due } : { dueDate: due }),
-        remindMinutes: due && isReminderMinutes(input.remindMinutes) ? input.remindMinutes : null,
-        ...(isTaskDuration(input.durationMinutes) ? { durationMinutes: input.durationMinutes } : {}),
-        ...padLinks(input),
-        ownerId: typeof input.ownerId === "string" && isUuid(input.ownerId) ? input.ownerId : user.userId,
-        ...(typeof input.mailThreadKey === "string" && input.mailThreadKey ? { mailThreadKey: input.mailThreadKey } : {}),
-        ...(Array.isArray(input.docIds) && input.docIds.length > 0 ? { docIds: input.docIds } : {}),
-        priority: "normal",
-        ...(input.repeat && typeof input.repeat === "object" ? { repeat: input.repeat } : {}),
-      },
-      input.clickupListId || null,
-      { provenance: { operation: "create_task", source: "web" }, ...(typeof input.key === "string" && isUuid(input.key) ? { idempotencyKey: input.key } : {}) },
-    );
+    const result = await addPadTask(user, input);
     revalidatePath(TASKS_PATH);
     revalidateRecordPages();
-    return created.clickupError
-      ? { ok: true, warning: `Saved. ClickUp sync failed and will retry: ${created.clickupError}` }
-      : { ok: true };
+    return result;
   } catch (error) {
     return actionError(error);
   }

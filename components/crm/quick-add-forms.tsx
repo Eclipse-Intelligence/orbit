@@ -42,6 +42,7 @@ type FormProps = {
 
 const TITLES: Record<QuickAddKind, string> = {
   task: "Add task",
+  reminder: "Add reminder",
   contact: "Add contact",
   company: "Add company",
   opportunity: "Add opportunity",

@@ -107,6 +107,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   })),
 
   { id: "create-task", label: "Create task", group: "Create", sequence: ["c", "t"], palette: true, keywords: "new add task" },
+  { id: "create-reminder", label: "Add reminder", group: "Create", sequence: ["c", "r"], palette: true, keywords: "new remind me reminders bell" },
   { id: "create-contact", label: "Create contact", group: "Create", sequence: ["c", "c"], palette: true, keywords: "new add person" },
   { id: "create-company", label: "Create company", group: "Create", sequence: ["c", "o"], palette: true, keywords: "new add organisation" },
   { id: "create-opportunity", label: "Create opportunity", group: "Create", sequence: ["c", "p"], palette: true, keywords: "new add deal" },

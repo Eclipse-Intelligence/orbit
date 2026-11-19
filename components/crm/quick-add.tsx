@@ -50,12 +50,15 @@ import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg"
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
+import BellIcon from "@/public/assets/images/mail/bell.svg";
+import { useCompaniesStore } from "@/stores/companies-store";
 
 const NOTICE_MS = 6_000;
 const LIFT_GAP = 12;
 
 const ICONS: Record<QuickAddKind, ComponentType<SVGProps<SVGSVGElement>>> = {
   task: TargetIcon,
+  reminder: BellIcon,
   contact: BookClosedIcon,
   company: BuildingIcon,
   opportunity: ClipboardIcon,
@@ -176,7 +179,7 @@ function SheetGrab() {
   return <div ref={grab} aria-hidden className="mx-auto mt-2 mb-0.5 h-[5px] w-9 rounded-full bg-white/18 md:hidden" />;
 }
 
-function TaskSheet({ children }: { children: ReactNode }) {
+export function TaskSheet({ children }: { children: ReactNode }) {
   return (
     <DialogContent
       closeButton={false}
@@ -213,6 +216,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   }, []);
 
   const { openComposer } = useComposer();
+  const openReminders = useCompaniesStore((state) => state.openReminders);
 
   const start = useCallback(
     (next: QuickAddKind) => {
@@ -220,6 +224,12 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
         setMenuOpen(false);
         const contact = quickAddPrefill(pathname, record, "email").contact;
         openComposer({ contactId: contact?.id ?? null });
+        return;
+      }
+      if (next === "reminder") {
+        choosing.current = true;
+        setMenuOpen(false);
+        openReminders();
         return;
       }
       choosing.current = true;
@@ -239,7 +249,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
       setDialogOpen(true);
       loadSetup();
     },
-    [loadSetup, openComposer, pathname, record],
+    [loadSetup, openComposer, openReminders, pathname, record],
   );
 
   useShortcut("quick-add", () => changeMenu(!menuOpen));

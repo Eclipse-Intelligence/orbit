@@ -325,6 +325,39 @@ async function swipe(page, id, distance) {
     .catch(() => false);
 }
 
+async function swipeReminder(page, title, distance) {
+  return page
+    .evaluate(
+      async ({ title, distance }) => {
+        const element = [...document.querySelectorAll("li[data-reminder-row] > div")].find((node) => node.parentElement.dataset.reminderRow === title);
+        if (!element) return false;
+        const box = element.getBoundingClientRect();
+        const y = box.top + box.height / 2;
+        const x = box.left + 40;
+        const touch = (cx) => new Touch({ identifier: 1, target: element, clientX: cx, clientY: y });
+        const fire = (type, cx) => element.dispatchEvent(new TouchEvent(type, { touches: type === "touchend" ? [] : [touch(cx)], changedTouches: [touch(cx)], bubbles: true, cancelable: true }));
+        fire("touchstart", x);
+        for (let step = 1; step <= 10; step += 1) {
+          fire("touchmove", x + (distance * step) / 10);
+          await new Promise((resolve) => setTimeout(resolve, 16));
+        }
+        fire("touchend", x + distance);
+        return true;
+      },
+      { title, distance },
+    )
+    .catch(() => false);
+}
+
+async function holdToDelete(page, scope) {
+  const hold = scope.getByRole("button", { name: "Hold to delete" });
+  await hold.focus().catch(() => undefined);
+  await page.keyboard.down("Enter");
+  await page.waitForTimeout(1100);
+  await page.keyboard.up("Enter");
+  await page.waitForTimeout(800);
+}
+
 async function setVisibility(page, state) {
   await page.evaluate((value) => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
@@ -1194,6 +1227,43 @@ for (const [device, viewport] of [
   await page.getByRole("button", { name: "Close menu" }).tap();
   await page.waitForTimeout(500);
   check(`${device} nav menu closes`, !(await visible(page.getByRole("button", { name: "Close menu" }))));
+  await page.getByRole("button", { name: "Open navigation" }).tap();
+  await page.waitForTimeout(600);
+  await page.getByRole("button", { name: /^Reminders/ }).last().tap();
+  await page.waitForTimeout(800);
+  const reminderSheet = page.locator("[data-reminders-sheet]");
+  check(`${device} Reminders opens as a sheet from the menu`, await visible(reminderSheet.getByRole("heading", { name: "Reminders" })));
+  const reminderTitle = `Sweep reminder ${device}`;
+  await reminderSheet.getByPlaceholder("Add a reminder").tap();
+  await page.keyboard.type(`${reminderTitle} tomorrow`);
+  await page.waitForTimeout(300);
+  check(`${device} the add line shows the date it read`, ((await reminderSheet.getByRole("status").first().textContent()) ?? "").includes("Date read from “tomorrow”"));
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1200);
+  const reminderRow = reminderSheet.locator(`li[data-reminder-row="${reminderTitle}"]`);
+  check(`${device} Enter adds the reminder under Upcoming`, (await visible(reminderRow)) && (await visible(reminderSheet.getByRole("region", { name: "Upcoming" }).locator(`li[data-reminder-row="${reminderTitle}"]`))));
+  check(`${device} the add line keeps focus and clears`, await page.evaluate(() => document.activeElement?.id === "reminder-add" && document.activeElement.value === ""));
+  check(`${device} reminders sheet no page overflow`, (await noHorizontalScroll()) && (await reminderSheet.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)));
+  await shot("reminders-sheet");
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+  await swipeReminder(page, reminderTitle, 260);
+  await page.waitForTimeout(1200);
+  check(`${device} swiping right marks the reminder done`, await visible(reminderRow.getByRole("button", { name: `Undo “${reminderTitle}”` })));
+  check(`${device} the done row stays, crossed out, with Undo`, (await visible(reminderRow.locator(".line-through"))) && (await visible(reminderSheet.getByRole("status").getByRole("button", { name: "Undo" }))));
+  await shot("reminders-swiped");
+  await reminderSheet.getByRole("status").getByRole("button", { name: "Undo" }).tap();
+  await page.waitForTimeout(1200);
+  check(`${device} Undo brings the reminder back`, await visible(reminderRow.getByRole("button", { name: `Mark “${reminderTitle}” done` })));
+  await reminderRow.getByRole("button", { name: `Open “${reminderTitle}”` }).tap();
+  await page.waitForTimeout(600);
+  check(`${device} tapping a reminder opens its details in the sheet`, (await visible(reminderSheet.getByRole("switch", { name: "Block time" }))) && (await visible(reminderSheet.getByRole("button", { name: "Turn into task" }))));
+  check(`${device} reminder details no overflow`, await reminderSheet.evaluate((node) => node.scrollWidth <= node.clientWidth + 1));
+  await shot("reminders-details");
+  await holdToDelete(page, reminderSheet);
+  check(`${device} Hold to delete removes the reminder`, !(await visible(reminderRow)) && (await visible(reminderSheet.getByRole("heading", { name: "Reminders" }))));
+  await reminderSheet.getByRole("button", { name: "Done", exact: true }).tap();
+  await page.waitForTimeout(600);
+  check(`${device} Done closes the reminders sheet`, !(await visible(reminderSheet)));
   await page.getByRole("button", { name: /Account menu/ }).tap();
   await page.waitForTimeout(400);
   check(`${device} account menu opens`, await visible(page.getByRole("menuitem", { name: "Settings" })));
@@ -1214,10 +1284,61 @@ for (const width of [1100, 1280, 1440]) {
   await page.fill('input[name="password"]', env.DEV_USER_PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+  const device = `desktop ${width}`;
+  if (width === 1280) {
+    await goto(page, `${base}/mail`);
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null)?.blur());
+    await page.keyboard.press("c");
+    await page.keyboard.press("r");
+    await page.waitForTimeout(600);
+    const reminderCard = page.locator("[data-reminders-card]");
+    check(`${device} c r opens the reminders card with the add line focused`, (await visible(reminderCard)) && (await page.evaluate(() => document.activeElement?.id === "reminder-add")));
+    const cardBox = await reminderCard.boundingBox();
+    check(`${device} the reminders card starts at the top right`, Boolean(cardBox && cardBox.x + cardBox.width >= width - 40 && cardBox.y < 120));
+    const reminderTitle = "Sweep card";
+    await page.keyboard.type(`${reminderTitle} no date`);
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(1200);
+    const reminderRow = reminderCard.locator(`li[data-reminder-row="${reminderTitle} no date"]`);
+    check(`${device} Enter adds a reminder in the card`, await visible(reminderRow));
+    await reminderRow.getByRole("button", { name: /^Mark/ }).click();
+    await page.waitForTimeout(1000);
+    check(`${device} ticking crosses the row out with Undo`, (await visible(reminderRow.locator(".line-through"))) && (await visible(reminderCard.getByRole("status").getByRole("button", { name: "Undo" }))));
+    await reminderCard.getByRole("status").getByRole("button", { name: "Undo" }).click();
+    await page.waitForTimeout(1000);
+    check(`${device} Undo reopens the reminder`, await visible(reminderRow.getByRole("button", { name: /^Mark/ })));
+    const head = reminderCard.locator("header");
+    const headBox = await head.boundingBox();
+    if (headBox) {
+      await page.mouse.move(headBox.x + 120, headBox.y + headBox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(headBox.x - 300, headBox.y + 200, { steps: 8 });
+      await page.mouse.up();
+    }
+    await page.waitForTimeout(300);
+    const moved = await reminderCard.boundingBox();
+    check(`${device} dragging the header moves the card`, Boolean(cardBox && moved && Math.abs(moved.x - (cardBox.x - 420)) < 4 && Math.abs(moved.y - (cardBox.y + 200)) < 4));
+    await page.screenshot({ path: path.join(out, `desktop-${width}-reminders.png`) });
+    await reminderRow.getByRole("button", { name: /^Open/ }).click();
+    await page.waitForTimeout(500);
+    check(`${device} a row opens its details in the card`, await visible(reminderCard.getByRole("switch", { name: "Block time" })));
+    await holdToDelete(page, reminderCard);
+    check(`${device} Hold to delete removes it`, !(await visible(reminderRow)));
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    check(`${device} Esc closes the card`, !(await visible(reminderCard)));
+    await page.keyboard.press("c");
+    await page.keyboard.press("r");
+    await page.waitForTimeout(600);
+    const again = await reminderCard.boundingBox();
+    check(`${device} the card comes back where it was left`, Boolean(moved && again && Math.abs(again.x - moved.x) < 2 && Math.abs(again.y - moved.y) < 2));
+    await page.evaluate(() => localStorage.removeItem("orbit-reminders-card"));
+    await page.keyboard.press("Escape");
+  }
   await goto(page, `${base}/tasks`);
   await page.waitForTimeout(1500);
   const first = page.locator("li[data-task-id]").first();
-  const device = `desktop ${width}`;
   if ((await first.count()) === 0) {
     check(`${device} has a task to open`, false);
     await context.close();

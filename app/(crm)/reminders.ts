@@ -14,11 +14,12 @@ import {
   type ReminderInput,
   type ReminderQuery,
 } from "@/lib/crm/reminders";
+import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
 const SESSION_ENDED = "Your session ended. Sign in again.";
 
-type Failure = { error: string; field?: string };
+type Failure = { error: string; field?: string; missing?: boolean };
 
 async function run<T>(work: (user: UserActor) => Promise<T>): Promise<T | Failure> {
   const user = await getUserActor();
@@ -27,7 +28,8 @@ async function run<T>(work: (user: UserActor) => Promise<T>): Promise<T | Failur
     return await work(user);
   } catch (error) {
     const failure: Failure = actionError(error);
-    return { error: failure.error, ...(failure.field ? { field: failure.field } : {}) };
+    const missing = error instanceof CrmError && error.status === 404;
+    return { error: failure.error, ...(failure.field ? { field: failure.field } : {}), ...(missing ? { missing } : {}) };
   }
 }
 
