@@ -91,6 +91,15 @@ describe("Turn into task", () => {
     assert.equal((await getReminder(mark, reminder.id)).reminder.title, "Call Mum back");
   });
 
+  it("adds a reminder once when the add line retries with the same key", async () => {
+    const key = randomUUID();
+    const first = await createReminder(mark, { title: "Retried reminder", dueOn: "2030-03-06" }, { idempotencyKey: key });
+    const again = await createReminder(mark, { title: "Retried reminder", dueOn: "2030-03-06" }, { idempotencyKey: key });
+    assert.equal(again.reminder.id, first.reminder.id);
+    const rows = await getAdminPool().query("select id from crm.reminders where title = 'Retried reminder'");
+    assert.equal(rows.rowCount, 1);
+  });
+
   it("adds a task without a reminder exactly as before", async () => {
     const result = await addPadTask(mark, { title: "Plain task", dueAt: null, remindMinutes: null, clickupListId: null, key: randomUUID() });
     assert.deepEqual(result, { ok: true });

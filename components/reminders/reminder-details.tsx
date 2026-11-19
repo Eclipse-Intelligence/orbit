@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import { DueDatePicker } from "@/components/_ui/date-picker";
 import HoldButton from "@/components/_ui/hold-button";
@@ -12,10 +12,14 @@ import { RepeatIcon, RepeatPicker } from "@/components/crm/task-repeat";
 import type { Reminder, ReminderInput } from "@/lib/crm/reminders";
 import { localInstant } from "@/lib/crm/task-time";
 import { TIME_OPTIONS } from "@/lib/date-input";
-import { draftOfRepeat, dueChange, repeatWords } from "@/lib/reminders-card";
+import { draftOfRepeat, dueChange, REMINDER_NOT_REMOVED, repeatWords } from "@/lib/reminders-card";
 import { padDueHasTime } from "@/lib/task-pad";
 import { repeatInputOf } from "@/lib/task-repeat";
 import { cn } from "@/lib/utils";
+
+function cleanTitle(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
 
 const FIELD = "bg-surface-field text-foreground hover:bg-surface-raised flex h-9 w-full min-w-0 items-center gap-2 rounded-lg px-3 text-left text-[14px] leading-none";
 
@@ -26,13 +30,17 @@ export default function ReminderDetails({
   onSave,
   onDelete,
   onTurnIntoTask,
+  stuck = false,
+  onRetryRemove,
 }: {
   reminder: Reminder;
   today: string;
   error: string | null;
-  onSave: (change: ReminderInput) => void;
+  onSave: (id: string, change: ReminderInput) => void;
   onDelete: () => void;
   onTurnIntoTask: () => void;
+  stuck?: boolean;
+  onRetryRemove?: () => void;
 }) {
   const id = useId();
   const [title, setTitle] = useState(reminder.title);
@@ -44,14 +52,33 @@ export default function ReminderDetails({
   const times = reminder.time && !TIME_OPTIONS.includes(reminder.time) ? [...TIME_OPTIONS, reminder.time].sort() : TIME_OPTIONS;
   const draft = draftOfRepeat(reminder.repeat, reminder.dueOn);
   const repeats = repeatWords(reminder);
+  const pending = useRef({ id: reminder.id, title, sent: reminder.title, onSave });
+
+  useEffect(() => {
+    Object.assign(pending.current, { id: reminder.id, title, onSave });
+  });
+
+  useEffect(() => {
+    const latest = pending.current;
+    return () => {
+      const next = cleanTitle(latest.title);
+      if (next && next !== latest.sent) latest.onSave(latest.id, { title: next });
+    };
+  }, []);
+
+  function save(change: ReminderInput) {
+    onSave(reminder.id, change);
+  }
 
   function saveTitle() {
-    const next = title.replace(/\s+/g, " ").trim();
+    const next = cleanTitle(title);
     if (!next) {
       setTitle(reminder.title);
       return;
     }
-    if (next !== reminder.title) onSave({ title: next });
+    if (next === reminder.title || next === pending.current.sent) return;
+    pending.current.sent = next;
+    save({ title: next });
   }
 
   return (
@@ -82,7 +109,7 @@ export default function ReminderDetails({
             id={`${id}-date`}
             value={reminder.dueOn ?? ""}
             placeholder="No date"
-            onChange={(value) => onSave(value && !padDueHasTime(value) ? { dueOn: value } : dueChange(value || null))}
+            onChange={(value) => save(value && !padDueHasTime(value) ? { dueOn: value } : dueChange(value || null))}
           />
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
@@ -96,7 +123,7 @@ export default function ReminderDetails({
             onChange={(event) => {
               const time = event.target.value;
               if (!reminder.dueOn) return;
-              onSave(time ? { dueAt: localInstant(`${reminder.dueOn}T${time}`) } : { dueOn: reminder.dueOn, dueAt: null });
+              save(time ? { dueAt: localInstant(`${reminder.dueOn}T${time}`) } : { dueOn: reminder.dueOn, dueAt: null });
             }}
           >
             <option value="">No time</option>
@@ -116,7 +143,7 @@ export default function ReminderDetails({
           anchor={reminder.dueOn ?? today}
           at={reminder.time}
           value={draft}
-          onChange={(next) => onSave({ repeat: next ? repeatInputOf(next.rule, next.ends) : null })}
+          onChange={(next) => save({ repeat: next ? repeatInputOf(next.rule, next.ends) : null })}
           trigger={
             <button type="button" aria-labelledby={`${id}-repeat ${id}-repeat-value`} className={cn(FIELD, "focus-visible:ring-ring/60 cursor-pointer outline-none focus-visible:ring-2")}>
               <RepeatIcon aria-hidden className="text-soft size-4 shrink-0" />
@@ -132,23 +159,34 @@ export default function ReminderDetails({
           <span className="ui-style text-foreground">Block time</span>
           <span className="caption-style text-subtle">Puts it in your calendar and Outlook as busy.</span>
         </label>
-        <Switch id={`${id}-block`} label="Block time" checked={reminder.blocksTime} onChange={(value) => onSave({ blocksTime: value })} />
+        <Switch id={`${id}-block`} label="Block time" checked={reminder.blocksTime} onChange={(value) => save({ blocksTime: value })} />
       </div>
       {reminder.blocksTime && (
         <div className="flex items-center justify-between gap-3">
           <span className="ui-style text-subtle">Length</span>
-          <DurationMenu value={reminder.durationMinutes} onChange={(minutes) => onSave({ durationMinutes: minutes })} />
+          <DurationMenu value={reminder.durationMinutes} onChange={(minutes) => save({ durationMinutes: minutes })} />
         </div>
       )}
-      {error && (
-        <p role="alert" className="caption-style text-danger">
-          {error}
-        </p>
+      {(error || stuck) && (
+        <div className="flex items-center justify-between gap-2">
+          <p role="alert" className="caption-style text-danger">
+            {error ?? REMINDER_NOT_REMOVED}
+          </p>
+          {stuck && onRetryRemove && (
+            <Button variant="secondary" size="sm" onClick={onRetryRemove}>
+              Try again
+            </Button>
+          )}
+        </div>
       )}
       <div className="flex flex-wrap items-center justify-between gap-1.5 pt-1">
-        <Button variant="secondary" size="sm" data-turn-into-task="" onClick={onTurnIntoTask}>
-          Turn into task
-        </Button>
+        {stuck ? (
+          <span />
+        ) : (
+          <Button variant="secondary" size="sm" data-turn-into-task="" onClick={onTurnIntoTask}>
+            Turn into task
+          </Button>
+        )}
         <HoldButton onConfirm={onDelete}>Hold to delete</HoldButton>
       </div>
     </div>

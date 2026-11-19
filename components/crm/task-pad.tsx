@@ -31,6 +31,7 @@ import {
   padDueHasTime,
   padRepeatDue,
   padSaveIds,
+  padSaveOutcome,
   ownerSetsTime,
   dayOnlyHint,
   londonParts,
@@ -520,7 +521,7 @@ export default function TaskPad({
   variant?: Variant;
   start?: PadStart | null;
   fromReminderId?: string | null;
-  onAdded?: (result: { warning?: string }) => void;
+  onAdded?: (result: { warning?: string; reminderError?: string }) => void;
 }) {
   const router = useRouter();
   const id = useId();
@@ -983,13 +984,10 @@ export default function TaskPad({
     const attempt = saveKey.current;
     const result = await addPadTaskAction({ ...attempt.request, key: attempt.key }).catch(() => null);
     setBusy(false);
-    if (!result || result.error) {
-      if (result) saveKey.current = null;
+    const outcome = padSaveOutcome(result);
+    if (outcome !== "saved" || !result) {
+      if (outcome === "failed") saveKey.current = null;
       setError(result?.error ?? "Couldn't add the task. Try again.");
-      return;
-    }
-    if (result.reminderError) {
-      setError(result.reminderError);
       return;
     }
     saveKey.current = null;
@@ -997,10 +995,10 @@ export default function TaskPad({
     reset();
     router.refresh();
     if (onAdded) {
-      onAdded({ warning: notes });
+      onAdded({ warning: notes, ...(result.reminderError ? { reminderError: result.reminderError } : {}) });
       return;
     }
-    setWarning(notes ?? null);
+    setWarning(result.reminderError ?? notes ?? null);
     input.current?.focus();
   }
 

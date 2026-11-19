@@ -15,6 +15,7 @@ import {
   type ReminderQuery,
 } from "@/lib/crm/reminders";
 import { CrmError } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 
 const SESSION_ENDED = "Your session ended. Sign in again.";
@@ -37,8 +38,8 @@ export async function listRemindersAction(query: ReminderQuery = {}): Promise<{ 
   return run((user) => listReminders(user, query));
 }
 
-export async function addReminderAction(input: ReminderInput): Promise<{ reminder: Reminder } | Failure> {
-  return run((user) => createReminder(user, input));
+export async function addReminderAction(input: ReminderInput, key: string | null = null): Promise<{ reminder: Reminder } | Failure> {
+  return run((user) => createReminder(user, input, typeof key === "string" && isUuid(key) ? { idempotencyKey: key } : {}));
 }
 
 export async function updateReminderAction(id: string, input: ReminderInput): Promise<{ reminder: Reminder } | Failure> {

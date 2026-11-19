@@ -1676,6 +1676,11 @@ export function padConfirmLine(found: ConfirmInput) {
 
 const SHORT_DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 
+export function padSaveOutcome(result: { error?: string } | null): "saved" | "failed" | "retry" {
+  if (!result) return "retry";
+  return result.error ? "failed" : "saved";
+}
+
 export function padDueHasTime(due: string | null | undefined) {
   return Boolean(due && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(due));
 }

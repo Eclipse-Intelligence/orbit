@@ -18,7 +18,7 @@ export function ReminderTick({ reminder, done, large, onToggle }: { reminder: Re
       aria-label={done ? `Undo “${reminder.title}”` : `Mark “${reminder.title}” done`}
       title={done ? "Undo" : "Done"}
       className={cn(
-        "hit focus-visible:ring-ring/60 ease-power3-out relative mt-px flex shrink-0 cursor-pointer items-center justify-center rounded-full text-white outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2",
+        "hit z-[1] focus-visible:ring-ring/60 ease-power3-out relative mt-px flex shrink-0 cursor-pointer items-center justify-center rounded-full text-white outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-2",
         large ? "size-5" : "size-4",
         done ? "bg-primary" : "shadow-[inset_0_0_0_1.5px_#5a5a5a] hover:shadow-[inset_0_0_0_1.5px_var(--primary)]",
       )}
@@ -127,7 +127,7 @@ export default function ReminderRowView({
   }, [swipeable]);
 
   return (
-    <li ref={item} data-reminder-row={reminder.title} className="relative overflow-hidden rounded-lg">
+    <li ref={item} data-reminder-row={reminder.title} className={cn("relative rounded-lg", offset !== 0 && "overflow-hidden")}>
       {offset > 0 && (
         <span
           aria-hidden
@@ -155,7 +155,7 @@ export default function ReminderRowView({
                 type="button"
                 aria-label={`Open “${reminder.title}”`}
                 onClick={() => onOpen(reminder)}
-                className="focus-visible:ring-ring/60 absolute -inset-y-1.5 -right-2 -left-1 cursor-pointer rounded-md outline-none focus-visible:ring-2"
+                className="focus-visible:ring-ring/60 absolute -inset-y-1.5 -right-2 left-1 cursor-pointer rounded-md outline-none focus-visible:ring-2"
               />
             )}
             <span className={cn("pointer-events-none relative break-words", large ? "text-[15px] leading-5" : "ui-style", done ? "text-faint line-through" : "text-foreground")}>{reminder.title}</span>

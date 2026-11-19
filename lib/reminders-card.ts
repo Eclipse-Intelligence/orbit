@@ -1,5 +1,5 @@
 import type { Reminder, ReminderInput } from "@/lib/crm/reminders";
-import { localInstant } from "@/lib/crm/task-time";
+import { clockLabel, localInstant, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
 import { shiftDay } from "@/lib/crm/working-days";
 import { formatDateLabel, todayValue } from "@/lib/date-input";
 import { padDueHasTime, padReading, padRepeatDue, parseTaskText, readingKey, readPhrase, type PadMark, type PadRepeat } from "@/lib/task-pad";
@@ -75,6 +75,8 @@ export function repeatWords(reminder: Pick<Reminder, "repeat" | "dueOn">) {
 
 export type AddGuess = { due: string; key: string; phrase: string };
 
+export type AddLength = { minutes: number; key: string; phrase: string; start: number; end: number };
+
 export type AddReading = {
   title: string;
   due: string | null;
@@ -84,7 +86,21 @@ export type AddReading = {
   key: string;
   marks: PadMark[];
   guess: AddGuess | null;
+  length: AddLength | null;
 };
+
+const LENGTH = /\bfor\s+(\d{1,3}(?:\.\d+)?)\s*(minutes?|mins?|m|hours?|hrs?|h)\b/i;
+
+export function readLength(text: string): AddLength | null {
+  const match = LENGTH.exec(text);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const hours = /^h/i.test(match[2]);
+  if (!hours && !Number.isInteger(amount)) return null;
+  const minutes = Math.round(hours ? amount * 60 : amount);
+  if (minutes < MIN_TASK_DURATION || minutes > MAX_TASK_DURATION) return null;
+  return { minutes, key: `length:${match[0].toLowerCase().replace(/\s+/g, " ")}`, phrase: match[0], start: match.index, end: match.index + match[0].length };
+}
 
 function textWithout(text: string, marks: PadMark[]) {
   let result = "";
@@ -102,24 +118,33 @@ function textWithout(text: string, marks: PadMark[]) {
 }
 
 export function readAddLine(text: string, choices: { confirmed: string | null; kept: readonly string[] }, now = new Date()): AddReading {
-  const parsed = parseTaskText(text, now);
+  const found = readLength(text);
+  const source = found ? `${text.slice(0, found.start)}${" ".repeat(found.end - found.start)}${text.slice(found.end)}` : text;
+  const parsed = parseTaskText(source, now);
   const guessMarks = parsed.marks.filter((mark) => mark.kind === "when");
-  const guessKey = parsed.unsure && parsed.guess && guessMarks.length > 0 ? readingKey(text, guessMarks) : null;
+  const guessKey = parsed.unsure && parsed.guess && guessMarks.length > 0 ? readingKey(source, guessMarks) : null;
   const confirmed = guessKey !== null && choices.confirmed === guessKey && !choices.kept.includes(guessKey);
-  const ai = confirmed ? { title: textWithout(text, guessMarks) || text.trim(), due: parsed.guess, remindMinutes: null, durationMinutes: parsed.durationMinutes, marks: guessMarks } : null;
-  const reading = padReading(text, parsed, ai, choices.kept);
+  const ai = confirmed ? { title: textWithout(source, guessMarks) || source.trim(), due: parsed.guess, remindMinutes: null, durationMinutes: parsed.durationMinutes, marks: guessMarks } : null;
+  const reading = padReading(source, parsed, ai, choices.kept);
   const repeat = reading.due ? (reading.repeat ?? null) : null;
   const due = repeat ? (padRepeatDue(repeat, reading.due, now) ?? reading.due) : reading.due;
-  const offered = !reading.key && guessKey !== null && parsed.guess && !choices.kept.includes(guessKey) ? { due: parsed.guess, key: guessKey, phrase: readPhrase(text, guessMarks) } : null;
+  const timed = Boolean(due && padDueHasTime(due));
+  const length = found && timed && !choices.kept.includes(found.key) ? found : null;
+  const dateMarks = reading.marks.filter((mark) => mark.kind !== "reminder");
+  const marks = length ? [...dateMarks, { start: length.start, end: length.end, kind: "when" as const }] : dateMarks;
+  const ownTitle = !reading.key || (found && !length) || dateMarks.length !== reading.marks.length;
+  const title = !reading.key ? text.replace(/\s+/g, " ").trim() : ownTitle ? textWithout(text, marks) || text.trim() : reading.title;
+  const offered = !reading.key && guessKey !== null && parsed.guess && !choices.kept.includes(guessKey) ? { due: parsed.guess, key: guessKey, phrase: readPhrase(source, guessMarks) } : null;
   return {
-    title: reading.title,
+    title,
     due,
     repeat,
-    durationMinutes: due && padDueHasTime(due) ? reading.durationMinutes : null,
+    durationMinutes: length ? length.minutes : timed ? reading.durationMinutes : null,
     phrase: reading.phrase,
     key: reading.key,
-    marks: reading.marks,
+    marks,
     guess: offered,
+    length,
   };
 }
 
@@ -178,12 +203,12 @@ export const CARD_TOP = 64;
 export const CARD_RIGHT = 18;
 export const CARD_HEADER = 44;
 
-export function defaultCardPosition(size: CardSize, viewport: CardSize): CardPoint {
-  return clampCardPosition({ x: viewport.width - size.width - CARD_RIGHT, y: CARD_TOP }, size, viewport);
+export function defaultCardPosition(size: CardSize, viewport: CardSize, beside = 0): CardPoint {
+  return clampCardPosition({ x: viewport.width - beside - size.width - CARD_RIGHT, y: CARD_TOP }, size, viewport, beside);
 }
 
-export function clampCardPosition(point: CardPoint, size: CardSize, viewport: CardSize): CardPoint {
-  const maxX = Math.max(CARD_MARGIN, viewport.width - size.width - CARD_MARGIN);
+export function clampCardPosition(point: CardPoint, size: CardSize, viewport: CardSize, beside = 0): CardPoint {
+  const maxX = Math.max(CARD_MARGIN, viewport.width - beside - size.width - CARD_MARGIN);
   const maxY = Math.max(CARD_MARGIN, viewport.height - Math.min(size.height, CARD_HEADER * 2) - CARD_MARGIN);
   return {
     x: Math.round(Math.min(maxX, Math.max(CARD_MARGIN, point.x))),
@@ -202,3 +227,54 @@ export function readCardPosition(raw: string | null): CardPoint | null {
     return null;
   }
 }
+
+export function optimisticReminder(reminder: Reminder, change: ReminderInput): Reminder {
+  const next: Reminder = { ...reminder };
+  if (change.title !== undefined) next.title = change.title ?? reminder.title;
+  if (change.blocksTime !== undefined) next.blocksTime = change.blocksTime;
+  if (change.durationMinutes !== undefined) next.durationMinutes = change.durationMinutes;
+  if (typeof change.dueAt === "string" && change.dueAt) {
+    next.dueAt = change.dueAt;
+    next.dueOn = taskDueDay(change.dueAt);
+    next.time = clockLabel(change.dueAt);
+  } else if (change.dueOn !== undefined) {
+    next.dueOn = change.dueOn;
+    if (change.dueOn === null || change.dueAt === null) {
+      next.dueAt = null;
+      next.time = null;
+    } else if (reminder.time) {
+      next.dueAt = localInstant(`${change.dueOn}T${reminder.time}`);
+    }
+  } else if (change.dueAt === null) {
+    next.dueAt = null;
+    next.time = null;
+  }
+  if (!next.time) next.blocksTime = false;
+  if (change.repeat !== undefined) {
+    next.repeat = change.repeat;
+    next.repeatText = null;
+  }
+  return next;
+}
+
+export type AddKey = { typed: string; key: string };
+
+export function addKeyFor(current: AddKey | null, input: ReminderInput, fresh: () => string): AddKey {
+  const typed = JSON.stringify(input);
+  return current?.typed === typed ? current : { typed, key: fresh() };
+}
+
+export function taskStartOf(reminder: Reminder) {
+  return {
+    title: reminder.title,
+    due: reminderDue(reminder),
+    durationMinutes: reminder.durationMinutes,
+    repeat: draftOfRepeat(reminder.repeat, reminder.dueOn),
+  };
+}
+
+export type AddDraft = { text: string; confirmed: string | null; kept: string[]; key: AddKey | null };
+
+export const EMPTY_DRAFT: AddDraft = { text: "", confirmed: null, kept: [], key: null };
+
+export const REMINDER_NOT_REMOVED = "Couldn't remove the reminder. Try again.";

@@ -4,9 +4,10 @@ import { isReminderMinutes } from "@/lib/crm/reminder-options";
 import { deleteReminder } from "@/lib/crm/reminders";
 import { isTaskDuration } from "@/lib/crm/task-time";
 import type { UserActor } from "@/lib/crm/types";
+import { REMINDER_NOT_REMOVED } from "@/lib/reminders-card";
 import type { RepeatInput } from "@/lib/task-repeat";
 
-export const REMINDER_NOT_REMOVED = "Couldn't remove the reminder. Try again.";
+export { REMINDER_NOT_REMOVED };
 
 export type PadTaskInput = {
   title: string;

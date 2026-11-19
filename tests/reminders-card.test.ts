@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Reminder } from "@/lib/crm/reminders";
 import {
+  addKeyFor,
   CARD_MARGIN,
   clampCardPosition,
   dayLabel,
@@ -10,12 +11,15 @@ import {
   dueChange,
   dueCount,
   groupReminders,
+  optimisticReminder,
   readAddLine,
   readCardPosition,
   reminderDue,
   reminderInputOf,
   repeatWords,
+  taskStartOf,
 } from "@/lib/reminders-card";
+import { padSaveOutcome } from "@/lib/task-pad";
 import { repeatInputOf } from "@/lib/task-repeat";
 
 const TODAY = "2026-11-19";
@@ -47,6 +51,24 @@ function titles(rows: { reminder: Reminder }[]) {
 }
 
 describe("reminders card", () => {
+  describe("saving", () => {
+    it("uses one key for the same reminder until it changes", () => {
+      let made = 0;
+      const fresh = () => `key-${(made += 1)}`;
+      const first = addKeyFor(null, { title: "Bins out", dueOn: TODAY }, fresh);
+      assert.equal(addKeyFor(first, { title: "Bins out", dueOn: TODAY }, fresh), first);
+      const changed = addKeyFor(first, { title: "Bins out", dueOn: "2026-11-20" }, fresh);
+      assert.notEqual(changed.key, first.key);
+    });
+
+    it("treats a task as saved even when its reminder couldn't be removed", () => {
+      assert.equal(padSaveOutcome({ reminderError: "Couldn't remove the reminder. Try again." } as { error?: string }), "saved");
+      assert.equal(padSaveOutcome({}), "saved");
+      assert.equal(padSaveOutcome({ error: "Enter a task." }), "failed");
+      assert.equal(padSaveOutcome(null), "retry");
+    });
+  });
+
   describe("groups", () => {
     const overdue = reminder({ title: "Renew car tax", dueOn: "2026-11-18" });
     const older = reminder({ title: "Old one", dueOn: "2026-11-02" });
@@ -156,12 +178,48 @@ describe("reminders card", () => {
       assert.deepEqual(reminderInputOf({ title: "Dentist", due: "2026-11-20", repeat: null, durationMinutes: 60 }), { title: "Dentist", dueOn: "2026-11-20" });
     });
 
-    it("ignores a typed reminder lead", () => {
+    it("ignores a typed reminder lead and leaves its words in the title", () => {
       const reading = readAddLine("Pay the plumber tomorrow 9am remind me 10 minutes before", blank, NOW);
       const input = reminderInputOf(reading);
       assert.equal(input.dueAt, "2026-11-20T09:00:00.000Z");
+      assert.equal(input.title, "Pay the plumber remind me 10 minutes before");
       assert.equal("remindMinutes" in input, false);
       assert.equal(input.blocksTime, undefined);
+    });
+
+    it("reads a typed length as Block time when there is a time", () => {
+      const cases: [string, number][] = [
+        ["Dentist tomorrow 9am for 1 hour", 60],
+        ["Dentist tomorrow 9am for 1 hr", 60],
+        ["Dentist tomorrow 9am for 30 mins", 30],
+        ["Dentist tomorrow 9am for 30 minutes", 30],
+        ["Dentist tomorrow 9am for 1.5 hours", 90],
+        ["Dentist tomorrow 9am for 2h", 120],
+        ["Dentist tomorrow 9am for 45m", 45],
+        ["Dentist for 45 min tomorrow 9am", 45],
+      ];
+      for (const [text, minutes] of cases) {
+        const reading = readAddLine(text, blank, NOW);
+        assert.deepEqual(reminderInputOf(reading), { title: "Dentist", dueAt: "2026-11-20T09:00:00.000Z", blocksTime: true, durationMinutes: minutes }, text);
+        assert.equal(reading.length?.minutes, minutes, text);
+      }
+    });
+
+    it("keeps a length's words when its chip is removed", () => {
+      const reading = readAddLine("Dentist tomorrow 9am for 1 hour", blank, NOW);
+      assert.ok(reading.length);
+      const kept = readAddLine("Dentist tomorrow 9am for 1 hour", { confirmed: null, kept: [reading.length.key] }, NOW);
+      assert.equal(kept.length, null);
+      assert.deepEqual(reminderInputOf(kept), { title: "Dentist for 1 hour", dueAt: "2026-11-20T09:00:00.000Z" });
+    });
+
+    it("never blocks time for a length without a time, or outside 5 to 480 minutes", () => {
+      assert.deepEqual(reminderInputOf(readAddLine("Dentist tomorrow for 1 hour", blank, NOW)), { title: "Dentist for 1 hour", dueOn: "2026-11-20" });
+      for (const text of ["Gym tomorrow 9am for 9 hours", "Gym tomorrow 9am for 2 mins", "Gym tomorrow 9am for 2.5 mins"]) {
+        const input = reminderInputOf(readAddLine(text, blank, NOW));
+        assert.equal(input.blocksTime, undefined, text);
+      }
+      assert.equal(readAddLine("Gym tomorrow 9am for 2 months", blank, NOW).length, null);
     });
 
     it("keeps the words as text when asked", () => {
@@ -196,6 +254,31 @@ describe("reminders card", () => {
   });
 
   describe("details", () => {
+    const timed = reminder({ title: "Dentist", dueOn: "2026-11-20", dueAt: "2026-11-20T09:00:00.000Z", time: "09:00", blocksTime: true, durationMinutes: 30 });
+
+    it("shows date, time and repeat changes straight away, so a second edit builds on the first", () => {
+      const moved = optimisticReminder(timed, { dueOn: "2026-11-23" });
+      assert.deepEqual([moved.dueOn, moved.time, moved.dueAt, moved.blocksTime], ["2026-11-23", "09:00", "2026-11-23T09:00:00.000Z", true]);
+      const later = optimisticReminder(moved, { dueAt: "2026-11-23T14:30:00.000Z" });
+      assert.deepEqual([later.dueOn, later.time], ["2026-11-23", "14:30"]);
+      const dayOnly = optimisticReminder(later, { dueOn: "2026-11-23", dueAt: null });
+      assert.deepEqual([dayOnly.dueOn, dayOnly.time, dayOnly.dueAt, dayOnly.blocksTime], ["2026-11-23", null, null, false]);
+      const repeating = optimisticReminder(dayOnly, { repeat: { every: "week", days: ["mo"], ends: null } });
+      assert.deepEqual(repeating.repeat, { every: "week", days: ["mo"], ends: null });
+      assert.equal(repeatWords(repeating), "Every Monday");
+      const cleared = optimisticReminder(timed, { dueOn: null });
+      assert.deepEqual([cleared.dueOn, cleared.time, cleared.blocksTime], [null, null, false]);
+      assert.equal(optimisticReminder(timed, { title: "Dentist again" }).title, "Dentist again");
+    });
+
+    it("turns a repeating reminder into a task with only the repeats left", () => {
+      const counted = reminder({ title: "Water plants", dueOn: "2026-11-21", repeat: { every: "week", days: ["sa"], ends: { after: 2 } } });
+      const start = taskStartOf(counted);
+      assert.equal(start.due, "2026-11-21");
+      assert.deepEqual(start.repeat?.ends, { count: 2 });
+      assert.deepEqual(taskStartOf(timed), { title: "Dentist", due: "2026-11-20T09:00", durationMinutes: 30, repeat: null });
+    });
+
     it("turns a picked date or time into the engine's fields", () => {
       assert.deepEqual(dueChange(null), { dueOn: null });
       assert.deepEqual(dueChange("2026-11-21"), { dueOn: "2026-11-21", dueAt: null });
@@ -237,6 +320,11 @@ describe("reminders card", () => {
       assert.deepEqual(clampCardPosition({ x: -50, y: -20 }, size, viewport), { x: CARD_MARGIN, y: CARD_MARGIN });
       assert.deepEqual(clampCardPosition({ x: 5000, y: 5000 }, size, viewport), { x: 932, y: 800 - 88 - CARD_MARGIN });
       assert.deepEqual(clampCardPosition({ x: 400.4, y: 300.6 }, size, viewport), { x: 400, y: 301 });
+    });
+
+    it("keeps clear of an open side panel", () => {
+      assert.deepEqual(defaultCardPosition(size, viewport, 480), { x: 442, y: 64 });
+      assert.deepEqual(clampCardPosition({ x: 922, y: 64 }, size, viewport, 480), { x: 452, y: 64 });
     });
 
     it("pulls the card back in when the window shrinks", () => {
