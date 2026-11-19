@@ -371,9 +371,9 @@ export function ComposerBox({
             />
           </div>
           {oneRow && (
-            <div className="flex shrink-0 items-center gap-0.5 p-[3px] md:hidden">
+            <div className="flex shrink-0 items-center gap-0.5 p-[3px] pointer-coarse:gap-2 md:hidden">
               <EmojiPopover open={phoneEmojiOpen} onOpenChange={setPhoneEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} trigger>
-                <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className="text-soft aria-expanded:text-foreground size-[38px] rounded-full">
+                <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className="hit text-soft aria-expanded:text-foreground size-[38px] rounded-full">
                   <SmileIcon aria-hidden className="size-4" />
                 </Button>
               </EmojiPopover>
