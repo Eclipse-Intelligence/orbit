@@ -5,7 +5,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { runTool } from "@/lib/assistant/tools";
 import { buildProgress, campaignProgress, compactProgress, eventSlots, type CampaignProgress, type CompactProgress, type ProgressEvent } from "@/lib/campaigns/progress";
+import { prospectLinkedin } from "@/lib/campaigns/normalize";
+import { campaignProvider, heyReachEvents } from "@/lib/campaigns/providers";
+import { saveProviderEvents } from "@/lib/campaigns/sync";
 import { getProspectThread } from "@/lib/campaigns/threads";
+import type { HeyReachLead } from "@/lib/heyreach";
 import { createContact } from "@/lib/crm/contacts";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -422,7 +426,9 @@ describe("campaign progress", () => {
                 const hasMessage = events.some((item) => item.kind === "message_sent" || item.kind === "inmail_sent");
                 for (const step of progress.steps) {
                   const done = step.state === "done" || step.state === "current";
-                  if (connection === "none" && step.label === "Invite") assert.ok(!done, `invite done: ${label}`);
+                  const hasInvite = events.some((item) => item.kind === "invite_sent" || item.kind === "invite_accepted");
+                  if (connection === "none" && !hasInvite && step.label === "Invite") assert.ok(!done, `invite done: ${label}`);
+                  if (connection === "none" && hasInvite && step.label === "Invite") assert.ok(done, `a real invite event wins over lagging state: ${label}`);
                   if (messaging === "none" && !hasMessage && (step.label === "Message" || step.label === "InMail")) assert.ok(!done, `message done: ${label}`);
                 }
                 const unaccepted = progress.steps.findIndex((step) => step.label === "Invite" && !step.text.includes("accepted"));
@@ -447,6 +453,20 @@ describe("campaign progress", () => {
       assert.equal(crossed.counts.messages, 0);
     });
 
+    it("never lets an InMail tick a Message step, and drops the step count when a step before the last done one isn't done", () => {
+      const inmail = build(row(["InMail", "Message"], { status: "in_sequence", connection: "none", messaging: "sent" }), [ev("inmail_sent", "2026-11-10T09:00:00Z", null, true)]);
+      assert.deepEqual(inmail.steps.map((step) => step.state), ["current", "next"]);
+      assert.equal(inmail.counts.messages, 1);
+
+      const gapped = build(row(["Invite", "Message", "Message", "Like post"], { status: "in_sequence", connection: "sent", messaging: "none" }), [
+        ev("invite_sent", "2026-11-01T09:00:00Z", null, true),
+        ev("post_liked", "2026-11-08T09:00:00Z", null, true),
+      ]);
+      assert.equal(gapped.stage, "Sent from Mark Ridgeon");
+      const whole = build(row(["Invite", "Message"], { status: "in_sequence", connection: "accepted", messaging: "sent" }), []);
+      assert.equal(whole.stage, "Step 2 of 2 · Sent from Mark Ridgeon");
+    });
+
     it("gives no date to a next step that may never run", () => {
       const otherBranch = build(row(["Invite", "View profile", "Like post", "Follow"], { status: "in_sequence", connection: "accepted", messaging: "sent" }), [
         ev("invite_sent", "2026-11-01T09:00:00Z", null, true),
@@ -468,5 +488,71 @@ describe("campaign progress", () => {
       const plain = build(row(["Invite", "View profile", "Message"], { status: "in_sequence", connection: "sent", messaging: "none" }), [ev("invite_sent", "2026-11-18T09:00:00Z", null, true)]);
       assert.equal(plain.steps[1].text, "around 19 Nov");
     });
+  });
+
+  it("places webhook messages after a polled one and keeps their dates through later polls", async () => {
+    const provider = campaignProvider("heyreach")!;
+    const [{ id: campaignId }] = await sql<{ id: string }>("select id from crm.campaigns where external_id = 'li-1'");
+    const lead = (name: string, messagesSent: number, lastMessageAt: string | null): HeyReachLead => ({
+      id: null,
+      state: "in_sequence",
+      connection: "accepted",
+      messaging: messagesSent > 0 ? "sent" : "none",
+      lastActionAt: lastMessageAt,
+      senderName: null,
+      profileUrl: `https://www.linkedin.com/in/${name}`,
+      firstName: name,
+      lastName: "Webhook",
+      companyName: null,
+      title: null,
+      email: null,
+      accountId: null,
+      status: "in_progress",
+      rawStatus: "IN_SEQUENCE",
+      addedAt: null,
+      invitedAt: null,
+      acceptedAt: null,
+      messagesSent,
+      lastMessageAt,
+      tags: [],
+    });
+    const poll = async (name: string, messagesSent: number, lastMessageAt: string) => {
+      await saveProviderEvents(campaignId, heyReachEvents("li-1", [lead(name, messagesSent, lastMessageAt)]), true);
+    };
+    const webhook = async (name: string, at: string) => {
+      const actions = provider.webhookActions!({ event_type: "MESSAGE_SENT", campaign: { id: "li-1" }, lead: { profile_url: `https://www.linkedin.com/in/${name}`, first_name: name, last_name: "Webhook" }, timestamp: at });
+      assert.ok(actions);
+      await saveProviderEvents(campaignId, actions.events, true);
+    };
+    const messagesOf = async (name: string) => {
+      const [{ id }] = await sql<{ id: string }>("select id from crm.campaign_prospects where linkedin = $1", [prospectLinkedin(`https://www.linkedin.com/in/${name}`)]);
+      const [progress] = await campaignProgress(owner, [id], OPTIONS);
+      return { texts: progress.steps.filter((step) => step.label === "Message").map((step) => step.text), count: progress.counts.messages };
+    };
+    for (const name of ["mia", "noa"]) {
+      await prospect(owner, { campaignId, lead: `lead-${name}`, linkedin: prospectLinkedin(`https://www.linkedin.com/in/${name}`), name: [name, "Webhook"], providerState: { status: "in_sequence", connection: "accepted", messaging: "sent" } });
+    }
+    const twoMessages = (sequence: unknown) => sql("update crm.campaigns set sequence = $2::jsonb where id = $1", [campaignId, JSON.stringify(sequence)]);
+    const before = await sql<{ sequence: unknown }>("select sequence from crm.campaigns where id = $1", [campaignId]);
+    await twoMessages([
+      { step: 1, variant: null, subject: "Invite", body: "", delayDays: null },
+      { step: 2, variant: null, subject: "Message", body: "", delayDays: 1 },
+      { step: 3, variant: null, subject: "Message", body: "", delayDays: 3 },
+    ]);
+    try {
+      await poll("mia", 1, "2026-11-12T09:00:00Z");
+      await webhook("mia", "2026-11-16T09:00:00Z");
+      assert.deepEqual(await messagesOf("mia"), { texts: ["", "16 Nov"], count: 2 });
+
+      await webhook("noa", "2026-11-12T09:00:00Z");
+      assert.deepEqual(await messagesOf("noa"), { texts: ["12 Nov", "next"], count: 1 });
+      await poll("noa", 1, "2026-11-12T09:30:00Z");
+      assert.deepEqual(await messagesOf("noa"), { texts: ["12 Nov", "next"], count: 1 });
+      await webhook("noa", "2026-11-16T09:00:00Z");
+      await poll("noa", 2, "2026-11-16T09:30:00Z");
+      assert.deepEqual(await messagesOf("noa"), { texts: ["12 Nov", "16 Nov"], count: 2 });
+    } finally {
+      await twoMessages(before[0].sequence);
+    }
   });
 });

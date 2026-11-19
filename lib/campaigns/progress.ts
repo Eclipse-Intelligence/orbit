@@ -271,7 +271,7 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
   const kindPosition: number[] = [];
   const messageEvents = () => slotsOf("message_sent").length + slotsOf("inmail_sent").length;
   const contradicted = (built: Built) =>
-    (built.kind === "Invite" && state.connection === "none") ||
+    (built.kind === "Invite" && state.connection === "none" && slotsOf("invite_sent").length === 0 && slotsOf("invite_accepted").length === 0) ||
     ((built.kind === "Message" || built.kind === "InMail") && state.messaging === "none" && messageEvents() === 0);
 
   if (linkedin) {
@@ -302,7 +302,7 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
         invites += 1;
       }
       if (kind === "message_sent") {
-        if (messages === 0 && (state.messaging === "sent" || state.messaging === "replied")) built.done = true;
+        if (messages === 0 && messageEvents() === 0 && (state.messaging === "sent" || state.messaging === "replied")) built.done = true;
         messages += 1;
       }
       if (contradicted(built)) built.done = false;
@@ -373,10 +373,11 @@ export function buildProgress(row: ProgressRow, events: ProgressEvent[], group: 
 
   const skipped = row.state === "skipped" || row.state === "failed";
   const current = lastDone >= 0 ? planned[lastDone].step : null;
+  const gapped = steps.slice(0, Math.max(lastDone, 0)).some((built) => !built.done);
   const sender = linkedin ? row.sender_name : (row.mailbox_owner ?? mailboxParts(row.mailbox)?.name ?? mailboxParts(row.mailbox)?.address ?? null);
   const stage = skipped
     ? [row.skip_reason?.trim() || "Not added"]
-    : [current !== null ? `Step ${current} of ${planned.length}` : planned.length > 0 ? "Not started" : null, sender ? `Sent from ${sender}` : null, stopLine(row, replied, group)];
+    : [current !== null ? (gapped ? null : `Step ${current} of ${planned.length}`) : planned.length > 0 ? "Not started" : null, sender ? `Sent from ${sender}` : null, stopLine(row, replied, group)];
 
   const counts: ProgressCounts = linkedin
     ? {
