@@ -1,4 +1,4 @@
-import type { ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
+import type { ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
 import { EMPTY_HOOK_CARD } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
@@ -52,7 +52,9 @@ export type ChatAction =
   | { type: "discard"; message: ChatMessage }
   | { type: "read"; conversationId: string; lastReadAt: string }
   | { type: "thread-read"; rootId: string; lastReadAt: string }
-  | { type: "forget"; conversationId: string };
+  | { type: "forget"; conversationId: string }
+  | { type: "reactions"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string }
+  | { type: "my-reaction"; conversationId: string; messageId: string; parentId: string | null; emoji: string; viewer: ChatPerson; mine: boolean };
 
 export const EMPTY_CHAT: ChatState = { rooms: {}, roomErrors: {}, timelines: {}, threads: {}, failed: {} };
 
@@ -87,6 +89,7 @@ export function localMessage(input: { clientKey: string; conversationId: string;
     deletedAt: null,
     createdAt: input.at,
     hook: null,
+    reactions: [],
   };
 }
 
@@ -137,7 +140,7 @@ export function replaceMessage(list: ChatMessage[], message: ChatMessage) {
 }
 
 export function blankDeleted(message: ChatMessage): ChatMessage {
-  return { ...message, body: "", mentions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
+  return { ...message, body: "", mentions: [], reactions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
 }
 
 export function removeRoot(list: ChatMessage[], id: string) {
@@ -147,6 +150,46 @@ export function removeRoot(list: ChatMessage[], id: string) {
     return list.map((message) => (message.id === id ? blankDeleted(message) : message));
   }
   return list.filter((message) => message.id !== id);
+}
+
+function mapReactions(list: ChatMessage[], messageId: string, change: (message: ChatMessage) => ChatMessage) {
+  let changed = false;
+  const next = list.map((message) => {
+    if (message.id !== messageId || message.deletedAt) return message;
+    const updated = change(message);
+    if (updated !== message) changed = true;
+    return updated;
+  });
+  return changed ? next : list;
+}
+
+export function applyReactions(list: ChatMessage[], messageId: string, reactions: ChatReaction[], at?: string) {
+  return mapReactions(list, messageId, (message) => {
+    if (at && message.reactionsAt && message.reactionsAt > at) return message;
+    return { ...message, reactions, reactionsAt: at ?? message.reactionsAt };
+  });
+}
+
+export function withMyReaction(reactions: ChatReaction[], emoji: string, viewer: ChatPerson, mine: boolean): ChatReaction[] {
+  const current = reactions.find((reaction) => reaction.emoji === emoji);
+  if (Boolean(current?.mine) === mine) return reactions;
+  if (!current) return [...reactions, { emoji, count: 1, mine: true, people: [viewer] }];
+  if (mine) return reactions.map((reaction) => (reaction === current ? { ...reaction, count: reaction.count + 1, mine: true, people: [...reaction.people, viewer] } : reaction));
+  const people = current.people.filter((person) => person.id !== viewer.id);
+  if (people.length === 0) return reactions.filter((reaction) => reaction !== current);
+  return reactions.map((reaction) => (reaction === current ? { ...reaction, count: people.length, mine: false, people } : reaction));
+}
+
+export function setMyReaction(list: ChatMessage[], messageId: string, emoji: string, viewer: ChatPerson, mine: boolean) {
+  return mapReactions(list, messageId, (message) => {
+    const reactions = withMyReaction(message.reactions, emoji, viewer, mine);
+    return reactions === message.reactions ? message : { ...message, reactions };
+  });
+}
+
+function keepReactions(list: ChatMessage[], message: ChatMessage) {
+  const stored = list.find((item) => item.id === message.id);
+  return stored ? { ...message, reactions: stored.reactions, reactionsAt: stored.reactionsAt } : message;
 }
 
 const GONE_KEPT = 50;
@@ -266,6 +309,24 @@ function incoming(state: ChatState, message: ChatMessage, root: ChatRoot | null,
   return updateTimeline(next, message.conversationId, (timeline) => acceptIncoming(timeline, message, unsynced));
 }
 
+function updateReactions(state: ChatState, place: { conversationId: string; messageId: string; parentId: string | null }, apply: (messages: ChatMessage[]) => ChatMessage[]) {
+  if (place.parentId) {
+    return updateThread(state, place.parentId, (thread) => {
+      const messages = apply(thread.timeline.messages);
+      return messages === thread.timeline.messages ? thread : { ...thread, timeline: { ...thread.timeline, messages } };
+    });
+  }
+  const next = updateTimeline(state, place.conversationId, (timeline) => {
+    const messages = apply(timeline.messages);
+    return messages === timeline.messages ? timeline : { ...timeline, messages };
+  });
+  return updateThread(next, place.messageId, (thread) => {
+    if (!thread.root) return thread;
+    const [root] = apply([thread.root]);
+    return root === thread.root ? thread : { ...thread, root };
+  });
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "room": {
@@ -322,17 +383,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "edited": {
       const { message } = action;
       let next = updateTimeline(state, message.conversationId, (timeline) => {
-        const messages = replaceMessage(timeline.messages, message);
+        const messages = replaceMessage(timeline.messages, keepReactions(timeline.messages, message));
         return messages === timeline.messages ? timeline : { ...timeline, messages };
       });
       if (message.parentId) {
         next = updateThread(next, message.parentId, (thread) => {
-          const messages = replaceMessage(thread.timeline.messages, message);
+          const messages = replaceMessage(thread.timeline.messages, keepReactions(thread.timeline.messages, message));
           return messages === thread.timeline.messages ? thread : { ...thread, timeline: { ...thread.timeline, messages } };
         });
       } else {
         next = updateThread(next, message.id, (thread) =>
-          thread.root ? { ...thread, root: { ...message, replyCount: thread.root.replyCount, replyAuthors: thread.root.replyAuthors, lastReplyAt: thread.root.lastReplyAt } } : thread,
+          thread.root
+            ? { ...thread, root: { ...keepReactions([thread.root], message), replyCount: thread.root.replyCount, replyAuthors: thread.root.replyAuthors, lastReplyAt: thread.root.lastReplyAt } }
+            : thread,
         );
       }
       return next;
@@ -382,6 +445,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return updateThread(state, action.rootId, (thread) =>
         thread.timeline.lastReadAt && thread.timeline.lastReadAt >= action.lastReadAt ? thread : { ...thread, following: true, timeline: { ...thread.timeline, lastReadAt: action.lastReadAt } },
       );
+    case "reactions":
+      return updateReactions(state, action, (messages) => applyReactions(messages, action.messageId, action.reactions, action.at));
+    case "my-reaction":
+      return updateReactions(state, action, (messages) => setMyReaction(messages, action.messageId, action.emoji, action.viewer, action.mine));
     case "forget": {
       const rooms = { ...state.rooms };
       const timelines = { ...state.timelines };

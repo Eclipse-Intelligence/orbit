@@ -106,6 +106,65 @@ export function subscribeFormatBar(listener: () => void) {
   };
 }
 
+const RECENT_EMOJI_PREFIX = "chat-emoji-recent:";
+const SKIN_TONE_PREFIX = "chat-emoji-tone:";
+const EMOJI_PREFS_EVENT = "orbit-chat-emoji";
+const RECENT_EMOJI_KEPT = 18;
+export const QUICK_REACTIONS = 5;
+
+export const DEFAULT_RECENT_EMOJI = ["✅️", "\u{1F440}", "\u{1F44D}️", "\u{1F389}", "\u{1F602}", "❤️", "\u{1F64F}", "\u{1F680}", "\u{1F525}"];
+
+export function readRecentEmojiText(userId: string) {
+  try {
+    return localStorage.getItem(`${RECENT_EMOJI_PREFIX}${userId}`) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function recentEmoji(text: string) {
+  let stored: unknown = null;
+  try {
+    stored = text ? JSON.parse(text) : null;
+  } catch {}
+  const mine = Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 64) : [];
+  return [...new Set([...mine, ...DEFAULT_RECENT_EMOJI])].slice(0, RECENT_EMOJI_KEPT);
+}
+
+export function pushRecentEmoji(userId: string, emoji: string) {
+  const recent = recentEmoji(readRecentEmojiText(userId));
+  if (recent.slice(0, QUICK_REACTIONS).includes(emoji)) return;
+  const current = recent.filter((item) => item !== emoji);
+  try {
+    localStorage.setItem(`${RECENT_EMOJI_PREFIX}${userId}`, JSON.stringify([emoji, ...current].slice(0, RECENT_EMOJI_KEPT)));
+  } catch {}
+  window.dispatchEvent(new Event(EMOJI_PREFS_EVENT));
+}
+
+export function readSkinTone(userId: string) {
+  try {
+    const value = Number(localStorage.getItem(`${SKIN_TONE_PREFIX}${userId}`));
+    if (Number.isInteger(value) && value >= 0 && value <= 5) return value;
+  } catch {}
+  return 0;
+}
+
+export function writeSkinTone(userId: string, tone: number) {
+  try {
+    localStorage.setItem(`${SKIN_TONE_PREFIX}${userId}`, String(tone));
+  } catch {}
+  window.dispatchEvent(new Event(EMOJI_PREFS_EVENT));
+}
+
+export function subscribeEmojiPrefs(listener: () => void) {
+  window.addEventListener(EMOJI_PREFS_EVENT, listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    window.removeEventListener(EMOJI_PREFS_EVENT, listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
 export function writeDraft(key: string, draft: ChatDraft) {
   try {
     if (draft.text.trim()) localStorage.setItem(key, JSON.stringify(draft));
