@@ -9,11 +9,12 @@ import { Input } from "@/components/_ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/components/crm/assignee-picker";
 import { listGroups } from "@/components/crm/clickup";
+import { usePadAiRead, useReadWhenUnsure } from "@/hooks/use-pad-ai-read";
 import { addPadTaskAction, detectTaskRecordsAction, searchLinksForTaskAction, searchTaskLinksAction } from "@/app/(crm)/task-pad";
 import type { ClickUpPicker } from "@/lib/crm/clickup";
 import { REMINDER_OPTIONS } from "@/lib/crm/reminder-options";
 import { DEFAULT_TASK_DURATION, localInstant } from "@/lib/crm/task-time";
-import type { PadAiParse, PadReadBody, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
+import type { PadAiParse, PadDetection, PadOption, PadRecord, PadSearchKind } from "@/lib/crm/task-pad";
 import { requestReminderPermission } from "@/lib/reminder-alerts";
 import {
   backspaceKeeps,
@@ -71,13 +72,6 @@ type PadContact = PadRecord & { company: PadRecord | null };
 type Variant = "card" | "inline";
 type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 
-const AI_READ_PATH = "/api/tasks/read";
-const padAi: { available: boolean | null } = { available: null };
-
-function readKey(value: string) {
-  const now = londonParts(new Date());
-  return `${now.year}-${now.month}-${now.day}T${now.hour}|${value}`;
-}
 
 const unset = <T,>(): Override<T> => ({ set: false, value: undefined as T });
 
@@ -532,13 +526,8 @@ export default function TaskPad({
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [highlight, setHighlight] = useState(0);
   const [detected, setDetected] = useState<{ text: string; scope: string | null; value: PadDetection } | null>(null);
-  const [ai, setAi] = useState<{ text: string; value: PadAiParse } | null>(null);
-  const [readingTexts, setReadingTexts] = useState<{ id: number; text: string }[]>([]);
+  const { ai, setAi, readingTexts, forgetAiReads, latestRead } = usePadAiRead();
   const reading = readingTexts.some((entry) => entry.text === text);
-  const readIds = useRef(0);
-  const aiReads = useRef(new Map<string, { promise: Promise<PadAiParse | null>; controller: AbortController }>());
-  const answers = useRef(new Map<string, PadAiParse>());
-  const latestRead = useRef<(value: string) => Promise<PadAiParse | null>>(async () => null);
   const [due, setDue] = useState<Override<string | null>>(() => (start?.due ? { set: true, value: start.due } : unset()));
   const [reminder, setReminder] = useState<Override<number | null>>(unset);
   const [chosenDuration, setDuration] = useState<number | null>(start?.durationMinutes ?? null);
@@ -677,48 +666,6 @@ export default function TaskPad({
     };
   }
 
-  function readWithAi(value: string): Promise<PadAiParse | null> {
-    const apply = (found: PadAiParse | null) => {
-      if (found) setAi((current) => (current?.text === value && current.value === found ? current : { text: value, value: found }));
-      return found;
-    };
-    if (padAi.available === false) return Promise.resolve(null);
-    const key = readKey(value);
-    const answered = answers.current.get(key);
-    if (answered) return Promise.resolve(apply(answered));
-    const known = aiReads.current.get(key);
-    if (known) return known.promise.then(apply);
-    const controller = new AbortController();
-    readIds.current += 1;
-    const id = readIds.current;
-    setReadingTexts((current) => [...current, { id, text: value }]);
-    const promise = fetch(AI_READ_PATH, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: value }),
-      signal: controller.signal,
-    })
-      .then((response) => (response.ok ? (response.json() as Promise<PadReadBody>) : null))
-      .catch(() => null)
-      .then((body) => {
-        if (aiReads.current.get(key)?.controller === controller) aiReads.current.delete(key);
-        setReadingTexts((current) => current.filter((entry) => entry.id !== id));
-        if (body?.available === false) padAi.available = false;
-        const found = controller.signal.aborted ? null : (body?.value ?? null);
-        if (found) answers.current.set(key, found);
-        return found;
-      });
-    aiReads.current.set(key, { promise, controller });
-    return promise.then(apply);
-  }
-
-  function forgetAiReads() {
-    for (const read of aiReads.current.values()) read.controller.abort();
-    aiReads.current.clear();
-    answers.current.clear();
-    setReadingTexts([]);
-  }
-
   function resolve(found: PadDetection | null) {
     return resolvePadLinks({ text, found, fixedCompany, contact, company, opportunity, dismissed });
   }
@@ -754,23 +701,7 @@ export default function TaskPad({
     };
   }, [text, scope]);
 
-  useEffect(() => {
-    latestRead.current = readWithAi;
-  });
-
-  useEffect(() => {
-    const reads = aiReads.current;
-    return () => {
-      for (const read of reads.values()) read.controller.abort();
-      reads.clear();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!parsed.unsure || text.trim().length < 4 || padAi.available === false) return;
-    const timer = window.setTimeout(() => void latestRead.current(text), 700);
-    return () => window.clearTimeout(timer);
-  }, [text, parsed.unsure]);
+  useReadWhenUnsure(latestRead, text, parsed.unsure);
 
   useEffect(() => {
     if (!mention) return;

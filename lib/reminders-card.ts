@@ -1,8 +1,9 @@
 import type { Reminder, ReminderInput } from "@/lib/crm/reminders";
-import { clockLabel, localInstant, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
+import type { PadAiParse } from "@/lib/crm/task-pad";
+import { clockLabel, DEFAULT_TASK_DURATION, localInstant, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
 import { shiftDay } from "@/lib/crm/working-days";
 import { formatDateLabel, todayValue } from "@/lib/date-input";
-import { padDueHasTime, padReading, padRepeatDue, parseTaskText, readingKey, readPhrase, type PadMark, type PadRepeat } from "@/lib/task-pad";
+import { padDueHasTime, padReading, padRepeatDue, parseTaskText, readingKey, type PadMark, type PadRepeat } from "@/lib/task-pad";
 import { repeatInputOf, ruleWords, WORKWEEK, weekdayOf, type MonthWeek, type RepeatEnds, type RepeatInput, type RepeatRule, type Weekday } from "@/lib/task-repeat";
 
 export type HeldTick = { snapshot: Reminder; doneId: string | null };
@@ -73,8 +74,6 @@ export function repeatWords(reminder: Pick<Reminder, "repeat" | "dueOn">) {
   return draft && reminder.dueOn ? ruleWords({ rule: draft.rule, startsOn: reminder.dueOn }) : null;
 }
 
-export type AddGuess = { due: string; key: string; phrase: string };
-
 export type AddLength = { minutes: number; key: string; phrase: string; start: number; end: number };
 
 export type AddReading = {
@@ -85,8 +84,12 @@ export type AddReading = {
   phrase: string;
   key: string;
   marks: PadMark[];
-  guess: AddGuess | null;
   length: AddLength | null;
+  source: string;
+  unsure: boolean;
+  timed: boolean;
+  typedMinutes: number | null;
+  blockMinutes: number;
 };
 
 const LENGTH = /\bfor\s+(\d{1,3}(?:\.\d+)?)\s*(minutes?|mins?|hours?|hrs?|h)\b/i;
@@ -117,15 +120,37 @@ function textWithout(text: string, marks: PadMark[]) {
     .trim();
 }
 
-export function readAddLine(text: string, choices: { confirmed: string | null; kept: readonly string[] }, now = new Date()): AddReading {
+export type AddBlock = { on: boolean; minutes: number; typed: string };
+
+export type AddChoices = { kept: readonly string[]; ai?: { text: string; value: PadAiParse } | null; block?: AddBlock | null };
+
+const WEEKDAY_BEFORE = /\b(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)[\s,]*$/i;
+
+function withWeekday(text: string, marks: PadMark[], due: string | null) {
+  const sorted = [...marks].sort((left, right) => left.start - right.start);
+  const first = sorted[0];
+  if (!due || !first) return marks;
+  const match = WEEKDAY_BEFORE.exec(text.slice(0, first.start));
+  if (!match || !/^\d/.test(text.slice(first.start, first.end).trim())) return marks;
+  return [{ ...first, start: match.index }, ...sorted.slice(1)];
+}
+
+function typedLength(length: AddLength | null, minutes: number | null) {
+  return length ? length.key : minutes ? `range:${minutes}` : "";
+}
+
+export function readAddLine(text: string, choices: AddChoices, now = new Date()): AddReading {
   const found = readLength(text);
   const source = found ? `${text.slice(0, found.start)}${" ".repeat(found.end - found.start)}${text.slice(found.end)}` : text;
   const parsed = parseTaskText(source, now);
-  const guessMarks = parsed.marks.filter((mark) => mark.kind === "when");
+  const guessMarks = withWeekday(source, parsed.marks.filter((mark) => mark.kind === "when"), parsed.guess);
   const guessKey = parsed.unsure && parsed.guess && guessMarks.length > 0 ? readingKey(source, guessMarks) : null;
-  const confirmed = guessKey !== null && choices.confirmed === guessKey && !choices.kept.includes(guessKey);
-  const ai = confirmed ? { title: textWithout(source, guessMarks) || source.trim(), due: parsed.guess, remindMinutes: null, durationMinutes: parsed.durationMinutes, marks: guessMarks } : null;
-  const reading = padReading(source, parsed, ai, choices.kept);
+  const answer = parsed.unsure && choices.ai && choices.ai.text === source && choices.ai.value.due && choices.ai.value.marks.length > 0 ? choices.ai.value : null;
+  const answerKey = answer ? readingKey(source, answer.marks) : null;
+  const dropped = [guessKey, answerKey].some((key) => key !== null && choices.kept.includes(key));
+  const guessed = guessKey !== null ? { title: textWithout(source, guessMarks) || source.trim(), due: parsed.guess, remindMinutes: null, durationMinutes: parsed.durationMinutes, marks: guessMarks } : null;
+  const fromAnswer = !dropped && answer ? padReading(source, parsed, answer, choices.kept) : null;
+  const reading = fromAnswer?.key ? fromAnswer : padReading(source, parsed, dropped ? null : guessed, choices.kept);
   const repeat = reading.due ? (reading.repeat ?? null) : null;
   const due = repeat ? (padRepeatDue(repeat, reading.due, now) ?? reading.due) : reading.due;
   const timed = Boolean(due && padDueHasTime(due));
@@ -134,18 +159,44 @@ export function readAddLine(text: string, choices: { confirmed: string | null; k
   const marks = length ? [...dateMarks, { start: length.start, end: length.end, kind: "when" as const }] : dateMarks;
   const ownTitle = !reading.key || (found && !length) || dateMarks.length !== reading.marks.length;
   const title = !reading.key ? text.replace(/\s+/g, " ").trim() : ownTitle ? textWithout(text, marks) || text.trim() : reading.title;
-  const offered = !reading.key && guessKey !== null && parsed.guess && !choices.kept.includes(guessKey) ? { due: parsed.guess, key: guessKey, phrase: readPhrase(source, guessMarks) } : null;
+  const typedMinutes = length ? length.minutes : timed ? reading.durationMinutes : null;
+  const block = choices.block && choices.block.typed === typedLength(length, typedMinutes) ? choices.block : null;
+  const durationMinutes = !timed ? null : block ? (block.on ? block.minutes : null) : typedMinutes;
   return {
     title,
     due,
     repeat,
-    durationMinutes: length ? length.minutes : timed ? reading.durationMinutes : null,
+    durationMinutes,
     phrase: reading.phrase,
     key: reading.key,
     marks,
-    guess: offered,
     length,
+    source,
+    unsure: parsed.unsure,
+    timed,
+    typedMinutes,
+    blockMinutes: durationMinutes ?? block?.minutes ?? typedMinutes ?? DEFAULT_TASK_DURATION,
   };
+}
+
+export function blockChoice(reading: Pick<AddReading, "length" | "typedMinutes">, on: boolean, minutes: number): AddBlock {
+  return { on, minutes, typed: typedLength(reading.length, reading.typedMinutes) };
+}
+
+export function toggledBlock(draft: AddDraft, reading: AddReading): AddDraft {
+  const on = reading.durationMinutes !== null;
+  if (on && reading.length) {
+    const typed = reading.length.key;
+    return { ...draft, block: null, kept: draft.kept.includes(typed) ? draft.kept : [...draft.kept, typed] };
+  }
+  const typed = on ? null : readLength(draft.text);
+  if (typed && draft.kept.includes(typed.key)) return { ...draft, block: null, kept: draft.kept.filter((key) => key !== typed.key) };
+  return { ...draft, block: blockChoice(reading, !on, reading.blockMinutes) };
+}
+
+export function withoutStaleBlock(draft: AddDraft, now = new Date(), ai: AddChoices["ai"] = null): AddDraft {
+  if (!draft.block) return draft;
+  return readAddLine(draft.text, { kept: draft.kept, ai }, now).timed ? draft : { ...draft, block: null };
 }
 
 export function reminderInputOf(reading: Pick<AddReading, "title" | "due" | "repeat" | "durationMinutes">): ReminderInput {
@@ -273,8 +324,8 @@ export function taskStartOf(reminder: Reminder) {
   };
 }
 
-export type AddDraft = { text: string; confirmed: string | null; kept: string[]; key: AddKey | null };
+export type AddDraft = { text: string; kept: string[]; key: AddKey | null; block: AddBlock | null };
 
-export const EMPTY_DRAFT: AddDraft = { text: "", confirmed: null, kept: [], key: null };
+export const EMPTY_DRAFT: AddDraft = { text: "", kept: [], key: null, block: null };
 
 export const REMINDER_NOT_REMOVED = "Couldn't remove the reminder. Try again.";

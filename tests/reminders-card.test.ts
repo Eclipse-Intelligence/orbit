@@ -3,11 +3,13 @@ import { describe, it } from "node:test";
 import type { Reminder } from "@/lib/crm/reminders";
 import {
   addKeyFor,
+  blockChoice,
   CARD_MARGIN,
   clampCardPosition,
   dayLabel,
   defaultCardPosition,
   draftOfRepeat,
+  EMPTY_DRAFT,
   dueChange,
   dueCount,
   groupReminders,
@@ -18,7 +20,10 @@ import {
   reminderInputOf,
   repeatWords,
   taskStartOf,
+  toggledBlock,
+  withoutStaleBlock,
 } from "@/lib/reminders-card";
+import type { PadAiParse } from "@/lib/crm/task-pad";
 import { padSaveOutcome } from "@/lib/task-pad";
 import { repeatInputOf } from "@/lib/task-repeat";
 
@@ -146,7 +151,7 @@ describe("reminders card", () => {
   });
 
   describe("add line", () => {
-    const blank = { confirmed: null, kept: [] as string[] };
+    const blank = { kept: [] as string[] };
 
     it("reads a date and time and turns it into a timed reminder", () => {
       const reading = readAddLine("Washing machine repair thu 10am", blank, NOW);
@@ -166,12 +171,10 @@ describe("reminders card", () => {
       assert.deepEqual(reminderInputOf(reading), { title: "Bins out", dueOn: "2026-11-24", repeat: { every: "week", days: ["tu"], ends: null } });
     });
 
-    it("turns a typed length into Block time once the reading is confirmed", () => {
+    it("turns a typed time range into Block time", () => {
       const reading = readAddLine("Dentist tomorrow 9-10am", blank, NOW);
-      assert.ok(reading.guess);
-      assert.deepEqual(reminderInputOf(reading), { title: "Dentist tomorrow 9-10am" });
-      const confirmed = readAddLine("Dentist tomorrow 9-10am", { confirmed: reading.guess.key, kept: [] }, NOW);
-      assert.deepEqual(reminderInputOf(confirmed), { title: "Dentist", dueAt: "2026-11-20T09:00:00.000Z", blocksTime: true, durationMinutes: 60 });
+      assert.equal(reading.unsure, true);
+      assert.deepEqual(reminderInputOf(reading), { title: "Dentist", dueAt: "2026-11-20T09:00:00.000Z", blocksTime: true, durationMinutes: 60 });
     });
 
     it("never blocks time without a time", () => {
@@ -216,7 +219,7 @@ describe("reminders card", () => {
     it("keeps a length's words when its chip is removed", () => {
       const reading = readAddLine("Dentist tomorrow 9am for 1 hour", blank, NOW);
       assert.ok(reading.length);
-      const kept = readAddLine("Dentist tomorrow 9am for 1 hour", { confirmed: null, kept: [reading.length.key] }, NOW);
+      const kept = readAddLine("Dentist tomorrow 9am for 1 hour", { kept: [reading.length.key] }, NOW);
       assert.equal(kept.length, null);
       assert.deepEqual(reminderInputOf(kept), { title: "Dentist for 1 hour", dueAt: "2026-11-20T09:00:00.000Z" });
     });
@@ -232,32 +235,155 @@ describe("reminders card", () => {
 
     it("keeps the words as text when asked", () => {
       const reading = readAddLine("Washing machine repair thu 10am", blank, NOW);
-      const kept = readAddLine("Washing machine repair thu 10am", { confirmed: null, kept: [reading.key] }, NOW);
+      const kept = readAddLine("Washing machine repair thu 10am", { kept: [reading.key] }, NOW);
       assert.equal(kept.due, null);
       assert.deepEqual(reminderInputOf(kept), { title: "Washing machine repair thu 10am" });
     });
 
-    it("offers a guess to confirm and saves it as text until then", () => {
-      const reading = readAddLine("Call Mum back 6:30", blank, NOW);
-      assert.equal(reading.due, null);
-      assert.ok(reading.guess);
-      assert.equal(reading.guess.due, "2026-11-19T18:30");
-      assert.deepEqual(reminderInputOf(reading), { title: "Call Mum back 6:30" });
-      const confirmed = readAddLine("Call Mum back 6:30", { confirmed: reading.guess.key, kept: [] }, NOW);
-      assert.equal(confirmed.guess, null);
-      assert.deepEqual(reminderInputOf(confirmed), { title: "Call Mum back", dueAt: "2026-11-19T18:30:00.000Z" });
+    it("shows a guess like any other reading and saves it", () => {
+      const cases: [string, string, string][] = [
+        ["Call Mum back 6:30", "Call Mum back", "2026-11-19T18:30:00.000Z"],
+        ["Call plumber tomorrow at 9", "Call plumber", "2026-11-20T09:00:00.000Z"],
+        ["Dentist Tuesday 25th November 2026 at 3:30pm", "Dentist", "2026-11-25T15:30:00.000Z"],
+      ];
+      for (const [text, title, dueAt] of cases) {
+        const reading = readAddLine(text, blank, NOW);
+        assert.equal(reading.unsure, true, text);
+        assert.ok(reading.phrase, text);
+        assert.ok(reading.marks.length > 0, text);
+        assert.deepEqual(reminderInputOf(reading), { title, dueAt }, text);
+      }
     });
 
-    it("leaves phrases it can't place as text with no guess", () => {
+    it("keeps a guess's words as text with no date when its chip is removed", () => {
+      for (const text of ["Call plumber tomorrow at 9", "Dentist Tuesday 25th November 2026 at 3:30pm"]) {
+        const reading = readAddLine(text, blank, NOW);
+        const kept = readAddLine(text, { kept: [reading.key] }, NOW);
+        assert.equal(kept.due, null, text);
+        assert.deepEqual(kept.marks, [], text);
+        assert.deepEqual(reminderInputOf(kept), { title: text }, text);
+      }
+    });
+
+    it("applies the AI's reading of an unsure phrase, and keeps it as text when asked", () => {
+      const text = "Call plumber tomorrow at 9";
+      const start = text.indexOf("tomorrow");
+      const value: PadAiParse = { title: "Call plumber", due: "2026-11-20T21:00", remindMinutes: null, durationMinutes: null, marks: [{ start, end: text.length, kind: "when" }] };
+      const reading = readAddLine(text, { kept: [], ai: { text, value } }, NOW);
+      assert.equal(reading.phrase, "tomorrow at 9");
+      assert.deepEqual(reminderInputOf(reading), { title: "Call plumber", dueAt: "2026-11-20T21:00:00.000Z" });
+      const stale = readAddLine(`${text}am`, { kept: [], ai: { text, value } }, NOW);
+      assert.equal(stale.due, "2026-11-20T09:00");
+      const kept = readAddLine(text, { kept: [reading.key], ai: { text, value } }, NOW);
+      assert.deepEqual(reminderInputOf(kept), { title: text });
+      const guessKept = readAddLine(text, { kept: [readAddLine(text, blank, NOW).key], ai: { text, value } }, NOW);
+      assert.deepEqual(reminderInputOf(guessKept), { title: text });
+    });
+
+    it("falls back to the guess when the AI finds no date", () => {
+      const text = "Call plumber tomorrow at 9";
+      const value: PadAiParse = { title: text, due: null, remindMinutes: null, durationMinutes: null, marks: [] };
+      assert.deepEqual(reminderInputOf(readAddLine(text, { kept: [], ai: { text, value } }, NOW)), { title: "Call plumber", dueAt: "2026-11-20T09:00:00.000Z" });
+    });
+
+    it("still reads the phrases it reads for sure", () => {
+      const cases: [string, Record<string, unknown>][] = [
+        ["Washing machine repair thu 10am", { title: "Washing machine repair", dueAt: "2026-11-26T10:00:00.000Z" }],
+        ["Dentist 25 November at 3pm", { title: "Dentist", dueAt: "2026-11-25T15:00:00.000Z" }],
+        ["Dentist 25/11/2026 3pm", { title: "Dentist", dueAt: "2026-11-25T15:00:00.000Z" }],
+        ["Car MOT 3 December", { title: "Car MOT", dueOn: "2026-12-03" }],
+        ["Bins out every Thursday", { title: "Bins out", dueOn: "2026-11-19", repeat: { every: "week", days: ["th"], ends: null } }],
+        ["Pick up parcel friday morning", { title: "Pick up parcel", dueAt: "2026-11-20T09:00:00.000Z" }],
+        ["Dentist next Wednesday at 2pm", { title: "Dentist", dueAt: "2026-11-25T14:00:00.000Z" }],
+        ["Boiler service 26 Nov 10am for 1 hour", { title: "Boiler service", dueAt: "2026-11-26T10:00:00.000Z", blocksTime: true, durationMinutes: 60 }],
+      ];
+      for (const [text, input] of cases) {
+        const reading = readAddLine(text, blank, NOW);
+        assert.equal(reading.unsure, false, text);
+        assert.deepEqual(reminderInputOf(reading), input, text);
+      }
+    });
+
+    it("leaves phrases it can't place as text", () => {
       const reading = readAddLine("Pay rent on the 5th?", blank, NOW);
       assert.equal(reading.due, null);
-      assert.equal(reading.guess, null);
       assert.deepEqual(reminderInputOf(reading), { title: "Pay rent on the 5th?" });
     });
 
     it("never reads records out of the text", () => {
       const reading = readAddLine("Ask Sarah Okafor about Hiscox tomorrow", blank, NOW);
       assert.deepEqual(reminderInputOf(reading), { title: "Ask Sarah Okafor about Hiscox", dueOn: "2026-11-20" });
+    });
+  });
+
+  describe("Block time while adding", () => {
+    const text = "Boiler service thu 10am";
+
+    it("starts off, and turns on with the task default length", () => {
+      const reading = readAddLine(text, { kept: [] }, NOW);
+      assert.equal(reading.durationMinutes, null);
+      assert.equal(reading.blockMinutes, 15);
+      const on = readAddLine(text, { kept: [], block: blockChoice(reading, true, reading.blockMinutes) }, NOW);
+      assert.deepEqual(reminderInputOf(on), { title: "Boiler service", dueAt: "2026-11-26T10:00:00.000Z", blocksTime: true, durationMinutes: 15 });
+      const longer = readAddLine(text, { kept: [], block: blockChoice(on, true, 45) }, NOW);
+      assert.equal(reminderInputOf(longer).durationMinutes, 45);
+      const off = readAddLine(text, { kept: [], block: blockChoice(longer, false, 45) }, NOW);
+      assert.deepEqual(reminderInputOf(off), { title: "Boiler service", dueAt: "2026-11-26T10:00:00.000Z" });
+    });
+
+    it("keeps a typed length when Block time is switched off and back on", () => {
+      const typed = "Call Sam at 3pm for 1 hour";
+      const start = { ...EMPTY_DRAFT, text: typed };
+      const first = readAddLine(typed, { kept: start.kept, block: start.block }, NOW);
+      assert.equal(first.durationMinutes, 60);
+      const off = toggledBlock(start, first);
+      const offReading = readAddLine(typed, { kept: off.kept, block: off.block }, NOW);
+      assert.equal(offReading.durationMinutes, null);
+      assert.equal(offReading.title, "Call Sam for 1 hour");
+      const on = toggledBlock(off, offReading);
+      const onReading = readAddLine(typed, { kept: on.kept, block: on.block }, NOW);
+      assert.equal(onReading.durationMinutes, 60);
+      assert.equal(onReading.title, "Call Sam");
+    });
+
+    it("switches Block time on and off without a typed length", () => {
+      const start = { ...EMPTY_DRAFT, text };
+      const on = toggledBlock(start, readAddLine(text, { kept: [], block: null }, NOW));
+      assert.equal(readAddLine(text, { kept: on.kept, block: on.block }, NOW).durationMinutes, 15);
+      const off = toggledBlock(on, readAddLine(text, { kept: on.kept, block: on.block }, NOW));
+      assert.equal(readAddLine(text, { kept: off.kept, block: off.block }, NOW).durationMinutes, null);
+    });
+
+    it("lets a typed length turn it on with that length", () => {
+      const reading = readAddLine(text, { kept: [] }, NOW);
+      const block = blockChoice(reading, true, 15);
+      const typed = readAddLine(`${text} for 2 hours`, { kept: [], block }, NOW);
+      assert.equal(reminderInputOf(typed).durationMinutes, 120);
+      const changed = readAddLine(`${text} for 2 hours`, { kept: [], block: blockChoice(typed, true, 30) }, NOW);
+      assert.equal(reminderInputOf(changed).durationMinutes, 30);
+    });
+
+    it("never blocks time without a time, and clears the choice when the time goes", () => {
+      const reading = readAddLine(text, { kept: [] }, NOW);
+      const block = blockChoice(reading, true, 30);
+      assert.equal(reminderInputOf(readAddLine("Boiler service thu", { kept: [], block }, NOW)).blocksTime, undefined);
+      const draft = { ...EMPTY_DRAFT, text, block };
+      assert.equal(withoutStaleBlock(draft, NOW), draft);
+      assert.equal(withoutStaleBlock({ ...draft, text: "Boiler service thu" }, NOW).block, null);
+      assert.equal(withoutStaleBlock({ ...draft, kept: [reading.key] }, NOW).block, null);
+    });
+
+    it("changes the add key when it changes, and resets with the draft", () => {
+      let made = 0;
+      const fresh = () => `key-${(made += 1)}`;
+      const reading = readAddLine(text, { kept: [] }, NOW);
+      const off = addKeyFor(null, reminderInputOf(reading), fresh);
+      const on = addKeyFor(off, reminderInputOf(readAddLine(text, { kept: [], block: blockChoice(reading, true, 15) }, NOW)), fresh);
+      assert.notEqual(on.key, off.key);
+      const longer = addKeyFor(on, reminderInputOf(readAddLine(text, { kept: [], block: blockChoice(reading, true, 30) }, NOW)), fresh);
+      assert.notEqual(longer.key, on.key);
+      assert.equal(EMPTY_DRAFT.block, null);
+      assert.equal(readAddLine(text, { kept: EMPTY_DRAFT.kept, block: EMPTY_DRAFT.block }, NOW).durationMinutes, null);
     });
   });
 

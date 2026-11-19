@@ -2,9 +2,11 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { addReminderAction } from "@/app/(crm)/reminders";
+import Button from "@/components/_ui/button";
+import { DurationMenu } from "@/components/crm/task-timing";
+import { usePadAiRead, useReadWhenUnsure } from "@/hooks/use-pad-ai-read";
 import type { Reminder } from "@/lib/crm/reminders";
-import { durationLabel } from "@/lib/crm/task-time";
-import { addKeyFor, dayLabel, EMPTY_DRAFT, readAddLine, reminderInputOf, type AddDraft } from "@/lib/reminders-card";
+import { addKeyFor, blockChoice, dayLabel, EMPTY_DRAFT, readAddLine, reminderInputOf, toggledBlock, withoutStaleBlock, type AddDraft } from "@/lib/reminders-card";
 import { backspaceKeeps, padDueHasTime } from "@/lib/task-pad";
 import { repeatChip } from "@/lib/task-repeat";
 import { cn } from "@/lib/utils";
@@ -18,11 +20,13 @@ type AddProps = { today: string; large: boolean; draft: AddDraft; onDraft: (chan
 
 const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd({ today, large, draft, onDraft, onAdded }, ref) {
   const field = useRef<HTMLTextAreaElement>(null);
-  const { text, confirmed, kept } = draft;
+  const { text, kept, block } = draft;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
-  const reading = useMemo(() => readAddLine(text, { confirmed, kept }, new Date()), [text, confirmed, kept]);
+  const { ai, setAi, forgetAiReads, latestRead } = usePadAiRead();
+  const reading = useMemo(() => readAddLine(text, { kept, ai, block }, new Date()), [text, kept, ai, block]);
+  useReadWhenUnsure(latestRead, reading.source, reading.unsure);
 
   useImperativeHandle(ref, () => ({ focus: () => field.current?.focus({ preventScroll: true }) }), []);
 
@@ -33,9 +37,25 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
     node.style.height = `${Math.min(node.scrollHeight, 120)}px`;
   }, [text]);
 
+  function change(next: (current: AddDraft) => AddDraft) {
+    onDraft((current) => withoutStaleBlock(next(current), new Date(), ai));
+  }
+
   function keep(key: string) {
     if (!key) return;
-    onDraft((current) => ({ ...current, kept: current.kept.includes(key) ? current.kept : [...current.kept, key], confirmed: null }));
+    change((current) => ({ ...current, kept: current.kept.includes(key) ? current.kept : [...current.kept, key] }));
+  }
+
+  function focusField() {
+    field.current?.focus({ preventScroll: true });
+  }
+
+  function toggleBlock() {
+    onDraft((current) => toggledBlock(current, reading));
+  }
+
+  function changeLength(minutes: number) {
+    onDraft((current) => ({ ...current, block: blockChoice(reading, true, minutes) }));
   }
 
   function keepAsText() {
@@ -57,6 +77,8 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
       return;
     }
     onDraft(() => EMPTY_DRAFT);
+    setAi(null);
+    forgetAiReads();
     onAdded(result.reminder);
     field.current?.focus({ preventScroll: true });
   }
@@ -90,8 +112,7 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
 
   const due = reading.due;
   const timed = due && padDueHasTime(due) ? due.slice(11, 16) : null;
-  const guess = reading.guess;
-  const guessLabel = guess ? `${dayLabel(guess.due.slice(0, 10), today)}${padDueHasTime(guess.due) ? `, ${guess.due.slice(11, 16)}` : ""}` : null;
+  const blocking = reading.durationMinutes !== null;
   const typeClass = large ? "text-[16px] leading-[22px]" : "text-[13px] leading-5 [@media(pointer:coarse)]:text-[16px] [@media(pointer:coarse)]:leading-[22px]";
 
   return (
@@ -126,7 +147,8 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
           onChange={(event) => {
             const value = event.target.value;
             setError(null);
-            onDraft((current) => (value.trim() ? { ...current, text: value } : { ...EMPTY_DRAFT, text: value }));
+            if (!value.trim()) setAi(null);
+            change((current) => (value.trim() ? { ...current, text: value } : { ...EMPTY_DRAFT, text: value }));
           }}
           onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
           onKeyDown={onKeyDown}
@@ -134,10 +156,10 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
         />
       </div>
       <p role="status" className="sr-only">
-        {reading.phrase ? `Date read from “${reading.phrase}”.` : guess ? `Did you mean ${guessLabel}?` : ""}
+        {reading.phrase ? `Date read from “${reading.phrase}”.` : ""}
       </p>
       {(text.trim() || error) && (
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 [@media(pointer:coarse)]:gap-x-3 [@media(pointer:coarse)]:gap-y-2">
           {due && (
             <>
               <span className={cn(CHIP, "bg-surface-selected text-[#c9c0ff]")}>{dayLabel(due.slice(0, 10), today)}</span>
@@ -147,7 +169,6 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
                   {repeatChip({ startsOn: due.slice(0, 10), at: timed, rule: reading.repeat.rule, ends: reading.repeat.ends })}
                 </span>
               )}
-              {reading.durationMinutes && !reading.length && <span className={cn(CHIP, "bg-surface-raised text-soft")}>Block time, {durationLabel(reading.durationMinutes)}</span>}
               <button
                 type="button"
                 aria-label={`Keep as text: ${reading.phrase}`}
@@ -158,33 +179,31 @@ const ReminderAdd = forwardRef<ReminderAddHandle, AddProps>(function ReminderAdd
               >
                 <XIcon aria-hidden className="size-3" />
               </button>
-              {reading.length && (
-                <span className={cn(CHIP, "bg-surface-raised text-soft gap-0.5 pr-0.5")}>
-                  Block time, {durationLabel(reading.length.minutes)}
-                  <button
-                    type="button"
-                    aria-label={`Keep as text: ${reading.length.phrase}`}
-                    title="Keep these words in the reminder and don't block time"
+              {timed && (
+                <span className={cn("inline-flex items-center rounded-full", blocking ? "bg-surface-raised" : "ring-line-subtle ring-1 ring-inset")}>
+                  <Button
+                    variant="chip"
+                    size="none"
+                    aria-pressed={blocking}
+                    aria-label="Block time"
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => reading.length && keep(reading.length.key)}
-                    className="hit text-subtle hover:text-foreground flex size-4 cursor-pointer items-center justify-center rounded-full hover:bg-white/10"
+                    onClick={toggleBlock}
+                    className={cn(CHIP, "hit", blocking ? "text-soft hover:text-foreground pr-1 hover:bg-transparent" : "text-faint hover:text-soft hover:bg-surface-hover")}
                   >
-                    <XIcon aria-hidden className="size-2.5" />
-                  </button>
+                    {blocking ? "Block time," : "Block time"}
+                  </Button>
+                  {blocking && reading.durationMinutes !== null && (
+                    <DurationMenu
+                      compact
+                      value={reading.durationMinutes}
+                      onChange={changeLength}
+                      onClosed={focusField}
+                      className={cn(CHIP, "hit text-soft hover:text-foreground gap-0.5 pl-0 hover:bg-transparent [&>svg]:size-3")}
+                    />
+                  )}
                 </span>
               )}
             </>
-          )}
-          {!due && guess && (
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onDraft((current) => ({ ...current, confirmed: guess.key }))}
-              aria-label={`Use ${guessLabel} from “${guess.phrase}”`}
-              className={cn(CHIP, "hit cursor-pointer bg-[var(--tag-amber-bg)] text-[var(--tag-amber-text)] shadow-[inset_0_0_0_1px_var(--tag-amber-border)]")}
-            >
-              {guessLabel}?
-            </button>
           )}
           {text.trim() && <span className="caption-style text-faint ml-auto [@media(pointer:coarse)]:hidden">Enter to add</span>}
         </div>
