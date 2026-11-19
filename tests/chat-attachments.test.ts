@@ -3,8 +3,20 @@ import { readFileSync } from "node:fs";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { readChat } from "@/lib/chat/tools";
 import type { ChatLiveEvent } from "@/lib/chat/types";
-import { chatWorkSettled, createRoom, deleteMessage, editMessage, getDiscussion, leaveRoom, listMessages, openDiscussion, openDm, postMessage } from "@/lib/crm/chat";
-import { chatFileLink, discardChatUploads, prepareChatUpload, sweepChatAttachments } from "@/lib/crm/chat-attachments";
+import {
+  chatWorkSettled,
+  createRoom,
+  deleteMessage,
+  editMessage,
+  getDiscussion,
+  leaveRoom,
+  listMessages,
+  openDiscussion,
+  openDm,
+  postMessage,
+  setRoomArchived,
+} from "@/lib/crm/chat";
+import { chatFileLink, discardChatUploads, prepareChatUpload, removeChatAttachments, sweepChatAttachments } from "@/lib/crm/chat-attachments";
 import { createCompany } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { scopesForRole } from "@/lib/crm/scopes";
@@ -19,7 +31,7 @@ import { createUser, queryAsUser, resetDatabase, useServerlessPool } from "./hel
 
 const SUPABASE = "https://project.supabase.test";
 const BUCKET = "email-attachments";
-const MIGRATION = "supabase/migrations/20270224100000_chat_attachments.sql";
+const MIGRATION = "supabase/migrations/20270225120000_chat_attachments.sql";
 
 type Stored = { bytes: number | null; type: string };
 
@@ -395,6 +407,32 @@ describe("chat attachments", () => {
       [ids[1]],
     );
     await sql("truncate private.storage_tombstones");
+  });
+
+  it("refuses every file change in an archived room, and files on system lines", async () => {
+    const room = await createRoom(mark, { name: "archived-files", memberIds: [sam.userId] });
+    const sentIds = await upload(mark, room.id, [
+      { name: "kept.pdf", type: "application/pdf" },
+      { name: "second.pdf", type: "application/pdf" },
+    ]);
+    const message = await post(mark, room.id, "Before archiving", sentIds);
+    const queued = await upload(mark, room.id, [{ name: "late.pdf", type: "application/pdf" }]);
+    await setRoomArchived(mark, room.id, true);
+    await refused(prepareChatUpload(mark, room.id, [{ name: "a.pdf", size: 10, contentType: "application/pdf" }], env.fetchImpl), /This room is archived\./);
+    await refused(prepareChatUpload(olly, room.id, [{ name: "a.pdf", size: 10, contentType: "application/pdf" }], env.fetchImpl), /Conversation not found\./);
+    await refused(post(mark, room.id, "", queued), /This room is archived\./);
+    await refused(editMessage(mark, message.id, "Before archiving", { removeAttachmentIds: [sentIds[0]] }), /This room is archived\./);
+    await refused(removeChatAttachments(mark, message.id, [sentIds[0]]), /This room is archived\./);
+    const kept = await sql<{ attachment_count: number }>("select attachment_count from crm.chat_messages where id = $1", [message.id]);
+    assert.deepEqual(kept, [{ attachment_count: 2 }]);
+    assert.match(await chatFileLink(sam, sentIds[0], {}, env.fetchImpl), /token=down$/);
+
+    const open = await createRoom(mark, { name: "system-lines", memberIds: [sam.userId] });
+    const loose = await upload(mark, open.id, [{ name: "line.pdf", type: "application/pdf" }]);
+    await deniedInDb(
+      sql("insert into crm.chat_messages (conversation_id, author_user_id, kind, body, attachment_ids) values ($1, $2, 'event', 'set the topic', $3::uuid[])", [open.id, mark.userId, loose]),
+      /Only people can attach files\./,
+    );
   });
 
   it("never sweeps a file that a post claims while the sweep runs", async () => {

@@ -105,7 +105,7 @@ set search_path = ''
 as $$
   select exists (
     select 1 from crm.chat_conversations c
-    where c.id = p_conversation and c.archived_at is null
+    where c.id = p_conversation
       and (
         (c.kind in ('room', 'dm') and exists (select 1 from crm.chat_members m where m.conversation_id = c.id and m.user_id = p_user))
         or (c.kind in ('task', 'doc', 'mail_thread') and private.chat_subject_open_to(c.id, p_user))
@@ -148,6 +148,9 @@ declare
 begin
   if p_user is null or not private.chat_attachment_open_to(p_conversation, p_user) then
     raise exception 'Conversation not found.' using errcode = 'P0002';
+  end if;
+  if exists (select 1 from crm.chat_conversations c where c.id = p_conversation and c.archived_at is not null) then
+    raise exception 'This room is archived.' using errcode = '22023';
   end if;
   if v_count < 1 then
     raise exception 'Choose a file to attach.' using errcode = '22023';
@@ -215,7 +218,7 @@ begin
   if new.attachment_count > 10 then
     raise exception 'Attach up to 10 files to a message.' using errcode = '22023';
   end if;
-  if new.author_user_id is null or new.via_hook_id is not null or new.via_workflow_id is not null then
+  if new.author_user_id is null or new.via_hook_id is not null or new.via_workflow_id is not null or new.kind = 'event' then
     raise exception 'Only people can attach files.' using errcode = '22023';
   end if;
   perform 1 from crm.chat_attachments a where a.id = any(v_ids) order by a.id for update;
@@ -301,6 +304,9 @@ begin
   if v_message.id is null or v_message.author_user_id is distinct from p_user or v_message.deleted_at is not null
     or not private.chat_attachment_open_to(v_message.conversation_id, p_user) then
     raise exception 'Message not found.' using errcode = 'P0002';
+  end if;
+  if exists (select 1 from crm.chat_conversations c where c.id = v_message.conversation_id and c.archived_at is not null) then
+    raise exception 'This room is archived.' using errcode = '22023';
   end if;
   select coalesce(array_agg(t.x order by t.ord), '{}') into v_keep
     from unnest(v_message.attachment_ids) with ordinality as t(x, ord)

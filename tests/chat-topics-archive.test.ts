@@ -83,6 +83,7 @@ function event(overrides: Partial<ChatMessage>): ChatMessage {
     deletedAt: null,
     createdAt: "2026-11-19T10:00:00.000Z",
     hook: null,
+    attachments: [],
     ...overrides,
   };
 }

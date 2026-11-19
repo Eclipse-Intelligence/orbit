@@ -1,5 +1,5 @@
 import { baseType, opensInline } from "@/lib/chat/files";
-import { CHAT_FILE_MAX_BYTES, CHAT_FILES_MAX, type ChatUpload } from "@/lib/chat/types";
+import { CHAT_ARCHIVED, CHAT_FILE_MAX_BYTES, CHAT_FILES_MAX, type ChatUpload } from "@/lib/chat/types";
 import { withActor } from "@/lib/crm/context";
 import { cleanName, cleanType, megabytes } from "@/lib/crm/email-attachments";
 import { CrmError, notFound, pgFailure } from "@/lib/crm/errors";
@@ -56,7 +56,8 @@ export function cleanAttachmentIds(ids: unknown): string[] {
 }
 
 function failure(error: unknown): never {
-  throw pgFailure(error) ?? error;
+  const known = pgFailure(error);
+  throw known?.message === CHAT_ARCHIVED ? new CrmError("conflict", CHAT_ARCHIVED, 409) : (known ?? error);
 }
 
 export async function prepareChatUpload(actor: UserActor, conversationId: unknown, files: unknown, fetchImpl: typeof fetch = fetch): Promise<ChatUpload[]> {

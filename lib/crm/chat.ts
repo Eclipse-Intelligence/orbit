@@ -1067,8 +1067,10 @@ export async function postMessage(
   try {
     if (attachmentIds.length > 0) {
       const earlier = await withActor(actor, async (db) => {
-        await readConversation(db, actor, conversationId);
-        return existingPost(db, actor, clientKey, conversationId, parentId);
+        const conversation = await readConversation(db, actor, conversationId);
+        const found = await existingPost(db, actor, clientKey, conversationId, parentId);
+        if (!found) writable(conversation);
+        return found;
       });
       if (earlier) return earlier;
       try {
