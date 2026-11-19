@@ -82,6 +82,7 @@ import CloseIcon from "@/public/assets/images/mail/close.svg";
 import { usePullToRefresh } from "@/components/mail/pull-refresh";
 import MailShareLive, { useMailShareEvents } from "@/components/mail/share-live";
 import { useSyncSignal, useSyncSignalsLive } from "@/components/crm/sync-signals";
+import { createPendingMarks, markSummary, type MarkAction } from "@/components/mail/pending-marks";
 import { fetchSharedList } from "@/components/mail/share-client";
 import SharedList from "@/components/mail/shared-list";
 import SharedReader from "@/components/mail/shared-reader";
@@ -184,9 +185,7 @@ function patchDetail(detail: ThreadDetail, action: ReaderAction): ThreadDetail {
 }
 
 function patchSummary(thread: ThreadSummary, action: ReaderAction): ThreadSummary {
-  if (action === "read" || action === "unread") return { ...thread, unread: action === "unread" };
-  if (action === "flag" || action === "unflag") return { ...thread, flagged: action === "flag" };
-  return thread;
+  return MOVES.has(action) ? thread : markSummary(thread, action as MarkAction);
 }
 
 function shiftUnread(nav: MailNav, thread: Pick<ThreadSummary, "sourceId" | "split">, change: number): MailNav {
@@ -266,6 +265,7 @@ export default function MailScreen({
   const [peeking, setPeeking] = useState(false);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
+  const [pendingMarks] = useState(createPendingMarks);
   const sendingThreads = useRef(new Map<string, OutgoingThread[]>());
   const keptUnread = useRef(new Set<string>());
   const loadingMore = useRef(false);
@@ -819,14 +819,17 @@ export default function MailScreen({
     if (cached) storeThread(patchDetail(cached, action));
     if (change && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, change));
     const undoAction: ReaderAction = action === "read" ? "unread" : action === "unread" ? "read" : action === "flag" ? "unflag" : "flag";
+    const release = pendingMarks.hold(key, action as MarkAction);
     postAction(key, action, from)
       .then((result) => {
+        release();
         if (!result.failed) return;
         forgetThread(key);
         fetchDetail(key, true);
         if (!silent) showToast({ message: partlyUpdated(result.failed, result.problem ?? null), tone: "alert" });
       })
       .catch((error: Error) => {
+        release();
         setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, undoAction) : item)) } : existing));
         forgetThread(key);
         fetchDetail(key, true);
@@ -838,7 +841,8 @@ export default function MailScreen({
 
   function settleSending(threads: ThreadSummary[]) {
     const outgoing = sendingThreads.current;
-    return threads
+    return pendingMarks
+      .keep(threads)
       .filter((thread) => !removing.current.has(thread.key))
       .map((thread) => (thread.draft && outgoing.get(thread.key)?.some((entry) => entry.cleared) ? { ...thread, draft: false } : thread));
   }
