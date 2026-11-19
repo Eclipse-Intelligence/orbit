@@ -22,24 +22,22 @@ async function run(work: () => Promise<unknown>) {
   }
 }
 
-const WEEKDAY = z.enum(["mo", "tu", "we", "th", "fr", "sa", "su"]);
-
 const repeatShape = z
-  .object({
-    every: z.enum(["day", "weekday", "week", "month", "year"]),
-    interval: z.number().int().min(1).max(99).optional(),
-    days: z.array(WEEKDAY).optional().describe("For week: the days. Defaults to the date's weekday."),
-    monthDay: z.number().int().min(1).max(31).optional(),
-    monthWeek: z.object({ n: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(-1)]), weekday: WEEKDAY }).optional(),
+  .looseObject({
+    every: z.string().describe("day, weekday, week, month or year."),
+    interval: z.number().optional().describe("Every 2 weeks and so on, 1 to 99."),
+    days: z.array(z.string()).optional().describe("For week: the days, mo to su. Defaults to the date's weekday."),
+    monthDay: z.number().optional().describe("For month: the date, 1 to 31."),
+    monthWeek: z.looseObject({ n: z.number(), weekday: z.string() }).optional().describe("For month: { n: 1 to 4 or -1, weekday }."),
     ends: z
-      .union([z.object({ after: z.number().int().min(1).max(999) }), z.object({ on: z.string() })])
+      .looseObject({ after: z.number().optional(), on: z.string().optional() })
       .nullable()
       .optional()
       .describe("{ after: N } more times, { on: YYYY-MM-DD }, or null for never."),
   })
   .nullable()
   .optional()
-  .describe("Repeats from the reminder's date, like repeating tasks. null stops it repeating.");
+  .describe("Repeats from the reminder's date, like repeating tasks. null stops it repeating. Checked as REST checks it.");
 
 const fields = {
   title: z.string().optional(),

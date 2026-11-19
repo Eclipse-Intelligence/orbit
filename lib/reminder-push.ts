@@ -2,6 +2,7 @@ import { actingActor } from "@/lib/crm/task-outlook";
 import { clockLabel } from "@/lib/crm/task-time";
 import { query } from "@/lib/db/pool";
 import { pushToUser, type PushSender } from "@/lib/push";
+import { appTimeZone } from "@/lib/time";
 
 export const REMINDERS_LINK = "/?reminders=open";
 
@@ -72,25 +73,32 @@ async function morningPushes(now: number, deadline: number, send: PushSender | u
   let claimed = 0;
   let pushed = 0;
   const failed: ClaimedMorning[] = [];
-  while (Date.now() < deadline) {
-    const batch = await query<ClaimedMorning>("select user_id, day::text as day, titles, total from private.claim_morning_reminders($1, $2)", [new Date(now).toISOString(), CLAIM_BATCH]);
-    claimed += batch.rows.length;
-    const results = await Promise.all(
-      batch.rows.map(async (row) => {
-        const later = async () => {
-          failed.push(row);
-        };
-        if (Date.now() > deadline) {
-          await later();
-          return 0;
-        }
-        return deliver(row.user_id, morningReminderPush(row.day, row.titles, row.total), send, later);
-      }),
-    );
-    pushed += results.filter((sent) => sent > 0).length;
-    if (batch.rows.length < CLAIM_BATCH) break;
+  try {
+    while (Date.now() < deadline) {
+      const batch = await query<ClaimedMorning>("select user_id, day::text as day, titles, total from private.claim_morning_reminders($1, $2, $3)", [
+        new Date(now).toISOString(),
+        CLAIM_BATCH,
+        appTimeZone(),
+      ]);
+      claimed += batch.rows.length;
+      const results = await Promise.all(
+        batch.rows.map(async (row) => {
+          const later = async () => {
+            failed.push(row);
+          };
+          if (Date.now() > deadline) {
+            await later();
+            return 0;
+          }
+          return deliver(row.user_id, morningReminderPush(row.day, row.titles, row.total), send, later);
+        }),
+      );
+      pushed += results.filter((sent) => sent > 0).length;
+      if (batch.rows.length < CLAIM_BATCH) break;
+    }
+  } finally {
+    for (const row of failed) await quietly("select private.release_morning_reminders($1, $2::date)", [row.user_id, row.day]);
   }
-  for (const row of failed) await quietly("select private.release_morning_reminders($1, $2::date)", [row.user_id, row.day]);
   return { claimed, pushed };
 }
 

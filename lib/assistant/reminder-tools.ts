@@ -111,15 +111,15 @@ async function runReminders(actor: Parameters<AssistantTool["run"]>[0], args: Ar
   if (action === "list") {
     if (id) return getReminder(actor, id);
     return listReminders(actor, {
-      from: isDayKey(args.from) ? args.from : undefined,
-      to: isDayKey(args.to) ? args.to : undefined,
+      from: args.from as string | undefined,
+      to: args.to as string | undefined,
       includeDone: args.includeDone === true,
     });
   }
   if (action === "create") return createReminder(actor, readReminderInput(args));
   if (!id) return { error: "Send the reminder's id from action list.", field: "id" };
   if (action === "update") return updateReminder(actor, id, readReminderInput(args));
-  if (action === "complete") return completeReminder(actor, id, { dueOn: isDayKey(args.dueOn) ? args.dueOn : undefined });
+  if (action === "complete") return completeReminder(actor, id, { dueOn: args.dueOn as string | null | undefined });
   if (action === "reopen") return reopenReminder(actor, id);
   return deleteReminder(actor, id);
 }

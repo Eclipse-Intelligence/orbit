@@ -113,14 +113,16 @@ $$;
 revoke all on function private.release_reminder_push(uuid, timestamptz) from public;
 grant execute on function private.release_reminder_push(uuid, timestamptz) to crm_app;
 
-create or replace function private.claim_morning_reminders(p_now timestamptz, p_limit integer)
+drop function if exists private.claim_morning_reminders(timestamptz, integer);
+
+create or replace function private.claim_morning_reminders(p_now timestamptz, p_limit integer, p_time_zone text)
 returns table (user_id uuid, day date, titles text[], total integer)
 language sql
 security definer
 set search_path = ''
 as $$
   with params as (
-    select (p_now at time zone 'Europe/London')::date as today
+    select (p_now at time zone p_time_zone)::date as today
   ), due as (
     select r.user_id, array_agg(r.title order by r.created_at, r.id) as titles, count(*)::integer as total
     from crm.reminders r, params
@@ -133,8 +135,8 @@ as $$
     from due d
     cross join params
     left join crm.reminder_settings s on s.user_id = d.user_id
-    where ((params.today + coalesce(s.morning_at, time '08:00')) at time zone 'Europe/London') <= p_now
-      and ((params.today + coalesce(s.morning_at, time '08:00')) at time zone 'Europe/London') > p_now - interval '1 hour'
+    where ((params.today + coalesce(s.morning_at, time '08:00')) at time zone p_time_zone) <= p_now
+      and ((params.today + coalesce(s.morning_at, time '08:00')) at time zone p_time_zone) > p_now - interval '1 hour'
       and (s.morning_sent_on is null or s.morning_sent_on < params.today)
     order by d.user_id
     limit greatest(1, least(coalesce(p_limit, 50), 200))
@@ -150,8 +152,8 @@ as $$
   join ready on ready.user_id = claimed.user_id
 $$;
 
-revoke all on function private.claim_morning_reminders(timestamptz, integer) from public;
-grant execute on function private.claim_morning_reminders(timestamptz, integer) to crm_app;
+revoke all on function private.claim_morning_reminders(timestamptz, integer, text) from public;
+grant execute on function private.claim_morning_reminders(timestamptz, integer, text) to crm_app;
 
 create or replace function private.release_morning_reminders(p_user_id uuid, p_day date)
 returns void

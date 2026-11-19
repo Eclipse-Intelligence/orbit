@@ -1,5 +1,5 @@
 import { requireCaller } from "@/lib/api/agent";
-import { readJson, withApi } from "@/lib/api/http";
+import { idempotencyKey, readJson, withApi } from "@/lib/api/http";
 import { createReminder, listReminders, personOf } from "@/lib/crm/reminders";
 import { readReminderInput } from "@/lib/crm/reminder-input";
 
@@ -21,6 +21,6 @@ export async function POST(request: Request) {
   return withApi(async () => {
     const actor = personOf(await requireCaller(request), "tasks:write");
     const input = readReminderInput(await readJson(request), { strict: true });
-    return Response.json(await createReminder(actor, input), { status: 201 });
+    return Response.json(await createReminder(actor, input, { idempotencyKey: idempotencyKey(request) }), { status: 201 });
   });
 }

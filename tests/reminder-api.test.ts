@@ -132,6 +132,29 @@ describe("reminders over REST, MCP and the assistant", () => {
       assert.deepEqual((await rest.remove(personal, id)).body, { id, deleted: false });
     });
 
+    it("ends an until repeat on its last day, and adds a retried create once", async () => {
+      const until = await rest.create(personal, { title: "Physio", dueOn: "2036-01-07", repeat: { every: "day", ends: { on: "2036-01-08" } } });
+      assert.equal(until.status, 201);
+      const id = until.body.reminder.id;
+      assert.equal((await rest.complete(personal, id, { dueOn: "2036-01-07" })).body.reminder.dueOn, "2036-01-08");
+      const last = await rest.complete(personal, id, { dueOn: "2036-01-08" });
+      assert.equal(last.body.doneId, id);
+      assert.ok(last.body.reminder.completedAt);
+      const keyed = (token: string) =>
+        new Request("http://crm.test/api/v1/reminders", {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "idempotency-key": "reminder-retry-1" },
+          body: JSON.stringify({ title: "Once only" }),
+        });
+      const one = await json(await restCreate(keyed(personal)));
+      const two = await json(await restCreate(keyed(personal)));
+      assert.equal(one.body.reminder.id, two.body.reminder.id);
+      const theirs = await json(await restCreate(keyed(samToken)));
+      assert.notEqual(theirs.body.reminder.id, one.body.reminder.id, "another person's key is their own");
+      const count = await getAdminPool().query("select count(*)::int as count from crm.reminders where title = 'Once only' and user_id = $1", [mark.userId]);
+      assert.equal(count.rows[0].count, 1);
+    });
+
     it("refuses agent tokens, admin ones included, on every route", async () => {
       const own = (await rest.create(personal, { title: "Private" })).body.reminder;
       for (const token of [agentToken, adminToken]) {
@@ -198,6 +221,35 @@ describe("reminders over REST, MCP and the assistant", () => {
       assert.equal(gone.body!.deleted, true);
       const hidden = await mcpCall(sam, "list_reminders", { id: viaRest.body.reminder.id });
       assert.match(hidden.text, /Reminder not found/);
+    });
+  });
+
+  describe("every route", () => {
+    it("refuses the same bad input with the same message on REST, MCP and the assistant", async () => {
+      const target = (await rest.create(personal, { title: "Parity", dueOn: "2038-01-07", repeat: { every: "day" } })).body.reminder;
+      const bad = [
+        { title: "Both ends", dueOn: "2038-01-07", repeat: { every: "week", ends: { after: 2, on: "2038-02-01" } } },
+        { title: "Colour", dueOn: "2038-01-07", repeat: { every: "week", colour: "red" } },
+        { title: "Ends key", dueOn: "2038-01-07", repeat: { every: "week", ends: { times: 2 } } },
+        { title: "Bad day", dueOn: "31/02/2038" },
+      ];
+      for (const input of bad) {
+        const viaRest = await rest.create(personal, input);
+        assert.equal(viaRest.status, 400, JSON.stringify(input));
+        const viaMcp = await mcpCall(mark, "create_reminder", input);
+        assert.equal(viaMcp.text, `invalid_input: ${viaRest.body.error.message}`, JSON.stringify(input));
+        const viaAssistant = (await runTool(mark, "reminders", { action: "create", ...input })) as { error: string };
+        assert.equal(viaAssistant.error, viaRest.body.error.message, JSON.stringify(input));
+      }
+      const listRest = await rest.list(personal, "?from=31/02/2038");
+      assert.equal(listRest.status, 400);
+      assert.equal((await mcpCall(mark, "list_reminders", { from: "31/02/2038" })).text, `invalid_input: ${listRest.body.error.message}`);
+      assert.equal(((await runTool(mark, "reminders", { action: "list", from: "31/02/2038" })) as { error: string }).error, listRest.body.error.message);
+      const tickRest = await rest.complete(personal, target.id, { dueOn: "tomorrow" });
+      assert.equal(tickRest.status, 400);
+      assert.equal((await mcpCall(mark, "complete_reminder", { id: target.id, dueOn: "tomorrow" })).text, `invalid_input: ${tickRest.body.error.message}`);
+      assert.equal(((await runTool(mark, "reminders", { action: "complete", id: target.id, dueOn: "tomorrow" })) as { error: string }).error, tickRest.body.error.message);
+      assert.equal((await rest.get(personal, target.id)).body.reminder.dueOn, "2038-01-07");
     });
   });
 

@@ -263,6 +263,29 @@ describe("reminders", () => {
       assert.equal(reopened.dueOn, "2027-01-21");
     });
 
+    it("keeps a time changed after the tick when undoing, and refuses once the repeat is off", async () => {
+      await wipe(mark.userId);
+      const call = (await createReminder(mark, { title: "Call Mum", dueAt: "2027-01-21T10:00", repeat: { every: "week" } }, { now: NOW })).reminder;
+      const ticked = await completeReminder(mark, call.id, { dueOn: "2027-01-21" }, { now: NOW });
+      const later = (await updateReminder(mark, call.id, { dueAt: "2027-01-28T15:00" }, { now: NOW })).reminder;
+      assert.equal(later.dueOn, "2027-01-28");
+      const undone = (await reopenReminder(mark, ticked.doneId!)).reminder;
+      assert.equal(undone.dueOn, "2027-01-21");
+      assert.equal(undone.time, "15:00", "the new time is kept");
+      const again = await completeReminder(mark, call.id, { dueOn: "2027-01-21" }, { now: NOW });
+      const plain = (await updateReminder(mark, call.id, { repeat: null }, { now: NOW })).reminder;
+      assert.equal(plain.repeat, null);
+      await refused(reopenReminder(mark, again.doneId!), MOVED_ON, 409);
+      assert.equal((await getReminder(mark, call.id)).reminder.dueOn, "2027-01-28");
+    });
+
+    it("refuses a tick for a date the reminder hasn't reached, naming its date", async () => {
+      await wipe(mark.userId);
+      const daily = (await createReminder(mark, { title: "Feed the cat", dueOn: "2027-01-17", repeat: { every: "day" } }, { now: NOW })).reminder;
+      await refused(completeReminder(mark, daily.id, { dueOn: "2027-01-18" }, { now: NOW }), "This reminder is due on 17 Jan. Tick that date.", 409);
+      assert.equal((await getReminder(mark, daily.id)).reminder.dueOn, "2027-01-17");
+    });
+
     it("never skips a date on a double tick, a retry or a stale tab", async () => {
       await wipe(mark.userId);
       const daily = (await createReminder(mark, { title: "Water plants", dueOn: "2027-01-16", repeat: { every: "day" } }, { now: NOW })).reminder;
@@ -387,6 +410,38 @@ describe("reminders", () => {
       const retry = pusher();
       await processReminderPushes({ deadline: Date.now() + 30_000, now: at + MINUTE, send: retry.send });
       assert.equal(retry.sent.length, 1);
+    });
+
+    it("pushes a ticked timed repeat again at its next date, and not twice after Undo", async () => {
+      await wipe(mark.userId);
+      const pills = (await createReminder(mark, { title: "Pills", dueAt: "2027-01-20T10:00", repeat: { every: "day" } }, { now: NOW })).reminder;
+      const first = pusher();
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-20T10:01:00Z"), send: first.send });
+      assert.equal(first.sent.length, 1);
+      const ticked = await completeReminder(mark, pills.id, { dueOn: "2027-01-20" }, { now: Date.parse("2027-01-20T10:02:00Z") });
+      const undone = (await reopenReminder(mark, ticked.doneId!)).reminder;
+      assert.equal(undone.dueAt, "2027-01-20T10:00:00.000Z");
+      const afterUndo = pusher();
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-20T10:03:00Z"), send: afterUndo.send });
+      assert.equal(afterUndo.sent.length, 0, "Undo after a push doesn't push again");
+      await completeReminder(mark, pills.id, { dueOn: "2027-01-20" }, { now: Date.parse("2027-01-20T10:04:00Z") });
+      const next = pusher();
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-21T10:01:00Z"), send: next.send });
+      assert.equal(next.sent.length, 1);
+      assert.equal(next.sent[0].title, "Pills");
+    });
+
+    it("releases a failed morning push so the next run sends it", async () => {
+      await wipe(mark.userId);
+      await createReminder(mark, { title: "Bins out", dueOn: "2027-01-15" }, { now: NOW - 6 * 60 * MINUTE });
+      const failing: PushSender = async () => {
+        throw Object.assign(new Error("down"), { statusCode: 503 });
+      };
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-15T08:05:00Z"), send: failing });
+      const retry = pusher();
+      await processReminderPushes({ deadline: Date.now() + 30_000, now: Date.parse("2027-01-15T08:06:00Z"), send: retry.send });
+      assert.equal(retry.sent.length, 1);
+      assert.equal(retry.sent[0].title, "1 reminder today");
     });
 
     it("sends the morning list once, skips an empty day, and skips more than an hour late", async () => {
