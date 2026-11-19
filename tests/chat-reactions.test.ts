@@ -17,6 +17,7 @@ import {
   openDm,
   postMessage,
   reactToMessage,
+  updateRoom,
 } from "@/lib/crm/chat";
 import { createCompany } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
@@ -102,6 +103,7 @@ describe("reactions in the timeline", () => {
     id: "m1",
     conversationId: "c1",
     parentId: null,
+    kind: "message",
     author: { id: "sam", name: "Sam" },
     via: null,
     clientKey: null,
@@ -354,6 +356,17 @@ describe("reactions", () => {
         await refused(reactToMessage(outsider, mailNote.id, ROCKET), /Message not found\./);
         assert.equal((await queryAsUser<{ n: number }>(outsider.userId, "select count(*)::int as n from crm.chat_reactions where message_id = $1", [mailNote.id]))[0].n, 0);
       }
+    });
+
+    it("refuses system lines like a message that isn't there, over MCP too", async () => {
+      const lined = (await createRoom(mark, { name: "topics", memberIds: [sam.userId] })).id;
+      await updateRoom(mark, lined, { topic: "Q4 pipeline" });
+      const line = (await sql("select id from crm.chat_messages where conversation_id = $1 and kind = 'event' limit 1", [lined])).rows[0].id as string;
+      await refused(reactToMessage(sam, line, THUMBS), /^Message not found\.$/);
+      await refused(reactToMessage(mark, line, THUMBS, { want: false }), /^Message not found\.$/);
+      const missing = await mcp(sam, "chat_react", { message_id: "00000000-0000-4000-8000-000000000000", emoji: THUMBS });
+      assert.deepEqual(await mcp(sam, "chat_react", { message_id: line, emoji: THUMBS }), missing);
+      assert.equal((await sql("select count(*)::int as n from crm.chat_reactions where message_id = $1", [line])).rows[0].n, 0);
     });
 
     it("refuses deleted messages, archived conversations and emoji outside the list", async () => {

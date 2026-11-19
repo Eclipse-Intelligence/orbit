@@ -41,6 +41,7 @@ type Props = {
   fullStamp?: boolean;
   highlighted?: boolean;
   tabStop?: boolean;
+  readOnly?: boolean;
 };
 
 function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPane; onDone: () => void }) {
@@ -112,7 +113,7 @@ function ToolButton({ label, title, onClick, children, className }: { label: str
   );
 }
 
-function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop }: Props) {
+function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop, readOnly = false }: Props) {
   const chat = useChat();
   const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames } = chat;
   const [picking, setPicking] = useState(false);
@@ -129,10 +130,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const error = local && message.clientKey ? failed[message.clientKey] : undefined;
   const isEditing = editing?.id === message.id && editing.pane === pane && !deleted;
   const mentionsMe = (!own || Boolean(message.via)) && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
-  const canReply = !inThread && !local && !deleted;
-  const canEdit = own && !local && !deleted && !message.via;
-  const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted;
-  const canReact = !local && !deleted;
+  const canReply = !inThread && !local && !deleted && !readOnly;
+  const canEdit = own && !local && !deleted && !message.via && !readOnly;
+  const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted && (!readOnly || local);
+  const canReact = !local && !deleted && !readOnly;
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
@@ -263,7 +264,9 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             </Button>
           </div>
         )}
-        {canReact && !isEditing && <Reactions message={message} viewerId={viewer.id} onToggle={(emoji) => react(message, emoji)} onAdd={() => setPicking(true)} />}
+        {!local && !deleted && !isEditing && (
+          <Reactions message={message} viewerId={viewer.id} readOnly={!canReact} onToggle={(emoji) => react(message, emoji)} onAdd={() => setPicking(true)} />
+        )}
         {!inThread && message.replyCount > 0 && (
           <button
             type="button"

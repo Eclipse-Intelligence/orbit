@@ -34,6 +34,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     id: input.id ?? `aaaaaaaa-aaaa-4aaa-8aaa-${String(sequence).padStart(12, "0")}`,
     conversationId: ROOM,
     parentId: null,
+    kind: "message",
     author: { id: SAM, name: "Sam Okafor" },
     via: null,
     clientKey: null,
@@ -224,9 +225,10 @@ describe("chat timeline", () => {
 describe("chat sidebar badge", () => {
   const sidebar: ChatSidebar = {
     conversations: [
-      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1 },
-      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0 },
+      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1 },
+      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0 },
     ],
+    archived: [],
     threads: { unread: 0, mentions: 0 },
     unreadConversations: 1,
     mentioned: true,

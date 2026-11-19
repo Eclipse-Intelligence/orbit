@@ -13,6 +13,7 @@ import {
   postMessage,
   reactToMessage,
   removeRoomMember,
+  setRoomArchived,
   updateRoom,
 } from "@/lib/crm/chat";
 import { createHook, deleteHook, listHooks, rotateHookSecret, setHookPaused } from "@/lib/crm/chat-hooks";
@@ -40,8 +41,14 @@ export async function createRoomAction(input: { name: string; workspaceId?: stri
   return run("Couldn't create the room. Try again.", async (actor) => ({ conversation: await createRoom(actor, input ?? {}) }));
 }
 
-export async function updateRoomAction(id: string, input: { name?: string; workspaceId?: string | null }): Promise<ChatResult<{ conversation: ChatConversation }>> {
+export async function updateRoomAction(id: string, input: { name?: string; workspaceId?: string | null; topic?: string | null }): Promise<ChatResult<{ conversation: ChatConversation }>> {
   return run("Couldn't save the room. Try again.", async (actor) => ({ conversation: await updateRoom(actor, id, input ?? {}) }));
+}
+
+export async function setRoomArchivedAction(id: string, archived: boolean): Promise<ChatResult<{ conversation: ChatConversation }>> {
+  return run(archived ? "Couldn't archive the room. Try again." : "Couldn't unarchive the room. Try again.", async (actor) => ({
+    conversation: await setRoomArchived(actor, id, archived === true),
+  }));
 }
 
 export async function addRoomMembersAction(id: string, userIds: string[]): Promise<ChatResult<{ added: string[] }>> {

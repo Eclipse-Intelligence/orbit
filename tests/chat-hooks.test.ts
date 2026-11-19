@@ -277,7 +277,10 @@ describe("chat hooks", () => {
       const archived = (await createRoom(mark, { name: "old", memberIds: [sam.userId] })).id;
       const { hook, secret } = await createHook(mark, archived, "Old");
       await sql("update crm.chat_conversations set archived_at = now() where id = $1", [archived]);
-      assert.equal((await send(hook.id, JSON.stringify({ text: "x" }), bearer(secret))).status, 404);
+      const answer = await send(hook.id, JSON.stringify({ text: "x" }), bearer(secret));
+      assert.equal(answer.status, 409);
+      assert.deepEqual(await answer.json(), { error: "This room is archived." });
+      assert.equal((await send(hook.id, JSON.stringify({ text: "x" }), bearer("wrong"))).status, 401);
       await refused(listHooks(mark, archived), /Room not found\./);
       await refused(createHook(mark, archived, "New"), /Room not found\./);
       const dm = await openDm(mark, sam.userId);

@@ -36,7 +36,7 @@ import { completeJson, LlmError, withinWindow } from "@/lib/llm";
 import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer, type DecisionQuestion } from "@/lib/parallel";
 import { siteOrigin } from "@/lib/site-url";
 import { alertLink } from "@/lib/crm/workspaces";
-import { findMyRooms, postMessage } from "@/lib/crm/chat";
+import { archivedRoom, findMyRooms, postMessage } from "@/lib/crm/chat";
 import { mentionsIn, splitMentions } from "@/lib/mentions";
 import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX } from "@/lib/chat/types";
 import { appTimeZone } from "@/lib/time";
@@ -1150,10 +1150,12 @@ export function chatBody(template: unknown, vars: Vars) {
 
 async function chatRoom(ctx: Ctx, roomId: string, roomName: string) {
   const shown = roomName ? `#${roomName}` : "that room";
-  const rooms = await findMyRooms(ctx.actor, { id: roomId || null, name: roomId ? null : roomName });
-  if (rooms.length === 0) {
+  const found = await findMyRooms(ctx.actor, { id: roomId || null, name: roomId ? null : roomName }, { archived: true });
+  if (found.length === 0) {
     throw new CrmError("forbidden", roomId ? `Couldn't post to Chat: you're no longer in ${shown}.` : `Couldn't post to Chat: you're not in a room called ${shown}.`, 403);
   }
+  const rooms = found.filter((room) => !room.archived);
+  if (rooms.length === 0) throw archivedRoom();
   if (rooms.length === 1) return rooms[0];
   const linked = rooms.filter((room) => room.workspaceId === ctx.actor.workspaceId);
   if (linked.length === 1) return linked[0];

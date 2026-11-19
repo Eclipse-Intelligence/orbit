@@ -32,6 +32,8 @@ export function chatConversation(conversation: ChatConversation) {
     name: conversation.kind === "room" ? `#${conversation.name}` : conversation.name,
     workspace: conversation.workspaceName,
     person: conversation.dmUser,
+    ...(conversation.topic ? { topic: conversation.topic } : {}),
+    ...(conversation.archivedAt ? { archived: true } : {}),
     unread: conversation.unread,
     mentions: conversation.mentions,
     lastMessageAt: conversation.lastMessageAt,
@@ -42,6 +44,7 @@ export function chatMessage(message: ChatMessage) {
   return {
     id: message.id,
     threadId: message.parentId,
+    ...(message.kind === "event" ? { event: true } : {}),
     author: { id: message.author.id, name: message.author.name },
     ...(message.via ? { via: { workflowId: message.via.workflowId, name: message.via.name } } : {}),
     ...(message.hook ? { fromWebhook: true, webhook: { title: message.hook.title, url: message.hook.url, formatted: message.hook.block } } : {}),

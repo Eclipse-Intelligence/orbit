@@ -37,7 +37,7 @@ declare
   v_want boolean;
 begin
   select m.* into v_message from crm.chat_messages m where m.id = p_message for no key update;
-  if not found then
+  if not found or v_message.kind = 'event' then
     raise exception 'Message not found.' using errcode = 'P0002';
   end if;
   select c.* into v_conversation from crm.chat_conversations c where c.id = v_message.conversation_id;

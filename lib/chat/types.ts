@@ -16,6 +16,8 @@ export const CHAT_ROOM_NAME_MAX = 80;
 export const CHAT_CLIENT_KEY_MAX = 100;
 export const CHAT_HOOK_NAME_MAX = 80;
 export const CHAT_REACTION_MAX = 20;
+export const CHAT_TOPIC_MAX = 250;
+export const CHAT_ARCHIVED = "This room is archived.";
 
 export type ChatHookCard = { title: string | null; url: string | null; block: boolean };
 
@@ -32,6 +34,8 @@ export type ChatConversation = {
   workspaceId: string | null;
   workspaceName: string | null;
   dmUser: ChatPerson | null;
+  topic: string | null;
+  archivedAt: string | null;
   createdAt: string;
   lastMessageAt: string | null;
   lastReadAt: string;
@@ -41,6 +45,7 @@ export type ChatConversation = {
 
 export type ChatSidebar = {
   conversations: ChatConversation[];
+  archived: { id: string; name: string }[];
   threads: { unread: number; mentions: number };
   unreadConversations: number;
   mentioned: boolean;
@@ -50,10 +55,13 @@ export type ChatReaction = { emoji: string; count: number; mine: boolean; people
 
 export type ChatVia = { workflowId: string | null; name: string };
 
+export type ChatMessageKind = "message" | "event";
+
 export type ChatMessage = {
   id: string;
   conversationId: string;
   parentId: string | null;
+  kind: ChatMessageKind;
   author: { id: string | null; name: string };
   via: ChatVia | null;
   clientKey: string | null;
@@ -79,6 +87,7 @@ export type ChatRoom = {
   conversation: ChatConversation;
   members: ChatMember[];
   createdBy: string | null;
+  canArchive: boolean;
 };
 
 export type ChatPage = {

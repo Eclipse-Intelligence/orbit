@@ -33,7 +33,7 @@ export function useEmojiPrefs(userId: string): EmojiPrefs {
   return useMemo(() => ({ recent: recentEmoji(text), tone }), [text, tone]);
 }
 
-function Pill({ reaction, viewerId, onToggle }: { reaction: ChatReaction; viewerId: string; onToggle: () => void }) {
+function Pill({ reaction, viewerId, readOnly, onToggle }: { reaction: ChatReaction; viewerId: string; readOnly: boolean; onToggle: () => void }) {
   const names = reactorNames(reaction.people, viewerId);
   return (
     <span className="group/pill relative">
@@ -41,7 +41,8 @@ function Pill({ reaction, viewerId, onToggle }: { reaction: ChatReaction; viewer
         type="button"
         aria-pressed={reaction.mine}
         aria-label={`${reaction.emoji} ${reaction.count}: ${names}`}
-        onClick={onToggle}
+        aria-disabled={readOnly || undefined}
+        onClick={readOnly ? undefined : onToggle}
         className={cn(
           "hit inline-flex h-6 items-center gap-1.5 rounded-full px-2 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60 pointer-coarse:h-9 pointer-coarse:min-w-11 pointer-coarse:justify-center",
           reaction.mine ? "bg-surface-selected text-violet shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_60%,transparent)]" : "bg-surface-raised text-soft hover:bg-surface-active",
@@ -60,15 +61,27 @@ function Pill({ reaction, viewerId, onToggle }: { reaction: ChatReaction; viewer
   );
 }
 
-export default function Reactions({ message, viewerId, onToggle, onAdd }: { message: ChatMessage; viewerId: string; onToggle: (emoji: string) => void; onAdd: () => void }) {
+export default function Reactions({
+  message,
+  viewerId,
+  readOnly = false,
+  onToggle,
+  onAdd,
+}: {
+  message: ChatMessage;
+  viewerId: string;
+  readOnly?: boolean;
+  onToggle: (emoji: string) => void;
+  onAdd: () => void;
+}) {
   if (message.reactions.length === 0) return null;
   const full = message.reactions.length >= CHAT_REACTION_MAX;
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1 pointer-coarse:gap-2">
       {message.reactions.map((reaction) => (
-        <Pill key={reaction.emoji} reaction={reaction} viewerId={viewerId} onToggle={() => onToggle(reaction.emoji)} />
+        <Pill key={reaction.emoji} reaction={reaction} viewerId={viewerId} readOnly={readOnly} onToggle={() => onToggle(reaction.emoji)} />
       ))}
-      {!full && (
+      {!full && !readOnly && (
         <button
           type="button"
           aria-label="Add reaction"
