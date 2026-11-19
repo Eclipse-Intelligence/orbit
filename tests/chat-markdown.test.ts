@@ -326,3 +326,16 @@ describe("chat review round 2", () => {
     assert.match(html("**x** and **y**"), /<strong class="font-semibold">x<\/strong> and <strong class="font-semibold">y<\/strong>/);
   });
 });
+
+describe("chat review round 3", () => {
+  const B = '<strong class="font-semibold">';
+
+  it("closes bold and italic at the right star in a run", () => {
+    assert.equal(inner(html("**bold***italic*")), `<div>${B}bold</strong><em>italic</em></div>`);
+    assert.equal(inner(html("**a***")), `<div>${B}a</strong>*</div>`);
+    assert.equal(inner(html("*a **b***")), `<div><em>a ${B}b</strong></em></div>`);
+    assert.equal(inner(html("**a *b***")), `<div>${B}a <em>b</em></strong></div>`);
+    assert.equal(inner(html("***both***")), `<div>${B}<em>both</em></strong></div>`);
+    assert.equal(inner(html("**x** and *y*")), `<div>${B}x</strong> and <em>y</em></div>`);
+  });
+});

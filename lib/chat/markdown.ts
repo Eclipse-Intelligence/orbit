@@ -99,32 +99,74 @@ function closes(src: string, at: number, to: number, marker: Marker) {
   return true;
 }
 
+function atomicEnd(src: string, at: number, from: number, to: number) {
+  const char = src[at];
+  if (char === "`") {
+    const close = codeSpanAt(src, at, to);
+    if (close > 0) return close + 1;
+  }
+  if (char === "@") {
+    const mention = mentionAt(src, at, to);
+    if (mention) return mention.end;
+  }
+  if (char === "[") {
+    const link = linkAt(src, at, to);
+    if (link) return link.end;
+  }
+  if (char === "h" || char === "H") {
+    const url = urlAt(src, at, from, to);
+    if (url) return at + url.length;
+  }
+  return -1;
+}
+
+function openStars(src: string, start: number, end: number, from: number) {
+  let single = false;
+  let double = false;
+  let at = start;
+  while (at < end) {
+    const skip = atomicEnd(src, at, from, end);
+    if (skip > 0) {
+      at = skip;
+      continue;
+    }
+    if (src[at] !== "*") {
+      at += 1;
+      continue;
+    }
+    let run = at;
+    while (run < end && src[run] === "*") run += 1;
+    const size = run - at;
+    if (size % 2 === 1) single = !single;
+    if (size >= 2) double = !double;
+    at = run;
+  }
+  return { single, double };
+}
+
+function starRunCloser(src: string, at: number, start: number, to: number, from: number, marker: Marker) {
+  let run = at;
+  while (run < to && src[run] === "*") run += 1;
+  const size = run - at;
+  if (marker === "*") {
+    if (size === 1) return { close: at > start && closes(src, at, to, marker) ? at : -1, next: run };
+    const last = run - 1;
+    const fits = size >= 3 && !isSpace(src[at - 1]) && !isWord(run < to ? src[run] : undefined);
+    return { close: fits && openStars(src, start, at, from).double ? last : -1, next: run };
+  }
+  if (size < marker.length) return { close: -1, next: run };
+  if (size > marker.length && openStars(src, start, at, from).single) {
+    const last = run - marker.length;
+    return { close: closes(src, last, to, marker) ? last : -1, next: run };
+  }
+  return { close: at > start && closes(src, at, to, marker) ? at : -1, next: run };
+}
+
 function findCloser(src: string, start: number, to: number, from: number, marker: Marker) {
   let at = start;
   while (at < to) {
     const char = src[at];
     if (char === "\n") return -1;
-    if (char === "`") {
-      const close = codeSpanAt(src, at, to);
-      if (close > 0) {
-        at = close + 1;
-        continue;
-      }
-    }
-    if (char === "@") {
-      const mention = mentionAt(src, at, to);
-      if (mention) {
-        at = mention.end;
-        continue;
-      }
-    }
-    if (char === "[") {
-      const link = linkAt(src, at, to);
-      if (link) {
-        at = link.end;
-        continue;
-      }
-    }
     if (char === "h" || char === "H") {
       const url = urlAt(src, at, from, to);
       if (url) {
@@ -134,16 +176,15 @@ function findCloser(src: string, start: number, to: number, from: number, marker
         continue;
       }
     }
-    if (marker === "*" && at + 2 <= to && src.startsWith("**", at)) {
-      at += 2;
+    const skip = atomicEnd(src, at, from, to);
+    if (skip > 0) {
+      at = skip;
       continue;
     }
-    if (marker !== "*" && char === "*" && at + marker.length <= to && src.startsWith(marker, at)) {
-      let run = at;
-      while (src[run] === "*" && run < to) run += 1;
-      const last = run - marker.length;
-      if (last > start && closes(src, last, to, marker)) return last;
-      at = run;
+    if (char === "*" && marker.startsWith("*")) {
+      const found = starRunCloser(src, at, start, to, from, marker);
+      if (found.close >= 0) return found.close;
+      at = found.next;
       continue;
     }
     if (at + marker.length <= to && src.startsWith(marker, at) && at > start && closes(src, at, to, marker)) return at;
