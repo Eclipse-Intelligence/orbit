@@ -3,7 +3,7 @@
 import Button from "@/components/_ui/button";
 import { NewDot } from "@/components/_common/sidebar/sidebar-toggle";
 import { useCompaniesStore } from "@/stores/companies-store";
-import BellIcon from "@/public/assets/images/mail/bell.svg";
+import RemindersIcon from "@/public/assets/images/reminders/list.svg";
 
 export function useRemindersToggle() {
   const open = useCompaniesStore((state) => state.remindersOpen);
@@ -14,7 +14,7 @@ export function useRemindersToggle() {
   return { open, due, toggle };
 }
 
-export default function RemindersBell() {
+export default function RemindersButton() {
   const { open, due, toggle } = useRemindersToggle();
   return (
     <Button
@@ -26,7 +26,7 @@ export default function RemindersBell() {
       title="Reminders"
       onClick={() => toggle(true)}
     >
-      <BellIcon aria-hidden className="size-3.5" />
+      <RemindersIcon aria-hidden className="size-3.5" />
       {due > 0 && <NewDot />}
     </Button>
   );

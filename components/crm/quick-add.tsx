@@ -50,7 +50,7 @@ import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg"
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import TargetIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import MailIcon from "@/public/assets/images/companies/sidebar/mail.svg";
-import BellIcon from "@/public/assets/images/mail/bell.svg";
+import RemindersIcon from "@/public/assets/images/reminders/list.svg";
 import { useCompaniesStore } from "@/stores/companies-store";
 
 const NOTICE_MS = 6_000;
@@ -58,7 +58,7 @@ const LIFT_GAP = 12;
 
 const ICONS: Record<QuickAddKind, ComponentType<SVGProps<SVGSVGElement>>> = {
   task: TargetIcon,
-  reminder: BellIcon,
+  reminder: RemindersIcon,
   contact: BookClosedIcon,
   company: BuildingIcon,
   opportunity: ClipboardIcon,
