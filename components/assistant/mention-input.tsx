@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { searchMentionsAction } from "@/app/(crm)/search";
 import type { MentionOption } from "@/lib/crm/mention-search";
 import { liveMentions, type Mention, type MentionKind } from "@/lib/mentions";
-import { stripMention } from "@/lib/task-pad";
+import { pickedMention, stripMention } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 
 const KIND_LABELS: Record<MentionKind, string> = { contact: "Contact", company: "Company", task: "Task", opportunity: "Opportunity", proposal: "Proposal", member: "Teammate" };
@@ -132,8 +132,7 @@ export default function MentionInput({
 
   function pick(option: MentionOption) {
     if (!open) return;
-    const after = value.slice(open.end).replace(/^\s+/, "");
-    const inserted = markdown && /^[*_~`]/.test(after) ? `@${option.name}` : `@${option.name} `;
+    const { inserted, after } = pickedMention(option.name, value.slice(open.end), { afterMarkers: markdown });
     const next = `${value.slice(0, open.start)}${inserted}${after}`;
     const caret = open.start + inserted.length;
     const chosen: Mention = { kind: option.kind, id: option.id, name: option.name };

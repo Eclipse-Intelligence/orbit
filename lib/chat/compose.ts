@@ -17,10 +17,16 @@ function trimmed(value: string, start: number, end: number) {
   return from < to ? { from, to } : { from: start, to: end };
 }
 
-function wrapLine(line: string, marker: string, remove: boolean) {
-  const lead = line.length - line.trimStart().length;
+const LINE_START = /^\s*(?:(?:[-*•]|\d{1,9}[.)]|>)[ \t]+)?/;
+
+function lineCore(line: string) {
+  const lead = LINE_START.exec(line)![0].length;
   const tail = line.length - line.trimEnd().length;
-  const core = line.trim();
+  return { lead, tail, core: line.slice(lead, line.length - tail) };
+}
+
+function wrapLine(line: string, marker: string, remove: boolean) {
+  const { lead, tail, core } = lineCore(line);
   if (!core) return line;
   const next = remove ? core.slice(marker.length, core.length - marker.length) : `${marker}${core}${marker}`;
   return `${line.slice(0, lead)}${next}${line.slice(line.length - tail)}`;
@@ -32,8 +38,8 @@ function wrapped(text: string, marker: string) {
 
 function wrapLines(value: string, from: number, to: number, marker: string): TextEdit {
   const lines = value.slice(from, to).split("\n");
-  const filled = lines.filter((line) => line.trim());
-  const remove = filled.every((line) => wrapped(line.trim(), marker));
+  const filled = lines.filter((line) => lineCore(line).core);
+  const remove = filled.every((line) => wrapped(lineCore(line).core, marker));
   const text = lines.map((line) => wrapLine(line, marker, remove)).join("\n");
   return { start: from, end: to, text, selectionStart: from, selectionEnd: from + text.length };
 }
@@ -42,7 +48,7 @@ function wrap(value: string, start: number, end: number, marker: string): TextEd
   const { from, to } = trimmed(value, start, end);
   const size = marker.length;
   const selected = value.slice(from, to);
-  if (selected.includes("\n")) return wrapLines(value, from, to, marker);
+  if (selected.includes("\n") || lineCore(selected).lead > 0) return wrapLines(value, from, to, marker);
   if (wrapped(selected, marker)) {
     const inner = selected.slice(size, -size);
     return { start: from, end: to, text: inner, selectionStart: from, selectionEnd: from + inner.length };
@@ -125,8 +131,9 @@ export function formatEdit(value: string, start: number, end: number, action: Fo
 }
 
 export function mentionEdit(value: string, start: number, end: number): TextEdit {
-  const before = value[start - 1];
-  const space = start > 0 && !/\s/.test(before) && !OPENING_MARKERS.test(before) ? " " : "";
+  let edge = start;
+  while (edge > 0 && OPENING_MARKERS.test(value[edge - 1])) edge -= 1;
+  const space = edge > 0 && !/\s/.test(value[edge - 1]) ? " " : "";
   const text = `${space}@`;
   const caret = start + text.length;
   return { start, end, text, selectionStart: caret, selectionEnd: caret };

@@ -134,11 +134,19 @@ function findCloser(src: string, start: number, to: number, from: number, marker
         continue;
       }
     }
-    if (marker === "*" && src.startsWith("**", at)) {
+    if (marker === "*" && at + 2 <= to && src.startsWith("**", at)) {
       at += 2;
       continue;
     }
-    if (src.startsWith(marker, at) && at > start && closes(src, at, to, marker)) return at;
+    if (marker !== "*" && char === "*" && at + marker.length <= to && src.startsWith(marker, at)) {
+      let run = at;
+      while (src[run] === "*" && run < to) run += 1;
+      const last = run - marker.length;
+      if (last > start && closes(src, last, to, marker)) return last;
+      at = run;
+      continue;
+    }
+    if (at + marker.length <= to && src.startsWith(marker, at) && at > start && closes(src, at, to, marker)) return at;
     at += 1;
   }
   return -1;
@@ -148,7 +156,7 @@ const EMPHASIS: Record<Exclude<Marker, "***">, "bold" | "italic" | "strike"> = {
 
 function emphasisAt(src: string, at: number, from: number, to: number) {
   for (const marker of MARKERS) {
-    if (!src.startsWith(marker, at) || !opens(src, at, from, marker)) continue;
+    if (at + marker.length > to || !src.startsWith(marker, at) || !opens(src, at, from, marker)) continue;
     const close = findCloser(src, at + marker.length, to, from, marker);
     if (close > 0) return { marker, close };
   }

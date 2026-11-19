@@ -145,6 +145,7 @@ export function ComposerBox({
   over,
   composer,
   autoFocus,
+  submitVerb = "send",
   actions,
   phoneAction,
   onChange,
@@ -162,6 +163,7 @@ export function ComposerBox({
   over?: boolean;
   composer?: boolean;
   autoFocus?: boolean;
+  submitVerb?: "send" | "save";
   actions: ReactNode;
   phoneAction?: ReactNode;
   onChange: (value: string, mentions: Mention[]) => void;
@@ -303,7 +305,7 @@ export function ComposerBox({
       </div>
       {inFence && (
         <p role="status" className="caption-style text-faint px-1 pt-1 text-right max-md:hidden">
-          {isMac() ? "⌘ Enter" : "Ctrl Enter"} to send
+          {isMac() ? "⌘ Enter" : "Ctrl Enter"} to {submitVerb}
         </p>
       )}
       {focused && (

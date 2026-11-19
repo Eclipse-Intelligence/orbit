@@ -1499,6 +1499,11 @@ export function stripMention(text: string, caret: number, options: { afterMarker
   return { start: at, end: caret, query };
 }
 
+export function pickedMention(name: string, rest: string, options: { afterMarkers?: boolean } = {}) {
+  const glued = options.afterMarkers && /^[*_~`]/.test(rest);
+  return { inserted: glued ? `@${name}` : `@${name} `, after: rest.replace(/^\s+/, "") };
+}
+
 export type DocQuery = { start: number; end: number; query: string };
 
 export function docQueryAt(text: string, caret: number): DocQuery | null {

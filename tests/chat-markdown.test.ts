@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import MessageBody from "@/components/chat/message-body";
 import { applyEdit, encodeChatMentions, formatEdit, mentionEdit } from "@/lib/chat/compose";
 import { cleanFormat, formatMentions, formatsAt, insideCodeFence, markdownMarks, parseMarkdown } from "@/lib/chat/markdown";
-import { stripMention } from "@/lib/task-pad";
+import { pickedMention, stripMention } from "@/lib/task-pad";
 import { physicalComboMatches, SHORTCUT_BY_ID } from "@/lib/shortcuts";
 
 const SAM = "33333333-3333-4333-8333-333333333333";
@@ -285,5 +285,44 @@ describe("chat composer review fixes", () => {
     assert.equal(stripMention("x**@ma", 6, { afterMarkers: true }), null);
     assert.equal(stripMention("**@ma", 5), null);
     assert.deepEqual(stripMention("Call @Ac", 8), { start: 5, end: 8, query: "Ac" });
+  });
+});
+
+describe("chat review round 2", () => {
+  function run(value: string, start: number, end: number, action: Parameters<typeof formatEdit>[3]) {
+    return applyEdit(value, formatEdit(value, start, end, action));
+  }
+
+  it("adds a space before @ after a closing marker, so the picker opens", () => {
+    for (const text of ["**Note**", "snake_", "~~gone~~", "_it_"]) {
+      const next = applyEdit(text, mentionEdit(text, text.length, text.length));
+      assert.equal(next, `${text} @`, text);
+      assert.ok(stripMention(next, next.length, { afterMarkers: true }), text);
+    }
+    assert.equal(applyEdit("hi **", mentionEdit("hi **", 5, 5)), "hi **@");
+  });
+
+  it("glues a picked mention only to a marker that follows at once", () => {
+    assert.deepEqual(pickedMention("Mark Ridgeon", " **done**", { afterMarkers: true }), { inserted: "@Mark Ridgeon ", after: "**done**" });
+    assert.deepEqual(pickedMention("Mark Ridgeon", "** later", { afterMarkers: true }), { inserted: "@Mark Ridgeon", after: "** later" });
+    assert.deepEqual(pickedMention("Mark Ridgeon", "**", {}), { inserted: "@Mark Ridgeon ", after: "**" });
+    assert.deepEqual(pickedMention("Mark Ridgeon", "  next", { afterMarkers: true }), { inserted: "@Mark Ridgeon ", after: "next" });
+  });
+
+  it("keeps list and quote prefixes outside the markers", () => {
+    assert.equal(run("- one\n- two", 0, 11, "bold"), "- **one**\n- **two**");
+    assert.equal(run("- **one**\n- **two**", 0, 19, "bold"), "- one\n- two");
+    assert.equal(run("1. one\n2) two", 0, 13, "italic"), "1. _one_\n2) _two_");
+    assert.equal(run("> quoted", 0, 8, "strike"), "> ~~quoted~~");
+    assert.equal(run("* item", 0, 6, "bold"), "* **item**");
+    for (const text of [run("- one\n- two", 0, 11, "bold"), run("> quoted", 0, 8, "strike")]) {
+      assert.ok(parseMarkdown(text).every((block) => block.type === "list" || block.type === "quote"), text);
+    }
+  });
+
+  it("closes bold at the end of a run of stars", () => {
+    assert.match(html("**a *b*** done"), /<strong class="font-semibold">a <em>b<\/em><\/strong> done/);
+    assert.match(html("***both***"), /<strong class="font-semibold"><em>both<\/em><\/strong>/);
+    assert.match(html("**x** and **y**"), /<strong class="font-semibold">x<\/strong> and <strong class="font-semibold">y<\/strong>/);
   });
 });

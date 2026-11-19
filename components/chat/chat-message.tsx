@@ -69,6 +69,7 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
         mentions={mentions}
         placeholder="Message"
         label="Edit message"
+        submitVerb="save"
         scope={pane === "room" && !discussion ? "room" : "thread"}
         autoFocus
         actions={
