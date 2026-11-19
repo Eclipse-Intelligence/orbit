@@ -3,7 +3,7 @@ import { Fragment, type ReactNode } from "react";
 import LinkedText from "@/components/_ui/linked-text";
 import { recordHref } from "@/lib/docs/routes";
 import { parseMarkdown, type Block, type ChatFormat, type Inline } from "@/lib/chat/markdown";
-import { plainMentions, splitMentions, type Mention } from "@/lib/mentions";
+import { plainMentions, roomMentionRanges, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 
 const MENTION = "rounded-[4px] bg-[var(--tag-purple-bg)] text-[var(--tag-purple-text)] shadow-[0_0_0_2px_var(--tag-purple-bg)]";
@@ -30,6 +30,24 @@ function MentionChip({ mention, viewer }: { mention: Mention; viewer: Viewer }) 
   );
 }
 
+function RoomText({ text }: { text: string }) {
+  const ranges = roomMentionRanges(text);
+  if (ranges.length === 0) return <LinkedText text={text} />;
+  const pieces: ReactNode[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    if (range.start > cursor) pieces.push(<LinkedText key={`t${cursor}`} text={text.slice(cursor, range.start)} />);
+    pieces.push(
+      <span key={`r${range.start}`} className={MENTION_ME}>
+        {text.slice(range.start, range.end)}
+      </span>,
+    );
+    cursor = range.end;
+  }
+  if (cursor < text.length) pieces.push(<LinkedText key={`t${cursor}`} text={text.slice(cursor)} />);
+  return <>{pieces}</>;
+}
+
 function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
   const mail = href.toLowerCase().startsWith("mailto:");
   return (
@@ -43,7 +61,7 @@ function renderInline(nodes: Inline[], viewer: Viewer, inLink = false): ReactNod
   return nodes.map((node, index) => {
     switch (node.type) {
       case "text":
-        return inLink ? <Fragment key={index}>{node.text}</Fragment> : <LinkedText key={index} text={node.text} />;
+        return inLink ? <Fragment key={index}>{node.text}</Fragment> : <RoomText key={index} text={node.text} />;
       case "mention":
         return <MentionChip key={index} mention={node.mention} viewer={viewer} />;
       case "code":
@@ -128,7 +146,7 @@ export default function MessageBody({
   }
   return (
     <div className={cn(BODY, className)}>
-      {splitMentions(body).map((piece, index) => ("mention" in piece ? <MentionChip key={index} mention={piece.mention} viewer={viewer} /> : <LinkedText key={index} text={piece.text} />))}
+      {splitMentions(body).map((piece, index) => ("mention" in piece ? <MentionChip key={index} mention={piece.mention} viewer={viewer} /> : <RoomText key={index} text={piece.text} />))}
     </div>
   );
 }

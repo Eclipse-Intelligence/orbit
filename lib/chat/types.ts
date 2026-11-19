@@ -24,6 +24,17 @@ export type ChatHook = { id: string; name: string; createdBy: string | null; pau
 
 export type ChatHookSecret = { hook: ChatHook; secret: string };
 
+export const CHAT_NOTIFY_LEVELS = ["default", "all", "mentions", "mute"] as const;
+
+export type ChatNotify = (typeof CHAT_NOTIFY_LEVELS)[number];
+
+export type ChatLevel = Exclude<ChatNotify, "default">;
+
+export function chatLevel(kind: ChatKind, notify: ChatNotify): ChatLevel {
+  if (notify !== "default") return notify;
+  return kind === "dm" ? "all" : "mentions";
+}
+
 export type ChatConversation = {
   id: string;
   kind: ChatKind;
@@ -36,7 +47,12 @@ export type ChatConversation = {
   lastReadAt: string;
   unread: number;
   mentions: number;
+  notify: ChatNotify;
+  muteMentions: boolean;
+  starred: boolean;
 };
+
+export type ChatNotifyInput = { notify?: ChatNotify; muteMentions?: boolean; starred?: boolean };
 
 export type ChatSidebar = {
   conversations: ChatConversation[];
@@ -106,6 +122,10 @@ export type ChatThreadCard = {
 
 export type ChatThreads = { threads: ChatThreadCard[]; next: string | null };
 
+export type ChatUnreadGroup = { conversation: ChatConversation; messages: ChatMessage[]; more: number };
+
+export type ChatUnreads = { groups: ChatUnreadGroup[] };
+
 export type ChatSearchResult = { messages: ChatMessage[] };
 
 export type ChatPost = { message: ChatMessage; root: ChatRoot | null; duplicate: boolean };
@@ -115,6 +135,7 @@ export type ChatLiveEvent =
   | { type: "edit"; conversationId: string; message: ChatMessage }
   | { type: "delete"; conversationId: string; messageId: string; parentId: string | null; root: ChatRoot | null }
   | { type: "read"; conversationId: string; lastReadAt: string }
+  | { type: "unread"; conversationId: string; messageId: string; lastReadAt: string }
   | { type: "thread-read"; conversationId: string; messageId: string; lastReadAt: string }
   | { type: "conversation"; conversationId: string }
   | { type: "removed"; conversationId: string };

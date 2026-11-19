@@ -117,6 +117,31 @@ function DropdownMenuRadioItem({
   );
 }
 
+function DropdownMenuCheckboxItem({
+  className,
+  children,
+  checked,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) {
+  const on = checked === true;
+  return (
+    <DropdownMenuPrimitive.CheckboxItem
+      data-slot="dropdown-menu-checkbox-item"
+      checked={checked}
+      className={cn(
+        "ui-style text-foreground ease-power3-out relative flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 transition-colors duration-150 outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-white/6",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+      <span aria-hidden className={cn("ml-auto inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 ease-power3-out", on ? "bg-primary" : "bg-surface-active")}>
+        <span className={cn("size-3 rounded-full bg-white transition-transform duration-200 ease-power3-out", on ? "translate-x-[14px]" : "translate-x-0.5")} />
+      </span>
+    </DropdownMenuPrimitive.CheckboxItem>
+  );
+}
+
 function DropdownMenuLabel({
   className,
   ...props
@@ -148,6 +173,7 @@ export {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuLabel,

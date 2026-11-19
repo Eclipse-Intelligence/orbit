@@ -37,7 +37,7 @@ import { decide, parallelKey, ParallelError, type Decision, type DecisionAnswer,
 import { siteOrigin } from "@/lib/site-url";
 import { alertLink } from "@/lib/crm/workspaces";
 import { findMyRooms, postMessage } from "@/lib/crm/chat";
-import { mentionsIn, splitMentions } from "@/lib/mentions";
+import { mentionsIn, splitMentions, stripRoomMention } from "@/lib/mentions";
 import { CHAT_BODY_MAX, CHAT_CLIENT_KEY_MAX } from "@/lib/chat/types";
 import { appTimeZone } from "@/lib/time";
 import { dayKeyAt, dueDayFrom, scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
@@ -1145,6 +1145,7 @@ export function chatBody(template: unknown, vars: Vars) {
       .join("");
   }
   if (untrustedTags(body, typed)) body = body.replace(/\]\(member:/g, "] (member:");
+  body = stripRoomMention(body);
   return body.trim();
 }
 

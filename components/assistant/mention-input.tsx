@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from "react-dom";
 import { searchMentionsAction } from "@/app/(crm)/search";
 import type { MentionOption } from "@/lib/crm/mention-search";
-import { liveMentions, type Mention, type MentionKind } from "@/lib/mentions";
+import { liveMentions, roomMentionRanges, type Mention, type MentionKind } from "@/lib/mentions";
 import { pickedMention, stripMention } from "@/lib/task-pad";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +15,8 @@ type Open = { start: number; end: number; query: string };
 export type InputMark = { start: number; end: number; className: string };
 
 const MENTION_CLASS = "bg-[var(--tag-purple-bg)] text-[var(--tag-purple-text)] shadow-[0_0_0_2px_var(--tag-purple-bg)]";
+
+const ROOM_OPTION: MentionOption = { kind: "member", id: "room", name: "room", detail: "Notify everyone in this room" };
 
 function highlightPieces(text: string, mentions: Mention[], extra: InputMark[]) {
   const ranges: { start: number; end: number; className: string }[] = extra.map((mark) => ({ ...mark }));
@@ -75,6 +77,7 @@ export default function MentionInput({
   onKeyDown: onKey,
   onBlur,
   markdown,
+  roomMention,
 }: {
   id: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -95,6 +98,7 @@ export default function MentionInput({
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onBlur?: () => void;
   markdown?: boolean;
+  roomMention?: boolean;
 }) {
   const [open, setOpen] = useState<Open | null>(null);
   const [found, setFound] = useState<{ query: string; options: MentionOption[] }>({ query: "", options: [] });
@@ -126,7 +130,7 @@ export default function MentionInput({
 
   function refresh(text: string, caret: number, known: Mention[] = mentions) {
     const found = stripMention(text, caret, { afterMarkers: markdown });
-    const tagged = found && [...known, ...picked.current].some((mention) => text.startsWith(`@${mention.name}`, found.start));
+    const tagged = found && ((roomMention && /^@room\s/i.test(text.slice(found.start))) || [...known, ...picked.current].some((mention) => text.startsWith(`@${mention.name}`, found.start)));
     setOpen(found && !tagged ? found : null);
   }
 
@@ -135,9 +139,13 @@ export default function MentionInput({
     const { inserted, after } = pickedMention(option.name, value.slice(open.end), { afterMarkers: markdown });
     const next = `${value.slice(0, open.start)}${inserted}${after}`;
     const caret = open.start + inserted.length;
-    const chosen: Mention = { kind: option.kind, id: option.id, name: option.name };
-    picked.current = [...picked.current.slice(-20), chosen];
-    onChange(next, liveMentions(next, [...mentions.filter((mention) => mention.id !== option.id), chosen]));
+    if (option === ROOM_OPTION) {
+      onChange(next, liveMentions(next, mentions));
+    } else {
+      const chosen: Mention = { kind: option.kind, id: option.id, name: option.name };
+      picked.current = [...picked.current.slice(-20), chosen];
+      onChange(next, liveMentions(next, [...mentions.filter((mention) => mention.id !== option.id), chosen]));
+    }
     setOpen(null);
     setFound({ query: "", options: [] });
     const node = inputRef.current;
@@ -157,7 +165,7 @@ export default function MentionInput({
       }
       if ((event.key === "Enter" && !composing(event)) || event.key === "Tab") {
         event.preventDefault();
-        pick(options[highlight]);
+        pick(options[Math.min(highlight, options.length - 1)]);
         return;
       }
       if (event.key === "Escape") {
@@ -175,8 +183,10 @@ export default function MentionInput({
     }
   }
 
-  const options = open && found.query === open.query ? found.options : [];
-  const pieces = highlightPieces(value, mentions, marks);
+  const offerRoom = Boolean(roomMention && open && "room".startsWith(open.query.toLowerCase()));
+  const options = [...(offerRoom ? [ROOM_OPTION] : []), ...(open && found.query === open.query ? found.options : [])];
+  const roomMarks = roomMention ? roomMentionRanges(value).map((range) => ({ ...range, className: MENTION_CLASS })) : [];
+  const pieces = highlightPieces(value, mentions, [...roomMarks, ...marks]);
   const listId = `${id}-mentions`;
   const showList = open !== null && options.length > 0;
   const indexed = options.map((option, index) => ({ option, index }));
@@ -188,14 +198,14 @@ export default function MentionInput({
 
   function optionRow(option: MentionOption, index: number) {
     return (
-      <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === highlight}>
+      <li key={`${option.kind}-${option.id}`} role="option" aria-selected={index === Math.min(highlight, options.length - 1)}>
         <button
           type="button"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => pick(option)}
-          className={cn("flex w-full cursor-pointer flex-col items-start rounded-lg px-2.5 py-1.5 text-left", index === highlight ? "bg-white/[0.07]" : "hover:bg-white/5")}
+          className={cn("flex w-full cursor-pointer flex-col items-start rounded-lg px-2.5 py-1.5 text-left", index === Math.min(highlight, options.length - 1) ? "bg-white/[0.07]" : "hover:bg-white/5")}
         >
-          <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option.name}</span>
+          <span className="text-foreground w-full truncate text-[13.5px] leading-5">{option === ROOM_OPTION ? "@room" : option.name}</span>
           <span className="caption-style text-subtle w-full truncate">
             {option.kind === "member" && option.detail ? option.detail : `${KIND_LABELS[option.kind]}${option.detail ? ` · ${option.detail}` : ""}`}
           </span>

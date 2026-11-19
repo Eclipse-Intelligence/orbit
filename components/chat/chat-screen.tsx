@@ -14,6 +14,7 @@ import RoomSettings from "@/components/chat/room-settings";
 import RoomView from "@/components/chat/room-view";
 import ThreadPanel from "@/components/chat/thread-panel";
 import ThreadsView from "@/components/chat/threads-view";
+import UnreadsView from "@/components/chat/unreads-view";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
 import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
@@ -119,6 +120,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const multi = workspaces.length > 1;
   const view = location.view;
   const roomId = view.kind === "room" ? view.id : null;
+  const [held, setHeld] = useState<{ conversationId: string; messageId: string } | null>(null);
+  if (held && held.conversationId !== roomId) setHeld(null);
   const threadId = location.thread;
   const detail = view.kind !== "home";
 
@@ -193,12 +196,26 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
     }
   }, []);
 
-  const { loadRoom, loadMessages, loadThread, deliver } = actions;
+  const { loadRoom, loadMessages, loadThread, deliver, markRead, markAllRead } = actions;
+  const markUnreadNow = actions.markUnread;
+
+  const markUnread = useCallback(
+    async (conversationId: string, messageId: string | null) => {
+      const open = latest.current.location.view;
+      const here = open.kind === "room" && open.id === conversationId;
+      if (here) setHeld({ conversationId, messageId: messageId ?? "" });
+      const marked = await markUnreadNow(conversationId, messageId);
+      if (here) setHeld((current) => (current?.conversationId !== conversationId ? current : marked ? { conversationId, messageId: marked } : null));
+      return marked;
+    },
+    [markUnreadNow],
+  );
 
   const send = useCallback(
     (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; discardOnFailure?: boolean }) => {
       const body = messageBody(input.text, input.mentions);
       if (!body || !input.conversationId) return Promise.resolve(null);
+      if (!input.parentId) setHeld((current) => (current?.conversationId === input.conversationId ? null : current));
       const message = localMessage({
         clientKey: newClientKey(),
         conversationId: input.conversationId,
@@ -350,6 +367,9 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       case "read":
         dispatch({ type: "read", conversationId: event.conversationId, lastReadAt: event.lastReadAt });
         return;
+      case "unread":
+        dispatch({ type: "unread", conversationId: event.conversationId, messageId: event.messageId, lastReadAt: event.lastReadAt });
+        return;
       case "thread-read":
         dispatch({ type: "thread-read", rootId: event.messageId, lastReadAt: event.lastReadAt });
         return;
@@ -397,6 +417,16 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
     if (!latest.current.location.thread) return false;
     closeThread();
   });
+  useShortcut("chat-mark-read", () => {
+    const current = latest.current.location.view;
+    if (current.kind !== "room") return false;
+    setHeld(null);
+    markRead(current.id, null);
+  });
+  useShortcut("chat-mark-all-read", () => {
+    setHeld(null);
+    markAllRead();
+  });
   useShortcut("chat-reply", () => {
     const focused = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>("[data-chat-message]") : null;
     const row = focused ?? document.querySelector<HTMLElement>("[data-chat-room-pane] [data-chat-message]:hover");
@@ -412,8 +442,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const members = room?.members;
   const memberNames = useMemo(() => new Map((members ?? []).map((member) => [member.id.toLowerCase(), member.name])), [members]);
   const context = useMemo<ChatContextValue>(
-    () => ({ ...actions, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames }),
-    [actions, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames],
+    () => ({ ...actions, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames }),
+    [actions, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames],
   );
 
   const entry: ChatConversation | null = roomId ? (sidebar?.conversations.find((item) => item.id === roomId) ?? room?.conversation ?? null) : null;
@@ -471,6 +501,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
             >
               {view.kind === "threads" ? (
                 <ThreadsView initial={threadsSeed} />
+              ) : view.kind === "unreads" ? (
+                <UnreadsView />
               ) : view.kind === "room" ? (
                 <RoomView
                   key={view.id}
@@ -481,6 +513,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                   timeline={state.timelines[view.id] ?? null}
                   focusId={location.message}
                   bottomSignal={bottomSignal}
+                  held={held?.conversationId === view.id ? held.messageId : null}
                   onSettings={() => setSettings({ open: true, adding: false })}
                   onAddPeople={() => setSettings({ open: true, adding: true })}
                 />

@@ -6,9 +6,11 @@ import { AvatarStack, ChatAvatar, roomLabel, useChat } from "@/components/chat/c
 import { setChatViewing, useChatEvents } from "@/components/chat/chat-live";
 import Composer from "@/components/chat/composer";
 import MessageList from "@/components/chat/message-list";
+import { NotifyButton } from "@/components/chat/notify-menu";
 import { useTyping } from "@/components/chat/use-typing";
 import { isLocal, lastOwnMessage, newestServerId, typingLine, type Timeline } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage, ChatRoom } from "@/lib/chat/types";
+import { ROOM_MENTION_MAX_MEMBERS } from "@/lib/mentions";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import SlidersIcon from "@/public/assets/images/chat/sliders.svg";
@@ -71,6 +73,7 @@ export default function RoomView({
   timeline,
   focusId,
   bottomSignal,
+  held,
   onSettings,
   onAddPeople,
 }: {
@@ -81,6 +84,7 @@ export default function RoomView({
   timeline: Timeline | null;
   focusId: string | null;
   bottomSignal: number;
+  held: string | null;
   onSettings: () => void;
   onAddPeople: () => void;
 }) {
@@ -96,6 +100,11 @@ export default function RoomView({
   const messages = useMemo(() => timeline?.messages ?? [], [timeline]);
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
   if (ready && !divider.ready) setDivider({ ready: true, id: firstUnread(messages, timeline?.lastReadAt ?? null, viewer.id) ?? timeline?.firstUnreadId ?? null });
+  const [heldShown, setHeldShown] = useState<string | null>(null);
+  if (held && held !== heldShown) {
+    setHeldShown(held);
+    setDivider({ ready: true, id: held });
+  }
 
   useChatEvents((event) => {
     if (event.type === "message" && event.conversationId === conversationId) typing.stopped(event.message.author.id);
@@ -106,7 +115,7 @@ export default function RoomView({
   const newestMessage = newest ? messages.find((message) => message.id === newest) : null;
   const behind = Boolean(newestMessage && timeline?.lastReadAt && newestMessage.createdAt > timeline.lastReadAt);
 
-  const reading = ready && atBottom && visible;
+  const reading = ready && atBottom && visible && held === null;
   useEffect(() => {
     if (!reading) return;
     setChatViewing(conversationId);
@@ -168,12 +177,13 @@ export default function RoomView({
               </span>
             </span>
           )}
+          {conversation && <NotifyButton conversation={conversation} />}
           {!dm && info && (
             <Button variant="ghost" size="icon" aria-label="Room settings" title="Room settings" onClick={onSettings} className="hit max-md:size-11">
               <SlidersIcon aria-hidden className="size-3.5" />
             </Button>
           )}
-          {(dm || !info) && <span aria-hidden className="size-11 md:hidden" />}
+          {(dm || !info) && !conversation && <span aria-hidden className="size-11 md:hidden" />}
         </span>
       </header>
       {roomError && !info ? (
@@ -231,6 +241,7 @@ export default function RoomView({
           autoFocus={!chat.location.thread}
           disabled={!info}
           onTyping={typing.send}
+          roomMention={info?.kind === "room" && (members?.length ?? 0) <= ROOM_MENTION_MAX_MEMBERS}
           onSend={(text, mentions) => send({ conversationId, parentId: null, text, mentions })}
           onEditLast={() => {
             const own = lastOwnMessage(messages, viewer.id);

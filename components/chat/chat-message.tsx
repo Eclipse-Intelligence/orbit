@@ -11,10 +11,11 @@ import { ComposerBox, focusComposer } from "@/components/chat/composer";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
+import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
 import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
-import { mentionsIn, plainMentions, type Mention } from "@/lib/mentions";
+import { mentionsIn, mentionsRoom, plainMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
@@ -24,6 +25,7 @@ import EditIcon from "@/public/assets/images/workflows/edit.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
 import ReplyIcon from "@/public/assets/images/mail/reply.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
+import UnreadIcon from "@/public/assets/images/chat/unreads.svg";
 
 const LONG_PRESS_MS = 450;
 const MOVE_SLOP = 10;
@@ -110,7 +112,8 @@ function ToolButton({ label, title, onClick, children }: { label: string; title?
 
 function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, copyLink, openThread, memberNames } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, copyLink, openThread, memberNames, markUnread, discussion } = chat;
+  const unreadHint = useShortcutHint("chat-mark-unread");
   const pressed = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -121,10 +124,12 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const deleted = Boolean(message.deletedAt);
   const error = local && message.clientKey ? failed[message.clientKey] : undefined;
   const isEditing = editing?.id === message.id && editing.pane === pane && !deleted;
-  const mentionsMe = (!own || Boolean(message.via)) && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
+  const mentionsMe =
+    (!own || Boolean(message.via)) && !deleted && (message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase()) || (!message.hook && !message.via && mentionsRoom(message.body)));
   const canReply = !inThread && !local && !deleted;
   const canEdit = own && !local && !deleted && !message.via;
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted;
+  const canMarkUnread = pane === "room" && !discussion && !inThread && !message.parentId && !local && !deleted;
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
@@ -193,6 +198,12 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
       onPointerUp={endPress}
       onPointerCancel={endPress}
       onClickCapture={(event) => {
+        if (canMarkUnread && event.altKey && !isEditing && event.currentTarget.contains(event.target as Node)) {
+          event.preventDefault();
+          event.stopPropagation();
+          void markUnread(message.conversationId, message.id);
+          return;
+        }
         if (!pressed.current || !event.currentTarget.contains(event.target as Node)) return;
         pressed.current = false;
         event.preventDefault();
@@ -276,6 +287,11 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
               <ReplyIcon aria-hidden className="size-3.5" />
             </ToolButton>
           )}
+          {canMarkUnread && (
+            <ToolButton label="Mark unread" title={unreadHint ? `Mark unread (${unreadHint})` : "Mark unread"} onClick={() => void markUnread(message.conversationId, message.id)}>
+              <UnreadIcon aria-hidden className="size-3.5" />
+            </ToolButton>
+          )}
           <ToolButton label={copied ? "Link copied" : "Copy link"} onClick={() => void copy()}>
             {copied ? <CheckIcon aria-hidden className="text-success size-3.5" /> : <LinkIcon aria-hidden className="size-3.5" />}
           </ToolButton>
@@ -338,6 +354,11 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           {!local && (
             <SheetAction onClick={() => act(() => void copy())} icon={<LinkIcon aria-hidden className="size-4" />}>
               Copy link
+            </SheetAction>
+          )}
+          {canMarkUnread && (
+            <SheetAction onClick={() => act(() => void markUnread(message.conversationId, message.id))} icon={<UnreadIcon aria-hidden className="size-4" />}>
+              Mark unread
             </SheetAction>
           )}
           {canEdit && (

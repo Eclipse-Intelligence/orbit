@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "react";
-import { deleteMessageAction, editMessageAction, postMessageAction } from "@/app/(crm)/chat/actions";
+import { deleteMessageAction, editMessageAction, markAllReadAction, markUnreadAction, postMessageAction, setNotifyAction } from "@/app/(crm)/chat/actions";
 import { chatJoined, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { encodeChatMentions } from "@/lib/chat/compose";
 import { formatMentions, type ChatFormat } from "@/lib/chat/markdown";
-import { isLocal, newerCursor, oldestServerId, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
-import type { ChatMessage, ChatNeedsShare } from "@/lib/chat/types";
+import { isLocal, newerCursor, oldestServerId, sidebarAllRead, sidebarNotify, sidebarRead, type ChatAction, type ChatState } from "@/lib/chat/timeline";
+import type { ChatMessage, ChatNeedsShare, ChatNotifyInput } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { useCompaniesStore } from "@/stores/companies-store";
 
@@ -23,6 +23,9 @@ export type ChatTimelineActions = {
   remove: (message: ChatMessage) => Promise<boolean>;
   markRead: (conversationId: string, upTo: string | null) => void;
   markThreadRead: (rootId: string, upTo: string | null) => void;
+  markUnread: (conversationId: string, messageId: string | null) => Promise<string | null>;
+  markAllRead: () => void;
+  setNotify: (conversationId: string, change: ChatNotifyInput) => void;
 };
 
 export function memberIds(body: string, format: ChatFormat = "markdown") {
@@ -217,8 +220,46 @@ export function useChatActions(
     [dispatch],
   );
 
+  const markUnread = useCallback(
+    async (conversationId: string, messageId: string | null) => {
+      reads.current.delete(conversationId);
+      const result = await markUnreadAction(conversationId, messageId).catch(() => ({ error: "Couldn't mark it unread. Try again." }));
+      if ("ok" in result && result.ok) {
+        dispatch({ type: "unread", conversationId, messageId: result.messageId, lastReadAt: result.lastReadAt });
+        refreshChatSidebar();
+        return result.messageId;
+      }
+      errorRef.current("error" in result ? result.error : "Couldn't mark it unread. Try again.");
+      return null;
+    },
+    [dispatch],
+  );
+
+  const markAllRead = useCallback(() => {
+    reads.current.clear();
+    useCompaniesStore.getState().setChat((current) => (current ? sidebarAllRead(current) : current));
+    void markAllReadAction()
+      .catch(() => ({ error: "Couldn't mark everything read. Try again." }))
+      .then((result) => {
+        if ("error" in result) errorRef.current(result.error);
+        refreshChatSidebar();
+      });
+  }, []);
+
+  const setNotify = useCallback((conversationId: string, change: ChatNotifyInput) => {
+    useCompaniesStore.getState().setChat((current) => (current ? sidebarNotify(current, conversationId, change) : current));
+    void setNotifyAction(conversationId, change)
+      .catch(() => ({ error: "Couldn't save. Try again." }))
+      .then((result) => {
+        if ("error" in result) {
+          errorRef.current(result.error);
+          refreshChatSidebar();
+        }
+      });
+  }, []);
+
   return useMemo(
-    () => ({ loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, markRead, markThreadRead }),
-    [loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, markRead, markThreadRead],
+    () => ({ loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, markRead, markThreadRead, markUnread, markAllRead, setNotify }),
+    [loadRoom, loadMessages, loadThread, deliver, retry, edit, remove, markRead, markThreadRead, markUnread, markAllRead, setNotify],
   );
 }
