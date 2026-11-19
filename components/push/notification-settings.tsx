@@ -7,6 +7,7 @@ import { SettingsCard } from "@/components/crm/settings-ui";
 import { disablePush, enablePush, isAppleMobile, pushState, sendPushTest, type PushState } from "@/components/push/push-client";
 import type { NotifyMail } from "@/lib/mail/notify";
 import { Radio } from "@/components/_ui/radio";
+import { setReminderMorningAction } from "@/app/(crm)/reminders";
 
 const LEVELS: { id: NotifyMail; label: string; detail?: string }[] = [
   { id: "important", label: "Important only", detail: "People you know and conversations you're in, plus calendar replies." },
@@ -31,20 +32,28 @@ const CALENDAR_CHOICES: { value: string; label: string }[] = [
   { value: "30", label: "30 minutes before" },
 ];
 
+const MORNING_CHOICES = Array.from({ length: 13 }, (_, index) => {
+  const minutes = 5 * 60 + index * 30;
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+});
+
 export default function NotificationSettings({
   initialMail,
   initialCalendarMinutes,
   initialReads,
   initialTeam,
+  initialMorning,
 }: {
   initialMail: NotifyMail;
   initialCalendarMinutes: number | null;
   initialReads: boolean;
   initialTeam: boolean;
+  initialMorning: string;
 }) {
   const [calendar, setCalendar] = useState(initialCalendarMinutes === null ? "off" : String(initialCalendarMinutes));
   const [reads, setReads] = useState(initialReads);
   const [team, setTeam] = useState(initialTeam);
+  const [morning, setMorning] = useState(initialMorning);
   const [state, setState] = useState<PushState | null>(null);
   const [mail, setMail] = useState(initialMail);
   const [busy, setBusy] = useState(false);
@@ -105,6 +114,20 @@ export default function NotificationSettings({
     setTeam(next);
     void save({ team: next }, () => setTeam(!next));
   }
+
+  function chooseMorning(next: string) {
+    const previous = morning;
+    setMorning(next);
+    void setReminderMorningAction(next)
+      .catch(() => ({ error: "That didn't save. Try again." }))
+      .then((result) => {
+        if (!("error" in result)) return;
+        setMorning(previous);
+        setMessage({ text: "That didn't save. Try again.", tone: "alert" });
+      });
+  }
+
+  const mornings = MORNING_CHOICES.includes(morning) ? MORNING_CHOICES : [...MORNING_CHOICES, morning].sort();
 
   return (
     <SettingsCard id="notifications" title="Notifications">
@@ -181,6 +204,23 @@ export default function NotificationSettings({
             {CALENDAR_CHOICES.map((choice) => (
               <option key={choice.value} value={choice.value}>
                 {choice.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label htmlFor="notify-reminders" className="text-[14px]">
+            Morning reminders
+          </label>
+          <select
+            id="notify-reminders"
+            value={morning}
+            onChange={(event) => chooseMorning(event.target.value)}
+            className="bg-secondary text-foreground select-chevron h-8 cursor-pointer rounded-full pl-3 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            {mornings.map((time) => (
+              <option key={time} value={time}>
+                {time}
               </option>
             ))}
           </select>

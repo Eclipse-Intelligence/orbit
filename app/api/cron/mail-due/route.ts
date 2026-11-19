@@ -7,6 +7,7 @@ import { syncTaskBlocks } from "@/lib/crm/task-outlook";
 import { SERIES_SHARE, syncSeriesOutlook } from "@/lib/crm/series-outlook";
 import { sweepWaitingSteers } from "@/lib/assistant/chat";
 import { processTaskReminders } from "@/lib/task-reminder-push";
+import { processReminderPushes } from "@/lib/reminder-push";
 import { rollDueSeries } from "@/lib/crm/task-series";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,10 @@ async function handle(request: Request) {
     console.error("Task reminders failed", error instanceof Error ? error.name : "unknown");
     return null;
   });
+  const reminders = await processReminderPushes({ deadline: Date.now() + 10_000 }).catch((error) => {
+    console.error("Reminder pushes failed", error instanceof Error ? error.name : "unknown");
+    return null;
+  });
   const throttled = new Set<string>();
   const seriesBlocks = await syncSeriesOutlook({ deadline: Date.now() + 15_000, throttled, limit: SERIES_SHARE }).catch((error) => {
     console.error("Outlook repeating tasks failed", error instanceof Error ? error.name : "unknown");
@@ -55,7 +60,7 @@ async function handle(request: Request) {
     console.error("Waiting assistant messages sweep failed", error instanceof Error ? error.name : "unknown");
     return 0;
   });
-  return Response.json({ users, calendar, repeats, taskReminders, taskBlocks, seriesBlocks, agentMail, polled, steering });
+  return Response.json({ users, calendar, repeats, taskReminders, reminders, taskBlocks, seriesBlocks, agentMail, polled, steering });
 }
 
 export const GET = handle;

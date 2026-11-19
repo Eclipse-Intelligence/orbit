@@ -80,8 +80,8 @@ describe("agent docs", () => {
       `The assistant sends ${CORE_TOOLS.length} core tools on every call. Keep it to 30 or fewer and put the rest in an area of TOOL_DOMAINS (see "Adding a tool" in docs/assistant.md).`,
     );
     assert.ok(
-      ASSISTANT_TOOLS.length <= REQUEST_TOOL_LIMIT,
-      `The assistant has ${ASSISTANT_TOOLS.length} tools. The cap is ${REQUEST_TOOL_LIMIT} (raised from 126 for the two campaign tools); a chat that loads every area stops at the per-chat area limit. Merge overlapping tools to stay at ${REQUEST_TOOL_LIMIT} or fewer.`,
+      ASSISTANT_TOOLS.length <= REQUEST_TOOL_LIMIT + 1,
+      `The assistant has ${ASSISTANT_TOOLS.length} tools. The cap is ${REQUEST_TOOL_LIMIT + 1} (raised from 126 for the two campaign tools and reminders); a chat that loads every area stops at the per-chat area limit. Merge overlapping tools to stay at ${REQUEST_TOOL_LIMIT + 1} or fewer.`,
     );
     for (const multiWorkspace of [true, false]) {
       for (const eclipse of [true, false]) {

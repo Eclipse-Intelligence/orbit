@@ -880,12 +880,12 @@ describe("campaigns for the assistant, MCP and the API", () => {
       const full = { multiWorkspace: true, eclipse: true, linear: true };
       assert.deepEqual(TOOL_DOMAIN_NAMES.slice(-3), ["web", "settings", "workspace"]);
       const untouched = fittingDomains(TOOL_DOMAIN_NAMES, full, []);
-      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !untouched.includes(domain)), ["chat", "workspace"]);
+      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !untouched.includes(domain)), ["reader_recall"]);
       const oneWorkspace = fittingDomains(TOOL_DOMAIN_NAMES, { ...full, multiWorkspace: false }, []);
-      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => domain !== "workspace" && !oneWorkspace.includes(domain)), ["chat"]);
+      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => domain !== "workspace" && !oneWorkspace.includes(domain)), ["reader_recall"]);
       const usedSettings = fittingDomains(TOOL_DOMAIN_NAMES, full, ["settings"]);
       assert.ok(usedSettings.includes("settings") && usedSettings.includes("web"));
-      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !usedSettings.includes(domain)), ["chat", "workspace"]);
+      assert.deepEqual(TOOL_DOMAIN_NAMES.filter((domain) => !usedSettings.includes(domain)), ["reader_recall"]);
 
       const webFirst = ["web", ...TOOL_DOMAIN_NAMES.filter((domain) => domain !== "web")] as typeof TOOL_DOMAIN_NAMES;
       const allUsed = fittingDomains(webFirst, full, webFirst);
@@ -896,7 +896,7 @@ describe("campaigns for the assistant, MCP and the API", () => {
       assert.ok(kept.includes("settings") && kept.includes("web"));
       assert.deepEqual(settingsOldest.filter((domain) => !kept.includes(domain)), ["records"]);
 
-      const beforeCampaigns = TOOL_DOMAIN_NAMES.filter((domain) => domain !== "campaigns");
+      const beforeCampaigns = TOOL_DOMAIN_NAMES.filter((domain) => domain !== "campaigns" && domain !== "reminders");
       const loaded = (await runTool(owner, "find_tools", { domains: ["campaigns"] }, { ...full, loaded: beforeCampaigns })) as {
         loaded: { domain: string }[];
         unloaded: string[];

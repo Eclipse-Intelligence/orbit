@@ -200,11 +200,12 @@ import {
   type GuideTopic,
 } from "@/lib/assistant/guides";
 import { fenceUntrusted, withoutMarkers } from "@/lib/assistant/untrusted";
+import { REMINDER_ALIASES, REMINDERS_TOOL } from "@/lib/assistant/reminder-tools";
 
 type Args = Record<string, unknown>;
 type JsonSchema = Record<string, unknown>;
 
-type AssistantTool = {
+export type AssistantTool = {
   name: string;
   description: string;
   parameters: JsonSchema;
@@ -216,7 +217,7 @@ type AssistantTool = {
   details?: (actor: UserActor, args: Args) => Promise<Record<string, string>>;
 };
 
-type Names = (id: unknown) => string;
+export type Names = (id: unknown) => string;
 
 type Defer = (work: () => Promise<unknown>) => void;
 
@@ -1768,6 +1769,10 @@ export const TOOL_DOMAINS = {
       "run_workflow",
       "decide_workflow_approval",
     ],
+  },
+  reminders: {
+    summary: "the user's own reminders (\"Remind me to...\" with no person, company, opportunity or piece of work in it): listing, adding, changing, ticking off and deleting them",
+    tools: ["reminders"],
   },
   calendar: {
     summary: "meeting invites, and moving, cancelling or answering meetings",
@@ -6596,6 +6601,7 @@ const TOOL_LIST: AssistantTool[] = [
       ...(strings(args.remove).length ? await removeWatchItems(actor, strings(args.remove)) : { removed: [] }),
     }),
   },
+  REMINDERS_TOOL,
 ];
 
 export const ASSISTANT_TOOLS: AssistantTool[] = TOOL_LIST.map(withWorkspaceParam);
@@ -6661,6 +6667,7 @@ const MERGED_TOOLS: Record<string, { tool: string; args: (args: Args) => Args }>
   get_proposal_template: { tool: "list_proposal_templates", args: ({ id }) => ({ id }) },
   cold_email_playbook: { tool: "guide", args: () => ({ topic: "cold_email" }) },
   workflow_guide: { tool: "guide", args: () => ({ topic: "workflows" }) },
+  ...Object.fromEntries(Object.entries(REMINDER_ALIASES).map(([alias, action]) => [alias, { tool: "reminders", args: (args: Args) => ({ ...args, action }) }])),
 };
 
 function resolveTool(name: string, args: Args = {}) {

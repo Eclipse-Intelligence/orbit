@@ -10,15 +10,17 @@ import { supabaseConfigured } from "@/lib/auth/config";
 import { getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
 import { getMeetingLink } from "@/lib/crm/invites";
 import { getPersonalContext } from "@/lib/crm/personal-context";
+import { getReminderSettings } from "@/lib/crm/reminders";
 
 export default async function GeneralSettings() {
   const user = await getUserActor();
   if (!user) redirect("/login");
-  const [meetingLink, notifications, about, workspaces] = await Promise.all([
+  const [meetingLink, notifications, about, workspaces, reminders] = await Promise.all([
     getMeetingLink(user),
     notificationSettings(user),
     getPersonalContext(user),
     getWorkspaceChoices(),
+    getReminderSettings(user),
   ]);
   const you = { linkedinUrl: about.linkedinUrl, interests: about.interests, writing: about.writing };
   return (
@@ -40,6 +42,7 @@ export default async function GeneralSettings() {
         initialCalendarMinutes={notifications.calendarMinutes}
         initialReads={notifications.reads}
         initialTeam={notifications.team}
+        initialMorning={reminders.morningAt}
       />
       <MeetingLinkSettings meetingLink={meetingLink} />
       <ShortcutSettings />

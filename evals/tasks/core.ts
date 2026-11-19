@@ -269,6 +269,17 @@ export const CORE_TASKS: EvalTask[] = [
     ],
   }),
   task({
+    id: "write-personal-reminder",
+    suite: "core",
+    category: "propose_write",
+    origin: "Reminders: a personal \"Remind me\" with no person, company or deal in it is a reminder, not a task.",
+    message: "Remind me to put the bins out on Thursday.",
+    checks: [
+      card("reminders", (args, world) => args.action === "create" && /bins/i.test(String(args.title ?? "")) && (dueOn("dueOn", { weekday: 4 })(args, world) || dueOn("dueAt", { weekday: 4 })(args, world))),
+      noCard("create_task"),
+    ],
+  }),
+  task({
     id: "write-task-for-tagged-teammate",
     suite: "core",
     category: "propose_write",
