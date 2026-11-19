@@ -13,11 +13,12 @@ import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
 import Reactions from "@/components/chat/reactions";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
+import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { pushRecentEmoji, QUICK_REACTIONS } from "@/lib/chat/client";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
 import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
-import { mentionsIn, plainMentions, type Mention } from "@/lib/mentions";
+import { mentionsIn, plainMentions, ROOM_MENTION_MAX_MEMBERS, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
@@ -28,6 +29,7 @@ import EditIcon from "@/public/assets/images/workflows/edit.svg";
 import LinkIcon from "@/public/assets/images/settings/link.svg";
 import ReplyIcon from "@/public/assets/images/mail/reply.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
+import UnreadIcon from "@/public/assets/images/chat/unreads.svg";
 
 const LONG_PRESS_MS = 450;
 const MOVE_SLOP = 10;
@@ -45,8 +47,9 @@ type Props = {
 };
 
 function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPane; onDone: () => void }) {
-  const { edit, discussion } = useChat();
+  const { edit, discussion, conversation, memberNames } = useChat();
   const id = useId();
+  const roomMention = !discussion && pane === "room" && !message.parentId && conversation(message.conversationId)?.kind === "room" && memberNames.size <= ROOM_MENTION_MAX_MEMBERS;
   const input = useRef<HTMLTextAreaElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const done = () => {
@@ -76,6 +79,7 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
         label="Edit message"
         submitVerb="save"
         scope={pane === "room" && !discussion ? "room" : "thread"}
+        roomMention={roomMention}
         autoFocus
         actions={
           <span className="flex items-center gap-2 pointer-coarse:gap-3">
@@ -115,7 +119,8 @@ function ToolButton({ label, title, onClick, children, className }: { label: str
 
 function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop, readOnly = false }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion } = chat;
+  const unreadHint = useShortcutHint("chat-mark-unread");
   const [picking, setPicking] = useState(false);
   const quick = chat.emoji.recent.slice(0, QUICK_REACTIONS);
   const pickRequested = useRef(false);
@@ -129,10 +134,12 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const deleted = Boolean(message.deletedAt);
   const error = local && message.clientKey ? failed[message.clientKey] : undefined;
   const isEditing = editing?.id === message.id && editing.pane === pane && !deleted;
-  const mentionsMe = (!own || Boolean(message.via)) && !deleted && message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase());
+  const mentionsMe =
+    (!own || Boolean(message.via)) && !deleted && (message.mentions.some((id) => id.toLowerCase() === viewer.id.toLowerCase()) || message.everyone === true);
   const canReply = !inThread && !local && !deleted && !readOnly;
   const canEdit = own && !local && !deleted && !message.via && !readOnly;
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted && (!readOnly || local);
+  const canMarkUnread = pane === "room" && !discussion && !inThread && !message.parentId && !local && !deleted && message.kind !== "event";
   const canReact = !local && !deleted && !readOnly;
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
@@ -202,6 +209,12 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
       onPointerUp={endPress}
       onPointerCancel={endPress}
       onClickCapture={(event) => {
+        if (canMarkUnread && event.altKey && !isEditing && event.currentTarget.contains(event.target as Node)) {
+          event.preventDefault();
+          event.stopPropagation();
+          void markUnread(message.conversationId, message.id);
+          return;
+        }
         if (!pressed.current || !event.currentTarget.contains(event.target as Node)) return;
         pressed.current = false;
         event.preventDefault();
@@ -252,7 +265,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         ) : message.hook ? (
           <HookCardBody card={message.hook} body={message.body} />
         ) : (
-          <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} className={cn(error && "text-soft")} />
+          <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} everyone={message.everyone} className={cn(error && "text-soft")} />
         )}
         {message.editedAt && !deleted && !isEditing && <span className="caption-style text-faint">Edited</span>}
         {error && (
@@ -300,6 +313,11 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           {canReply && (
             <ToolButton label="Reply in thread" title="Reply in thread (R)" onClick={() => openThread(message.conversationId, message.id)}>
               <ReplyIcon aria-hidden className="size-3.5" />
+            </ToolButton>
+          )}
+          {canMarkUnread && (
+            <ToolButton label="Mark unread" title={unreadHint ? `Mark unread (${unreadHint})` : "Mark unread"} onClick={() => void markUnread(message.conversationId, message.id)}>
+              <UnreadIcon aria-hidden className="size-3.5" />
             </ToolButton>
           )}
           <ToolButton label={copied ? "Link copied" : "Copy link"} onClick={() => void copy()}>
@@ -405,6 +423,11 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           {!local && (
             <SheetAction onClick={() => act(() => void copy())} icon={<LinkIcon aria-hidden className="size-4" />}>
               Copy link
+            </SheetAction>
+          )}
+          {canMarkUnread && (
+            <SheetAction onClick={() => act(() => void markUnread(message.conversationId, message.id))} icon={<UnreadIcon aria-hidden className="size-4" />}>
+              Mark unread
             </SheetAction>
           )}
           {canEdit && (

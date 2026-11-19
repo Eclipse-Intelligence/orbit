@@ -13,7 +13,9 @@ import {
   EMPTY_CHAT,
   lastOwnMessage,
   localMessage,
+  sidebarAllRead,
   sidebarBadge,
+  sidebarNotify,
   sidebarRead,
   startsGroup,
   typingLine,
@@ -21,7 +23,7 @@ import {
   type ChatState,
 } from "@/lib/chat/timeline";
 import type { ChatMessage, ChatPage, ChatSidebar } from "@/lib/chat/types";
-import { SHORTCUTS, sequenceShortcut } from "@/lib/shortcuts";
+import { matchingShortcuts, SHORTCUTS, sequenceShortcut } from "@/lib/shortcuts";
 
 const ROOM = "11111111-1111-4111-8111-111111111111";
 const ME = "22222222-2222-4222-8222-222222222222";
@@ -225,8 +227,8 @@ describe("chat timeline", () => {
 describe("chat sidebar badge", () => {
   const sidebar: ChatSidebar = {
     conversations: [
-      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1 },
-      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0 },
+      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
+      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0, notify: "default", muteMentions: false, starred: false },
     ],
     archived: [],
     threads: { unread: 0, mentions: 0 },
@@ -459,3 +461,47 @@ describe("chat review fixes", () => {
   });
 });
 
+describe("chat notify and unread state", () => {
+  it("moves the divider back on mark unread and forward again on read", () => {
+    const first = message({ at: "2026-11-11T08:00:00.000Z" });
+    const second = message({ at: "2026-11-11T08:01:00.000Z" });
+    let state = loaded([first, second], { lastReadAt: "2026-11-11T08:02:00.000Z", firstUnreadId: null });
+    state = chatReducer(state, { type: "unread", conversationId: ROOM, messageId: second.id, lastReadAt: "2026-11-11T08:00:59.999Z" });
+    assert.equal(state.timelines[ROOM].firstUnreadId, second.id);
+    assert.equal(state.timelines[ROOM].lastReadAt, "2026-11-11T08:00:59.999Z");
+    state = chatReducer(state, { type: "read", conversationId: ROOM, lastReadAt: "2026-11-11T08:02:00.000Z" });
+    assert.equal(state.timelines[ROOM].firstUnreadId, null);
+    assert.equal(state.timelines[ROOM].lastReadAt, "2026-11-11T08:02:00.000Z");
+  });
+
+  it("updates one conversation's settings and clears every unread count", () => {
+    const sidebar: ChatSidebar = {
+      conversations: [
+        { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
+        { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 2, mentions: 0, notify: "default", muteMentions: false, starred: false },
+      ],
+      archived: [],
+      threads: { unread: 1, mentions: 1 },
+      unreadConversations: 2,
+      mentioned: true,
+    };
+    const muted = sidebarNotify(sidebar, ROOM, { notify: "mute", starred: true });
+    assert.deepEqual([muted.conversations[0].notify, muted.conversations[0].starred, muted.conversations[1].notify], ["mute", true, "default"]);
+    const read = sidebarAllRead(sidebar);
+    assert.deepEqual(read.conversations.map((conversation) => [conversation.unread, conversation.mentions]), [[0, 0], [0, 0]]);
+    assert.deepEqual([read.unreadConversations, read.mentioned, read.threads], [0, false, { unread: 0, mentions: 0 }]);
+  });
+
+  it("routes All unreads", () => {
+    assert.deepEqual(chatSegments(["unreads"]), { kind: "unreads" });
+    assert.equal(chatLocationHref({ view: { kind: "unreads" } }), "/chat/unreads");
+    assert.deepEqual(parseChatLocation("/chat/unreads", `?thread=${ROOM}`), { view: { kind: "unreads" }, thread: ROOM, message: null });
+  });
+
+  it("closes a thread before Esc marks the room read, and Shift Esc marks everything read", () => {
+    const esc = matchingShortcuts({ key: "Escape", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false }, true).map((shortcut) => shortcut.id);
+    assert.ok(esc.indexOf("chat-close-thread") >= 0 && esc.indexOf("chat-close-thread") < esc.indexOf("chat-mark-read"));
+    const shifted = matchingShortcuts({ key: "Escape", metaKey: false, ctrlKey: false, altKey: false, shiftKey: true }, true).map((shortcut) => shortcut.id);
+    assert.deepEqual(shifted, ["chat-mark-all-read"]);
+  });
+});

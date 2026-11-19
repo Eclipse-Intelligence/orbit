@@ -60,3 +60,37 @@ export function encodeMentions(text: string, mentions: Mention[]) {
 export function liveMentions(text: string, mentions: Mention[]) {
   return mentions.filter((mention) => text.includes(`@${mention.name}`));
 }
+
+export const ROOM_MENTION = "@room";
+export const ROOM_MENTION_MAX_MEMBERS = 50;
+export const ROOM_SENTINEL = "00000000-0000-0000-0000-000000000000";
+
+const ROOM_TOKEN = /(^|[ \t\n\r\f\v(*_~"'])@room(?![A-Za-z0-9-])/i;
+const ROOM_TOKENS = /(^|[ \t\n\r\f\v(*_~"'])@(room)(?![A-Za-z0-9-])/gi;
+
+export function mentionsRoom(text: string) {
+  return ROOM_TOKEN.test(text);
+}
+
+export function stripRoomMention(text: string) {
+  return text.replace(ROOM_TOKENS, "$1$2");
+}
+
+export function roomMentionRanges(text: string) {
+  const ranges: { start: number; end: number }[] = [];
+  for (const match of text.matchAll(ROOM_TOKENS)) {
+    const start = (match.index ?? 0) + match[1].length;
+    ranges.push({ start, end: start + ROOM_MENTION.length });
+  }
+  return ranges;
+}
+
+export function roomOfferPlace(query: string, searched: boolean): "first" | "last" | null {
+  const typed = query.toLowerCase();
+  if (typed === "room") return "first";
+  return searched && "room".startsWith(typed) ? "last" : null;
+}
+
+export function peopleMentioned(ids: string[]) {
+  return ids.filter((id) => id !== ROOM_SENTINEL);
+}

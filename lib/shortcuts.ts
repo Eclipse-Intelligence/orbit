@@ -204,6 +204,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "chat-edit-last", label: "Edit your last message", group: "Chat", combos: [{ key: "ArrowUp" }], whileTyping: true },
   { id: "chat-reply", label: "Reply in thread", group: "Chat", combos: [{ key: "r" }] },
   { id: "chat-close-thread", label: "Close the thread", group: "Chat", combos: [{ key: "Escape" }] },
+  { id: "chat-mark-read", label: "Mark the conversation read", group: "Chat", combos: [{ key: "Escape" }] },
+  { id: "chat-mark-all-read", label: "Mark everything read", group: "Chat", combos: [{ key: "Escape", shift: true }] },
+  { id: "chat-mark-unread", label: "Mark unread from a message", group: "Chat", combos: [{ key: "Click", alt: true }] },
   { id: "chat-prev", label: "Previous conversation", group: "Chat", combos: [{ key: "ArrowUp", alt: true }], whileTyping: true },
   { id: "chat-next", label: "Next conversation", group: "Chat", combos: [{ key: "ArrowDown", alt: true }], whileTyping: true },
   { id: "chat-send", label: "Send (Shift Enter adds a line)", group: "Chat", combos: [{ key: "Enter" }], whileTyping: true },
@@ -310,6 +313,7 @@ const KEY_LABELS: Record<string, string> = {
   ArrowRight: "→",
   " ": "Space",
   Tab: "Tab",
+  Click: "Click",
 };
 
 export function comboLabel(combo: Combo, mac: boolean) {

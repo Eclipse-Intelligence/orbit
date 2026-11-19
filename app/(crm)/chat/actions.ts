@@ -2,17 +2,20 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import type { ChatFormat } from "@/lib/chat/markdown";
-import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatPost, ChatReacted, ChatResult } from "@/lib/chat/types";
+import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatNotifyInput, ChatPost, ChatReacted, ChatResult } from "@/lib/chat/types";
 import {
   addRoomMembers,
   createRoom,
   deleteMessage,
   editMessage,
   leaveRoom,
+  markAllChatRead,
+  markConversationUnread,
   openDm,
   postMessage,
   reactToMessage,
   removeRoomMember,
+  setConversationNotify,
   setRoomArchived,
   updateRoom,
 } from "@/lib/crm/chat";
@@ -68,11 +71,23 @@ export async function openDmAction(userId: string): Promise<ChatResult<{ convers
 }
 
 export async function postMessageAction(input: { conversationId: string; parentId?: string | null; body: string; format?: ChatFormat; clientKey: string }): Promise<ChatResult<ChatPost>> {
-  return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}));
+  return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}, { roomMention: true }));
 }
 
 export async function editMessageAction(id: string, body: string, format?: ChatFormat): Promise<ChatResult<{ message: ChatMessage }>> {
-  return run("Couldn't save the message. Try again.", async (actor) => ({ message: await editMessage(actor, id, body, { format }) }));
+  return run("Couldn't save the message. Try again.", async (actor) => ({ message: await editMessage(actor, id, body, { format, roomMention: true }) }));
+}
+
+export async function setNotifyAction(id: string, input: ChatNotifyInput): Promise<ChatResult<{ conversation: ChatConversation }>> {
+  return run("Couldn't save. Try again.", async (actor) => ({ conversation: await setConversationNotify(actor, id, input ?? {}) }));
+}
+
+export async function markUnreadAction(id: string, messageId: string | null): Promise<ChatResult<{ lastReadAt: string; messageId: string }>> {
+  return run("Couldn't mark it unread. Try again.", (actor) => markConversationUnread(actor, id, messageId));
+}
+
+export async function markAllReadAction(): Promise<ChatResult<{ conversations: number }>> {
+  return run("Couldn't mark everything read. Try again.", (actor) => markAllChatRead(actor));
 }
 
 export async function deleteMessageAction(id: string): Promise<ChatResult<{ deleted: true }>> {

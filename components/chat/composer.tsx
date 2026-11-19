@@ -158,6 +158,7 @@ export function ComposerBox({
   onSubmit,
   onKeyDown,
   onBlur,
+  roomMention,
 }: {
   id: string;
   inputRef: RefObject<HTMLTextAreaElement | null>;
@@ -176,6 +177,7 @@ export function ComposerBox({
   onSubmit: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onBlur?: () => void;
+  roomMention?: boolean;
 }) {
   const { viewer, emoji: emojiPrefs } = useChat();
   const [shown, setShown] = useFormatBar(viewer.id, scope);
@@ -361,6 +363,7 @@ export function ComposerBox({
               autoFocus={autoFocus}
               autoSize={GROW_MAX_PX}
               markdown
+              roomMention={roomMention}
               onChange={(next, kept) => {
                 onChange(next, kept);
                 track(next, inputRef.current?.selectionStart ?? next.length);
@@ -430,6 +433,7 @@ export default function Composer({
   onEditLast,
   onEscape,
   onTyping,
+  roomMention,
 }: {
   id: string;
   conversationId: string;
@@ -447,6 +451,7 @@ export default function Composer({
   onEditLast?: () => boolean;
   onEscape?: () => void;
   onTyping?: (typing: boolean) => void;
+  roomMention?: boolean;
 }) {
   const { viewer } = useChat();
   const input = useRef<HTMLTextAreaElement>(null);
@@ -528,6 +533,7 @@ export default function Composer({
         scope={scope}
         over={over}
         composer
+        roomMention={roomMention}
         actions={sendButton(false)}
         phoneAction={sendButton(true)}
         onChange={change}
