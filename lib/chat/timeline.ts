@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatConversation, ChatMessage, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
+import type { ChatAttachment, ChatConversation, ChatMessage, ChatNotifyInput, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
 import { EMPTY_HOOK_CARD } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
@@ -51,6 +51,7 @@ export type ChatAction =
   | { type: "retrying"; clientKey: string }
   | { type: "discard"; message: ChatMessage }
   | { type: "read"; conversationId: string; lastReadAt: string }
+  | { type: "unread"; conversationId: string; messageId: string; lastReadAt: string }
   | { type: "thread-read"; rootId: string; lastReadAt: string }
   | { type: "forget"; conversationId: string }
   | { type: "reactions"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string }
@@ -150,7 +151,7 @@ export function replaceMessage(list: ChatMessage[], message: ChatMessage) {
 }
 
 export function blankDeleted(message: ChatMessage): ChatMessage {
-  return { ...message, body: "", mentions: [], attachments: [], reactions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
+  return { ...message, body: "", mentions: [], everyone: false, attachments: [], reactions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
 }
 
 export function removeRoot(list: ChatMessage[], id: string) {
@@ -451,6 +452,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         const lastReadAt = timeline.lastReadAt && timeline.lastReadAt > action.lastReadAt ? timeline.lastReadAt : action.lastReadAt;
         return lastReadAt === timeline.lastReadAt && !timeline.firstUnreadId ? timeline : { ...timeline, lastReadAt, firstUnreadId: null };
       });
+    case "unread":
+      return updateTimeline(state, action.conversationId, (timeline) => ({ ...timeline, lastReadAt: action.lastReadAt, firstUnreadId: action.messageId }));
     case "thread-read":
       return updateThread(state, action.rootId, (thread) =>
         thread.timeline.lastReadAt && thread.timeline.lastReadAt >= action.lastReadAt ? thread : { ...thread, following: true, timeline: { ...thread.timeline, lastReadAt: action.lastReadAt } },
@@ -514,6 +517,27 @@ export function sidebarRead(sidebar: ChatSidebar, conversationId: string): ChatS
     conversations,
     unreadConversations: conversations.filter((conversation) => conversation.unread > 0).length,
     mentioned: sidebar.threads.mentions > 0 || conversations.some((conversation) => conversation.mentions > 0 || (conversation.kind === "dm" && conversation.unread > 0)),
+  };
+}
+
+export function readNeeded(sent: Map<string, string | null>, key: string, upTo: string | null) {
+  return upTo === null || !sent.has(key) || sent.get(key) !== upTo;
+}
+
+export function sidebarNotify(sidebar: ChatSidebar, conversationId: string, change: ChatNotifyInput): ChatSidebar {
+  return {
+    ...sidebar,
+    conversations: sidebar.conversations.map((conversation) => (conversation.id === conversationId ? { ...conversation, ...change } : conversation)),
+  };
+}
+
+export function sidebarAllRead(sidebar: ChatSidebar): ChatSidebar {
+  return {
+    ...sidebar,
+    conversations: sidebar.conversations.map((conversation) => (conversation.unread || conversation.mentions ? { ...conversation, unread: 0, mentions: 0 } : conversation)),
+    threads: { unread: 0, mentions: 0 },
+    unreadConversations: 0,
+    mentioned: false,
   };
 }
 

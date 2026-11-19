@@ -1,4 +1,4 @@
-import { mentionsIn, type Mention, type MentionKind } from "@/lib/mentions";
+import { mentionsIn, mentionsRoom, type Mention, type MentionKind } from "@/lib/mentions";
 import { trimUrl } from "@/lib/text-links";
 
 export type ChatFormat = "plain" | "markdown";
@@ -481,4 +481,22 @@ export function fenceRangeAt(text: string, start: number, end = start) {
 export function insideCodeFence(text: string, caret: number) {
   const fence = fenceRangeAt(text, caret);
   return Boolean(fence && caret >= fence.open + FENCE.length);
+}
+
+function inlineUsesRoom(nodes: Inline[]): boolean {
+  return nodes.some((node, index) => {
+    const glued = index > 0 && (nodes[index - 1].type === "code" || nodes[index - 1].type === "mention" || nodes[index - 1].type === "url");
+    if (node.type === "text") return mentionsRoom(glued ? `x${node.text}` : node.text);
+    if (node.type === "bold" || node.type === "italic" || node.type === "strike") return inlineUsesRoom(node.children);
+    return false;
+  });
+}
+
+export function usesRoomMention(body: string, format: ChatFormat): boolean {
+  if (format !== "markdown") return mentionsRoom(body);
+  return parseMarkdown(body).some((block) => {
+    if (block.type === "paragraph" || block.type === "quote") return inlineUsesRoom(block.children);
+    if (block.type === "list") return block.items.some((item) => inlineUsesRoom(item));
+    return false;
+  });
 }

@@ -14,6 +14,7 @@ import {
   openDiscussion,
   openDm,
   postMessage,
+  setConversationNotify,
   setRoomArchived,
 } from "@/lib/crm/chat";
 import { chatFileLink, discardChatUploads, prepareChatUpload, removeChatAttachments, sweepChatAttachments } from "@/lib/crm/chat-attachments";
@@ -527,5 +528,22 @@ describe("chat attachments", () => {
     assert.ok(titles.includes("Mark sent you 2 files"), titles.join(", "));
     const events = broadcasts.filter((item) => item.topic === personTopic(sam.userId)).map((item) => item.payload as ChatLiveEvent);
     assert.ok(events.some((event) => event.type === "message" && event.message.attachments.length === 2));
+  });
+
+  it("alerts for files only as each person's notify level allows", async () => {
+    const titles = async (user: UserActor) => {
+      await chatWorkSettled();
+      return (await sql<{ title: string }>("select title from crm.notifications where user_id = $1 order by created_at", [user.userId])).map((row) => row.title);
+    };
+    const dm = await openDm(mark, priya.userId);
+    await setConversationNotify(priya, dm.id, { notify: "mute" });
+    await post(mark, dm.id, "", await upload(mark, dm.id, [{ name: "muted.png", type: "image/png" }]));
+    assert.deepEqual(await titles(priya), []);
+
+    const room = await createRoom(mark, { name: "file-alerts", memberIds: [sam.userId, priya.userId] });
+    await setConversationNotify(sam, room.id, { notify: "all" });
+    await post(mark, room.id, "", await upload(mark, room.id, [{ name: "room.pdf", type: "application/pdf" }]));
+    assert.deepEqual(await titles(sam), ["Mark sent a file in #file-alerts"]);
+    assert.deepEqual(await titles(priya), []);
   });
 });
