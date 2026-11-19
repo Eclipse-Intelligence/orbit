@@ -19,6 +19,7 @@ import {
 import { Radio } from "@/components/_ui/radio";
 import Tag from "@/components/_ui/tag";
 import { Textarea } from "@/components/_ui/textarea";
+import CampaignProgressList from "@/components/campaigns/campaign-progress";
 import ChannelIcon from "@/components/campaigns/channel-icon";
 import { DoNotContactDialog, DoNotContactStatus } from "@/components/campaigns/do-not-contact";
 import DetailSection from "@/components/companies/detail/detail-section";
@@ -596,6 +597,11 @@ export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer:
           }
         />
       )}
+      {pane && thread.progress.length > 0 && (
+        <section aria-label="Progress" className="border-border max-h-[40vh] shrink-0 overflow-auto border-b px-3 py-3 sm:px-5">
+          <CampaignProgressList progress={thread.progress} columns className="mx-auto w-full max-w-[47.5em]" />
+        </section>
+      )}
       <div className="min-h-0 flex-1 overflow-auto">
         <div className={cn("grid min-h-full", !pane && "lg:grid-cols-[minmax(0,1fr)_300px]")}>
           <div className={cn("border-border flex min-w-0 flex-col gap-3 px-3 py-4 sm:px-5", !pane && "border-b lg:border-r lg:border-b-0")}>
@@ -664,6 +670,11 @@ export default function ThreadScreen({ viewer, thread, canAct, pane }: { viewer:
                   ))}
                 </ul>
               </DetailSection>
+              {thread.progress.length > 0 && (
+                <DetailSection title="Progress" className="gap-3">
+                  <CampaignProgressList progress={thread.progress} />
+                </DetailSection>
+              )}
               <Variables thread={thread} />
             </aside>
           )}
