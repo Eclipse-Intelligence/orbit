@@ -11,7 +11,7 @@ import {
 } from "@/lib/chat/types";
 import { discussionHref } from "@/lib/chat/discussions";
 import { messageHref } from "@/lib/chat/routes";
-import { checkId, CURSOR_TIME, FORMER, iso, MEMBER_NAME, messageColumns, toMessage, type MessageRow } from "@/lib/crm/chat";
+import { checkId, CURSOR_TIME, directName, GROUP_PEOPLE, iso, MEMBER_NAME, messageColumns, toMessage, type MessageRow, type PeopleRow } from "@/lib/crm/chat";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -110,7 +110,7 @@ export async function listSavedIds(actor: UserActor): Promise<ChatSavedIds> {
 }
 
 type SavedRow = MessageRow &
-  SubjectColumns & { saved_at: string; saved_ts: Date; c_name: string | null; dm_name: string | null; task_title: string | null; page_title: string | null };
+  SubjectColumns & { saved_at: string; saved_ts: Date; c_name: string | null; dm_name: string | null; c_people: PeopleRow[] | null; task_title: string | null; page_title: string | null };
 
 export async function listSaved(actor: UserActor, options: { cursor?: string | null; limit?: number } = {}): Promise<ChatSaved> {
   const limit = pageSize(options.limit);
@@ -122,7 +122,8 @@ export async function listSaved(actor: UserActor, options: { cursor?: string | n
          case when c.kind = 'dm' then (
            select ${MEMBER_NAME("o", "op")} from crm.chat_members o left join crm.profiles op on op.id = o.user_id
            where o.conversation_id = c.id and o.user_id <> s.user_id limit 1
-         ) end as dm_name
+         ) end as dm_name,
+         ${GROUP_PEOPLE("c", "s.user_id")} as c_people
        from crm.chat_saved s
        join crm.chat_messages m on m.id = s.message_id and m.deleted_at is null
        join crm.chat_conversations c on c.id = m.conversation_id
@@ -141,13 +142,11 @@ export async function listSaved(actor: UserActor, options: { cursor?: string | n
         id: row.conversation_id,
         kind: row.conversation_kind,
         name:
-          row.conversation_kind === "dm"
-            ? row.dm_name || FORMER
-            : row.conversation_kind === "task"
-              ? (row.task_title ?? "")
-              : row.conversation_kind === "doc"
-                ? (row.page_title ?? "")
-                : (row.c_name ?? ""),
+          row.conversation_kind === "task"
+            ? (row.task_title ?? "")
+            : row.conversation_kind === "doc"
+              ? (row.page_title ?? "")
+              : directName(row.conversation_kind, { name: row.c_name, dmName: row.dm_name, people: row.c_people }),
       },
       subject: subjectOf(row),
       savedAt: iso(row.saved_ts),

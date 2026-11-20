@@ -1,5 +1,5 @@
 import type { ChatAttachment, ChatConversation, ChatMessage, ChatNotifyInput, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
-import { EMPTY_HOOK_CARD } from "@/lib/chat/types";
+import { EMPTY_HOOK_CARD, isDirect } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
 const GROUP_GAP_MS = 5 * 60_000;
@@ -516,7 +516,7 @@ export function sidebarRead(sidebar: ChatSidebar, conversationId: string): ChatS
     ...sidebar,
     conversations,
     unreadConversations: conversations.filter((conversation) => conversation.unread > 0).length,
-    mentioned: sidebar.threads.mentions > 0 || conversations.some((conversation) => conversation.mentions > 0 || (conversation.kind === "dm" && conversation.unread > 0)),
+    mentioned: sidebar.threads.mentions > 0 || conversations.some((conversation) => conversation.mentions > 0 || (isDirect(conversation.kind) && conversation.unread > 0)),
   };
 }
 

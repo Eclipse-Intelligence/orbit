@@ -1,4 +1,4 @@
-import type { ChatKind, ChatSidebar } from "@/lib/chat/types";
+import { chatLabel, type ChatKind, type ChatSidebar } from "@/lib/chat/types";
 
 export type ChatJump = {
   id: string;
@@ -44,5 +44,5 @@ export function chatJumps(sidebar: ChatSidebar | null, text: string, multi: bool
 }
 
 export function jumpLabel(item: Pick<ChatJump, "kind" | "name">) {
-  return item.kind === "dm" ? item.name : `#${item.name}`;
+  return chatLabel(item);
 }

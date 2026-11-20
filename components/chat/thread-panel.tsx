@@ -10,7 +10,7 @@ import { useOrbitActions } from "@/components/chat/orbit-actions";
 import MessageList from "@/components/chat/message-list";
 import { PhoneBack, useVisible } from "@/components/chat/room-view";
 import { isLocal, lastOwnMessage, newestServerId, type ThreadState } from "@/lib/chat/timeline";
-import type { ChatConversation, ChatMessage } from "@/lib/chat/types";
+import { isDirect, type ChatConversation, type ChatMessage } from "@/lib/chat/types";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
@@ -55,8 +55,8 @@ export default function ThreadPanel({
   const root = thread?.root ?? null;
   const where = thread?.conversation ?? conversation;
   const archived = Boolean((conversation ?? thread?.conversation)?.archivedAt);
-  const place = where ? (where.kind === "dm" ? where.name : roomLabel(where)) : "";
-  const backLabel = where ? (where.kind === "dm" ? where.name : `# ${where.name}`) : "Chat";
+  const place = where ? roomLabel(where) : "";
+  const backLabel = where ? (isDirect(where.kind) ? where.name : `# ${where.name}`) : "Chat";
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
   const addFiles = useRef<((files: File[]) => void) | null>(null);
   const target = root?.conversationId ?? where?.id ?? null;

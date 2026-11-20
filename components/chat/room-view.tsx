@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import Tag from "@/components/_ui/tag";
 import { setRoomArchivedAction } from "@/app/(crm)/chat/actions";
-import { AvatarStack, ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
+import { AvatarStack, ChatAvatar, GroupAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar, setChatViewing, useChatEvents } from "@/components/chat/chat-live";
 import { FileDrop } from "@/components/chat/attachments";
 import FindBar from "@/components/chat/find-bar";
@@ -14,7 +14,7 @@ import { NotifyButton } from "@/components/chat/notify-menu";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { useTyping } from "@/components/chat/use-typing";
 import { isLocal, lastOwnMessage, newestServerId, typingLine, type Timeline } from "@/lib/chat/timeline";
-import type { ChatConversation, ChatMessage, ChatRoom } from "@/lib/chat/types";
+import { isDirect, type ChatConversation, type ChatMessage, type ChatRoom } from "@/lib/chat/types";
 import { ROOM_MENTION_MAX_MEMBERS } from "@/lib/mentions";
 import ArchiveIcon from "@/public/assets/images/chat/archive.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
@@ -193,17 +193,18 @@ export default function RoomView({
   }, [reading, newest, unread, behind, conversationId, markRead]);
 
   const title = info ? roomLabel(info) : "";
-  const dm = info?.kind === "dm";
+  const dm = info ? isDirect(info.kind) : false;
+  const group = info?.kind === "group_dm";
   const archived = Boolean(info?.archivedAt);
   const topic = dm ? null : (info?.topic ?? null);
-  const placeholder = info ? `Message ${dm ? info.name : `#${info.name}`}` : "Message";
+  const placeholder = info ? `Message ${roomLabel(info)}` : "Message";
   const shownMembers = (members ?? []).slice(0, HEADER_AVATARS).map((member) => ({ id: member.id, name: member.name }));
 
   const empty = (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-10 text-center">
       {dm ? (
         <>
-          <ChatAvatar person={info?.dmUser ?? null} size="lg" />
+          {group ? <AvatarStack people={info?.people ?? []} size="lg" /> : <ChatAvatar person={info?.dmUser ?? null} size="lg" />}
           <p className="text-soft">Start of your conversation with {info?.name}.</p>
         </>
       ) : (
@@ -226,7 +227,9 @@ export default function RoomView({
         <div className="flex min-w-0 flex-col max-md:flex-1 max-md:items-center">
           <span className="flex max-w-full min-w-0 items-center gap-2">
             <h2 className="flex min-w-0 items-center gap-1">
-              {dm ? (
+              {group ? (
+                <GroupAvatar people={info?.people ?? []} className="mr-1 max-md:hidden" />
+              ) : dm ? (
                 <ChatAvatar person={info?.dmUser ?? null} size="sm" className="mr-1 max-md:hidden" />
               ) : (
                 <span aria-hidden className="text-faint">

@@ -4,11 +4,12 @@ import { useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } 
 import Button from "@/components/_ui/button";
 import CountBadge from "@/components/_ui/count-badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
-import { ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
+import { ChatAvatar, GroupAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { conversationLevel, NotifyItems } from "@/components/chat/notify-menu";
 import SearchField, { SearchHint, type SearchBox } from "@/components/chat/search-field";
 import { chatLocationHref, type ChatView } from "@/lib/chat/routes";
-import type { ChatConversation, ChatSidebar } from "@/lib/chat/types";
+import { orderedConversations } from "@/lib/chat/order";
+import { isDirect, type ChatConversation, type ChatSidebar } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
@@ -20,16 +21,6 @@ import BookmarkIcon from "@/public/assets/images/chat/bookmark.svg";
 
 const LONG_PRESS_MS = 450;
 const MOVE_SLOP = 10;
-
-export function orderedConversations(sidebar: ChatSidebar | null) {
-  const conversations = sidebar?.conversations ?? [];
-  const starred = conversations.filter((conversation) => conversation.starred);
-  return {
-    starred: [...starred.filter((conversation) => conversation.kind === "room"), ...starred.filter((conversation) => conversation.kind === "dm")],
-    rooms: conversations.filter((conversation) => conversation.kind === "room" && !conversation.starred),
-    dms: conversations.filter((conversation) => conversation.kind === "dm" && !conversation.starred),
-  };
-}
 
 export function listViews(sidebar: ChatSidebar | null): ChatView[] {
   const { starred, rooms, dms } = orderedConversations(sidebar);
@@ -200,7 +191,7 @@ function DmItem({ conversation, active }: { conversation: ChatConversation; acti
   const muted = conversationLevel(conversation) === "mute";
   return (
     <ConversationRow conversation={conversation} active={active}>
-      <ChatAvatar person={conversation.dmUser ?? { id: conversation.id, name: conversation.name }} size="sm" />
+      {conversation.kind === "group_dm" ? <GroupAvatar people={conversation.people} /> : <ChatAvatar person={conversation.dmUser ?? { id: conversation.id, name: conversation.name }} size="sm" />}
       <span className="min-w-0 flex-1 truncate">{conversation.name}</span>
       <Badge count={conversation.unread} accent={!muted} label="unread" className="pointer-fine:group-hover/row:hidden pointer-fine:group-focus-within/row:hidden" />
     </ConversationRow>
@@ -211,7 +202,7 @@ function Conversations({ list, activeId }: { list: ChatConversation[]; activeId:
   return (
     <ul className="flex flex-col gap-0.5">
       {list.map((conversation) =>
-        conversation.kind === "dm" ? (
+        isDirect(conversation.kind) ? (
           <DmItem key={conversation.id} conversation={conversation} active={conversation.id === activeId} />
         ) : (
           <RoomItem key={conversation.id} conversation={conversation} active={conversation.id === activeId} />
@@ -344,7 +335,7 @@ export default function ChatList({
         {dms.length > 0 ? (
           <Conversations list={dms} activeId={activeId} />
         ) : (
-          sidebar && !starred.some((conversation) => conversation.kind === "dm") && <p className="caption-style text-subtle px-2">Message anyone who shares a workspace with you.</p>
+          sidebar && !starred.some((conversation) => isDirect(conversation.kind)) && <p className="caption-style text-subtle px-2">Message anyone who shares a workspace with you.</p>
         )}
       </section>
     </nav>

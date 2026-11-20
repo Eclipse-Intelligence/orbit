@@ -198,7 +198,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "mail-undo", label: "Undo the last move", group: "Mail", combos: [{ key: "z" }] },
   { id: "mail-refresh", label: "Check for new mail", group: "Mail", combos: [{ key: "r", shift: true }], palette: true, keywords: "sync refresh email" },
 
-  { id: "chat-new-message", label: "New message", group: "Create", sequence: ["c", "h"], href: "/chat?new=message", palette: true, keywords: "chat direct message dm teammate" },
+  { id: "chat-new-message", label: "New message", group: "Create", sequence: ["c", "h"], href: "/chat?new=message", palette: true, keywords: "chat direct message group dm teammate" },
   { id: "chat-new-room", label: "New room", group: "Chat", palette: true, keywords: "chat create channel" },
   { id: "chat-room-settings", label: "Room settings", group: "Chat", palette: true, keywords: "chat members name workspace leave" },
   { id: "chat-search", label: "Search Chat", group: "Chat", combos: [{ key: "f", mod: true, shift: true }], whileTyping: true, palette: true, keywords: "chat find messages files rooms direct" },

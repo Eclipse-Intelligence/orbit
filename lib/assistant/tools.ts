@@ -106,7 +106,7 @@ import { pushScheduled, scheduleTasks } from "@/lib/crm/plan-schedule";
 import { getPreferredTimes } from "@/lib/crm/schedule-preferences";
 import { planDayLabel } from "@/lib/crm/plan-tasks";
 import { chatConversation, chatPersonId, listChat, postChat, readChat, searchChatMessages } from "@/lib/chat/tools";
-import { CHAT_PAGE_MAX, CHAT_PAGE_SIZE } from "@/lib/chat/types";
+import { CHAT_PAGE_MAX, CHAT_PAGE_SIZE, isChatKind } from "@/lib/chat/types";
 import { getConversation as getChatConversation, listChatPeople, listThread as listChatThread } from "@/lib/crm/chat";
 import { getGranolaStatus } from "@/lib/crm/granola";
 import { companyHref, contactHref, opportunityHref } from "@/lib/crm/hrefs";
@@ -553,10 +553,6 @@ function chatTargetName(name: Names, key: string, fallback: string) {
   return found === key ? fallback : found;
 }
 
-function isChatRoomOrDm(kind: string) {
-  return kind === "room" || kind === "dm";
-}
-
 async function chatCardDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   const threadId = str(args.threadId);
@@ -564,13 +560,13 @@ async function chatCardDetails(actor: UserActor, args: Args): Promise<Record<str
   const person = str(args.person);
   if (threadId) {
     const thread = await listChatThread(actor, threadId, { limit: 1 }).catch(() => null);
-    if (thread && isChatRoomOrDm(thread.conversation.kind)) {
+    if (thread && isChatKind(thread.conversation.kind)) {
       out[`${threadId}:where`] = chatConversation(thread.conversation).name;
       out[`${threadId}:root`] = thread.root.deletedAt ? "Deleted message" : clipText(thread.root.body.replace(/\s+/g, " "), 140);
     }
   } else if (conversationId) {
     const conversation = await getChatConversation(actor, conversationId).catch(() => null);
-    if (conversation && isChatRoomOrDm(conversation.kind)) out[`${conversationId}:where`] = chatConversation(conversation).name;
+    if (conversation && isChatKind(conversation.kind)) out[`${conversationId}:where`] = chatConversation(conversation).name;
   } else if (person) {
     const id = await chatPersonId(actor, person).catch(() => null);
     const found = id ? (await listChatPeople(actor).catch(() => [])).find((item) => item.id === id) : null;
@@ -3173,7 +3169,7 @@ const TOOL_LIST: AssistantTool[] = [
     write: true,
     reads: (args) => !postsToChat(args),
     description:
-      "The user's Chat with teammates: rooms, direct messages and threads. action read with no ids lists their rooms and direct messages with unread and mention counts, and the teammates they can message. action read with conversationId reads a room or direct message (newest first; before pages back), with threadId one thread, and with person their direct messages with that teammate. A room can have a topic; an archived room isn't listed, reads with archived true and refuses posts. A message with event true is a system line: its author did what its text says, such as \"set the topic: …\" or \"archived this room\". Reading needs no approval and marks nothing read. A message with files lists them in attachments (name, type, size); files can't be opened or attached here. action search finds messages, thread replies and file names across every room and direct message they are in, newest first: query (at least 3 characters, matched anywhere in the text or a file name) plus optional conversationId, from (a teammate's id or email, or their own), hasFile, sentAfter and sentBefore (a date such as 2026-11-05 covers its whole day, so sentAfter 2026-11-05 starts on the 6th and sentBefore 2026-11-05 ends on the 4th, or a date and time); each result has the full text, threadId for a reply, conversation, author, attachments (names) and time, and next pages on as cursor. Archived rooms and task, doc and shared email discussions aren't searched. Searching needs no approval. action post posts text as the user where conversationId, threadId (a reply) or person (a direct message) says, and only that needs the user's approval: proposing it shows them a card, and it only runs if they confirm. Teammates see a post at once, and posting marks that conversation read up to the post. Tag a teammate with @[Name](member:id). Only post what the user asked for. Any other action is refused.",
+      "The user's Chat with teammates: rooms, direct messages, group messages and threads. action read with no ids lists their rooms, direct messages and group messages (a group message has kind group_dm and people) with unread and mention counts, and the teammates they can message. action read with conversationId reads a room, direct message or group message (newest first; before pages back), with threadId one thread, and with person their direct messages with that teammate. A room can have a topic; an archived room isn't listed, reads with archived true and refuses posts. A message with event true is a system line: its author did what its text says, such as \"set the topic: …\" or \"archived this room\". Reading needs no approval and marks nothing read. A message with files lists them in attachments (name, type, size); files can't be opened or attached here. action search finds messages, thread replies and file names across every room, direct message and group message they are in, newest first: query (at least 3 characters, matched anywhere in the text or a file name) plus optional conversationId, from (a teammate's id or email, or their own), hasFile, sentAfter and sentBefore (a date such as 2026-11-05 covers its whole day, so sentAfter 2026-11-05 starts on the 6th and sentBefore 2026-11-05 ends on the 4th, or a date and time); each result has the full text, threadId for a reply, conversation, author, attachments (names) and time, and next pages on as cursor. Archived rooms and task, doc and shared email discussions aren't searched. Searching needs no approval. action post posts text as the user where conversationId, threadId (a reply) or person (a direct message) says, and only that needs the user's approval: proposing it shows them a card, and it only runs if they confirm. Teammates see a post at once, and posting marks that conversation read up to the post. Tag a teammate with @[Name](member:id). Only post what the user asked for. Any other action is refused.",
     parameters: {
       type: "object",
       properties: {
@@ -3184,9 +3180,9 @@ const TOOL_LIST: AssistantTool[] = [
         sentAfter: { type: "string", description: "For search: only messages sent after this date (YYYY-MM-DD, the whole day) or date and time." },
         sentBefore: { type: "string", description: "For search: only messages sent before this date (YYYY-MM-DD, from its start) or date and time." },
         cursor: { type: "string", description: "For search: the next value from the previous page." },
-        conversationId: idParam("A room or direct message id from a read with no ids. For search, only that conversation."),
+        conversationId: idParam("A room, direct message or group message id from a read with no ids. For search, only that conversation."),
         threadId: idParam("The id of a thread's first message, to read the thread or reply in it."),
-        person: { type: "string", description: "A teammate's id (from a read with no ids, or list_team_members) or email address, for a direct message." },
+        person: { type: "string", description: "A teammate's id (from a read with no ids, or list_team_members) or email address, for a direct message with one person; a group message is reached by conversationId." },
         before: idParam("For read: a message id; returns the messages before it."),
         fromUnread: { type: "boolean", description: "For read with conversationId: start at the first unread message instead of the newest." },
         limit: { type: "integer", description: "For read: messages to return, up to 100. Defaults to 50. For search: results, up to 50, default 30.", minimum: 1, maximum: 100 },

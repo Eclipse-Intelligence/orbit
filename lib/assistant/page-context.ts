@@ -1,4 +1,5 @@
 import { listThread } from "@/lib/crm/chat";
+import { isChatKind } from "@/lib/chat/types";
 import { CrmError } from "@/lib/crm/errors";
 import { taskDueDay } from "@/lib/crm/task-time";
 import { parseDocsRoute } from "@/lib/docs/routes";
@@ -547,8 +548,8 @@ async function focusedChatThread(actor: UserActor, id: string | null): Promise<L
   const lead = "Chat thread they asked about";
   try {
     const { conversation, root } = await listThread(actor, id, { limit: 1 });
-    if (conversation.kind !== "room" && conversation.kind !== "dm") return [`The ${lead.toLowerCase()} ${CHAT_MISSING}.`];
-    const where = conversation.kind === "dm" ? `their direct messages with ${quoted(conversation.name, "a teammate")}` : `the room ${quoted(`#${conversation.name}`, "a room")}`;
+    if (!isChatKind(conversation.kind)) return [`The ${lead.toLowerCase()} ${CHAT_MISSING}.`];
+    const where = conversation.kind === "dm" ? `their direct messages with ${quoted(conversation.name, "a teammate")}` : conversation.kind === "group_dm" ? `their group message with ${quoted(conversation.name, "teammates")}` : `the room ${quoted(`#${conversation.name}`, "a room")}`;
     const replies = root.replyCount === 0 ? "no replies, so the thread is that one message" : root.replyCount === 1 ? "1 reply" : `${root.replyCount} replies`;
     return [
       `${lead}: started by ${quoted(root.author.name, "someone")} in ${where} [conversation id ${conversation.id}], ${replies} [thread id ${root.id}]. Read it with team_chat (in the chat area, so load that with find_tools first) and that threadId.`,

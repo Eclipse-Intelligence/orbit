@@ -12,6 +12,7 @@ import {
   markAllChatRead,
   markConversationUnread,
   openDm,
+  openGroup,
   postMessage,
   reactToMessage,
   removeRoomMember,
@@ -72,6 +73,10 @@ export async function leaveRoomAction(id: string): Promise<ChatResult<{ deleted:
 
 export async function openDmAction(userId: string): Promise<ChatResult<{ conversation: ChatConversation }>> {
   return run("Couldn't open the conversation. Try again.", async (actor) => ({ conversation: await openDm(actor, userId) }));
+}
+
+export async function openGroupAction(userIds: string[]): Promise<ChatResult<{ conversation: ChatConversation }>> {
+  return run("Couldn't open the conversation. Try again.", async (actor) => ({ conversation: await openGroup(actor, userIds) }));
 }
 
 export async function postMessageAction(input: {

@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
 import { useChat } from "@/components/chat/chat-context";
-import { chatLevel, type ChatConversation, type ChatLevel } from "@/lib/chat/types";
+import { chatLevel, isDirect, type ChatConversation, type ChatLevel } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import BellIcon from "@/public/assets/images/chat/bell.svg";
@@ -39,7 +39,7 @@ function Choice({ value, label, detail }: { value: ChatLevel; label: string; det
 
 export function NotifyItems({ conversation }: { conversation: ChatConversation }) {
   const { setNotify } = useChat();
-  const dm = conversation.kind === "dm";
+  const dm = isDirect(conversation.kind);
   const level = conversationLevel(conversation);
   return (
     <>
