@@ -4,6 +4,7 @@ import { CHAT_ARCHIVED, type ChatKind, type ChatPost, type ChatScheduled, type C
 import { CHAT_SCHEDULED_PATH } from "@/lib/chat/routes";
 import { cleanFormat, type ChatFormat } from "@/lib/chat/markdown";
 import { broadcastChat, checkId, checkScheduledPost, directName, GROUP_PEOPLE, iso, MEMBER_NAME, postMessage, type PeopleRow } from "@/lib/crm/chat";
+import { type PreviewTransport } from "@/lib/crm/chat-link-previews";
 import { checkUploads, cleanAttachmentIds } from "@/lib/crm/chat-attachments";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, pgFailure } from "@/lib/crm/errors";
@@ -49,7 +50,7 @@ type ScheduledRow = {
   attachments: ChatScheduledItem["attachments"] | null;
 };
 
-export type DeliverOptions = { fetchImpl?: typeof fetch; send?: PushSender };
+export type DeliverOptions = { fetchImpl?: typeof fetch; send?: PushSender; linkPreviews?: PreviewTransport };
 
 export type DeliverOutcome = { outcome: "sent"; post: ChatPost | null } | { outcome: "failed"; reason: string } | { outcome: "retry" };
 
@@ -236,7 +237,7 @@ export async function deliverScheduled(row: Claimed, options: DeliverOptions & {
     const post = await postMessage(
       actor,
       { conversationId: checked.conversationId, parentId: checked.parentId, body: checked.body, format: checked.format, clientKey: row.id, attachmentIds: row.attachment_ids },
-      { roomMention: true, fetchImpl: options.fetchImpl, markRead: false },
+      { roomMention: true, fetchImpl: options.fetchImpl, markRead: false, linkPreviews: options.linkPreviews ?? {} },
     );
     await query("select private.chat_schedule_done($1, $2)", [row.id, row.claim_token]);
     return { outcome: "sent", post };

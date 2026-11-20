@@ -783,6 +783,21 @@ describe("scheduled chat messages", () => {
     await refused(schedule(sam, group.id, "Too late"), /Everyone else has left/);
   });
 
+  it("gives a scheduled post link previews like a normal post,", async () => {
+    const story = "https://news.example/story";
+    const pages = async (input: string | URL | Request) =>
+      String(input) === story ? new Response("<html><head><title>Big story</title></head></html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }) : new Response("missing", { status: 404 });
+    const transport = { fetchImpl: pages as typeof fetch, lookup: async () => ["93.184.216.34"] };
+    const item = await schedule(sam, room, `Read ${story}`);
+    await makeDue(item.id);
+    await processDueScheduled({ fetchImpl: env.fetchImpl, linkPreviews: transport });
+    await chatWorkSettled();
+    const posted = (await messagesWithKey(item.id))[0];
+    const previews = await sql<{ url: string; title: string | null }>("select url, title from crm.chat_link_previews where message_id = $1", [posted.id]);
+    assert.deepEqual(previews, [{ url: story, title: "Big story" }]);
+    assert.ok(broadcasts.some((event) => (event.payload as { type?: string }).type === "previews"));
+  });
+
   it("runs from the every-minute cron", async () => {
     const item = await schedule(sam, room, "From the cron");
     await makeDue(item.id);
