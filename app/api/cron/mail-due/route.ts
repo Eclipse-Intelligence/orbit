@@ -3,6 +3,7 @@ import { processAllCalendarAlerts } from "@/lib/calendar-alerts";
 import { sweepAgentMail } from "@/lib/agent-mail/jobs";
 import { pollAgentMailboxes } from "@/lib/agent-mail/poll";
 import { processAllDueMail } from "@/lib/mail/due";
+import { processAllPendingMail } from "@/lib/mail/pending";
 import { syncTaskBlocks } from "@/lib/crm/task-outlook";
 import { syncReminderBlocks } from "@/lib/crm/reminder-outlook";
 import { SERIES_SHARE, syncSeriesOutlook } from "@/lib/crm/series-outlook";
@@ -20,6 +21,10 @@ async function handle(request: Request) {
   if (auth === "unauthorized") return Response.json({ error: "Unauthorized." }, { status: 401 });
   const started = Date.now();
   const deadline = started + 45_000;
+  const moves = await processAllPendingMail(Date.now() + 25_000).catch((error) => {
+    console.error("Queued mail moves failed", error instanceof Error ? error.name : "unknown");
+    return null;
+  });
   const users = await processAllDueMail(deadline - 10_000).catch((error) => {
     console.error("Due mail failed", error instanceof Error ? error.name : "unknown");
     return null;
@@ -65,7 +70,7 @@ async function handle(request: Request) {
     console.error("Waiting assistant messages sweep failed", error instanceof Error ? error.name : "unknown");
     return 0;
   });
-  return Response.json({ users, calendar, repeats, taskReminders, reminders, taskBlocks, seriesBlocks, reminderBlocks, agentMail, polled, steering });
+  return Response.json({ users, moves, calendar, repeats, taskReminders, reminders, taskBlocks, seriesBlocks, reminderBlocks, agentMail, polled, steering });
 }
 
 export const GET = handle;

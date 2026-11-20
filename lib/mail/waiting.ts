@@ -1,4 +1,5 @@
 import { withActor } from "@/lib/crm/context";
+import { hiddenByPending } from "@/lib/mail/pending-sql";
 import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { CrmError } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
@@ -208,6 +209,7 @@ function repliesSql() {
       from crm.mail_messages m
       join crm.mail_folders f on f.id = m.folder_id
       where m.user_id = $1 and not m.is_draft and f.role = 'inbox'
+        and ${hiddenByPending("m", "f")}
         and m.received_at >= $3 and m.received_at < $4
         and nullif(m.from_email, '') is not null
         and lower(m.from_email) not in (select email from own)

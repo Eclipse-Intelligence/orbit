@@ -24,7 +24,10 @@ import {
   cachedThread,
   dwellReadDue,
   fetchList,
+  announceRefusals,
   fetchNav,
+  listenForRefusals,
+  postMove,
   fetchScheduled,
   postSenderSplit,
   askAi,
@@ -55,14 +58,14 @@ import { useTeamUnread } from "@/components/crm/attention";
 import PushPrompt from "@/components/push/push-prompt";
 import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/mail/reconnect-notice";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
-import ThreadList from "@/components/mail/thread-list";
+import ThreadList, { SWIPE_SETTLE_MS } from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
 import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { useComposer } from "@/components/mail/compose-dock";
 import { watchEdgeSwipe, type EdgeHandlers } from "@/components/mail/swipe";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
-import { MAIL_SPLITS, SPLIT_LABELS, type MailSplit, type ComposeAccount, type ComposeIntent, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
+import { MAIL_SPLITS, refusalMessage, SPLIT_LABELS, type MailSplit, type ComposeAccount, type ComposeIntent, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -265,6 +268,7 @@ export default function MailScreen({
   const [peeking, setPeeking] = useState(false);
   const request = useRef(0);
   const removing = useRef(new Set<string>());
+  const early = useRef(new Map<string, Promise<MailActionReply>>());
   const [pendingMarks] = useState(createPendingMarks);
   const sendingThreads = useRef(new Map<string, OutgoingThread[]>());
   const keptUnread = useRef(new Set<string>());
@@ -286,6 +290,14 @@ export default function MailScreen({
     fullRefresh.current = Date.now();
   }, []);
 
+  useEffect(
+    () =>
+      listenForRefusals((items) => {
+        for (const item of items) showToast({ message: refusalMessage(item), tone: "alert" });
+      }),
+    [showToast],
+  );
+
   const receiveNav = useCallback((streamed: MailNav | null) => {
     const apply = (fresh: MailNav) => {
       setNav(fresh);
@@ -293,8 +305,10 @@ export default function MailScreen({
       const current = latest.current.query;
       if (current.account && !fresh.accounts.some((account) => account.id === current.account)) showRef.current({ ...current, account: null });
     };
-    if (streamed) apply(streamed);
-    else fetchNav().then(apply).catch(() => null);
+    if (streamed) {
+      announceRefusals(streamed);
+      apply(streamed);
+    } else fetchNav().then(apply).catch(() => null);
   }, []);
 
   function settleNav() {
@@ -723,7 +737,7 @@ export default function MailScreen({
       inbox: `Moved ${count} to Inbox.`,
       snooze: `${count === 1 ? "Reminder" : "Reminders"} set for ${count} ${count === 1 ? "conversation" : "conversations"}, ${detail ?? "later"}.`,
     };
-    const pending = runAll((thread) => postAction(thread.key, action, from, until));
+    const pending = runAll((thread) => postMove(thread.key, action, from, until));
     const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
     const shown = showToast({
       message: labels[action],
@@ -735,7 +749,7 @@ export default function MailScreen({
               run: () => {
                 void pending.then(() => {
                   chosen.forEach(putBack);
-                  void runAll((thread) => postAction(thread.key, "inbox", undoFrom)).then(() => {
+                  void runAll((thread) => postMove(thread.key, "inbox", undoFrom)).then(() => {
                     forgetOtherLists(latest.current.query);
                     settleNav();
                   });
@@ -753,10 +767,38 @@ export default function MailScreen({
       .finally(() => chosen.forEach((thread) => removing.current.delete(thread.key)));
   }
 
+  function startMove(key: string) {
+    const { query: target } = latest.current;
+    if (early.current.has(key)) return;
+    removing.current.add(key);
+    const action = primaryMove();
+    const started = postMove(key, action, target.query ? "search" : target.view);
+    started.catch(() => undefined);
+    early.current.set(key, started);
+    window.setTimeout(() => {
+      if (early.current.get(key) !== started) return;
+      early.current.delete(key);
+      started
+        .then(() => showToast({ message: DONE_LABEL[action] }))
+        .catch((error: Error) => {
+          if (!flagReconnect(error, {})) showToast({ message: error.message, tone: "alert" });
+        })
+        .finally(() => {
+          removing.current.delete(key);
+          settleNav();
+        });
+    }, SWIPE_SETTLE_MS);
+  }
+
   function act(key: string, action: ReaderAction, until?: string, detail?: string, silent = false) {
     const { page: currentPage, query: target } = latest.current;
     const thread = currentPage?.threads.find((item) => item.key === key);
-    if (!thread) return;
+    if (!thread) {
+      if (!early.current.has(key)) return;
+      early.current.delete(key);
+      removing.current.delete(key);
+      return;
+    }
     const from = target.query ? "search" : target.view;
     if (MOVES.has(action)) {
       const list = currentPage!.threads;
@@ -788,7 +830,7 @@ export default function MailScreen({
               run: () => {
                 void pendingMove.then(() => {
                   putBack();
-                  postAction(key, "inbox", undoFrom)
+                  postMove(key, "inbox", undoFrom)
                     .then(() => forgetOtherLists(latest.current.query))
                     .catch((error: Error) => {
                       if (!flagReconnect(error, { sourceId: thread.sourceId })) showToast({ message: error.message, tone: "alert" });
@@ -799,7 +841,9 @@ export default function MailScreen({
             }
           : undefined,
       });
-      const pendingMove = postAction(key, action, from, until)
+      const started = early.current.get(key);
+      early.current.delete(key);
+      const pendingMove = (started ?? postMove(key, action, from, until))
         .then((result) => {
           if (result.failed) showToast({ message: partlyMoved(result.failed, result.problem ?? null), tone: "alert" });
         })
@@ -1657,6 +1701,7 @@ export default function MailScreen({
                     : {
                         leftLabel: primaryMove() === "inbox" ? "Move to Inbox" : "Archive",
                         restore: primaryMove() === "inbox",
+                        onLeftStart: startMove,
                         onLeft: (key) => act(key, primaryMove()),
                         rightLabel: query.view === "snoozed" && !query.query ? null : "Remind me",
                         onRight: (key) => {

@@ -3,6 +3,7 @@ import type {
   MailAttachmentMeta,
   MailDraft,
   MailNav,
+  MailRefusalItem,
   SubscriptionSender,
   SubscriptionStatus,
   ThreadCursor,
@@ -286,8 +287,32 @@ export function prefetchThreads(keys: string[]) {
   void Promise.all([work(), work()]);
 }
 
+let refusalListener: ((items: MailRefusalItem[]) => void) | null = null;
+let heldRefusals: MailRefusalItem[] = [];
+
+export function listenForRefusals(listener: (items: MailRefusalItem[]) => void) {
+  refusalListener = listener;
+  if (heldRefusals.length > 0) {
+    listener(heldRefusals);
+    heldRefusals = [];
+  }
+  return () => {
+    if (refusalListener === listener) refusalListener = null;
+  };
+}
+
+export function announceRefusals(nav: MailNav | null) {
+  const items = nav?.refusals ?? [];
+  if (items.length === 0) return;
+  if (refusalListener) refusalListener(items);
+  else heldRefusals = [...heldRefusals, ...items];
+}
+
 export function fetchNav() {
-  return getJson<MailNav>("/api/mail/nav");
+  return getJson<MailNav>("/api/mail/nav").then((nav) => {
+    announceRefusals(nav);
+    return nav;
+  });
 }
 
 export type MailActionReply = { changed: number; failed?: number; problem?: string | null };
@@ -310,6 +335,28 @@ export function postAction(thread: string, action: string, view: string, until?:
     headers: { "content-type": "application/json", [SYNC_ORIGIN_HEADER]: syncOrigin() },
     body: JSON.stringify({ thread, action, view, until }),
   });
+}
+
+const MOVE_RETRY_MS = [1_000, 3_000, 8_000, 20_000, 45_000, 60_000, 60_000];
+const MOVE_VERBS: Record<string, string> = { archive: "archive", trash: "delete", inbox: "move to Inbox", snooze: "snooze" };
+
+function transientRequest(error: unknown) {
+  if (!(error instanceof Error)) return true;
+  const { status, reconnect } = error as MailRequestError & { reconnect?: unknown };
+  if (reconnect) return false;
+  return status === undefined || status === 429 || status >= 500;
+}
+
+export async function postMove(thread: string, action: string, view: string, until?: string) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await postAction(thread, action, view, until);
+    } catch (error) {
+      if (!transientRequest(error)) throw error;
+      if (attempt >= MOVE_RETRY_MS.length) throw new Error(`Couldn't ${MOVE_VERBS[action] ?? "move it"}. Try again.`);
+      await new Promise((resolve) => window.setTimeout(resolve, MOVE_RETRY_MS[attempt]));
+    }
+  }
 }
 
 export function fetchScheduled() {

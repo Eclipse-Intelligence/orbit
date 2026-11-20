@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { takeMailRefusals } from "@/lib/mail/refusals";
 import { after } from "next/server";
 import CaptureScreen from "@/components/capture/capture-screen";
 import { getUserActor } from "@/lib/auth/user";
@@ -62,6 +63,7 @@ export default async function CapturePage() {
     }),
     listDismissedImports(user).catch(logged("Reading dismissed calls failed", { items: [], total: 0 })),
   ]);
+  const refusals = await takeMailRefusals(user).catch(() => []);
   const rules = await listSenderRules(user).catch(logged("Reading Capture rules failed", []));
   after(async () => {
     try {
@@ -107,6 +109,7 @@ export default async function CapturePage() {
       dismissedTotal={dismissed.total}
       sorting={unknown.sorting}
       rules={rules}
+      refusals={refusals}
       failed={[...failed]}
       workspaces={unknown.workspaces}
       workspaceId={user.workspaceId}

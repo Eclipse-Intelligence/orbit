@@ -256,7 +256,17 @@ export type MailNav = {
   splits: { sourceId: string; split: MailSplit; total: number; unread: number }[];
   version?: string;
   partial?: boolean;
+  refusals?: MailRefusalItem[];
 };
+
+export type MailRefusalItem = { id: string; action: "archive" | "trash" | "inbox" | "snooze"; subject: string | null; problem: string };
+
+const REFUSAL_VERBS: Record<MailRefusalItem["action"], string> = { archive: "archive", trash: "delete", inbox: "move to Inbox", snooze: "snooze" };
+
+export function refusalMessage(refusal: MailRefusalItem) {
+  const subject = refusal.subject?.trim().slice(0, 80);
+  return `Couldn't ${REFUSAL_VERBS[refusal.action]} ${subject ? `"${subject}"` : "an email"}. ${refusal.problem}`;
+}
 
 export type ThreadCursor = { at: string; key: string };
 
