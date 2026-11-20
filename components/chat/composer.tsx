@@ -28,6 +28,7 @@ import LinkIcon from "@/public/assets/images/chat/link.svg";
 import BulletsIcon from "@/public/assets/images/chat/list-bullets.svg";
 import NumbersIcon from "@/public/assets/images/chat/list-numbers.svg";
 import QuoteIcon from "@/public/assets/images/chat/quote.svg";
+import CloseIcon from "@/public/assets/images/chat/remove.svg";
 import SmileIcon from "@/public/assets/images/chat/smile.svg";
 import StrikeIcon from "@/public/assets/images/chat/strikethrough.svg";
 
@@ -135,7 +136,7 @@ function FormatToggle({ shown, onToggle, phone }: { shown: boolean; onToggle: ()
       onMouseDown={(event) => event.preventDefault()}
       onClick={onToggle}
       className={cn(
-        "aria-pressed:bg-surface-active aria-pressed:text-foreground shrink-0 rounded-md px-2 text-[13px] font-medium",
+        "aria-pressed:bg-surface-active aria-pressed:text-foreground shrink-0 rounded-md px-2 text-[13px] font-medium pointer-coarse:text-[16px]",
         phone ? "h-11 min-w-11" : "h-[30px] pointer-coarse:h-11 pointer-coarse:min-w-11",
       )}
     >
@@ -196,11 +197,14 @@ export function ComposerBox({
   const { viewer, emoji: emojiPrefs } = useChat();
   const [shown, setShown] = useFormatBar(viewer.id, scope);
   const [focused, setFocused] = useState(false);
+  const [phoneTools, setPhoneTools] = useState(false);
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
   const active = useMemo(() => (focused ? formatsAt(value, selection.start, selection.end) : new Set<FormatKind>()), [focused, value, selection]);
   const inFence = focused && selection.start === selection.end && insideCodeFence(value, selection.start);
   const marks = useMemo(() => markdownMarks(value).map((mark) => ({ ...mark, className: MARK_CLASS })), [value]);
   const oneRow = Boolean(phoneAction);
+  const expanded = !oneRow || focused || value.length > 0 || Boolean(queued);
+  const collapsed = oneRow && !expanded;
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [phoneEmojiOpen, setPhoneEmojiOpen] = useState(false);
   const [library, setLibrary] = useState<EmojiLibrary | null>(null);
@@ -366,7 +370,7 @@ export function ComposerBox({
         data-chat-queued={queued ? "" : undefined}
         className={cn(
           "border-line-strong bg-secondary flex flex-col rounded-lg border",
-          oneRow && "max-md:rounded-[22px]",
+          oneRow && (collapsed ? "max-md:rounded-[22px]" : "max-md:rounded-[18px]"),
           over && "border-danger",
         )}
         onClick={(event) => {
@@ -375,8 +379,8 @@ export function ComposerBox({
       >
         {shown && <Toolbar onRun={run} active={active} className="border-line-subtle overflow-x-auto overscroll-contain border-b px-1.5 py-1 max-md:hidden" />}
         <div className="flex items-end gap-2">
-          {oneRow && phoneLead && <div className="shrink-0 p-[3px] pr-0 md:hidden">{phoneLead}</div>}
-          <div className={cn("min-w-0 flex-1 px-3.5 pt-2.5 pb-1", oneRow && "max-md:py-[9px] max-md:pl-4", oneRow && phoneLead && "max-md:pl-1")}>
+          {collapsed && phoneLead && <div className="shrink-0 p-[3px] pr-0 md:hidden">{phoneLead}</div>}
+          <div className={cn("min-w-0 flex-1 px-3.5 pt-2.5 pb-1", collapsed && "max-md:py-[9px] max-md:pl-4", collapsed && phoneLead && "max-md:pl-1")}>
             <MentionInput
               id={id}
               inputRef={inputRef}
@@ -398,7 +402,7 @@ export function ComposerBox({
               onKeyDown={keyDown}
             />
           </div>
-          {oneRow && (
+          {collapsed && (
             <div className="flex shrink-0 items-center gap-0.5 p-[3px] pointer-coarse:gap-2 md:hidden">
               <EmojiPopover open={phoneEmojiOpen} onOpenChange={setPhoneEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} trigger>
                 <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className="hit text-soft aria-expanded:text-foreground size-[38px] rounded-full">
@@ -410,34 +414,63 @@ export function ComposerBox({
           )}
         </div>
         {queue}
-        <div className={cn("flex items-center gap-0.5 px-1.5 pt-0.5 pb-1.5", oneRow && "max-md:hidden")}>
-          {attach}
-          <EmojiPopover open={emojiOpen} onOpenChange={setEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} align="start" trigger>
-            <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className={cn(iconButton, "aria-expanded:bg-surface-active aria-expanded:text-foreground")}>
-              <SmileIcon aria-hidden className="size-3.5" />
+        <div className={cn("flex items-center gap-0.5 px-1.5 pt-0.5 pb-1.5 max-md:gap-1 max-md:px-2 max-md:pb-2", collapsed && "max-md:hidden")}>
+          {phoneTools && (
+            <div className="flex min-w-0 flex-1 items-center gap-1 md:hidden">
+              <Button
+                variant="primary"
+                size="none"
+                aria-label="Hide formatting"
+                title="Hide formatting"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setPhoneTools(false)}
+                className="hit size-[38px] shrink-0 rounded-full"
+              >
+                <CloseIcon aria-hidden className="size-4" />
+              </Button>
+              <Toolbar onRun={run} active={active} phone className="min-w-0 flex-1 overflow-x-auto overscroll-contain" />
+            </div>
+          )}
+          <div className={cn("flex min-w-0 flex-1 items-center gap-0.5 max-md:gap-1", phoneTools && "max-md:hidden")}>
+            {phoneLead ? (
+              <>
+                <span className="contents md:hidden">{phoneLead}</span>
+                <span className="contents max-md:hidden">{attach}</span>
+              </>
+            ) : (
+              attach
+            )}
+            <EmojiPopover open={emojiOpen} onOpenChange={setEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} align="start" trigger>
+              <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className={cn(iconButton, "aria-expanded:bg-surface-active aria-expanded:text-foreground")}>
+                <SmileIcon aria-hidden className="size-3.5 pointer-coarse:size-[18px]" />
+              </Button>
+            </EmojiPopover>
+            <Button variant="ghost" size="none" aria-label="Mention someone" title="Mention someone" onMouseDown={(event) => event.preventDefault()} onClick={mention} className={iconButton}>
+              <AtIcon aria-hidden className="size-3.5 pointer-coarse:size-[18px]" />
             </Button>
-          </EmojiPopover>
-          <Button variant="ghost" size="none" aria-label="Mention someone" title="Mention someone" onMouseDown={(event) => event.preventDefault()} onClick={mention} className={iconButton}>
-            <AtIcon aria-hidden className="size-3.5" />
-          </Button>
-          <span aria-hidden className="bg-line-strong mx-1 h-4 w-px shrink-0 max-md:hidden" />
-          <span className="max-md:hidden">
-            <FormatToggle shown={shown} onToggle={() => setShown(!shown)} />
-          </span>
-          <span className="flex-1" />
-          {actions}
+            <span aria-hidden className="bg-line-strong mx-1 h-4 w-px shrink-0 max-md:hidden" />
+            <span className="contents max-md:hidden">
+              <FormatToggle shown={shown} onToggle={() => setShown(!shown)} />
+            </span>
+            <span className="contents md:hidden">
+              <FormatToggle shown={false} onToggle={() => setPhoneTools(true)} phone />
+            </span>
+            <span className="flex-1" />
+          </div>
+          {phoneAction ? (
+            <>
+              <span className="contents md:hidden">{phoneAction}</span>
+              <span className="contents max-md:hidden">{actions}</span>
+            </>
+          ) : (
+            actions
+          )}
         </div>
       </div>
       {inFence && (
         <p role="status" className="caption-style text-faint px-1 pt-1 text-right max-md:hidden">
           {isMac() ? "⌘ Enter" : "Ctrl Enter"} to {submitVerb}
         </p>
-      )}
-      {focused && (
-        <div className="bg-popover border-line-subtle -mx-2 mt-2 flex items-center gap-0.5 overflow-x-auto overscroll-contain border-t px-1.5 py-1 md:hidden">
-          <FormatToggle shown={shown} onToggle={() => setShown(!shown)} phone />
-          {shown && <Toolbar onRun={run} active={active} phone />}
-        </div>
       )}
     </div>
   );
