@@ -69,7 +69,7 @@ export default function WorkingHoursSettings({ hours }: { hours: WorkingHours })
 
   return (
     <SettingsCard title="Working hours" description="Plan and Schedule only place tasks inside these. Booking pages keep their own hours.">
-      <ul className="border-border flex flex-col rounded-lg border" aria-label="Working hours">
+      <ul className="divide-border border-border flex flex-col divide-y rounded-lg border" aria-label="Working hours">
         {SETTINGS_WEEK.map((weekday) => {
           const day = days[weekday];
           const name = WEEKDAY_NAMES[weekday];

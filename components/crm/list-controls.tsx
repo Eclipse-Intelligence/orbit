@@ -174,7 +174,7 @@ export function PresenceFilter<T extends string>({
           ))}
         </ul>
         {active > 0 && (
-          <div className="mt-2 flex justify-end px-1">
+          <div className="border-border mt-1 flex justify-end border-t px-1 pt-2">
             <Button variant="ghost" size="sm" onClick={() => (onClear ? onClear() : onChange([], []))}>
               Clear filters
             </Button>

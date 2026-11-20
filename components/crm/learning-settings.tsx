@@ -94,7 +94,7 @@ export function LearningStatusCard({ statuses, canRunShared }: { statuses: Learn
   return (
     <SettingsCard id="learning" title="Nightly learning">
       <div className="flex flex-col gap-4">
-        <ul className="flex flex-col">
+        <ul className="divide-border flex flex-col divide-y">
           {kinds.map((kind) => {
             const status = byKind.get(kind);
             return (
@@ -380,7 +380,7 @@ export function MemoriesCard({
           </form>
         )}
         {shown.length ? (
-          <ul className="flex flex-col">
+          <ul className="divide-border flex flex-col divide-y">
             {shown.map((memory) => (
               <MemoryRow key={memory.id} memory={memory} showPlace={manyWorkspaces} />
             ))}
@@ -460,7 +460,7 @@ export function WatchlistCard({ items }: { items: WatchItem[] }) {
           </p>
         )}
         {items.length ? (
-          <ul className="flex flex-col">
+          <ul className="divide-border flex flex-col divide-y">
             {items.map((item) => (
               <li key={item.id} className="flex items-center gap-3 py-2">
                 <Tag tone="neutral" size="sm" className="text-[12px]">
@@ -498,7 +498,7 @@ export function MarketNotesCard({ notes }: { notes: MarketNote[] }) {
   return (
     <SettingsCard id="market-notes" title="Market notes">
       {notes.length ? (
-        <ul className="flex flex-col">
+        <ul className="divide-border flex flex-col divide-y">
           {notes.map((note) => (
             <li key={note.id} className="flex items-start gap-3 py-2.5">
               <span className="min-w-0 flex-1">

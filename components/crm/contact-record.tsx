@@ -245,7 +245,7 @@ export default function ContactRecord({
       <RecordLayout
         activityCount={activities.length}
         summary={
-            <div className="flex items-start gap-3 p-5">
+            <div className="flex items-start gap-3 p-5 shadow-[inset_0_-1px_0_var(--border)]">
               <Monogram
                 name={shown.name}
                 className="size-[50px] rounded-full text-[18px]"
@@ -406,10 +406,10 @@ export default function ContactRecord({
                 )}
               </DetailSection>
             )}
-            <DetailSection title="Tasks">
+            <DetailSection title="Tasks" className="shadow-[inset_0_1px_0_var(--border)]">
               <RecordTasks tasks={tasks} viewer={viewer} members={members} here={{ kind: "contact", id: contact.id }} />
             </DetailSection>
-            <MeetingsCard meetings={meetings} />
+            <MeetingsCard meetings={meetings} className="shadow-[inset_0_1px_0_var(--border)]" />
             <ProposalsCard
               documents={proposals}
               company={shown.companyId ? { id: shown.companyId, name: shown.companyName ?? "Company" } : null}

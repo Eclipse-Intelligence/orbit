@@ -107,7 +107,7 @@ export default function StepsPanel({
       {steps.length > 0 && (
         <ol className="flex flex-col">
           {steps.map((step, index) => (
-            <li key={step.id} className="flex items-start gap-3 py-2.5">
+            <li key={step.id} className="border-border flex items-start gap-3 border-t py-2.5 first:border-t-0">
               <Checkbox
                 className="mt-0.5"
                 checked={Boolean(step.doneAt)}

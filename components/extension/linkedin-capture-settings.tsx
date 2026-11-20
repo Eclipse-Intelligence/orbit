@@ -82,7 +82,7 @@ function BrowserRow({ browser, workspaces }: { browser: BrowserRowView; workspac
   const [pending, start] = useTransition();
   const showWorkspaces = workspaces.length > 1 || browser.workspaces.length === 0;
   return (
-    <li className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+    <li className="border-border flex flex-wrap items-center justify-between gap-3 border-t py-3 first:border-t-0 first:pt-0 last:pb-0">
       <span className="flex min-w-0 flex-col gap-1">
         <span className="text-[14px] leading-5">{browser.name}</span>
         <span className="caption-style text-subtle flex flex-wrap items-center gap-x-2 gap-y-1">

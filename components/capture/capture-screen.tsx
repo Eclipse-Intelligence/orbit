@@ -555,7 +555,7 @@ export default function CaptureScreen({
                         </p>
                       )}
                       {rows.length > 0 && (
-                        <ul className="bg-card border-line-strong flex flex-col overflow-hidden rounded-2xl border">
+                        <ul className="bg-card border-line-strong divide-border flex flex-col divide-y overflow-hidden rounded-2xl border">
                           {rows.map((entry) => entry.node)}
                         </ul>
                       )}

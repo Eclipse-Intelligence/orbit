@@ -43,7 +43,7 @@ function Row({ conversation, href, selected }: { conversation: Conversation; hre
       data-row-href={href}
       className={cn(
         KEYBOARD_ROW_CLASS,
-        "relative flex gap-2.5 px-4 py-3 transition-colors duration-150 hover:bg-white/3",
+        "border-border relative flex gap-2.5 border-b px-4 py-3 transition-colors duration-150 hover:bg-white/3",
         selected && "bg-white/[0.07] hover:bg-white/[0.07]",
       )}
     >
@@ -163,8 +163,8 @@ export default function ConversationsScreen({
         />
       </div>
       <div className="flex min-h-0 flex-1">
-        <div className={cn("flex min-h-0 w-full min-w-0 flex-col md:w-[21.25rem] md:shrink-0", thread && "max-md:hidden")}>
-          <div className="flex shrink-0 flex-col gap-2 px-3 py-2.5">
+        <div className={cn("border-border flex min-h-0 w-full min-w-0 flex-col md:w-[21.25rem] md:shrink-0 md:border-r", thread && "max-md:hidden")}>
+          <div className="border-border flex shrink-0 flex-col gap-2 border-b px-3 py-2.5">
             <div role="group" aria-label="Show" className="-mx-1 flex min-w-0 items-center gap-0.5 overflow-x-auto px-1 [scrollbar-width:none]">
               {CHIPS.map((chip) => {
                 const active = view.show === chip.id;

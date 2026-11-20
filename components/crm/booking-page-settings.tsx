@@ -728,7 +728,7 @@ export default function BookingPageSettings({
         </div>
         <fieldset className="flex flex-col gap-2">
           <legend className="caption-style text-soft mb-2">Weekly hours</legend>
-          <ul className="border-border flex flex-col rounded-lg border">
+          <ul className="divide-border border-border flex flex-col divide-y rounded-lg border">
             {WEEKDAYS.map((day) => {
               const range = draft.weeklyHours[day][0];
               const on = Boolean(range);

@@ -140,9 +140,9 @@ export default function PlanPanel({
       data-plan-panel=""
       data-quick-add-hide=""
       data-task-drop=""
-      className="bg-background hidden w-[320px] shrink-0 flex-col md:flex lg:w-[372px]"
+      className="border-border bg-background hidden w-[320px] shrink-0 flex-col border-l md:flex lg:w-[372px]"
     >
-      <div className="flex items-center gap-2 py-2.5 pr-3 pl-4">
+      <div className="border-border flex items-center gap-2 border-b py-2.5 pr-3 pl-4">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-center gap-2">
             <h3>Plan</h3>
@@ -288,7 +288,7 @@ export default function PlanPanel({
           </>
         )}
       </div>
-      <div className="before:from-background before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-4 before:bg-linear-to-t before:to-transparent relative flex flex-col gap-2.5 px-4 pt-3 pb-3.5">
+      <div className="before:from-background before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-4 before:bg-linear-to-t before:to-transparent border-border relative flex flex-col gap-2.5 border-t px-4 pt-3 pb-3.5">
         <div className="flex items-start gap-2.5">
           <Switch className="hit mt-px" checked={replan} disabled={busy || !preview} label="Replan my blocks" onChange={handlers.onReplan} />
           <div className="flex min-w-0 flex-col gap-0.5">

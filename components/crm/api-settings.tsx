@@ -18,7 +18,7 @@ export default function ApiSettings({
   return (
     <SettingsCard id="agents" title="Agents">
       <dl className="flex flex-col">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 pb-3">
+        <div className="border-border flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b pb-3">
           <dt className="caption-style text-subtle">REST API</dt>
           <dd>
             <Code>{`${origin}/api/v1`}</Code>
