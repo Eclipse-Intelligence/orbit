@@ -1,20 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type FocusEvent, type KeyboardEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import Button from "@/components/_ui/button";
-import MentionInput from "@/components/assistant/mention-input";
+import { Input } from "@/components/_ui/input";
 import { UploadQueue } from "@/components/chat/attachments";
 import { useChat } from "@/components/chat/chat-context";
+import ChatInput, { CHAT_INPUT, type ChatCaret, type ChatInputHandle, type LinkTarget } from "@/components/chat/chat-input";
 import EmojiPopover from "@/components/chat/emoji-popover";
 import { attachmentQueued, queuedAttachment, useUploads, type QueuedFile, type UploadTarget } from "@/components/chat/use-uploads";
 import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { draftKey, formatBarDefault, pushRecentEmoji, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, writeQueuedFiles, type FormatScope } from "@/lib/chat/client";
-import { applyEdit, formatEdit, mentionEdit, shortcodeAt, type FormatAction, type TextEdit } from "@/lib/chat/compose";
+import { shortcodeAt, type FormatAction } from "@/lib/chat/compose";
 import { pasteAttaches } from "@/lib/chat/files";
-import { formatsAt, insideCodeFence, markdownMarks, type FormatKind } from "@/lib/chat/markdown";
+import type { FormatKind } from "@/lib/chat/markdown";
+import { cleanHref } from "@/lib/chat/rich-text";
 import { CHAT_BODY_MAX, type ChatAttachment } from "@/lib/chat/types";
-import { liveMentions, type Mention } from "@/lib/mentions";
+import type { Mention } from "@/lib/mentions";
 import { physicalComboMatches, SHORTCUT_BY_ID } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
@@ -32,9 +34,9 @@ import CloseIcon from "@/public/assets/images/chat/remove.svg";
 import SmileIcon from "@/public/assets/images/chat/smile.svg";
 import StrikeIcon from "@/public/assets/images/chat/strikethrough.svg";
 
-const GROW_MAX_PX = 200;
-const MARK_CLASS = "bg-transparent text-faint";
 const SHORTCODE_OPTIONS = 8;
+const NO_FORMATS = new Set<FormatKind>();
+const IDLE_CARET: ChatCaret = { text: "", caret: 0, empty: true, focused: false, formats: NO_FORMATS, inCode: false, inCodeBlock: false };
 
 type EmojiLibrary = typeof import("@/lib/chat/emoji");
 type Shortcode = { start: number; end: number; query: string };
@@ -69,18 +71,17 @@ function isMac() {
   return /mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent);
 }
 
-function composing(event: KeyboardEvent<HTMLTextAreaElement>) {
-  return event.nativeEvent.isComposing || event.keyCode === 229;
+function composing(event: KeyboardEvent) {
+  return event.isComposing || event.keyCode === 229;
 }
 
-export function caretToEnd(area: HTMLTextAreaElement | null | undefined) {
-  if (!area || document.activeElement !== area) return;
-  area.setSelectionRange(area.value.length, area.value.length);
-}
+export { caretToEnd, chatInputText } from "@/components/chat/chat-input";
+
+export const COMPOSER_INPUT = `[data-chat-composer] ${CHAT_INPUT}`;
 
 export function focusComposer(from: Element | null) {
   const scope = from?.closest("[data-chat-room-pane], [data-chat-thread-pane]") ?? document;
-  scope.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea")?.focus({ preventScroll: true });
+  scope.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
 }
 
 function useFormatBar(userId: string, scope: FormatScope) {
@@ -145,6 +146,62 @@ function FormatToggle({ shown, onToggle, phone }: { shown: boolean; onToggle: ()
   );
 }
 
+function LinkForm({ target, onSave, onRemove, onCancel }: { target: LinkTarget; onSave: (href: string, text?: string) => void; onRemove: () => void; onCancel: () => void }) {
+  const [text, setText] = useState(target.text);
+  const [url, setUrl] = useState(target.href ?? "");
+  const address = useRef<HTMLInputElement>(null);
+  const href = cleanHref(url);
+  const needsText = !target.text;
+
+  useEffect(() => {
+    address.current?.focus({ preventScroll: true });
+  }, []);
+
+  return (
+    <form
+      aria-label="Link"
+      className="border-line-subtle flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (href) onSave(href, needsText ? text.trim() || url.trim() : undefined);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
+      {needsText && <Input aria-label="Link text" placeholder="Text" value={text} onChange={(event) => setText(event.target.value)} className="h-8 min-w-[8em] flex-1 text-[13px]" />}
+      <Input
+        ref={address}
+        aria-label="Link address"
+        placeholder="https://"
+        inputMode="url"
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        value={url}
+        onChange={(event) => setUrl(event.target.value)}
+        className="h-8 min-w-[10em] flex-[2] text-[13px]"
+      />
+      <span className="flex shrink-0 items-center gap-1 pointer-coarse:gap-2">
+        {target.href && (
+          <Button variant="ghost" size="sm" type="button" onClick={onRemove} className="hit">
+            Remove
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" type="button" onClick={onCancel} className="hit">
+          Cancel
+        </Button>
+        <Button variant="primary" size="sm" type="submit" disabled={!href} className="hit">
+          Save
+        </Button>
+      </span>
+    </form>
+  );
+}
+
 export function ComposerBox({
   id,
   inputRef,
@@ -171,7 +228,7 @@ export function ComposerBox({
   roomMention,
 }: {
   id: string;
-  inputRef: RefObject<HTMLTextAreaElement | null>;
+  inputRef: RefObject<ChatInputHandle | null>;
   value: string;
   mentions: Mention[];
   placeholder: string;
@@ -190,7 +247,7 @@ export function ComposerBox({
   onPasteFiles?: (files: File[]) => void;
   onChange: (value: string, mentions: Mention[]) => void;
   onSubmit: () => void;
-  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onKeyDown?: (event: KeyboardEvent) => void;
   onBlur?: () => void;
   roomMention?: boolean;
 }) {
@@ -198,10 +255,10 @@ export function ComposerBox({
   const [shown, setShown] = useFormatBar(viewer.id, scope);
   const [focused, setFocused] = useState(false);
   const [phoneTools, setPhoneTools] = useState(false);
-  const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
-  const active = useMemo(() => (focused ? formatsAt(value, selection.start, selection.end) : new Set<FormatKind>()), [focused, value, selection]);
-  const inFence = focused && selection.start === selection.end && insideCodeFence(value, selection.start);
-  const marks = useMemo(() => markdownMarks(value).map((mark) => ({ ...mark, className: MARK_CLASS })), [value]);
+  const [caret, setCaret] = useState<ChatCaret>(IDLE_CARET);
+  const [linking, setLinking] = useState<LinkTarget | null>(null);
+  const active = focused ? caret.formats : NO_FORMATS;
+  const inFence = focused && caret.empty && caret.inCodeBlock;
   const oneRow = Boolean(phoneAction);
   const expanded = !oneRow || focused || value.length > 0 || Boolean(queued);
   const collapsed = oneRow && !expanded;
@@ -217,16 +274,13 @@ export function ComposerBox({
   }, [code, library, emojiPrefs.tone]);
   const codeOpen = codeOptions.length > 0;
 
-  useEffect(() => {
-    const phone = window.matchMedia("(max-width: 767px)");
-    const check = () => {
-      const area = inputRef.current;
-      if (!phone.matches || !area || document.activeElement !== area) return;
-      if (area.selectionStart !== area.selectionEnd) setPhoneTools(true);
-    };
-    document.addEventListener("selectionchange", check);
-    return () => document.removeEventListener("selectionchange", check);
-  }, [inputRef]);
+  function caretMoved(next: ChatCaret) {
+    setCaret(next);
+    if (!next.focused) return;
+    if (!next.empty && window.matchMedia("(max-width: 767px)").matches) setPhoneTools(true);
+    if (next.empty && !next.inCode) track(next.text, next.caret);
+    else setCode(null);
+  }
 
   function track(text: string, caret: number) {
     const found = shortcodeAt(text, caret);
@@ -239,49 +293,36 @@ export function ComposerBox({
   }
 
   function insertEmoji(emoji: string, range?: { start: number; end: number }) {
-    const area = inputRef.current;
-    if (!area) return;
-    const start = range?.start ?? area.selectionStart;
-    const end = range?.end ?? area.selectionEnd;
+    const input = inputRef.current;
+    if (!input) return;
     pushRecentEmoji(viewer.id, emoji);
     setCode(null);
-    apply({ start, end, text: emoji, selectionStart: start + emoji.length, selectionEnd: start + emoji.length });
-  }
-
-  function apply(edit: TextEdit) {
-    const area = inputRef.current;
-    if (!area) return;
-    area.focus({ preventScroll: true });
-    area.setSelectionRange(edit.start, edit.end);
-    let inserted = false;
-    try {
-      inserted = edit.text ? document.execCommand("insertText", false, edit.text) : document.execCommand("delete");
-    } catch {
-      inserted = false;
-    }
-    if (inserted && area.value === applyEdit(value, edit)) {
-      area.setSelectionRange(edit.selectionStart, edit.selectionEnd);
-      setSelection({ start: edit.selectionStart, end: edit.selectionEnd });
-      return;
-    }
-    const next = applyEdit(value, edit);
-    onChange(next, liveMentions(next, mentions));
-    window.requestAnimationFrame(() => area.setSelectionRange(edit.selectionStart, edit.selectionEnd));
+    input.insert(emoji, range);
   }
 
   function run(action: FormatAction) {
-    const area = inputRef.current;
-    if (!area) return;
-    apply(formatEdit(value, area.selectionStart, area.selectionEnd, action));
+    const input = inputRef.current;
+    if (!input) return;
+    if (action !== "link") return input.run(action);
+    const target = input.linkTarget();
+    if (!target) return;
+    const href = target.href ? null : /^(?:https?:\/\/|mailto:)\S+$/i.test(target.text) ? cleanHref(target.text) : null;
+    if (href) input.setLink({ from: target.from, to: target.to, href });
+    else setLinking(target);
+  }
+
+  function closeLink(change?: { href: string | null; text?: string }) {
+    const target = linking;
+    setLinking(null);
+    if (target && change) inputRef.current?.setLink({ from: target.from, to: target.to, ...change });
+    else inputRef.current?.focus();
   }
 
   function mention() {
-    const area = inputRef.current;
-    if (!area) return;
-    apply(mentionEdit(value, area.selectionStart, area.selectionEnd));
+    inputRef.current?.mention();
   }
 
-  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+  function keyDown(event: KeyboardEvent) {
     if (composing(event)) {
       onKeyDown?.(event);
       return;
@@ -321,20 +362,15 @@ export function ComposerBox({
       }
     }
     onKeyDown?.(event);
-    if (event.defaultPrevented) return;
-    if (event.key === "Enter" && !event.shiftKey && !mod && !event.altKey && insideCodeFence(value, event.currentTarget.selectionStart)) {
-      event.preventDefault();
-      const area = event.currentTarget;
-      apply({ start: area.selectionStart, end: area.selectionEnd, text: "\n", selectionStart: area.selectionStart + 1, selectionEnd: area.selectionStart + 1 });
-    }
   }
 
-  function paste(event: ClipboardEvent<HTMLDivElement>) {
-    if (!onPasteFiles) return;
+  function paste(event: ClipboardEvent) {
+    if (!onPasteFiles) return false;
     const files = Array.from(event.clipboardData?.files ?? []);
-    if (!pasteAttaches(Array.from(event.clipboardData?.types ?? []), files.length)) return;
+    if (!pasteAttaches(Array.from(event.clipboardData?.types ?? []), files.length)) return false;
     event.preventDefault();
     onPasteFiles(files);
+    return true;
   }
 
   function blur(event: FocusEvent<HTMLDivElement>) {
@@ -350,13 +386,6 @@ export function ComposerBox({
       className="relative flex flex-col"
       onFocus={() => setFocused(true)}
       onBlur={blur}
-      onPaste={paste}
-      onSelect={(event) => {
-        if (!(event.target instanceof HTMLTextAreaElement)) return;
-        setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
-        if (event.target.selectionStart === event.target.selectionEnd) track(event.target.value, event.target.selectionStart);
-        else setCode(null);
-      }}
     >
       {codeOpen && (
         <ul role="listbox" aria-label="Emoji" className="bg-popover border-line-strong shadow-overlay absolute bottom-full left-0 z-30 mb-1.5 w-[260px] max-w-full rounded-xl border p-1">
@@ -389,7 +418,16 @@ export function ComposerBox({
         }}
       >
         {shown && <Toolbar onRun={run} active={active} className="border-line-subtle overflow-x-auto overscroll-contain border-b px-1.5 py-1 max-md:hidden" />}
-        {phoneTools && (
+        {linking && (
+          <LinkForm
+            key={`${linking.from}-${linking.to}`}
+            target={linking}
+            onSave={(href, text) => closeLink({ href, text })}
+            onRemove={() => closeLink({ href: null })}
+            onCancel={() => closeLink()}
+          />
+        )}
+        {phoneTools && !linking && (
           <div className="border-line-subtle flex items-center gap-1 border-b px-2 py-1.5 md:hidden">
             <Button
               variant="primary"
@@ -408,25 +446,21 @@ export function ComposerBox({
         <div className="flex items-end gap-2">
           {collapsed && phoneLead && <div className="shrink-0 p-[3px] pr-0 md:hidden">{phoneLead}</div>}
           <div className={cn("min-w-0 flex-1 px-3.5 pt-2.5 pb-1", collapsed && "max-md:py-[9px] max-md:pl-4", collapsed && phoneLead && "max-md:pl-1")}>
-            <MentionInput
+            <ChatInput
               id={id}
-              inputRef={inputRef}
+              handle={inputRef}
               value={value}
               mentions={mentions}
-              marks={marks}
               placeholder={placeholder}
               ariaLabel={label}
               autoFocus={autoFocus}
-              autoSize={GROW_MAX_PX}
-              markdown
               roomMention={roomMention}
-              onChange={(next, kept) => {
-                onChange(next, kept);
-                track(next, inputRef.current?.selectionStart ?? next.length);
-              }}
+              onChange={onChange}
               onSubmit={onSubmit}
               onBlur={onBlur}
               onKeyDown={keyDown}
+              onCaret={caretMoved}
+              onPaste={paste}
             />
           </div>
           {collapsed && (
@@ -529,7 +563,7 @@ export default function Composer({
   roomMention?: boolean;
 }) {
   const { viewer } = useChat();
-  const input = useRef<HTMLTextAreaElement>(null);
+  const input = useRef<ChatInputHandle>(null);
   const key = draftKey(viewer.id, conversationId, parentId);
   const [value, setValue] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
@@ -576,7 +610,7 @@ export default function Composer({
 
   useEffect(() => {
     if (!autoFocus || !window.matchMedia("(pointer: fine)").matches) return;
-    const timer = window.setTimeout(() => input.current?.focus({ preventScroll: true }), 0);
+    const timer = window.setTimeout(() => input.current?.focus(), 0);
     return () => window.clearTimeout(timer);
   }, [autoFocus, key]);
 
@@ -597,14 +631,14 @@ export default function Composer({
     setMentions([]);
     setFailure(null);
     onTyping?.(false);
-    input.current?.focus({ preventScroll: true });
+    input.current?.focus();
     void onSend(text, sent, files.map(queuedAttachment)).then((error) => {
       if (!error || !restoreOnFailure) return;
       setFailure(error);
       setValue((current) => (current ? current : text));
       setMentions((current) => (current.length ? current : sent));
       uploads.restore(files);
-      window.requestAnimationFrame(() => caretToEnd(input.current));
+      window.requestAnimationFrame(() => input.current?.caretToEnd());
     });
   }
 

@@ -348,7 +348,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
               if (choosing.current) event.preventDefault();
               else if (tucked) {
                 event.preventDefault();
-                const target = returnTo.current?.isConnected ? returnTo.current : document.querySelector<HTMLElement>("[data-chat-composer] textarea");
+                const target = returnTo.current?.isConnected ? returnTo.current : document.querySelector<HTMLElement>("[data-chat-composer] [data-chat-input]");
                 target?.focus({ preventScroll: true });
               }
               returnTo.current = null;

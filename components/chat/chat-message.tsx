@@ -8,6 +8,7 @@ import Tag from "@/components/_ui/tag";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import { MessageAttachments, UploadQueue } from "@/components/chat/attachments";
 import { AvatarStack, ChatAvatar, useChat, type ChatPane } from "@/components/chat/chat-context";
+import type { ChatInputHandle } from "@/components/chat/chat-input";
 import { ComposerBox, focusComposer } from "@/components/chat/composer";
 import EmojiPopover from "@/components/chat/emoji-popover";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
@@ -51,7 +52,7 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
   const { edit, discussion, conversation, memberNames } = useChat();
   const id = useId();
   const roomMention = !discussion && pane === "room" && !message.parentId && conversation(message.conversationId)?.kind === "room" && memberNames.size <= ROOM_MENTION_MAX_MEMBERS;
-  const input = useRef<HTMLTextAreaElement>(null);
+  const input = useRef<ChatInputHandle>(null);
   const box = useRef<HTMLDivElement>(null);
   const done = () => {
     const from = box.current;
@@ -198,7 +199,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const editRequested = useRef(false);
 
   function focusEdit() {
-    row.current?.querySelector<HTMLTextAreaElement>("textarea[aria-label='Edit message']")?.focus({ preventScroll: true });
+    row.current?.querySelector<HTMLElement>("[data-chat-input][aria-label='Edit message']")?.focus({ preventScroll: true });
   }
 
   function startEdit() {
