@@ -17,6 +17,7 @@ import MessageBody from "@/components/chat/message-body";
 import { askLabel, CREATE_TASK_LABEL, useOrbitActions } from "@/components/chat/orbit-actions";
 import Reactions from "@/components/chat/reactions";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
+import { REMIND_CHOICES } from "@/components/chat/use-saved";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { pushRecentEmoji, QUICK_REACTIONS } from "@/lib/chat/client";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
@@ -26,6 +27,8 @@ import { mentionsIn, plainMentions, ROOM_MENTION_MAX_MEMBERS, type Mention } fro
 import { cn } from "@/lib/utils";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
+import BellIcon from "@/public/assets/images/chat/bell.svg";
+import BookmarkIcon from "@/public/assets/images/chat/bookmark.svg";
 import CopyIcon from "@/public/assets/images/assistant/copy.svg";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
@@ -138,7 +141,7 @@ function ToolButton({ label, title, onClick, children, className }: { label: str
 
 function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop, readOnly = false }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion, saved } = chat;
   const unreadHint = useShortcutHint("chat-mark-unread");
   const [picking, setPicking] = useState(false);
   const quick = chat.emoji.recent.slice(0, QUICK_REACTIONS);
@@ -147,6 +150,8 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const [confirming, setConfirming] = useState(false);
   const [menu, setMenu] = useState(false);
   const [more, setMore] = useState(false);
+  const [remindChoices, setRemindChoices] = useState(false);
+  const [remindMenu, setRemindMenu] = useState(false);
   const [copied, setCopied] = useState(false);
   const afterMenu = useRef<(() => void) | null>(null);
   const orbit = useOrbitActions(message);
@@ -163,6 +168,8 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted && (!readOnly || local);
   const canMarkUnread = pane === "room" && !discussion && !inThread && !message.parentId && !local && !deleted && message.kind !== "event";
   const canReact = !local && !deleted && !readOnly;
+  const canSave = !local && !deleted && message.kind !== "event";
+  const isSaved = canSave && saved.isSaved(message.id);
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
@@ -198,8 +205,13 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
     window.setTimeout(() => setCopied(false), 1500);
   }
 
-  function act(run: () => void) {
+  function closeMenu() {
     setMenu(false);
+    setRemindChoices(false);
+  }
+
+  function act(run: () => void) {
+    closeMenu();
     run();
   }
 
@@ -214,7 +226,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
 
   function actAfterClose(run: () => void) {
     afterMenu.current = run;
-    setMenu(false);
+    closeMenu();
   }
 
   const row = useRef<HTMLDivElement>(null);
@@ -226,7 +238,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
 
   function startEdit() {
     editRequested.current = true;
-    setMenu(false);
+    closeMenu();
     flushSync(() => setEditing({ id: message.id, pane }));
     focusEdit();
   }
@@ -337,7 +349,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         <div
           className={cn(
             "bg-popover border-line-strong shadow-overlay absolute -top-3.5 right-4 hidden items-center gap-0.5 rounded-[10px] border p-0.5 group-focus-within:flex group-hover:flex [@media(pointer:coarse)]:!hidden",
-            (picking || more) && "flex",
+            (picking || more || remindMenu) && "flex",
           )}
         >
           {quick.slice(0, 3).map((emoji) => (
@@ -358,6 +370,27 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             <ToolButton label="Mark unread" title={unreadHint ? `Mark unread (${unreadHint})` : "Mark unread"} onClick={() => void markUnread(message.conversationId, message.id)}>
               <UnreadIcon aria-hidden className="size-3.5" />
             </ToolButton>
+          )}
+          {canSave && (
+            <>
+              <ToolButton label={isSaved ? "Remove from Saved" : "Save"} onClick={() => saved.save(message, !isSaved)}>
+                <BookmarkIcon aria-hidden className={cn("size-3.5", isSaved && "text-primary fill-current")} />
+              </ToolButton>
+              <DropdownMenu open={remindMenu} onOpenChange={setRemindMenu}>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" aria-label="Remind me about this" title="Remind me about this">
+                    <BellIcon aria-hidden className="size-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[148px]">
+                  {REMIND_CHOICES.map((choice) => (
+                    <DropdownMenuItem key={choice.when} onSelect={() => saved.remind(message, choice.when)}>
+                      {choice.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
           )}
           <ToolButton label={copied ? "Link copied" : "Copy link"} onClick={() => void copy()}>
             {copied ? <CheckIcon aria-hidden className="text-success size-3.5" /> : <LinkIcon aria-hidden className="size-3.5" />}
@@ -431,7 +464,13 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         confirmLabel="Delete"
         onConfirm={() => void remove(message)}
       />
-      <Sheet open={menu} onOpenChange={setMenu}>
+      <Sheet
+        open={menu}
+        onOpenChange={(open) => {
+          setMenu(open);
+          if (!open) setRemindChoices(false);
+        }}
+      >
         <SheetContent
           side="bottom"
           className="gap-1 overflow-y-auto px-2 pt-2 [&>*]:shrink-0"
@@ -468,7 +507,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
               ))}
               <Button variant="ghost" size="none" aria-label="Add reaction" onClick={() => {
                   pickRequested.current = true;
-                  setMenu(false);
+                  closeMenu();
                 }} className="bg-surface-raised text-soft size-12 rounded-full">
                 <SmilePlusIcon aria-hidden className="size-5" />
               </Button>
@@ -478,6 +517,25 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             <SheetAction onClick={() => act(() => openThread(message.conversationId, message.id))} icon={<ReplyIcon aria-hidden className="size-4" />}>
               Reply in thread
             </SheetAction>
+          )}
+          {canSave && (
+            <SheetAction onClick={() => act(() => saved.save(message, !isSaved))} icon={<BookmarkIcon aria-hidden className={cn("size-4", isSaved && "text-primary fill-current")} />}>
+              {isSaved ? "Remove from Saved" : "Save"}
+            </SheetAction>
+          )}
+          {canSave && (
+            <SheetAction aria-expanded={remindChoices} onClick={() => setRemindChoices((open) => !open)} icon={<BellIcon aria-hidden className="size-4" />}>
+              Remind me about this
+            </SheetAction>
+          )}
+          {canSave && remindChoices && (
+            <div role="group" aria-label="Remind me" className="flex flex-col gap-1 pl-8">
+              {REMIND_CHOICES.map((choice) => (
+                <SheetAction key={choice.when} onClick={() => act(() => saved.remind(message, choice.when))} icon={null}>
+                  {choice.label}
+                </SheetAction>
+              ))}
+            </div>
           )}
           {!deleted && (
             <SheetAction
@@ -528,9 +586,9 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   );
 }
 
-function SheetAction({ children, icon, onClick, danger }: { children: React.ReactNode; icon: React.ReactNode; onClick: () => void; danger?: boolean }) {
+function SheetAction({ children, icon, onClick, danger, ...rest }: { children: React.ReactNode; icon: React.ReactNode; onClick: () => void; danger?: boolean; "aria-expanded"?: boolean }) {
   return (
-    <Button variant="ghost" size="md" onClick={onClick} className={cn("h-12 w-full justify-start gap-3 rounded-xl px-4 text-[16px] font-normal", danger ? "text-danger hover:text-danger" : "text-foreground")}>
+    <Button variant="ghost" size="md" onClick={onClick} {...rest} className={cn("h-12 w-full justify-start gap-3 rounded-xl px-4 text-[16px] font-normal", danger ? "text-danger hover:text-danger" : "text-foreground")}>
       {icon}
       {children}
     </Button>

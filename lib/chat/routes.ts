@@ -1,8 +1,9 @@
 export const CHAT_PATH = "/chat";
 export const CHAT_THREADS_PATH = "/chat/threads";
 export const CHAT_UNREADS_PATH = "/chat/unreads";
+export const CHAT_SAVED_PATH = "/chat/saved";
 
-export type ChatView = { kind: "home" } | { kind: "threads" } | { kind: "unreads" } | { kind: "room"; id: string };
+export type ChatView = { kind: "home" } | { kind: "threads" } | { kind: "unreads" } | { kind: "saved" } | { kind: "room"; id: string };
 
 export type ChatLocation = { view: ChatView; thread: string | null; message: string | null };
 
@@ -35,6 +36,7 @@ export function chatSegments(segments: string[]): ChatView | null {
   const [segment] = segments;
   if (segment === "threads") return { kind: "threads" };
   if (segment === "unreads") return { kind: "unreads" };
+  if (segment === "saved") return { kind: "saved" };
   return isChatId(segment) ? { kind: "room", id: segment.toLowerCase() } : null;
 }
 
@@ -55,7 +57,16 @@ export function parseChatLocation(pathname: string, search: URLSearchParams | st
 
 export function chatLocationHref(location: { view: ChatView; thread?: string | null; message?: string | null }) {
   const { view } = location;
-  const path = view.kind === "home" ? CHAT_PATH : view.kind === "threads" ? CHAT_THREADS_PATH : view.kind === "unreads" ? CHAT_UNREADS_PATH : `${CHAT_PATH}/${view.id}`;
+  const path =
+    view.kind === "home"
+      ? CHAT_PATH
+      : view.kind === "threads"
+        ? CHAT_THREADS_PATH
+        : view.kind === "unreads"
+          ? CHAT_UNREADS_PATH
+          : view.kind === "saved"
+            ? CHAT_SAVED_PATH
+            : `${CHAT_PATH}/${view.id}`;
   const params = new URLSearchParams();
   if (location.thread && view.kind !== "home") params.set("thread", location.thread);
   else if (location.message && view.kind === "room") params.set("message", location.message);

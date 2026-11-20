@@ -42,6 +42,7 @@ function padLinks(input: { companyId?: unknown; contactId?: unknown; opportunity
 export async function addPadTask(user: UserActor, input: PadTaskInput, options: { removeReminder?: typeof deleteReminder } = {}): Promise<PadTaskResult> {
   const due = typeof input.dueAt === "string" && input.dueAt ? input.dueAt : null;
   const timed = Boolean(due && due.includes("T"));
+  const reminderId = typeof input.fromReminderId === "string" && input.fromReminderId ? input.fromReminderId : null;
   const created = await createTaskWithClickUp(
     user,
     {
@@ -61,7 +62,6 @@ export async function addPadTask(user: UserActor, input: PadTaskInput, options: 
     { provenance: { operation: "create_task", source: "web" }, ...(typeof input.key === "string" && isUuid(input.key) ? { idempotencyKey: input.key } : {}) },
   );
   const result: PadTaskResult = created.clickupError ? { ok: true, warning: `Saved. ClickUp sync failed and will retry: ${created.clickupError}` } : { ok: true };
-  const reminderId = typeof input.fromReminderId === "string" && input.fromReminderId ? input.fromReminderId : null;
   if (!reminderId) return result;
   try {
     await (options.removeReminder ?? deleteReminder)(user, reminderId);

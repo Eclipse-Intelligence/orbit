@@ -6,6 +6,10 @@ import { formatDateLabel, todayValue } from "@/lib/date-input";
 import { padDueHasTime, padReading, padRepeatDue, parseTaskText, readingKey, type PadMark, type PadRepeat } from "@/lib/task-pad";
 import { repeatInputOf, ruleWords, WORKWEEK, weekdayOf, type MonthWeek, type RepeatEnds, type RepeatInput, type RepeatRule, type Weekday } from "@/lib/task-repeat";
 
+import { REMINDER_LINK_LABEL, reminderOrbitPath } from "@/lib/crm/reminder-link";
+
+export { REMINDER_LINK_LABEL };
+
 export type HeldTick = { snapshot: Reminder; doneId: string | null };
 
 export type ReminderRow = { key: string; reminder: Reminder; ticked: boolean; overdue: boolean };
@@ -313,6 +317,11 @@ export type AddKey = { typed: string; key: string };
 export function addKeyFor(current: AddKey | null, input: ReminderInput, fresh: () => string): AddKey {
   const typed = JSON.stringify(input);
   return current?.typed === typed ? current : { typed, key: fresh() };
+}
+
+export function taskLinkOf(reminder: Reminder) {
+  const href = reminder.link ? reminderOrbitPath(reminder.link) : null;
+  return href ? { label: REMINDER_LINK_LABEL, href } : null;
 }
 
 export function taskStartOf(reminder: Reminder) {

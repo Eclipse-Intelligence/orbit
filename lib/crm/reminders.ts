@@ -3,6 +3,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound, tooLong } from "@/lib/crm/errors";
 import { isUuid, replayOrRun, requestHash } from "@/lib/crm/mutate";
 import { queueReminderBlock } from "@/lib/crm/reminder-block-queue";
+import { isReminderLink } from "@/lib/crm/reminder-link";
 import { assertScope, type Scope } from "@/lib/crm/scopes";
 import { readRepeat } from "@/lib/crm/task-series";
 import { clockLabel, DEFAULT_TASK_DURATION, isTaskDuration, MAX_TASK_DURATION, MIN_TASK_DURATION, taskDueDay } from "@/lib/crm/task-time";
@@ -56,6 +57,7 @@ export type Reminder = {
   completedAt: string | null;
   repeatOf: string | null;
   movedTo: string | null;
+  link: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -86,6 +88,7 @@ type Row = {
   completed_at: Date | null;
   repeat_of: string | null;
   moved_to: string | null;
+  link: string | null;
   pushed_for: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -94,7 +97,7 @@ type Row = {
 type Timing = { dueOn: string | null; dueAt: string | null; rule: RepeatRule | null; ends: RepeatEnds | null };
 
 const COLUMNS = `id, user_id, title, due_on::text as due_on, due_at, blocks_time, duration_minutes, repeat_rule, repeat_ends,
-  completed_at, repeat_of, moved_to::text as moved_to, pushed_for, created_at, updated_at`;
+  completed_at, repeat_of, moved_to::text as moved_to, link, pushed_for, created_at, updated_at`;
 
 function iso(value: Date | null) {
   return value ? value.toISOString() : null;
@@ -143,6 +146,7 @@ function toReminder(row: Row): Reminder {
     completedAt: iso(row.completed_at),
     repeatOf: row.repeat_of,
     movedTo: row.moved_to,
+    link: row.link,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -314,14 +318,26 @@ export async function getReminder(actor: Actor, id: string) {
   });
 }
 
-export async function createReminder(actor: Actor, input: ReminderInput, options: { now?: number; idempotencyKey?: string | null } = {}) {
-  const person = personOf(actor, "tasks:write");
-  if (!options.idempotencyKey) return addReminder(person, input, options.now);
-  const key = options.idempotencyKey;
-  return withActor(person, async (db) => (await replayOrRun(db, person, key, requestHash("create_reminder", input), 201, () => addReminder(person, input, options.now, db))).body);
+function readLink(value: unknown) {
+  if (value === undefined || value === null) return null;
+  if (!isReminderLink(value)) invalid("A reminder's link has to be a path inside Orbit.", "link");
+  return value;
 }
 
-async function addReminder(person: UserActor, input: ReminderInput, at?: number, within?: Db) {
+export async function createReminder(
+  actor: Actor,
+  input: ReminderInput,
+  options: { now?: number; idempotencyKey?: string | null; link?: string | null; fingerprint?: unknown } = {},
+) {
+  const person = personOf(actor, "tasks:write");
+  const link = readLink(options.link);
+  if (!options.idempotencyKey) return addReminder(person, input, link, options.now);
+  const key = options.idempotencyKey;
+  const hashed = options.fingerprint ?? (link ? { ...input, link } : input);
+  return withActor(person, async (db) => (await replayOrRun(db, person, key, requestHash("create_reminder", hashed), 201, () => addReminder(person, input, link, options.now, db))).body);
+}
+
+async function addReminder(person: UserActor, input: ReminderInput, link: string | null, at?: number, within?: Db) {
   const now = at ?? Date.now();
   const title = cleanTitle(input.title);
   if (input.blocksTime !== undefined && typeof input.blocksTime !== "boolean") invalid("blocksTime is true or false.", "blocksTime");
@@ -335,10 +351,10 @@ async function addReminder(person: UserActor, input: ReminderInput, at?: number,
   const insert = async (db: Db) => {
     await assertRoom(db, person.userId, { open: true, repeating: Boolean(settled.rule) });
     const result = await db.query<Row>(
-      `insert into crm.reminders (user_id, title, due_on, due_at, blocks_time, duration_minutes, repeat_rule, repeat_ends)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
+      `insert into crm.reminders (user_id, title, due_on, due_at, blocks_time, duration_minutes, repeat_rule, repeat_ends, link)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        returning ${COLUMNS}`,
-      [person.userId, title, settled.dueOn, settled.dueAt, blocksTime, durationMinutes, settled.rule, settled.ends],
+      [person.userId, title, settled.dueOn, settled.dueAt, blocksTime, durationMinutes, settled.rule, settled.ends, link],
     );
     if (blocksTime) queueReminderBlock(db, result.rows[0].id);
     return { reminder: toReminder(result.rows[0]) };
@@ -410,10 +426,10 @@ export async function completeReminder(actor: Actor, id: string, input: { dueOn?
       return { reminder: toReminder(done.rows[0]), doneId: row.id, changed: true };
     }
     const copy = await db.query<{ id: string }>(
-      `insert into crm.reminders (user_id, title, due_on, due_at, blocks_time, duration_minutes, completed_at, repeat_of, moved_to, pushed_for)
-       values ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9)
+      `insert into crm.reminders (user_id, title, due_on, due_at, blocks_time, duration_minutes, completed_at, repeat_of, moved_to, pushed_for, link)
+       values ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10)
        returning id`,
-      [row.user_id, row.title, row.due_on, row.due_at, row.blocks_time, row.duration_minutes, row.id, step.next, row.pushed_for],
+      [row.user_id, row.title, row.due_on, row.due_at, row.blocks_time, row.duration_minutes, row.id, step.next, row.pushed_for, row.link],
     );
     const moved = await db.query<Row>(
       `update crm.reminders set due_on = $2, due_at = $3, repeat_ends = $4 where id = $1 returning ${COLUMNS}`,

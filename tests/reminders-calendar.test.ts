@@ -62,6 +62,7 @@ function reminder(overrides: Partial<Reminder>): Reminder {
     completedAt: null,
     repeatOf: null,
     movedTo: null,
+    link: null,
     createdAt: "2026-11-01T10:00:00.000Z",
     updatedAt: "2026-11-01T10:00:00.000Z",
     ...overrides,

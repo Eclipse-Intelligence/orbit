@@ -6,6 +6,7 @@ import type { ChatContextValue, ChatEditing } from "@/components/chat/chat-conte
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { useEmojiPrefs } from "@/components/chat/reactions";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
+import { useSavedMessages } from "@/components/chat/use-saved";
 import { draftKey, newClientKey, readDraft, takeQueuedFiles, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
 import type { ChatLocation } from "@/lib/chat/routes";
@@ -94,6 +95,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
     refusals.current.set(clientKey, needs);
   }, []);
   const actions = useChatActions(dispatch, state, viewer.id, setNotice, noteRefusal);
+  const saved = useSavedMessages(setNotice, enabled);
   const { loadMessages, loadThread, deliver } = actions;
   const joined = useChatJoined();
   const subjectKey = `${enabled ? "on" : "off"}:${draftSubjectKey(subject)}`;
@@ -379,9 +381,10 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       send: (input) => send(input),
       memberNames: NO_NAMES,
       emoji,
+      saved,
       discussion: true,
     }),
-    [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, messageLink, send, emoji],
+    [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, messageLink, send, emoji, saved],
   );
 
   const loaded = timeline?.status === "ready" && !timeline.hasOlder;

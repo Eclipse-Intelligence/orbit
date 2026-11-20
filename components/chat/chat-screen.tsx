@@ -15,10 +15,12 @@ import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { useEmojiPrefs } from "@/components/chat/reactions";
 import RoomSettings from "@/components/chat/room-settings";
 import RoomView from "@/components/chat/room-view";
+import SavedView from "@/components/chat/saved-view";
 import ThreadPanel from "@/components/chat/thread-panel";
 import ThreadsView from "@/components/chat/threads-view";
 import UnreadsView from "@/components/chat/unreads-view";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
+import { useSavedMessages } from "@/components/chat/use-saved";
 import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
 import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
@@ -106,6 +108,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const joined = useChatJoined();
   const [notice, setNotice] = useState<string | null>(null);
   const actions = useChatActions(dispatch, state, viewer.id, setNotice);
+  const saved = useSavedMessages(setNotice);
   const [editing, setEditing] = useState<ChatEditing>(null);
   const [now, setNow] = useState(initialNow);
   const [newRoom, setNewRoom] = useState(false);
@@ -468,8 +471,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const memberNames = useMemo(() => new Map((members ?? []).map((member) => [member.id.toLowerCase(), member.name])), [members]);
   const emoji = useEmojiPrefs(me.id);
   const context = useMemo<ChatContextValue>(
-    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji }),
-    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji],
+    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji, saved }),
+    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji, saved],
   );
 
   const entry: ChatConversation | null = roomId ? (sidebar?.conversations.find((item) => item.id === roomId) ?? room?.conversation ?? null) : null;
@@ -529,6 +532,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                 <ThreadsView initial={threadsSeed} />
               ) : view.kind === "unreads" ? (
                 <UnreadsView />
+              ) : view.kind === "saved" ? (
+                <SavedView />
               ) : view.kind === "room" ? (
                 <RoomView
                   key={view.id}
