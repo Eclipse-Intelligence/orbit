@@ -3,7 +3,7 @@ import { alertMembers } from "@/lib/alerts";
 import { CHAT_ARCHIVED, type ChatKind, type ChatPost, type ChatScheduled, type ChatScheduledChange, type ChatScheduledInput, type ChatScheduledItem, type ChatScheduledStatus } from "@/lib/chat/types";
 import { CHAT_SCHEDULED_PATH } from "@/lib/chat/routes";
 import { cleanFormat, type ChatFormat } from "@/lib/chat/markdown";
-import { broadcastChat, checkId, checkScheduledPost, FORMER, iso, MEMBER_NAME, postMessage } from "@/lib/crm/chat";
+import { broadcastChat, checkId, checkScheduledPost, directName, GROUP_PEOPLE, iso, MEMBER_NAME, postMessage, type PeopleRow } from "@/lib/crm/chat";
 import { checkUploads, cleanAttachmentIds } from "@/lib/crm/chat-attachments";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, pgFailure } from "@/lib/crm/errors";
@@ -45,6 +45,7 @@ type ScheduledRow = {
   conversation_kind: ChatKind | null;
   c_name: string | null;
   dm_name: string | null;
+  people: PeopleRow[] | null;
   attachments: ChatScheduledItem["attachments"] | null;
 };
 
@@ -76,7 +77,7 @@ function toItem(row: ScheduledRow): ChatScheduledItem {
     conversation: {
       id: row.conversation_id,
       kind: row.conversation_kind ?? "room",
-      name: row.conversation_kind === "dm" ? (row.dm_name ?? FORMER) : row.conversation_kind ? row.c_name : null,
+      name: row.conversation_kind ? directName(row.conversation_kind, { name: row.c_name, dmName: row.dm_name, people: row.people }) : null,
     },
     parentId: row.parent_id,
     body: row.body,
@@ -98,6 +99,7 @@ async function readScheduled(actor: UserActor, id: string | null): Promise<ChatS
            select ${MEMBER_NAME("o", "op")} from crm.chat_members o left join crm.profiles op on op.id = o.user_id
            where o.conversation_id = c.id and o.user_id <> s.user_id limit 1
          ) end as dm_name,
+         ${GROUP_PEOPLE("c", "s.user_id")} as people,
          coalesce((
            select json_agg(json_build_object('id', f.id, 'name', f.name, 'contentType', f.content_type, 'size', f.size, 'width', f.width, 'height', f.height)
              order by array_position(s.attachment_ids, f.id))

@@ -143,7 +143,7 @@ begin
       where r.id = new.parent_id
       returning r.author_user_id, r.created_at into v_root;
     v_followers := array[v_root.author_user_id] || new.mentions;
-    if exists (select 1 from crm.chat_conversations c where c.id = new.conversation_id and c.kind = 'dm') then
+    if exists (select 1 from crm.chat_conversations c where c.id = new.conversation_id and c.kind in ('dm', 'group_dm')) then
       v_followers := v_followers || array(select cm.user_id from crm.chat_members cm where cm.conversation_id = new.conversation_id);
     end if;
     perform private.chat_follow(new.parent_id, array_remove(v_followers, new.author_user_id), v_root.created_at);
@@ -225,7 +225,7 @@ begin
     raise exception 'Conversation not found.' using errcode = 'P0002';
   end if;
   select c.kind, c.archived_at into v_kind, v_archived from crm.chat_conversations c where c.id = p_conversation;
-  if v_kind not in ('room', 'dm') then
+  if v_kind not in ('room', 'dm', 'group_dm') then
     raise exception 'Only rooms and direct messages can send later.' using errcode = '22023';
   end if;
   if v_archived is not null then

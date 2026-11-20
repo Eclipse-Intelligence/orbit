@@ -5,7 +5,7 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { daysToMonday, scheduledHere, scheduledPlace, scheduledWhen, sendLaterChoices } from "@/lib/chat/scheduled";
 import type { ChatScheduledItem } from "@/lib/chat/types";
 import { chatLocationHref, chatSegments, parseChatLocation } from "@/lib/chat/routes";
-import { chatWorkSettled, createRoom, deleteMessage, listConversations, listMessages, openDiscussion, openDm, postMessage, removeRoomMember, setRoomArchived } from "@/lib/crm/chat";
+import { chatWorkSettled, createRoom, deleteMessage, listConversations, listMessages, openDiscussion, openDm, openGroup, postMessage, removeRoomMember, setRoomArchived } from "@/lib/crm/chat";
 import { chatFileLink, drainStorageTombstones, prepareChatUpload, sweepChatAttachments } from "@/lib/crm/chat-attachments";
 import { cancelScheduled, deliverScheduled, listScheduled, processDueScheduled, scheduleMessage, sendScheduledNow, sweepScheduled, updateScheduled } from "@/lib/crm/chat-scheduled";
 import { createCompany } from "@/lib/crm/companies";
@@ -759,6 +759,28 @@ describe("scheduled chat messages", () => {
     assert.equal(events.length, 1);
     assert.deepEqual(events[0].payload, { type: "scheduled", conversationId: room });
     assert.ok(!JSON.stringify(broadcasts).includes("Quarterly"));
+  });
+
+  it("schedules in a group message, names it in the list, and fails it when everyone else has left", async () => {
+    const group = await openGroup(sam, [mark.userId, ada.userId]);
+    const item = await schedule(sam, group.id, "Hello group");
+    assert.equal(item.conversation.kind, "group_dm");
+    assert.equal(item.conversation.name, group.name);
+    assert.match(item.conversation.name ?? "", /Mark Ridgeon/);
+    assert.equal(scheduledPlace(item), group.name);
+    const root = (await postMessage(mark, { conversationId: group.id, body: "Root", format: "markdown", clientKey: randomUUID() })).message;
+    const reply = await schedule(sam, group.id, "Group reply", { parentId: root.id });
+    await makeDue(item.id, 30);
+    await makeDue(reply.id, 20);
+    assert.deepEqual(await processDueScheduled({ fetchImpl: env.fetchImpl }), { sent: 2, failed: 0, retried: 0 });
+    assert.equal((await messagesWithKey(item.id))[0].conversation_id, group.id);
+    const gone = await schedule(sam, group.id, SECRET);
+    await sql("delete from crm.chat_members where conversation_id = $1 and user_id <> $2", [group.id, sam.userId]);
+    await makeDue(gone.id);
+    assert.deepEqual(await processDueScheduled({ fetchImpl: env.fetchImpl }), { sent: 0, failed: 1, retried: 0 });
+    assert.match((await row(gone.id))?.failure ?? "", /Everyone else has left/);
+    assert.deepEqual((await noticesFor(sam)).filter((notice) => notice.href === "/chat/scheduled").map((notice) => notice.title), ["A scheduled message wasn't sent"]);
+    await refused(schedule(sam, group.id, "Too late"), /Everyone else has left/);
   });
 
   it("runs from the every-minute cron", async () => {

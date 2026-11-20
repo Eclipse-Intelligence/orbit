@@ -1291,6 +1291,10 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
 }
 
 async function assertReachable(db: Db, conversation: ConversationRow) {
+  if (conversation.kind === "group_dm") {
+    if ((conversation.people ?? []).length === 0) throw new CrmError("forbidden", "Everyone else has left this group, so no one can get new messages.", 403);
+    return;
+  }
   if (conversation.kind !== "dm") return;
   const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
   if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
@@ -1308,7 +1312,7 @@ export async function checkScheduledPost(
   memberMentions(body, format, everyone);
   await withActor(actor, async (db) => {
     const conversation = writable(await readConversation(db, actor, conversationId));
-    if (conversation.kind !== "room" && conversation.kind !== "dm") throw new CrmError("invalid_input", "Only rooms and direct messages can send later.", 400);
+    if (!isChatKind(conversation.kind)) throw new CrmError("invalid_input", "Only rooms and direct messages can send later.", 400);
     if (parentId) {
       const root = await db.query("select 1 from crm.chat_messages where id = $1 and conversation_id = $2 and parent_id is null and kind = 'message' and deleted_at is null", [parentId, conversationId]);
       if ((root.rowCount ?? 0) === 0) throw new CrmError("conflict", "The thread was deleted.", 409);
