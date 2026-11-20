@@ -398,7 +398,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                 documentId={doc.id}
                 initial={doc.steps}
                 clientCompany={doc.companyName}
-                ourCompany={senderCompany(doc.preview)}
+                ourCompany={senderCompany(doc.version?.content ?? doc.preview)}
                 contactFirstName={doc.contactName.split(/\s+/)[0] || "them"}
                 canEmail={Boolean(doc.link)}
                 onSteps={(steps) => setDoc((current) => ({ ...current, steps }))}

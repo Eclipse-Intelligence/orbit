@@ -16,7 +16,7 @@ import { bandAccent, businessLines, missingMessage, senderCompany, type Content 
 import { renderPdf } from "@/lib/proposals/pdf";
 import { decodePng, encodePng, logoForDarkBand, logoIsDark } from "@/lib/proposals/png";
 import { clientSign, openDocument } from "@/lib/proposals/public";
-import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
+import { createAgent, createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const WEB = { operation: "business_test", source: "web" };
 const WORKSPACE_NAME = "Zeta Holdings Workspace";
@@ -225,6 +225,49 @@ describe("business details", () => {
     await countersignDocument(owner, old, { signatureText: "Mark Ridgeon" });
     const oldSignatures = await getAdminPool().query<{ role: string; company: string | null }>("select role, company from crm.document_signatures where document_id = $1", [old]);
     assert.equal(oldSignatures.rows.find((row) => row.role === "sender")?.company, "Eclipse");
+    const oldDetail = await getDocument(owner, old);
+    assert.equal(senderCompany(oldDetail.version?.content ?? oldDetail.preview), "Eclipse");
+    assert.equal(senderCompany(oldDetail.preview), "Renamed Ltd");
+  });
+
+  it("removes the starter's company suffix from templates and drafts, and leaves sent and edited text alone", async () => {
+    const OLD = "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}.";
+    const NEW = "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}.";
+    const EDITED = "Prepared for {{contact.name}} by {{sender.name}}, {{workspace.name}}. With thanks.";
+    const pool = getAdminPool();
+    const companyId = (await createCompany(owner, { name: "Suffix Ltd", domain: "suffix.test" })).body.company.id;
+    const contactId = (await createContact(owner, { firstName: "Sue", email: "sue@suffix.test", companyId })).body.contact.id;
+    const setSubtitle = (table: string, id: string, subtitle: string) =>
+      pool.query(
+        `update crm.${table} set blocks = (select jsonb_agg(case when b->>'type' = 'cover' then jsonb_set(b, '{subtitle}', to_jsonb($2::text)) else b end order by i) from jsonb_array_elements(blocks) with ordinality as e(b, i)) where id = $1`,
+        [id, subtitle],
+      );
+    const starter = await createTemplate(owner, { starter: "proposal" });
+    const edited = await createTemplate(owner, { starter: "proposal" });
+    await setSubtitle("document_templates", starter.id, OLD);
+    await setSubtitle("document_templates", edited.id, EDITED);
+    await updateTemplate(owner, starter.id, { status: "active" });
+    const draft = await createDocument(owner, { templateId: starter.id, companyId, contactId });
+    const sent = await createDocument(owner, { templateId: starter.id, companyId, contactId });
+    await pool.query("update crm.documents set status = 'sent' where id = $1", [sent]);
+    const subtitles = async (table: string, id: string) =>
+      (await pool.query<{ subtitle: string }>(`select b->>'subtitle' as subtitle from crm.${table}, jsonb_array_elements(blocks) b where id = $1 and b->>'type' = 'cover'`, [id])).rows.map(
+        (row) => row.subtitle,
+      );
+    const before = await pool.query<{ blocks: unknown }>("select blocks from crm.document_templates where id = $1", [starter.id]);
+    assert.deepEqual(await subtitles("documents", draft), [OLD]);
+    for (let run = 0; run < 2; run += 1) {
+      await reapplyMigrationsFrom("20270226100000_business_details.sql");
+      assert.deepEqual(await subtitles("document_templates", starter.id), [NEW]);
+      assert.deepEqual(await subtitles("documents", draft), [NEW]);
+      assert.deepEqual(await subtitles("document_templates", edited.id), [EDITED]);
+      assert.deepEqual(await subtitles("documents", sent), [OLD]);
+    }
+    const after = await pool.query<{ blocks: { id: string; type: string }[] }>("select blocks from crm.document_templates where id = $1", [starter.id]);
+    assert.deepEqual(
+      after.rows[0].blocks.map((block) => [block.id, block.type]),
+      (before.rows[0].blocks as { id: string; type: string }[]).map((block) => [block.id, block.type]),
+    );
   });
 
   it("shows a sent version with the party it was sent with, and new versions with the business name or the sender", async () => {

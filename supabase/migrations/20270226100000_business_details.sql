@@ -27,4 +27,35 @@ create policy workspace_brands_select_agent on crm.workspace_brands
   for select to crm_agent
   using (workspace_id = (select private.request_workspace_id()));
 
+update crm.document_templates t
+set blocks = (
+  select jsonb_agg(
+    case
+      when block->>'type' = 'cover' and block->>'subtitle' = 'Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}.'
+        then jsonb_set(block, '{subtitle}', to_jsonb('Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}.'::text))
+      else block
+    end
+    order by position
+  )
+  from jsonb_array_elements(t.blocks) with ordinality as item(block, position)
+)
+where jsonb_typeof(t.blocks) = 'array'
+  and t.blocks @> '[{"type": "cover", "subtitle": "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}."}]'::jsonb;
+
+update crm.documents d
+set blocks = (
+  select jsonb_agg(
+    case
+      when block->>'type' = 'cover' and block->>'subtitle' = 'Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}.'
+        then jsonb_set(block, '{subtitle}', to_jsonb('Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}.'::text))
+      else block
+    end
+    order by position
+  )
+  from jsonb_array_elements(d.blocks) with ordinality as item(block, position)
+)
+where d.status = 'draft'
+  and jsonb_typeof(d.blocks) = 'array'
+  and d.blocks @> '[{"type": "cover", "subtitle": "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}."}]'::jsonb;
+
 reset lock_timeout;
