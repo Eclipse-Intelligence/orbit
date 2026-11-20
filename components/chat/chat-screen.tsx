@@ -125,6 +125,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const [threadBottomSignal, setThreadBottomSignal] = useState(0);
   const [draft, setDraft] = useState<{ text: string; href: string } | null>(null);
   const searchTimer = useRef(0);
+  const openedThread = useRef<string | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const pane = useRef<HTMLDivElement>(null);
   const threadPane = useRef<HTMLDivElement>(null);
@@ -140,6 +141,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   if (held && held.conversationId !== roomId) setHeld(null);
   const threadId = location.thread;
   const roomMessage = threadId ? null : location.message;
+  const threadMessage = threadId ? location.message : null;
   const detail = view.kind !== "home";
 
   useKeyboardFit(pane, detail && !threadId);
@@ -347,9 +349,13 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       return;
     }
     const thread = latest.current.state.threads[threadId];
-    if (!thread?.root || thread.timeline.status !== "ready") loadThread(threadId, "latest");
-    else loadThread(threadId, "newer");
-  }, [threadId, loadThread]);
+    const opened = openedThread.current !== threadId;
+    openedThread.current = threadId;
+    const missing = threadMessage !== null && !thread?.timeline.messages.some((item) => item.id === threadMessage);
+    if (!thread?.root || thread.timeline.status !== "ready") loadThread(threadId, "latest", threadMessage);
+    else if (missing) loadThread(threadId, "latest", threadMessage);
+    else if (opened) loadThread(threadId, "newer");
+  }, [threadId, threadMessage, loadThread]);
 
   const roomTimeline = roomId ? state.timelines[roomId] : undefined;
   const roomCatchUp = needsCatchUp(roomTimeline);

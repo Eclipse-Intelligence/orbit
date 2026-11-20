@@ -8,6 +8,7 @@ import {
   chatWorkSettled,
   createRoom,
   deleteMessage,
+  listThread,
   editMessage,
   openDiscussion,
   openDm,
@@ -474,6 +475,46 @@ describe("filters", () => {
   it("combines every filter", async () => {
     assert.deepEqual(await hitIds(mark, "ocelot", { in: room, from: sam.userId, hasFile: true, after: "2026-03-09", before: "2026-03-11" }), [middle]);
     assert.deepEqual(await hitIds(mark, "ocelot", { in: room, from: mark.userId, hasFile: true }), []);
+  });
+});
+
+describe("opening a thread at an old reply", () => {
+  useServerlessPool();
+
+  it("loads the page around the reply, the same way rooms do, under the same access", async () => {
+    const room = (await createRoom(mark, { name: "long-thread", memberIds: [sam.userId] })).id;
+    const root = await say(mark, room, "Long thread root");
+    const replies: string[] = [];
+    for (let index = 0; index < 130; index += 1) replies.push((await say(index % 2 ? sam : mark, room, `Reply ${index}`, root.id)).id);
+    const latest = await listThread(mark, root.id);
+    assert.equal(latest.replies.length, 100);
+    assert.equal(latest.hasOlder, true);
+    assert.ok(!latest.replies.some((reply) => reply.id === replies[0]));
+    const oldest = await listThread(mark, root.id, { around: replies[0] });
+    assert.equal(oldest.replies[0].id, replies[0]);
+    assert.equal(oldest.hasOlder, false);
+    assert.equal(oldest.hasNewer, true);
+    assert.equal(oldest.replies.length, 100);
+    const middle = await listThread(sam, root.id, { around: replies[60], limit: 20 });
+    assert.deepEqual(middle.replies.map((reply) => reply.id), replies.slice(50, 80));
+    assert.equal(middle.hasOlder, true);
+    assert.equal(middle.hasNewer, true);
+    const newest = await listThread(mark, root.id, { around: replies[129], limit: 20 });
+    assert.equal(newest.replies[newest.replies.length - 1].id, replies[129]);
+    assert.equal(newest.hasNewer, false);
+    assert.equal(newest.replies.length, 11);
+    assert.deepEqual((await listThread(mark, root.id, { around: replies[0], before: replies[10] })).replies.map((reply) => reply.id), replies.slice(0, 10));
+  });
+
+  it("refuses non-members and replies from another thread", async () => {
+    const room = (await createRoom(mark, { name: "guarded-thread", memberIds: [] })).id;
+    const root = await say(mark, room, "Guarded root");
+    const reply = await say(mark, room, "Guarded reply", root.id);
+    const other = await say(mark, room, "Other root");
+    const stray = await say(mark, room, "Other reply", other.id);
+    await refused(listThread(sam, root.id, { around: reply.id }), /not found/i);
+    await refused(listThread(ada, root.id, { around: reply.id }), /not found/i);
+    await refused(listThread(mark, root.id, { around: stray.id }), /not found/i);
   });
 });
 

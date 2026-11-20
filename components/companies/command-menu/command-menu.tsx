@@ -90,7 +90,7 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
 
   const trimmed = query.trim();
   const chatSidebar = useCompaniesStore((store) => store.chat);
-  const jumps = useMemo(() => (listMode ? [] : chatJumps(chatSidebar, query)), [listMode, chatSidebar, query]);
+  const jumps = useMemo(() => (listMode ? [] : chatJumps(chatSidebar, query, multi)), [listMode, chatSidebar, query, multi]);
   const searching = Boolean(open && trimmed && remote?.query !== trimmed);
   const results = remote?.query === trimmed ? remote : null;
 

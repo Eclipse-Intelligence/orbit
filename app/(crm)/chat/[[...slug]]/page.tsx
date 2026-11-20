@@ -52,7 +52,7 @@ export default async function ChatPage({
     getWorkspaceChoices(),
     roomId ? getRoom(user, roomId).catch(failure("Couldn't load the conversation. Try again.")) : null,
     roomId ? listMessages(user, roomId, { around: message ?? "unread" }).catch(failure("Couldn't load messages. Try again.")) : null,
-    thread ? listThread(user, thread).catch(failure("Couldn't load the thread. Try again.")) : null,
+    thread ? listThread(user, thread, { around: threadFocus }).catch(failure("Couldn't load the thread. Try again.")) : null,
     view.kind === "threads" ? listThreads(user).catch(failure("Couldn't load threads. Try again.")) : null,
   ]);
 

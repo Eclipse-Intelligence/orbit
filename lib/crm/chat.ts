@@ -858,7 +858,7 @@ async function replyCursor(db: Db, rootId: string, value: string | null | undefi
   return id;
 }
 
-export async function listThread(actor: UserActor, rootId: string, options: { before?: string | null; after?: string | null; limit?: number } = {}): Promise<ChatThread> {
+export async function listThread(actor: UserActor, rootId: string, options: { before?: string | null; after?: string | null; around?: string | null; limit?: number } = {}): Promise<ChatThread> {
   const id = checkId(rootId, "thread");
   const limit = pageSize(options.limit, CHAT_PAGE_MAX);
   return withActor(actor, async (db) => {
@@ -867,6 +867,7 @@ export async function listThread(actor: UserActor, rootId: string, options: { be
     const cursor = `(select k.created_at from crm.chat_messages k where k.id = $2 and k.parent_id = $1)`;
     const before = await replyCursor(db, id, options.before);
     const afterId = before ? null : await replyCursor(db, id, options.after);
+    const around = before || afterId ? null : await replyCursor(db, id, options.around);
     const beyond = async (pivot: string, side: ">=" | "<=") => {
       const result = await db.query(`select 1 from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null and (m.created_at, m.id) ${side} (${cursor}, $2::uuid) limit 1`, [
         id,
@@ -877,7 +878,22 @@ export async function listThread(actor: UserActor, rootId: string, options: { be
     let rows: MessageRow[];
     let hasOlder = false;
     let hasNewer = false;
-    if (afterId) {
+    if (around) {
+      const half = Math.floor(limit / 2);
+      const above = await db.query<MessageRow>(
+        `select ${messageColumns()} from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null and (m.created_at, m.id) < (${cursor}, $2::uuid)
+         order by m.created_at desc, m.id desc limit ${half + 1}`,
+        [id, around],
+      );
+      const below = await db.query<MessageRow>(
+        `select ${messageColumns()} from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null and (m.created_at, m.id) >= (${cursor}, $2::uuid)
+         order by m.created_at, m.id limit ${limit + 1}`,
+        [id, around],
+      );
+      rows = [...above.rows.slice(0, half).reverse(), ...below.rows.slice(0, limit)];
+      hasOlder = above.rows.length > half;
+      hasNewer = below.rows.length > limit;
+    } else if (afterId) {
       const result = await db.query<MessageRow>(
         `select ${messageColumns()} from crm.chat_messages m where m.parent_id = $1 and m.deleted_at is null and (m.created_at, m.id) > (${cursor}, $2::uuid)
          order by m.created_at, m.id limit ${limit + 1}`,
@@ -1020,7 +1036,7 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
 type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown; attachmentIds?: unknown };
 
 function chatHref(conversationId: string, message: ChatMessage) {
-  return message.parentId ? `/chat/${conversationId}?thread=${message.parentId}` : `/chat/${conversationId}?message=${message.id}`;
+  return message.parentId ? `/chat/${conversationId}?thread=${message.parentId}&message=${message.id}` : `/chat/${conversationId}?message=${message.id}`;
 }
 
 const VERIFIED = { recipientsVerified: true };

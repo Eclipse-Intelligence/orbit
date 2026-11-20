@@ -297,7 +297,7 @@ describe("chat", () => {
       assert.deepEqual(reply.root?.replyAuthors, [{ id: sam.userId, name: "Sam Okafor" }]);
       await until(async () => (await notifications(priya.userId)).length === 1, "thread alert to root author");
       assert.equal((await notifications(priya.userId))[0].title, "Sam replied in a thread in #sales");
-      assert.equal((await notifications(priya.userId))[0].href, `/chat/${room}?thread=${root.message.id}`);
+      assert.equal((await notifications(priya.userId))[0].href, `/chat/${room}?thread=${root.message.id}&message=${reply.message.id}`);
       assert.equal((await notifications(mark.userId)).length, 0);
       const second = await postMessage(mark, { conversationId: room, parentId: root.message.id, body: `${tag(priya)} is.`, clientKey: "reply-2" });
       await until(async () => (await notifications(sam.userId)).length === 1, "thread alert to replier");

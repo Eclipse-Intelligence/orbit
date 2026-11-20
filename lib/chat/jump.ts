@@ -16,8 +16,8 @@ function words(text: string) {
   return text.trim().toLowerCase().replace(/^#/, "").split(/\s+/).filter(Boolean);
 }
 
-function matches(item: ChatJump, wanted: string[]) {
-  const haystack = `${item.name} ${item.workspaceName ?? ""}`.toLowerCase();
+function matches(item: ChatJump, wanted: string[], multi: boolean) {
+  const haystack = `${item.name} ${multi ? (item.workspaceName ?? "") : ""}`.toLowerCase();
   return wanted.every((word) => haystack.includes(word));
 }
 
@@ -25,7 +25,7 @@ function newest(left: string | null, right: string | null) {
   return (right ?? "").localeCompare(left ?? "");
 }
 
-export function chatJumps(sidebar: ChatSidebar | null, text: string): ChatJump[] {
+export function chatJumps(sidebar: ChatSidebar | null, text: string, multi: boolean): ChatJump[] {
   if (!sidebar) return [];
   const wanted = words(text);
   const live = [...sidebar.conversations]
@@ -40,7 +40,7 @@ export function chatJumps(sidebar: ChatSidebar | null, text: string): ChatJump[]
     }));
   if (wanted.length === 0) return live.filter((item) => item.unread > 0).slice(0, UNREAD_SHOWN);
   const old = (sidebar.archived ?? []).map<ChatJump>((room) => ({ id: room.id, kind: "room", name: room.name, unread: 0, archived: true, workspaceName: room.workspaceName }));
-  return [...live, ...old].filter((item) => matches(item, wanted)).slice(0, JUMPS_SHOWN);
+  return [...live, ...old].filter((item) => matches(item, wanted, multi)).slice(0, JUMPS_SHOWN);
 }
 
 export function jumpLabel(item: Pick<ChatJump, "kind" | "name">) {

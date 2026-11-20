@@ -126,24 +126,31 @@ describe("jump to a conversation", () => {
   };
 
   it("lists only the unread conversations before anything is typed, mentions first and then the newest", () => {
-    assert.deepEqual(chatJumps(sidebar, "").map((item) => item.id), ["a4", "a3", "a2"]);
-    assert.deepEqual(chatJumps(sidebar, "   ").map((item) => item.id), ["a4", "a3", "a2"]);
-    assert.deepEqual(chatJumps(null, "sales"), []);
+    assert.deepEqual(chatJumps(sidebar, "", true).map((item) => item.id), ["a4", "a3", "a2"]);
+    assert.deepEqual(chatJumps(sidebar, "   ", true).map((item) => item.id), ["a4", "a3", "a2"]);
+    assert.deepEqual(chatJumps(null, "sales", true), []);
   });
 
   it("matches names and workspaces, with unread first and then the newest, archived rooms last", () => {
-    assert.deepEqual(chatJumps(sidebar, "sales").map((item) => item.id), ["a2", "a1", "z1"]);
-    assert.deepEqual(chatJumps(sidebar, "#sales ops").map((item) => item.id), ["a2"]);
-    assert.deepEqual(chatJumps(sidebar, "ridgeon").map((item) => item.id), ["a6", "z1"]);
-    assert.equal(chatJumps(sidebar, "sales-2024")[0].workspaceName, "Ridgeon");
-    assert.deepEqual(chatJumps(sidebar, "SAM").map((item) => item.id), ["a3"]);
-    assert.deepEqual(chatJumps(sidebar, "nothing like it"), []);
-    assert.equal(chatJumps(sidebar, "sales").find((item) => item.id === "z1")?.archived, true);
+    assert.deepEqual(chatJumps(sidebar, "sales", true).map((item) => item.id), ["a2", "a1", "z1"]);
+    assert.deepEqual(chatJumps(sidebar, "#sales ops", true).map((item) => item.id), ["a2"]);
+    assert.deepEqual(chatJumps(sidebar, "ridgeon", true).map((item) => item.id), ["a6", "z1"]);
+    assert.equal(chatJumps(sidebar, "sales-2024", true)[0].workspaceName, "Ridgeon");
+    assert.deepEqual(chatJumps(sidebar, "SAM", true).map((item) => item.id), ["a3"]);
+    assert.deepEqual(chatJumps(sidebar, "nothing like it", true), []);
+    assert.equal(chatJumps(sidebar, "sales", true).find((item) => item.id === "z1")?.archived, true);
+  });
+
+  it("matches a workspace name only when the person is in more than one workspace", () => {
+    assert.deepEqual(chatJumps(sidebar, "ridgeon", false), []);
+    assert.deepEqual(chatJumps(sidebar, "launch ridgeon", false), []);
+    assert.deepEqual(chatJumps(sidebar, "launch", false).map((item) => item.id), ["a6"]);
+    assert.deepEqual(chatJumps(sidebar, "ridgeon", true).map((item) => item.id), ["a6", "z1"]);
   });
 
   it("caps the list and labels rooms and direct messages", () => {
     const many: ChatSidebar = { ...sidebar, archived: [], conversations: Array.from({ length: 20 }, (_, index) => conversation({ id: `r${index}`, name: `room ${index}` })) };
-    assert.equal(chatJumps(many, "room").length, 8);
+    assert.equal(chatJumps(many, "room", true).length, 8);
     assert.equal(jumpLabel({ kind: "room", name: "sales" }), "#sales");
     assert.equal(jumpLabel({ kind: "dm", name: "Sam Okafor" }), "Sam Okafor");
   });

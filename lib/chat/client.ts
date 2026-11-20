@@ -34,7 +34,7 @@ export const chatApi = {
   room: (id: string) => request<ChatRoom>(`/api/chat/${id}`, "Couldn't load the conversation. Try again."),
   messages: (id: string, options: { before?: string | null; after?: string | null; around?: string | null } = {}) =>
     request<ChatPage>(`/api/chat/${id}/messages${query(options)}`, "Couldn't load messages. Try again."),
-  thread: (rootId: string, options: { before?: string | null; after?: string | null } = {}) =>
+  thread: (rootId: string, options: { before?: string | null; after?: string | null; around?: string | null } = {}) =>
     request<ChatThread>(`/api/chat/threads/${rootId}${query(options)}`, "Couldn't load the thread. Try again."),
   unreads: () => request<ChatUnreads>("/api/chat/unreads", "Couldn't load unread messages. Try again."),
   threads: (cursor?: string | null) => request<ChatThreads>(`/api/chat/threads${query({ cursor })}`, "Couldn't load threads. Try again."),
