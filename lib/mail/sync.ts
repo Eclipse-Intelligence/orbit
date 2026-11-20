@@ -372,9 +372,10 @@ async function storePage(
   const touched = new Set<string>();
   const quiet = !shareVisibleRole(folder.role);
   let changed = 0;
-  let delta = 0;
+  const others = new Set<string>();
+  let exact = false;
   if (rows.length > 0) {
-    const result = await db.query<{ id: string; inserted: boolean; thread_key: string | null; before_thread: string | null; changed: boolean; differs: boolean }>(
+    const result = await db.query<{ id: string; inserted: boolean; thread_key: string | null; before_thread: string | null; changed: boolean; differs: boolean; before_folder: string | null }>(
       `with before as (
          select m.provider_message_id, m.folder_id, m.is_draft, m.thread_key, m.is_read, m.is_flagged, m.has_attachments, m.subject, m.snippet,
            m.from_email, m.from_name, m.received_at, m.sent_at, m.focused, m.tracking_id
@@ -428,6 +429,7 @@ async function storePage(
          from_email, from_name, received_at, sent_at, focused, tracking_id, (xmax = 0) as inserted
        )
        select s.id, s.inserted, s.thread_key, b.thread_key as before_thread,
+         b.folder_id as before_folder,
          (b.provider_message_id is not null and (b.folder_id <> s.folder_id or b.is_draft <> s.is_draft or b.thread_key is distinct from s.thread_key)) as changed,
          (b.provider_message_id is not null and (b.folder_id, b.thread_key, b.is_draft, b.is_read, b.is_flagged, b.has_attachments, b.subject, b.snippet, b.from_email, b.from_name, b.received_at, b.sent_at, b.focused, b.tracking_id)
            is distinct from (s.folder_id, s.thread_key, s.is_draft, s.is_read, s.is_flagged, s.has_attachments, s.subject, s.snippet, s.from_email, s.from_name, s.received_at, s.sent_at, s.focused, s.tracking_id)) as differs
@@ -437,6 +439,8 @@ async function storePage(
     for (const row of result.rows) {
       if (row.inserted) inserted.push(row.id);
       if (row.inserted || row.differs) changed += 1;
+      if (!row.inserted && row.differs) exact = true;
+      if (row.before_folder && row.before_folder !== folder.id) others.add(row.before_folder);
       if (row.inserted && quiet) continue;
       if (!row.inserted && !row.changed) continue;
       if (row.thread_key) touched.add(row.thread_key);
@@ -461,7 +465,10 @@ async function storePage(
     );
     for (const row of moved.rows) if (row.thread_key) touched.add(row.thread_key);
     changed += moved.rows.length;
-    delta -= moved.rows.length;
+    if (moved.rows.length > 0) {
+      exact = true;
+      for (const item of removals.moved) others.add(item.folder_id);
+    }
   }
   if (removals.deleted.length > 0) {
     const deleted = await db.query<{ thread_key: string | null }>(
@@ -470,9 +477,19 @@ async function storePage(
     );
     if (!quiet) for (const row of deleted.rows) if (row.thread_key) touched.add(row.thread_key);
     changed += deleted.rows.length;
-    delta -= deleted.rows.length;
+    if (deleted.rows.length > 0) exact = true;
   }
-  return { stored: rows.length, inserted, touched: [...touched], changed, delta: delta + inserted.length };
+  others.delete(folder.id);
+  if (others.size > 0) await recountFolders(db, [...others]);
+  return { stored: rows.length, inserted, touched: [...touched], changed, exact, added: inserted.length };
+}
+
+export async function recountFolders(db: Db, folderIds: string[]) {
+  if (folderIds.length === 0) return;
+  await db.query(
+    "update crm.mail_folders f set synced_count = (select count(*)::int from crm.mail_messages m where m.folder_id = f.id) where f.id = any($1::uuid[])",
+    [folderIds],
+  );
 }
 
 async function folderPlaces(actor: UserActor, sourceId: string): Promise<Map<string, string>> {
@@ -587,14 +604,14 @@ async function syncFolder(
            sync_state = $3,
            synced_count = case
              when $5::boolean then (select count(*)::int from crm.mail_messages where folder_id = $1)
-             else greatest(synced_count + $6::int, 0)
+             else synced_count + $6::int
            end,
            last_synced_at = case when $4 then now() else last_synced_at end,
            last_error = null,
            failures = 0,
            retry_at = null
          where id = $1`,
-        [folder.id, next, state, Boolean(page.deltaLink), walkEnds && stored.changed > 0, walkEnds ? 0 : stored.delta],
+        [folder.id, next, state, Boolean(page.deltaLink), stored.exact || (walkEnds && stored.changed > 0), stored.added],
       );
       return options.guard && state === "backfill" ? storageFull(db) : false;
     });

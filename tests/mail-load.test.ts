@@ -6,6 +6,7 @@ import { setLiveTesting, type LiveMessage } from "@/lib/docs/live/broadcast";
 import { watchSyncSignals } from "@/lib/docs/live/client";
 import { memoryHub } from "@/lib/docs/live/transport";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { applyMailAction } from "@/lib/mail/actions";
 import { syncMail } from "@/lib/mail/sync";
 import { createSignalMerge, HOLD_POLL_MS } from "@/lib/signal-merge";
 import { readSyncOrigin, SYNC_ORIGIN_HEADER } from "@/lib/sync-origin";
@@ -246,5 +247,85 @@ describe("mail load", () => {
     });
     assert.ok(report.stored >= 2);
     assert.deepEqual(await storedCount(), { stored: 2, counted: 2 });
+  });
+
+  async function folderCounts() {
+    const result = await getAdminPool().query<{ role: string; stored: number; counted: number }>(
+      `select f.role, f.synced_count as stored, (select count(*)::int from crm.mail_messages m where m.folder_id = f.id) as counted
+       from crm.mail_folders f where f.role in ('inbox', 'archive') order by f.role`,
+    );
+    return result.rows.map((row) => [row.role, row.stored, row.counted]);
+  }
+
+  function twoFolders(inboxPages: Record<string, Page>, archivePages: Record<string, Page>, parent: Record<string, string> = {}) {
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if ((init?.method ?? "GET") !== "GET") {
+        const id = decodeURIComponent(url.match(/\/me\/messages\/([^/?]+)/)?.[1] ?? "");
+        const destination = String((JSON.parse(String(init?.body)) as { destinationId: string }).destinationId);
+        return Response.json({ id, parentFolderId: destination === "archive" ? "f-archive" : "f-inbox" }, { status: 201 });
+      }
+      const named = url.match(/\/me\/mailFolders\/(inbox|archive)\?\$select=id$/);
+      if (named) return Response.json({ id: `f-${named[1]}` });
+      if (url.includes("/me/mailFolders/") && url.includes("$select=id") && !url.includes("/messages")) return Response.json({ error: { code: "ErrorFolderNotFound" } }, { status: 404 });
+      if (url.startsWith(`${GRAPH}/me/mailFolders?$top=100`)) {
+        return Response.json({
+          value: [
+            { id: "f-inbox", displayName: "Inbox", childFolderCount: 0, totalItemCount: 0 },
+            { id: "f-archive", displayName: "Archive", childFolderCount: 0, totalItemCount: 0 },
+          ],
+        });
+      }
+      const lookup = url.match(/\/me\/messages\/([^/?]+)\?/);
+      if (lookup) return Response.json({ id: lookup[1], parentFolderId: parent[decodeURIComponent(lookup[1])] ?? "f-inbox" });
+      const delta = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/);
+      const pages = delta?.[1] === "f-archive" ? archivePages : inboxPages;
+      return Response.json(pages[url] ?? { value: [], "@odata.deltaLink": `${GRAPH}/me/mailFolders/${delta?.[1]}/messages/delta?$deltatoken=idle` });
+    };
+    return fetchImpl;
+  }
+
+  it("keeps both folders' counts right after an Outlook move and after an Orbit move", async () => {
+    const admin = getAdminPool();
+    await admin.query("delete from crm.mail_messages");
+    await admin.query("update crm.mail_folders set sync_state = 'live', sync_link = null, synced_count = 0 where role = 'inbox'");
+    const inbox = await admin.query<{ id: string; source_id: string; workspace_id: string }>("select id, source_id, workspace_id from crm.mail_folders where role = 'inbox'");
+    await admin.query(
+      `insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role, sync_state)
+       values ($1, $2, $3, 'f-archive', 'Archive', 'archive', 'live') on conflict do nothing`,
+      [inbox.rows[0].workspace_id, owner.userId, inbox.rows[0].source_id],
+    );
+    await admin.query(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, thread_key, subject, received_at)
+       select $1, $2, $3, $4, 'o-' || g, 'o-' || g, 'Seeded', now() from generate_series(1, 3) g`,
+      [inbox.rows[0].workspace_id, owner.userId, inbox.rows[0].source_id, inbox.rows[0].id],
+    );
+    await admin.query("update crm.mail_folders f set synced_count = (select count(*) from crm.mail_messages m where m.folder_id = f.id)");
+    assert.deepEqual(await folderCounts(), [["archive", 0, 0], ["inbox", 3, 3]]);
+
+    await admin.query("update crm.mail_sources set retry_at = null, locked_until = null, last_error = null");
+    await admin.query("update crm.mail_folders set retry_at = null, failures = 0, last_error = null");
+    await admin.query("update crm.mail_folders set sync_link = $1 where role = 'inbox'", [`${GRAPH}/me/mailFolders/f-inbox/messages/delta?$deltatoken=start`]);
+    await admin.query("update crm.mail_folders set sync_link = $1 where role = 'archive'", [`${GRAPH}/me/mailFolders/f-archive/messages/delta?$deltatoken=start`]);
+    const moved = await syncMail(owner, {
+      budgetMs: 30_000,
+      backfill: false,
+      fetchImpl: twoFolders(
+        { [`${GRAPH}/me/mailFolders/f-inbox/messages/delta?$deltatoken=start`]: { value: [{ id: "o-1", "@removed": { reason: "deleted" } }], "@odata.deltaLink": inboxDelta("moved") } },
+        {
+          [`${GRAPH}/me/mailFolders/f-archive/messages/delta?$deltatoken=start`]: {
+            value: [message("o-1", { conversationId: "o-1", subject: "Seeded", receivedDateTime: "2026-10-01T09:00:05Z" })],
+            "@odata.deltaLink": `${GRAPH}/me/mailFolders/f-archive/messages/delta?$deltatoken=moved`,
+          },
+        },
+        { "o-1": "f-archive" },
+      ),
+    });
+    assert.deepEqual(moved.errors, []);
+    assert.deepEqual(await folderCounts(), [["archive", 1, 1], ["inbox", 2, 2]]);
+
+    const thread = await admin.query<{ thread_key: string }>("select thread_key from crm.mail_messages where provider_message_id = 'o-2'");
+    await applyMailAction(owner, { thread: `${inbox.rows[0].source_id}|${thread.rows[0].thread_key}`, action: "archive", view: { role: "inbox" } }, twoFolders({}, {}));
+    assert.deepEqual(await folderCounts(), [["archive", 2, 2], ["inbox", 1, 1]]);
   });
 });
