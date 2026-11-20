@@ -266,6 +266,7 @@ export type ChatLiveEvent =
   | { type: "thread-read"; conversationId: string; messageId: string; lastReadAt: string }
   | { type: "conversation"; conversationId: string }
   | { type: "removed"; conversationId: string }
+  | { type: "scheduled"; conversationId: string }
   | { type: "reaction"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string }
   | { type: "previews"; conversationId: string; messageId: string; parentId: string | null; previews: ChatLinkPreview[] };
 

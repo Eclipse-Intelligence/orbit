@@ -47,19 +47,19 @@ export function sendLaterChoices(nowMs: number, timeZone = appTimeZone()): SendL
   return choices;
 }
 
-export function scheduledWhen(sendAt: string | Date, nowMs: number, timeZone = appTimeZone()) {
+export function scheduledWhen(sendAt: string | Date, nowMs: number, timeZone = appTimeZone(), options: { sentence?: boolean } = {}) {
   const date = new Date(sendAt);
   const wall = zonedParts(date, timeZone);
   const today = zonedParts(new Date(nowMs), timeZone);
   const gap = Math.round((Date.UTC(wall.year, wall.month - 1, wall.day) - Date.UTC(today.year, today.month - 1, today.day)) / DAY_MS);
   const time = clock(date, timeZone);
-  if (gap === 0) return `Today at ${time}`;
-  if (gap === 1) return `Tomorrow at ${time}`;
+  if (gap === 0) return `${options.sentence ? "today" : "Today"} at ${time}`;
+  if (gap === 1) return `${options.sentence ? "tomorrow" : "Tomorrow"} at ${time}`;
   const near = gap > 0 && gap < 7;
   const parts = new Intl.DateTimeFormat("en-GB", {
     weekday: near ? "long" : "short",
     ...(near ? {} : { day: "numeric", month: "short" }),
-    ...(wall.year === today.year ? {} : { year: "numeric" }),
+    ...(near || wall.year === today.year ? {} : { year: "numeric" }),
     timeZone,
   }).formatToParts(date);
   const day = parts

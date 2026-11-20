@@ -168,7 +168,7 @@ export async function updateScheduledAction(id: string, change: ChatScheduledCha
 }
 
 export async function cancelScheduledAction(id: string): Promise<ChatResult<{ cancelled: boolean }>> {
-  return run("Couldn't cancel the message. Try again.", (actor) => cancelScheduled(actor, id));
+  return run("Couldn't delete the message. Try again.", (actor) => cancelScheduled(actor, id));
 }
 
 export async function sendScheduledNowAction(id: string): Promise<ChatResult<{ post: ChatPost | null }>> {

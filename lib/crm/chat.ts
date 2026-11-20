@@ -1322,7 +1322,7 @@ export async function checkScheduledPost(
 export async function postMessage(
   actor: UserActor,
   input: PostInput,
-  options: { viaWorkflowId?: string; charge?: () => Promise<void>; roomMention?: boolean; fetchImpl?: typeof fetch; linkPreviews?: PreviewTransport } = {},
+  options: { viaWorkflowId?: string; charge?: () => Promise<void>; roomMention?: boolean; fetchImpl?: typeof fetch; linkPreviews?: PreviewTransport; markRead?: boolean } = {},
 ): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
@@ -1387,7 +1387,7 @@ export async function postMessage(
       const message = (await readMessage(db, inserted.rows[0].id, actor.userId))!;
       const rootMessage = parentId ? await readMessage(db, parentId, actor.userId) : null;
       const root = rootMessage ? toRoot(rootMessage) : null;
-      if (!parentId && !via) {
+      if (!parentId && !via && options.markRead !== false) {
         await db.query(
           `update crm.chat_members set last_read_at = greatest(last_read_at, (select created_at from crm.chat_messages where id = $3))
            where conversation_id = $1 and user_id = $2`,

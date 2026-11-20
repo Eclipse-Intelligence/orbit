@@ -94,7 +94,7 @@ function EditRow({ item, onDone }: { item: ChatScheduledItem; onDone: () => void
       />
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
         <span className="caption-style text-subtle">Sends</span>
-        <Button variant="secondary" size="sm" aria-label={`Change time, now ${scheduledWhen(at, now)}`} onClick={() => setPicking(Date.now())} className="hit max-md:h-11">
+        <Button variant="secondary" size="sm" aria-label={`Change time, now ${scheduledWhen(at, now, undefined, { sentence: true })}`} onClick={() => setPicking(Date.now())} className="hit max-md:h-11">
           <ClockIcon aria-hidden className="size-3.5" />
           {scheduledWhen(at, now)}
         </Button>
@@ -235,7 +235,7 @@ export default function ScheduledView() {
             Loading…
           </p>
         )}
-        {loaded && items.length === 0 && (
+        {loaded && !error && items.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
             <h3>No scheduled messages</h3>
             <p className="text-soft max-w-[24em]">Only you can see what you schedule.</p>

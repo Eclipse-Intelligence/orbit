@@ -12,7 +12,7 @@ import { useCompaniesStore } from "@/stores/companies-store";
 
 const SCHEDULE_FAILED = "Couldn't schedule the message. Try again.";
 const SAVE_FAILED = "Couldn't save the message. Try again.";
-const CANCEL_FAILED = "Couldn't cancel the message. Try again.";
+const CANCEL_FAILED = "Couldn't delete the message. Try again.";
 const SEND_FAILED = "Couldn't send. Try again.";
 const GONE = "That message is no longer scheduled.";
 const FOCUS_GAP_MS = 30_000;
@@ -78,6 +78,10 @@ export function useScheduledMessages(report: (message: string) => void, onPosted
   }, []);
 
   useChatEvents((event) => {
+    if (event.type === "scheduled") {
+      useChatScheduled.getState().load({ force: true });
+      return;
+    }
     const key = event.type === "message" ? event.message.clientKey : null;
     if (!key || !useChatScheduled.getState().items.some((item) => item.id === key)) return;
     useChatScheduled.getState().remove(key);
@@ -107,7 +111,7 @@ export function useScheduledMessages(report: (message: string) => void, onPosted
       attempts.current = new Map();
       useChatScheduled.getState().upsert(result.item);
       refreshChatSidebar();
-      reporter.current(`Scheduled for ${scheduledWhen(result.item.sendAt, Date.now())}`);
+      reporter.current(`Scheduled for ${scheduledWhen(result.item.sendAt, Date.now(), undefined, { sentence: true })}`);
       return null;
     }
     return "error" in result ? result.error : SCHEDULE_FAILED;

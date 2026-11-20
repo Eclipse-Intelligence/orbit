@@ -186,6 +186,11 @@ describe("send later times", () => {
     assert.equal(scheduledWhen("2026-03-30T08:00:00Z", now, zone), "Monday at 09:00");
     assert.equal(scheduledWhen("2026-04-14T08:00:00Z", now, zone), "Tue 14 Apr at 09:00");
     assert.equal(scheduledWhen("2027-01-04T09:00:00Z", now, zone), "Mon 4 Jan 2027 at 09:00");
+    assert.equal(scheduledWhen("2026-12-30T09:00:00Z", Date.parse("2026-12-28T10:00:00Z"), zone), "Wednesday at 09:00");
+    assert.equal(scheduledWhen("2027-01-02T09:00:00Z", Date.parse("2026-12-29T10:00:00Z"), zone), "Saturday at 09:00");
+    assert.equal(scheduledWhen("2027-01-20T09:00:00Z", Date.parse("2026-12-29T10:00:00Z"), zone), "Wed 20 Jan 2027 at 09:00");
+    assert.equal(scheduledWhen("2026-03-27T17:00:00Z", now, zone, { sentence: true }), "today at 17:00");
+    assert.equal(scheduledWhen("2026-03-28T09:00:00Z", now, zone, { sentence: true }), "tomorrow at 09:00");
     assert.equal(scheduledWhen("2026-03-27T23:30:00Z", Date.parse("2026-03-27T22:30:00Z"), zone), "Today at 23:30");
   });
 
@@ -339,7 +344,7 @@ describe("scheduled chat messages", () => {
       [sam.userId, room],
     );
     assert.equal((await sql("select 1 from crm.chat_scheduled where user_id = $1", [sam.userId])).length, 100);
-    await refused(schedule(sam, room, "One too many"), /100 scheduled messages/);
+    await refused(schedule(sam, room, "One too many"), /Send or delete some first\./);
     assert.equal((await listConversations(sam)).scheduled, 100);
   });
 
@@ -672,7 +677,7 @@ describe("scheduled chat messages", () => {
     assert.deepEqual((await sql<{ path: string }>("select path from private.storage_tombstones")).map((entry) => entry.path), [key(room, files[1])]);
     await refused(updateScheduled(sam, item.id, { body: "  ", removeAttachmentIds: [files[0]] }), /Write a message first\./);
     const onlyFile = await schedule(sam, room, "", { files: await upload(sam, room, ["alone.pdf"]) });
-    await refused(updateScheduled(sam, onlyFile.id, { removeAttachmentIds: [onlyFile.attachments[0].id] }), /Cancel the scheduled message instead\./);
+    await refused(updateScheduled(sam, onlyFile.id, { removeAttachmentIds: [onlyFile.attachments[0].id] }), /Delete the scheduled message instead\./);
     assert.equal((await row(onlyFile.id))?.attachment_ids.length, 1);
     await refused(updateScheduled(sam, item.id, { sendAt: new Date(Date.now() - 1000).toISOString() }), /Pick a time in the future\./);
     await refused(updateScheduled(sam, "nope", { body: "x" }), /not found/i);
@@ -715,6 +720,45 @@ describe("scheduled chat messages", () => {
     assert.ok(await row(recent.id));
     assert.ok(await row(waiting.id));
     assert.deepEqual((await sql<{ path: string }>("select path from private.storage_tombstones")).map((entry) => entry.path), [key(other, kept[0])]);
+  });
+
+  it("leaves the sender's unread state alone when a scheduled message is posted, top level and in a thread", async () => {
+    const root = (await postMessage(sam, { conversationId: room, body: "Root by Sam", format: "markdown", clientKey: randomUUID() })).message;
+    const top = await schedule(sam, room, "Scheduled top level");
+    const reply = await schedule(sam, room, "Scheduled reply", { parentId: root.id });
+    await postMessage(mark, { conversationId: room, body: "Overnight message", format: "markdown", clientKey: randomUUID() });
+    await postMessage(mark, { conversationId: room, parentId: root.id, body: "Overnight reply", format: "markdown", clientKey: randomUUID() });
+    const before = await listConversations(sam);
+    const readBefore = (await sql<{ last_read_at: Date }>("select last_read_at from crm.chat_members where conversation_id = $1 and user_id = $2", [room, sam.userId]))[0].last_read_at;
+    const threadBefore = (await sql<{ last_read_at: Date }>("select last_read_at from crm.chat_thread_reads where message_id = $1 and user_id = $2", [root.id, sam.userId]))[0].last_read_at;
+    assert.deepEqual([before.conversations.find((entry) => entry.id === room)?.unread, before.threads.unread], [1, 1]);
+    await makeDue(top.id, 20);
+    await makeDue(reply.id, 10);
+    assert.deepEqual(await processDueScheduled({ fetchImpl: env.fetchImpl }), { sent: 2, failed: 0, retried: 0 });
+    const after = await listConversations(sam);
+    assert.deepEqual([after.conversations.find((entry) => entry.id === room)?.unread, after.threads.unread], [1, 1]);
+    assert.deepEqual(
+      (await sql<{ last_read_at: Date }>("select last_read_at from crm.chat_members where conversation_id = $1 and user_id = $2", [room, sam.userId]))[0].last_read_at,
+      readBefore,
+    );
+    assert.deepEqual(
+      (await sql<{ last_read_at: Date }>("select last_read_at from crm.chat_thread_reads where message_id = $1 and user_id = $2", [root.id, sam.userId]))[0].last_read_at,
+      threadBefore,
+    );
+    await postMessage(sam, { conversationId: room, parentId: root.id, body: "Sent by hand", format: "markdown", clientKey: randomUUID() });
+    assert.equal((await listConversations(sam)).threads.unread, 0);
+  });
+
+  it("tells the owner live, without content, when a run marks a message failed", async () => {
+    const item = await schedule(sam, room, SECRET);
+    await makeDue(item.id);
+    await setRoomArchived(mark, room, true);
+    await processDueScheduled({ fetchImpl: env.fetchImpl });
+    await chatWorkSettled();
+    const events = broadcasts.filter((event) => event.topic === personTopic(sam.userId) && (event.payload as { type?: string }).type === "scheduled");
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].payload, { type: "scheduled", conversationId: room });
+    assert.ok(!JSON.stringify(broadcasts).includes("Quarterly"));
   });
 
   it("runs from the every-minute cron", async () => {

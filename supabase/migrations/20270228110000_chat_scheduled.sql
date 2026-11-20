@@ -29,7 +29,6 @@ create index if not exists chat_scheduled_due_idx on crm.chat_scheduled (send_at
 create index if not exists chat_scheduled_failed_idx on crm.chat_scheduled (updated_at) where status = 'failed';
 create index if not exists chat_scheduled_conversation_idx on crm.chat_scheduled (conversation_id);
 create index if not exists chat_scheduled_parent_idx on crm.chat_scheduled (parent_id) where parent_id is not null;
-create index if not exists chat_attachments_scheduled_idx on crm.chat_attachments (scheduled_id) where scheduled_id is not null;
 
 alter table crm.chat_scheduled enable row level security;
 alter table crm.chat_scheduled force row level security;
@@ -120,6 +119,75 @@ $$;
 
 revoke all on function private.chat_message_claim() from public;
 
+create or replace function private.chat_message_counts()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_root record;
+  v_followers uuid[];
+  v_scheduled boolean;
+begin
+  if tg_op = 'INSERT' then
+    if new.parent_id is null then
+      if cardinality(new.mentions) > 0 then
+        perform private.chat_follow(new.id, new.mentions, new.created_at);
+      end if;
+      return null;
+    end if;
+    update crm.chat_messages r
+      set reply_count = r.reply_count + 1,
+          last_reply_at = greatest(coalesce(r.last_reply_at, new.created_at), new.created_at)
+      where r.id = new.parent_id
+      returning r.author_user_id, r.created_at into v_root;
+    v_followers := array[v_root.author_user_id] || new.mentions;
+    if exists (select 1 from crm.chat_conversations c where c.id = new.conversation_id and c.kind = 'dm') then
+      v_followers := v_followers || array(select cm.user_id from crm.chat_members cm where cm.conversation_id = new.conversation_id);
+    end if;
+    perform private.chat_follow(new.parent_id, array_remove(v_followers, new.author_user_id), v_root.created_at);
+    v_scheduled := new.client_key is not null and exists (
+      select 1 from crm.chat_scheduled s
+      where s.id::text = new.client_key and s.user_id = new.author_user_id and s.status = 'sending'
+    );
+    if v_scheduled then
+      insert into crm.chat_thread_reads (message_id, user_id, last_read_at)
+        values (new.parent_id, new.author_user_id, v_root.created_at)
+        on conflict (message_id, user_id) do nothing;
+    else
+      insert into crm.chat_thread_reads (message_id, user_id, last_read_at)
+        values (new.parent_id, new.author_user_id, new.created_at)
+        on conflict (message_id, user_id) do update set last_read_at = greatest(crm.chat_thread_reads.last_read_at, excluded.last_read_at);
+    end if;
+    return null;
+  end if;
+  if tg_op = 'UPDATE' then
+    if new.parent_id is not null and new.deleted_at is not null and old.deleted_at is null then
+      perform private.chat_recount(new.parent_id);
+    end if;
+    if new.deleted_at is null and new.mentions is distinct from old.mentions then
+      v_followers := array(select unnest(new.mentions) except select unnest(old.mentions));
+      v_followers := array_remove(v_followers, new.author_user_id);
+      if cardinality(v_followers) > 0 then
+        if new.parent_id is null then
+          perform private.chat_follow(new.id, v_followers, new.created_at);
+        else
+          perform private.chat_follow(new.parent_id, v_followers, (select r.created_at from crm.chat_messages r where r.id = new.parent_id));
+        end if;
+      end if;
+    end if;
+    return null;
+  end if;
+  if old.parent_id is not null and old.deleted_at is null then
+    perform private.chat_recount(old.parent_id);
+  end if;
+  return null;
+end;
+$$;
+
+revoke all on function private.chat_message_counts() from public;
+
 create or replace function private.chat_schedule_create(
   p_user uuid,
   p_id uuid,
@@ -176,7 +244,7 @@ begin
     raise exception 'Pick a time within the next year.' using errcode = '22023';
   end if;
   if (select count(*) from crm.chat_scheduled s where s.user_id = p_user) >= 100 then
-    raise exception 'You have 100 scheduled messages. Send or cancel some first.' using errcode = '22023';
+    raise exception 'You have 100 scheduled messages. Send or delete some first.' using errcode = '22023';
   end if;
   select coalesce(array_agg(u.x order by u.first), '{}') into v_ids
     from (
@@ -256,7 +324,7 @@ begin
     from unnest(v_row.attachment_ids) with ordinality as t(x, ord)
     where not (t.x = any(coalesce(p_remove, '{}')));
   if length(btrim(v_body, E' \t\n')) = 0 and cardinality(v_keep) = 0 then
-    raise exception 'Cancel the scheduled message instead.' using errcode = '22023';
+    raise exception 'Delete the scheduled message instead.' using errcode = '22023';
   end if;
   delete from crm.chat_attachments a
     where a.scheduled_id = p_id and a.message_id is null and not (a.id = any(v_keep));
@@ -441,3 +509,5 @@ revoke all on function private.chat_sweep_scheduled(integer) from public;
 grant execute on function private.chat_sweep_scheduled(integer) to crm_app;
 
 reset lock_timeout;
+
+create index concurrently if not exists chat_attachments_scheduled_idx on crm.chat_attachments (scheduled_id) where scheduled_id is not null;

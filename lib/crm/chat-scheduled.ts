@@ -3,7 +3,7 @@ import { alertMembers } from "@/lib/alerts";
 import { CHAT_ARCHIVED, type ChatKind, type ChatPost, type ChatScheduled, type ChatScheduledChange, type ChatScheduledInput, type ChatScheduledItem, type ChatScheduledStatus } from "@/lib/chat/types";
 import { CHAT_SCHEDULED_PATH } from "@/lib/chat/routes";
 import { cleanFormat, type ChatFormat } from "@/lib/chat/markdown";
-import { checkId, checkScheduledPost, FORMER, iso, MEMBER_NAME, postMessage } from "@/lib/crm/chat";
+import { broadcastChat, checkId, checkScheduledPost, FORMER, iso, MEMBER_NAME, postMessage } from "@/lib/crm/chat";
 import { checkUploads, cleanAttachmentIds } from "@/lib/crm/chat-attachments";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, pgFailure } from "@/lib/crm/errors";
@@ -216,7 +216,10 @@ async function release(row: Claimed, reason: string | null, options: DeliverOpti
   const result = released.rows[0];
   if (!result?.failed) return { outcome: "retry" };
   const text = result.failure ?? SEND_FAILED;
-  if (options.notify) await notifyFailed(row.user_id, row, text, options);
+  if (options.notify) {
+    await broadcastChat([row.user_id], { type: "scheduled", conversationId: row.conversation_id });
+    await notifyFailed(row.user_id, row, text, options);
+  }
   return { outcome: "failed", reason: text };
 }
 
@@ -231,7 +234,7 @@ export async function deliverScheduled(row: Claimed, options: DeliverOptions & {
     const post = await postMessage(
       actor,
       { conversationId: checked.conversationId, parentId: checked.parentId, body: checked.body, format: checked.format, clientKey: row.id, attachmentIds: row.attachment_ids },
-      { roomMention: true, fetchImpl: options.fetchImpl },
+      { roomMention: true, fetchImpl: options.fetchImpl, markRead: false },
     );
     await query("select private.chat_schedule_done($1, $2)", [row.id, row.claim_token]);
     return { outcome: "sent", post };
