@@ -42,6 +42,8 @@ import {
   type ChatThreadCard,
   type ChatThreads,
   type ChatUnreads,
+  CHAT_THREADS_MAX,
+  CHAT_THREADS_PAGE,
   groupName,
   isChatKind,
   isDirect,
@@ -130,8 +132,6 @@ type MemberRow = { user_id: string; last_read_at: Stamp; notify: ChatNotify; mut
 export type LinkedRoom = { conversationId: string; memberIds: string[] };
 
 const THREAD_CARD_REPLIES = 2;
-const THREADS_PAGE_SIZE = 20;
-const THREADS_PAGE_MAX = 50;
 const SEARCH_LIMIT = 30;
 const UNREADS_PER_CONVERSATION = 20;
 const MENTION_MAX = 50;
@@ -1012,7 +1012,7 @@ function threadsCursor(cursor: ThreadsCursor) {
 }
 
 export async function listThreads(actor: UserActor, options: { cursor?: string | null; limit?: number } = {}): Promise<ChatThreads> {
-  const limit = Math.min(THREADS_PAGE_MAX, pageSize(options.limit, THREADS_PAGE_SIZE));
+  const limit = Math.min(CHAT_THREADS_MAX, pageSize(options.limit, CHAT_THREADS_PAGE));
   const cursor = readThreadsCursor(options.cursor);
   return withActor(actor, async (db) => {
     const result = await db.query<
@@ -1165,7 +1165,7 @@ function postAlerts(actor: UserActor, conversation: ConversationRow, members: Me
   const tag = `chat:${conversation.id}`;
   const dm = isDirect(conversation.kind);
   const group = conversation.kind === "group_dm";
-  const others = members.filter((member) => member.user_id !== actor.userId);
+  const others = message.via ? members : members.filter((member) => member.user_id !== actor.userId);
   const { reached, jobs } = mentionJobs(actor, conversation, members, message, dm ? [] : message.mentions);
   if (!message.parentId) {
     const filesOnly = !message.body.trim() && message.attachments.length > 0;
@@ -1173,18 +1173,23 @@ function postAlerts(actor: UserActor, conversation: ConversationRow, members: Me
     for (const other of others) {
       if (reached.has(other.user_id) || memberLevel(conversation, other) !== "all") continue;
       jobs.push(
-        ...alertJob(actor, [other.user_id], {
-          source: "chat",
-          href: dm ? `/chat/${conversation.id}` : chatHref(conversation.id, message),
-          tag,
-          body: null,
-          key: dm ? `chat:dm:${conversation.id}:${millis(other.last_read_at)}` : `chat:room:${conversation.id}:${millis(other.last_read_at)}`,
-          title: dm
-            ? filesOnly
-              ? `${name} sent ${group ? "your group" : "you"} ${filesTitle(message.attachments.length)}`
-              : `${name} sent ${group ? "your group" : "you"} a message`
-            : (filesOnly ? `${sender} sent ${filesTitle(message.attachments.length)} in #${conversation.name ?? ""}` : `${sender} posted in #${conversation.name ?? ""}`).slice(0, 200),
-        }),
+        ...alertJob(
+          actor,
+          [other.user_id],
+          {
+            source: "chat",
+            href: dm ? `/chat/${conversation.id}` : chatHref(conversation.id, message),
+            tag,
+            body: null,
+            key: dm ? `chat:dm:${conversation.id}:${millis(other.last_read_at)}` : `chat:room:${conversation.id}:${millis(other.last_read_at)}`,
+            title: dm
+              ? filesOnly
+                ? `${name} sent ${group ? "your group" : "you"} ${filesTitle(message.attachments.length)}`
+                : `${name} sent ${group ? "your group" : "you"} a message`
+              : (filesOnly ? `${sender} sent ${filesTitle(message.attachments.length)} in #${conversation.name ?? ""}` : `${sender} posted in #${conversation.name ?? ""}`).slice(0, 200),
+          },
+          { includeSelf: Boolean(message.via) },
+        ),
       );
     }
     return jobs;
@@ -1341,7 +1346,7 @@ export async function checkScheduledPost(
 
 const WEB_POST = { roomMention: true, linkPreviews: {} } as const;
 
-export function postFromWeb(actor: UserActor, input: PostInput, overrides: { linkPreviews?: PreviewTransport } = {}) {
+export function postFromWeb(actor: UserActor, input: PostInput, overrides: { linkPreviews?: PreviewTransport; markRead?: boolean } = {}) {
   return postMessage(actor, input, { ...WEB_POST, ...overrides });
 }
 

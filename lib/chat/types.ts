@@ -41,6 +41,8 @@ export const CHAT_ARCHIVED = "This room is archived.";
 export const CHAT_FILES_MAX = 10;
 export const CHAT_FILE_MAX_BYTES = 25 * 1024 * 1024;
 export const CHAT_PINS_MAX = 50;
+export const CHAT_THREADS_PAGE = 20;
+export const CHAT_THREADS_MAX = 50;
 export const CHAT_QUOTES_MAX = 50;
 
 export type ChatAttachment = { id: string; name: string; contentType: string; size: number; width: number | null; height: number | null };

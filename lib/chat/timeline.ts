@@ -1,5 +1,5 @@
 import type { ChatAttachment, ChatConversation, ChatLinkPreview, ChatMessage, ChatNotifyInput, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
-import { EMPTY_HOOK_CARD, isDirect } from "@/lib/chat/types";
+import { CHAT_THREADS_MAX, CHAT_THREADS_PAGE, EMPTY_HOOK_CARD, isDirect } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
 const GROUP_GAP_MS = 5 * 60_000;
@@ -205,6 +205,11 @@ export function setMyReaction(list: ChatMessage[], messageId: string, emoji: str
   });
 }
 
+function editedMessage(list: ChatMessage[], message: ChatMessage, gone: string[]) {
+  if (gone.includes(message.id) || list.some((item) => item.id === message.id && item.deletedAt)) return list;
+  return replaceMessage(list, keepReactions(list, message));
+}
+
 function keepReactions(list: ChatMessage[], message: ChatMessage) {
   const stored = list.find((item) => item.id === message.id);
   return stored ? { ...message, reactions: stored.reactions, reactionsAt: stored.reactionsAt } : message;
@@ -401,17 +406,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "edited": {
       const { message } = action;
       let next = updateTimeline(state, message.conversationId, (timeline) => {
-        const messages = replaceMessage(timeline.messages, keepReactions(timeline.messages, message));
+        const messages = editedMessage(timeline.messages, message, timeline.gone);
         return messages === timeline.messages ? timeline : { ...timeline, messages };
       });
       if (message.parentId) {
         next = updateThread(next, message.parentId, (thread) => {
-          const messages = replaceMessage(thread.timeline.messages, keepReactions(thread.timeline.messages, message));
+          const messages = editedMessage(thread.timeline.messages, message, thread.timeline.gone);
           return messages === thread.timeline.messages ? thread : { ...thread, timeline: { ...thread.timeline, messages } };
         });
       } else {
         next = updateThread(next, message.id, (thread) =>
-          thread.root
+          thread.root && !thread.root.deletedAt
             ? { ...thread, root: { ...keepReactions([thread.root], message), replyCount: thread.root.replyCount, replyAuthors: thread.root.replyAuthors, lastReplyAt: thread.root.lastReplyAt } }
             : thread,
         );
@@ -555,9 +560,28 @@ export function appendCards(current: ChatThreadCard[], incoming: ChatThreadCard[
   return [...current, ...incoming.filter((card) => !seen.has(card.root.id))];
 }
 
-export function refreshCards(current: ChatThreadCard[], fresh: ChatThreadCard[]) {
+export function reloadLimit(loaded: number) {
+  return Math.min(CHAT_THREADS_MAX, Math.max(CHAT_THREADS_PAGE, loaded));
+}
+
+export function reloadCards(current: ChatThreadCard[], fresh: ChatThreadCard[], limit: number) {
+  if (current.length <= limit) return fresh;
   const updated = new Set(fresh.map((card) => card.root.id));
   return [...fresh, ...current.filter((card) => !updated.has(card.root.id))];
+}
+
+export function reloadNext(loadedAtStart: number, loadedNow: number, limit: number, current: string | null, fresh: string | null) {
+  return loadedAtStart <= limit && loadedNow === loadedAtStart ? fresh : current;
+}
+
+export function dropThread(current: ChatThreadCard[], rootId: string) {
+  const kept = current.filter((card) => card.root.id !== rootId);
+  return kept.length === current.length ? current : kept;
+}
+
+export function dropCards(current: ChatThreadCard[], conversationId: string) {
+  const kept = current.filter((card) => card.conversation.id !== conversationId);
+  return kept.length === current.length ? current : kept;
 }
 
 export function sidebarBadge(sidebar: ChatSidebar | null) {

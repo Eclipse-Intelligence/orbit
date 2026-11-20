@@ -175,7 +175,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const canReply = !inThread && !local && !deleted && !readOnly;
   const canEdit = own && !local && !deleted && !message.via && !readOnly;
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted && (!readOnly || local);
-  const canMarkUnread = pane === "room" && !discussion && !inThread && !message.parentId && !local && !deleted && message.kind !== "event";
+  const canMarkUnread = pane === "room" && !discussion && !inThread && !message.parentId && !local && !deleted && !readOnly && message.kind !== "event";
   const canReact = !local && !deleted && !readOnly;
   const canSave = canSaveMessage(message);
   const isSaved = canSave && saved.isSaved(message.id);
@@ -188,7 +188,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   function startPress(event: PointerEvent<HTMLDivElement>) {
     if (!event.currentTarget.contains(event.target as Node)) return;
     pressed.current = false;
-    if (event.pointerType !== "touch" || isEditing) return;
+    if (event.pointerType !== "touch" || isEditing || deleted) return;
     const timer = window.setTimeout(() => {
       press.current = null;
       pressed.current = true;
@@ -388,15 +388,19 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             (picking || more || remindMenu) && "flex",
           )}
         >
-          {quick.slice(0, 3).map((emoji) => (
-            <ToolButton key={emoji} label={`React with ${emoji}`} onClick={() => react(message, emoji)} className="text-[15px] leading-none">
-              {emoji}
-            </ToolButton>
-          ))}
-          <span aria-hidden className="bg-line-strong mx-0.5 h-4 w-px" />
-          <ToolButton label="Add reaction" onClick={() => setPicking(true)}>
-            <SmilePlusIcon aria-hidden className="size-3.5" />
-          </ToolButton>
+          {canReact && (
+            <>
+              {quick.slice(0, 3).map((emoji) => (
+                <ToolButton key={emoji} label={`React with ${emoji}`} onClick={() => react(message, emoji)} className="text-[15px] leading-none">
+                  {emoji}
+                </ToolButton>
+              ))}
+              <span aria-hidden className="bg-line-strong mx-0.5 h-4 w-px" />
+              <ToolButton label="Add reaction" onClick={() => setPicking(true)}>
+                <SmilePlusIcon aria-hidden className="size-3.5" />
+              </ToolButton>
+            </>
+          )}
           {canReply && (
             <ToolButton label="Reply in thread" title="Reply in thread (R)" onClick={() => openThread(message.conversationId, message.id)}>
               <ReplyIcon aria-hidden className="size-3.5" />
@@ -587,7 +591,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
               ))}
             </div>
           )}
-          {!deleted && (
+          {!deleted && message.body.trim() !== "" && (
             <SheetAction
               onClick={() => act(() => void navigator.clipboard?.writeText(plainMentions(message.body)).catch(() => undefined))}
               icon={<CopyIcon aria-hidden className="size-4" />}
@@ -635,7 +639,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
               Try again
             </SheetAction>
           )}
-          {canDelete && (
+          {canDelete && (!local || error) && (
             <SheetAction danger onClick={() => act(() => (local ? void remove(message) : setConfirming(true)))} icon={<TrashIcon aria-hidden className="size-4" />}>
               {local ? "Discard" : "Delete"}
             </SheetAction>

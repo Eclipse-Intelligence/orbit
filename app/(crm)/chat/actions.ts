@@ -94,7 +94,7 @@ export async function postMessageAction(input: {
 }
 
 export async function shareMessageAction(input: { conversationId: string; body: string; clientKey: string; quotedMessageId: string }): Promise<ChatResult<ChatPost>> {
-  return run("Couldn't share the message. Try again.", (actor) => postFromWeb(actor, { ...(input ?? {}), format: "plain" }));
+  return run("Couldn't share the message. Try again.", (actor) => postFromWeb(actor, { ...(input ?? {}), format: "plain" }, { markRead: false }));
 }
 
 export async function editMessageAction(id: string, body: string, format?: ChatFormat, removeAttachmentIds?: string[]): Promise<ChatResult<{ message: ChatMessage }>> {

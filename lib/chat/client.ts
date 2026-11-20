@@ -38,7 +38,7 @@ export const chatApi = {
   thread: (rootId: string, options: { before?: string | null; after?: string | null; around?: string | null } = {}) =>
     request<ChatThread>(`/api/chat/threads/${rootId}${query(options)}`, "Couldn't load the thread. Try again."),
   unreads: () => request<ChatUnreads>("/api/chat/unreads", "Couldn't load unread messages. Try again."),
-  threads: (cursor?: string | null) => request<ChatThreads>(`/api/chat/threads${query({ cursor })}`, "Couldn't load threads. Try again."),
+  threads: (options: { cursor?: string | null; limit?: number } = {}) => request<ChatThreads>(`/api/chat/threads${query({ cursor: options.cursor, limit: options.limit ? String(options.limit) : null })}`, "Couldn't load threads. Try again."),
   saved: (cursor?: string | null) => request<ChatSaved>(`/api/chat/saved${query({ cursor })}`, "Couldn't load saved messages. Try again."),
   savedIds: () => request<ChatSavedIds>("/api/chat/saved/ids", "Couldn't load saved messages. Try again."),
   scheduled: () => request<ChatScheduled>("/api/chat/scheduled", "Couldn't load scheduled messages. Try again."),
