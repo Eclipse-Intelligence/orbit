@@ -29,6 +29,7 @@ import {
   REMINDER_NOT_REMOVED,
   readCardPosition,
   remindersToday,
+  taskLinkOf,
   taskStartOf,
   type AddDraft,
   type CardPoint,
@@ -625,6 +626,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
               autoFocus
               start={taskStartOf(converting)}
               fromReminderId={converting.id}
+              link={taskLinkOf(converting)}
               onAdded={converted}
             />
           </TaskSheet>

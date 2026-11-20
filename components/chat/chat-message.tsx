@@ -226,7 +226,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
 
   function actAfterClose(run: () => void) {
     afterMenu.current = run;
-    setMenu(false);
+    closeMenu();
   }
 
   const row = useRef<HTMLDivElement>(null);

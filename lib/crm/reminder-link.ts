@@ -9,7 +9,12 @@ export function isReminderLink(value: unknown): value is string {
   return typeof value === "string" && value.length <= MAX_REMINDER_LINK && ORBIT_PATH.test(value);
 }
 
-export function reminderLinkMarkdown(link: string) {
+export function reminderOrbitPath(link: string) {
   const path = link.replace(/[()[\]<>"]/g, (char) => encodeURIComponent(char).replace(/[()]/g, (paren) => (paren === "(" ? "%28" : "%29")));
-  return orbitPath(path) ? orbitLink(REMINDER_LINK_LABEL, path) : null;
+  return orbitPath(path) ? path : null;
+}
+
+export function reminderLinkMarkdown(link: string) {
+  const path = reminderOrbitPath(link);
+  return path ? orbitLink(REMINDER_LINK_LABEL, path) : null;
 }

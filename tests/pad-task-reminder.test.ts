@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
+import { orbitLink, orbitPath } from "@/lib/chat/task-text";
+import { taskLinkOf } from "@/lib/reminders-card";
 import { descriptionParts } from "@/lib/task-doc-picks";
 import { CrmError } from "@/lib/crm/errors";
 import { addPadTask, REMINDER_NOT_REMOVED } from "@/lib/crm/pad-task";
@@ -49,32 +51,35 @@ describe("Turn into task", () => {
     await gone(mark, reminder.id);
   });
 
-  it("carries a reminder's link into the task description as a markdown link, and leaves other tasks alone", async () => {
+  it("saves a reminder's link as the task description the pad sends, and a retry after the reminder is gone replays that one task", async () => {
     const link = "/chat/6b77a718-65ec-4679-9420-bd40ecdc4ffb?thread=43d4e049-9fd7-4dee-80ac-dddbca518bad";
     const { reminder } = await createReminder(mark, { title: "Chat message from Lena", dueOn: "2030-03-06" }, { link });
-    await addPadTask(mark, { title: "Chat message from Lena", dueAt: "2030-03-06", remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: reminder.id });
-    const description = async (title: string) => (await getAdminPool().query<{ description: string | null }>("select description from crm.tasks where title = $1", [title])).rows[0].description;
-    assert.equal(await description("Chat message from Lena"), `[Open message](${link})`);
+    const chip = taskLinkOf(reminder);
+    assert.deepEqual(chip, { label: "Open message", href: link });
+    const description = orbitLink(chip!.label, chip!.href);
+    const key = randomUUID();
+    const input = { title: "Chat message from Lena", dueAt: "2030-03-06", remindMinutes: null, clickupListId: null, key, description, fromReminderId: reminder.id };
+    assert.deepEqual(await addPadTask(mark, input), { ok: true });
     await gone(mark, reminder.id);
+    assert.deepEqual(await addPadTask(mark, input), { ok: true });
+    const rows = (await getAdminPool().query<{ description: string | null }>("select description from crm.tasks where title = 'Chat message from Lena'")).rows;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].description, `[Open message](${link})`);
+    const parts = descriptionParts(rows[0].description!, []);
+    assert.equal(parts.some((part) => part.kind === "link" && "href" in part && part.href === link), true);
+  });
 
+  it("offers no link chip for a reminder without one, and encodes awkward characters so the chip always saves", async () => {
     const plain = await createReminder(mark, { title: "Plain reminder", dueOn: "2030-03-06" });
+    assert.equal(taskLinkOf(plain.reminder), null);
     await addPadTask(mark, { title: "Plain reminder", dueAt: "2030-03-06", remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: plain.reminder.id });
-    assert.equal(await description("Plain reminder"), null);
-    await addPadTask(mark, { title: "No reminder at all", dueAt: "2030-03-06", remindMinutes: null, clickupListId: null, key: randomUUID() });
-    assert.equal(await description("No reminder at all"), null);
-
-    const awkward = await createReminder(mark, { title: "Awkward link" }, { link: "/chat/x?a=(b)" });
-    await addPadTask(mark, { title: "Awkward link", dueAt: null, remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: awkward.reminder.id });
-    const awkwardText = await description("Awkward link");
-    assert.equal(awkwardText, "[Open message](/chat/x?a=%28b%29)");
-    const parts = descriptionParts(awkwardText!, []);
-    assert.deepEqual(parts.filter((part) => part.kind === "link").map((part) => ("href" in part ? [part.label, part.href] : null)), [["Open message", "/chat/x?a=%28b%29"]]);
-    const plainLink = descriptionParts(`[Open message](${link})`, []);
-    assert.equal(plainLink.some((part) => part.kind === "link" && "href" in part && part.href === link), true);
-
-    const theirs = await createReminder(sam, { title: "Sam's link" }, { link: "/chat/secret?message=1" });
-    await addPadTask(mark, { title: "Not Sam's", dueAt: null, remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: theirs.reminder.id });
-    assert.equal(await description("Not Sam's"), null);
+    const saved = await getAdminPool().query<{ description: string | null }>("select description from crm.tasks where title = 'Plain reminder'");
+    assert.equal(saved.rows[0].description, null);
+    const awkward = await createReminder(mark, { title: "Awkward link" }, { link: '/chat/x?a=(b)[c]"d"' });
+    const chip = taskLinkOf(awkward.reminder);
+    assert.ok(chip);
+    assert.equal(orbitPath(chip.href), true);
+    assert.doesNotThrow(() => orbitLink(chip.label, chip.href));
   });
 
   it("keeps the task when the reminder can't be removed, and Try again with the same key only removes it", async () => {

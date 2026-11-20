@@ -1,8 +1,7 @@
 import { createTaskWithClickUp } from "@/lib/crm/clickup";
 import { isUuid } from "@/lib/crm/mutate";
 import { isReminderMinutes } from "@/lib/crm/reminder-options";
-import { isReminderLink, reminderLinkMarkdown } from "@/lib/crm/reminder-link";
-import { deleteReminder, getReminder } from "@/lib/crm/reminders";
+import { deleteReminder } from "@/lib/crm/reminders";
 import { isTaskDuration } from "@/lib/crm/task-time";
 import type { UserActor } from "@/lib/crm/types";
 import { REMINDER_NOT_REMOVED } from "@/lib/reminders-card";
@@ -40,21 +39,10 @@ function padLinks(input: { companyId?: unknown; contactId?: unknown; opportunity
   ) as { companyId?: string | null; contactId?: string | null; opportunityId?: string | null };
 }
 
-async function linkOf(user: UserActor, reminderId: string) {
-  try {
-    const { reminder } = await getReminder(user, reminderId);
-    return reminder.link && isReminderLink(reminder.link) ? reminder.link : null;
-  } catch {
-    return null;
-  }
-}
-
 export async function addPadTask(user: UserActor, input: PadTaskInput, options: { removeReminder?: typeof deleteReminder } = {}): Promise<PadTaskResult> {
   const due = typeof input.dueAt === "string" && input.dueAt ? input.dueAt : null;
   const timed = Boolean(due && due.includes("T"));
   const reminderId = typeof input.fromReminderId === "string" && input.fromReminderId ? input.fromReminderId : null;
-  const link = reminderId ? await linkOf(user, reminderId) : null;
-  const description = link ? reminderLinkMarkdown(link) : null;
   const created = await createTaskWithClickUp(
     user,
     {
@@ -68,7 +56,6 @@ export async function addPadTask(user: UserActor, input: PadTaskInput, options: 
       ...(typeof input.description === "string" && input.description.trim() ? { description: input.description } : {}),
       ...(Array.isArray(input.docIds) && input.docIds.length > 0 ? { docIds: input.docIds } : {}),
       priority: "normal",
-      ...(description ? { description } : {}),
       ...(input.repeat && typeof input.repeat === "object" ? { repeat: input.repeat } : {}),
     },
     input.clickupListId || null,
