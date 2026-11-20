@@ -559,6 +559,7 @@ export async function listConversations(actor: UserActor): Promise<ChatSidebar> 
        where t.user_id = $1 and r.last_reply_at > t.last_read_at`,
       [actor.userId],
     );
+    const scheduled = await db.query<{ count: number }>("select count(*)::integer as count from crm.chat_scheduled where user_id = $1", [actor.userId]);
     const archived = await db.query<{ id: string; name: string; workspace_name: string | null }>(
       `select c.id, c.name, w.name as workspace_name from crm.chat_conversations c
        join crm.chat_members me on me.conversation_id = c.id and me.user_id = $1
@@ -574,6 +575,7 @@ export async function listConversations(actor: UserActor): Promise<ChatSidebar> 
       archived: archived.rows.map((row) => ({ id: row.id, name: row.name, workspaceName: row.workspace_name })),
       threads: threadCounts,
       unreadConversations: conversations.filter((conversation) => conversation.unread > 0).length,
+      scheduled: scheduled.rows[0]?.count ?? 0,
       mentioned: threadCounts.mentions > 0 || conversations.some((conversation) => conversation.mentions > 0 || (isDirect(conversation.kind) && conversation.unread > 0)),
     };
   });
@@ -1288,6 +1290,35 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
   return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
+async function assertReachable(db: Db, conversation: ConversationRow) {
+  if (conversation.kind !== "dm") return;
+  const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
+  if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
+}
+
+export async function checkScheduledPost(
+  actor: UserActor,
+  input: { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; files: number },
+): Promise<{ conversationId: string; parentId: string | null; body: string; format: ChatFormat }> {
+  const conversationId = checkId(input.conversationId, "conversation");
+  const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
+  const body = cleanBody(input.body, { allowEmpty: input.files > 0 });
+  const format = cleanFormat(input.format, "markdown");
+  const everyone = usesRoomMention(body, format);
+  memberMentions(body, format, everyone);
+  await withActor(actor, async (db) => {
+    const conversation = writable(await readConversation(db, actor, conversationId));
+    if (conversation.kind !== "room" && conversation.kind !== "dm") throw new CrmError("invalid_input", "Only rooms and direct messages can send later.", 400);
+    if (parentId) {
+      const root = await db.query("select 1 from crm.chat_messages where id = $1 and conversation_id = $2 and parent_id is null and kind = 'message' and deleted_at is null", [parentId, conversationId]);
+      if ((root.rowCount ?? 0) === 0) throw new CrmError("conflict", "The thread was deleted.", 409);
+    }
+    await assertReachable(db, conversation);
+    await checkRoomMention(db, conversation, parentId, body, format, true);
+  });
+  return { conversationId, parentId, body, format };
+}
+
 export async function postMessage(
   actor: UserActor,
   input: PostInput,
@@ -1339,13 +1370,7 @@ export async function postMessage(
       writable(conversation);
       await checkRoomMention(db, conversation, parentId, body, format, roomMention);
       const tagged = await tagFromDiscussion(db, actor, conversation, peopleMentioned(mentions));
-      if (conversation.kind === "dm") {
-        const reachable = conversation.dm_user_id ? await db.query("select 1 from crm.profiles where id = $1", [conversation.dm_user_id]) : null;
-        if ((reachable?.rowCount ?? 0) === 0) throw new CrmError("forbidden", "You no longer share a workspace with this person, so they can't get new messages.", 403);
-      }
-      if (conversation.kind === "group_dm" && (conversation.people ?? []).length === 0) {
-        throw new CrmError("forbidden", "Everyone else has left this group, so no one can get new messages.", 403);
-      }
+      await assertReachable(db, conversation);
       const via = options.viaWorkflowId ?? null;
       const inserted = await db.query<{ id: string }>(
         `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions, attachment_ids${via ? ", via_workflow_id" : ""})

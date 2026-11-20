@@ -7,6 +7,7 @@ import { UploadQueue } from "@/components/chat/attachments";
 import { useChat } from "@/components/chat/chat-context";
 import ChatInput, { CHAT_INPUT, type ChatCaret, type ChatInputHandle, type LinkTarget } from "@/components/chat/chat-input";
 import EmojiPopover from "@/components/chat/emoji-popover";
+import SendLaterMenu from "@/components/chat/send-later";
 import { attachmentQueued, queuedAttachment, useUploads, type QueuedFile, type UploadTarget } from "@/components/chat/use-uploads";
 import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
@@ -217,6 +218,7 @@ export function ComposerBox({
   submitVerb = "send",
   actions,
   phoneAction,
+  phoneLater,
   phoneLead,
   attach,
   queue,
@@ -242,6 +244,7 @@ export function ComposerBox({
   submitVerb?: "send" | "save";
   actions: ReactNode;
   phoneAction?: ReactNode;
+  phoneLater?: ReactNode;
   phoneLead?: ReactNode;
   attach?: ReactNode;
   queue?: ReactNode;
@@ -510,7 +513,10 @@ export function ComposerBox({
           </div>
           {phoneAction ? (
             <>
-              <span className="contents md:hidden">{phoneAction}</span>
+              <span className="flex items-center gap-2 md:hidden">
+                {phoneLater}
+                {phoneAction}
+              </span>
               <span className="contents max-md:hidden">{actions}</span>
             </>
           ) : (
@@ -543,6 +549,7 @@ export default function Composer({
   uploadTo,
   fileRef,
   onSend,
+  onSchedule,
   onEditLast,
   onEscape,
   onTyping,
@@ -563,6 +570,7 @@ export default function Composer({
   uploadTo?: UploadTarget;
   fileRef?: MutableRefObject<((files: File[]) => void) | null>;
   onSend: (text: string, mentions: Mention[], files: ChatAttachment[]) => Promise<string | null>;
+  onSchedule?: (text: string, mentions: Mention[], files: ChatAttachment[], sendAt: string) => Promise<string | null>;
   onEditLast?: () => boolean;
   onEscape?: () => void;
   onTyping?: (typing: boolean) => void;
@@ -574,6 +582,7 @@ export default function Composer({
   const [value, setValue] = useState("");
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
+  const [scheduleFailure, setScheduleFailure] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
   const uploads = useUploads(uploadTo);
@@ -624,6 +633,7 @@ export default function Composer({
     setValue(next);
     setMentions(kept);
     setFailure(null);
+    setScheduleFailure(null);
     writeDraft(key, { text: next, mentions: kept });
     onTyping?.(next.trim().length > 0);
   }
@@ -641,6 +651,32 @@ export default function Composer({
     void onSend(text, sent, files.map(queuedAttachment)).then((error) => {
       if (!error || !restoreOnFailure) return;
       setFailure(error);
+      setValue((current) => (current ? current : text));
+      setMentions((current) => (current.length ? current : sent));
+      uploads.restore(files);
+      window.requestAnimationFrame(() => input.current?.caretToEnd());
+    });
+  }
+
+  function schedule(sendAt: string) {
+    if (blocked || !onSchedule) return;
+    const text = value;
+    const sent = mentions;
+    const files: QueuedFile[] = uploads.take();
+    const body = messageBody(text, sent);
+    setValue("");
+    setMentions([]);
+    setFailure(null);
+    setScheduleFailure(null);
+    onTyping?.(false);
+    input.current?.focus();
+    void onSchedule(text, sent, files.map(queuedAttachment), sendAt).then((error) => {
+      if (!error) {
+        const stored = readDraft(key);
+        if (stored.text && messageBody(stored.text, stored.mentions) === body) writeDraft(key, { text: "", mentions: [] });
+        return;
+      }
+      setScheduleFailure(error);
       setValue((current) => (current ? current : text));
       setMentions((current) => (current.length ? current : sent));
       uploads.restore(files);
@@ -667,7 +703,7 @@ export default function Composer({
   }
 
   function sendButton(phone: boolean) {
-    return (
+    const control = (
       <Button
         variant="primary"
         size="icon"
@@ -676,10 +712,17 @@ export default function Composer({
         disabled={blocked}
         onMouseDown={(event) => event.preventDefault()}
         onClick={send}
-        className={cn("hit", phone ? "size-[38px] rounded-full" : "w-[34px] pointer-coarse:size-11")}
+        className={cn("hit", phone ? "size-[38px] rounded-full" : "w-[34px] pointer-coarse:size-11", !phone && onSchedule && "rounded-r-none pointer-coarse:rounded-lg")}
       >
         <ArrowUpIcon aria-hidden className="size-3.5" />
       </Button>
+    );
+    if (phone || !onSchedule) return control;
+    return (
+      <span className="flex items-center">
+        {control}
+        <SendLaterMenu disabled={blocked} onPick={schedule} />
+      </span>
     );
   }
 
@@ -699,6 +742,7 @@ export default function Composer({
         historyKey={key}
         actions={sendButton(false)}
         phoneAction={sendButton(true)}
+        phoneLater={onSchedule ? <SendLaterMenu disabled={blocked} phone onPick={schedule} /> : undefined}
         phoneLead={attachButton(true)}
         attach={attachButton(false)}
         queue={<UploadQueue files={uploads.files} onRemove={uploads.remove} onRetry={uploads.retry} />}
@@ -741,6 +785,11 @@ export default function Composer({
       {over && (
         <p role="status" className="caption-style text-danger px-1">
           Messages can be up to {CHAT_BODY_MAX.toLocaleString("en-GB")} characters. This one is {length.toLocaleString("en-GB")}.
+        </p>
+      )}
+      {scheduleFailure && (
+        <p role="alert" className="caption-style text-danger px-1">
+          {scheduleFailure}
         </p>
       )}
       {failure && !hideFailure && (

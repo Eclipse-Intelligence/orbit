@@ -6,6 +6,7 @@ import Tag from "@/components/_ui/tag";
 import { setRoomArchivedAction } from "@/app/(crm)/chat/actions";
 import { AvatarStack, ChatAvatar, GroupAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar, setChatViewing, useChatEvents } from "@/components/chat/chat-live";
+import ScheduledNote from "@/components/chat/scheduled-note";
 import { FileDrop } from "@/components/chat/attachments";
 import FindBar from "@/components/chat/find-bar";
 import Composer from "@/components/chat/composer";
@@ -325,6 +326,7 @@ export default function RoomView({
           <ArchivedBanner conversationId={conversationId} canUnarchive={room?.canArchive ?? false} />
         ) : (
           <>
+            <ScheduledNote conversationId={conversationId} parentId={null} />
             <TypingLine names={typing.names} />
             <Composer
               id={`chat-composer-${conversationId}`}
@@ -339,6 +341,7 @@ export default function RoomView({
               uploadTo={uploadTo}
               fileRef={addFiles}
               onSend={(text, mentions, attachments) => send({ conversationId, parentId: null, text, mentions, attachments })}
+              onSchedule={chat.schedule ? (text, mentions, attachments, sendAt) => chat.schedule!.schedule({ conversationId, parentId: null, text, mentions, attachments, sendAt }) : undefined}
               onEditLast={() => {
                 const own = lastOwnMessage(messages, viewer.id);
                 if (!own) return false;

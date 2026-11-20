@@ -348,6 +348,12 @@ export async function handleCronRequest(
     console.error("Chat file sweep failed", error);
   }
   try {
+    const { sweepScheduled } = await import("@/lib/crm/chat-scheduled");
+    await sweepScheduled();
+  } catch (error) {
+    console.error("Scheduled message sweep failed", error);
+  }
+  try {
     const { sweepChatAttachments } = await import("@/lib/crm/chat-attachments");
     await sweepChatAttachments();
   } catch (error) {

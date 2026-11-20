@@ -262,6 +262,7 @@ describe("chat sidebar badge", () => {
     archived: [],
     threads: { unread: 0, mentions: 0 },
     unreadConversations: 1,
+    scheduled: 0,
     mentioned: true,
   };
 
@@ -523,6 +524,7 @@ describe("chat notify and unread state", () => {
       archived: [],
       threads: { unread: 1, mentions: 1 },
       unreadConversations: 2,
+      scheduled: 0,
       mentioned: true,
     };
     const muted = sidebarNotify(sidebar, ROOM, { notify: "mute", starred: true });

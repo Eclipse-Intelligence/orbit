@@ -8,6 +8,7 @@ import ChatMessageRow from "@/components/chat/chat-message";
 import Composer from "@/components/chat/composer";
 import { useOrbitActions } from "@/components/chat/orbit-actions";
 import MessageList from "@/components/chat/message-list";
+import ScheduledNote from "@/components/chat/scheduled-note";
 import { PhoneBack, useVisible } from "@/components/chat/room-view";
 import { isLocal, lastOwnMessage, newestServerId, type ThreadState } from "@/lib/chat/timeline";
 import { isDirect, type ChatConversation, type ChatMessage } from "@/lib/chat/types";
@@ -151,27 +152,35 @@ export default function ThreadPanel({
         {archived ? (
           <p className="bg-surface-raised ui-style text-soft rounded-[10px] px-3 py-2.5">This room is archived.</p>
         ) : (
-          <Composer
-            id={`chat-reply-${rootId}`}
-            conversationId={root?.conversationId ?? where?.id ?? ""}
-            parentId={rootId}
-            placeholder="Reply…"
-            label="Reply in thread"
-            sendLabel="Send reply"
-            scope="thread"
-            autoFocus
-            onEscape={onClose}
-            disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
-            uploadTo={uploadTo}
-            fileRef={addFiles}
-            onSend={(text, mentions, attachments) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions, attachments }) : Promise.resolve(null))}
-            onEditLast={() => {
-              const own = lastOwnMessage(messages, viewer.id);
-              if (!own) return false;
-              setEditing({ id: own.id, pane: "thread" });
-              return true;
-            }}
-          />
+          <>
+            {root && <ScheduledNote conversationId={root.conversationId} parentId={rootId} />}
+            <Composer
+              id={`chat-reply-${rootId}`}
+              conversationId={root?.conversationId ?? where?.id ?? ""}
+              parentId={rootId}
+              placeholder="Reply…"
+              label="Reply in thread"
+              sendLabel="Send reply"
+              scope="thread"
+              autoFocus
+              onEscape={onClose}
+              disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
+              uploadTo={uploadTo}
+              fileRef={addFiles}
+              onSend={(text, mentions, attachments) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions, attachments }) : Promise.resolve(null))}
+              onSchedule={
+                chat.schedule && root
+                  ? (text, mentions, attachments, sendAt) => chat.schedule!.schedule({ conversationId: root.conversationId, parentId: rootId, text, mentions, attachments, sendAt })
+                  : undefined
+              }
+              onEditLast={() => {
+                const own = lastOwnMessage(messages, viewer.id);
+                if (!own) return false;
+                setEditing({ id: own.id, pane: "thread" });
+                return true;
+              }}
+            />
+          </>
         )}
       </div>
     </FileDrop>

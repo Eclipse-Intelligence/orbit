@@ -5,6 +5,7 @@ import { ParticipantAvatar, type AvatarSize } from "@/components/docs/presence";
 import type { ChatLocation } from "@/lib/chat/routes";
 import type { EmojiPrefs } from "@/components/chat/reactions";
 import type { ChatTimelineActions } from "@/components/chat/use-chat-actions";
+import type { ChatScheduleActions } from "@/components/chat/use-scheduled";
 import type { ChatSavedActions } from "@/components/chat/use-saved";
 import { chatLabel, type ChatAttachment, type ChatConversation, type ChatMessage, type ChatPerson } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
@@ -37,6 +38,7 @@ export type ChatContextValue = ChatTimelineActions & {
   memberNames: Map<string, string>;
   emoji: EmojiPrefs;
   saved: ChatSavedActions;
+  schedule?: ChatScheduleActions;
   discussion?: boolean;
 };
 

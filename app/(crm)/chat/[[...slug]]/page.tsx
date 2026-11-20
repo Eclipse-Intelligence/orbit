@@ -41,7 +41,7 @@ export default async function ChatPage({
   const view: ChatView = segments.kind === "search" ? { kind: "search", query: readSearchQuery(new URLSearchParams(Object.entries(search).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])))) } : segments;
   const threadParam = single(search.thread);
   const messageParam = single(search.message);
-  const thread = view.kind !== "home" && view.kind !== "search" && isChatId(threadParam) ? threadParam.toLowerCase() : null;
+  const thread = view.kind !== "home" && view.kind !== "search" && view.kind !== "scheduled" && isChatId(threadParam) ? threadParam.toLowerCase() : null;
   const wanted = isChatId(messageParam) ? messageParam.toLowerCase() : null;
   const message = view.kind === "room" && !thread ? wanted : null;
   const threadFocus = thread ? wanted : null;

@@ -2,7 +2,7 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import type { ChatFormat } from "@/lib/chat/markdown";
-import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatNotifyInput, ChatPost, ChatReacted, ChatRemindWhen, ChatResult, ChatSavedState, ChatUpload } from "@/lib/chat/types";
+import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatNotifyInput, ChatPost, ChatReacted, ChatRemindWhen, ChatResult, ChatSavedState, ChatScheduledChange, ChatScheduledInput, ChatScheduledItem, ChatUpload } from "@/lib/chat/types";
 import {
   addRoomMembers,
   createRoom,
@@ -23,6 +23,7 @@ import {
 } from "@/lib/crm/chat";
 import { discardChatUploads, prepareChatUpload } from "@/lib/crm/chat-attachments";
 import { remindAboutMessage, setMessageSaved } from "@/lib/crm/chat-saved";
+import { cancelScheduled, scheduleMessage, sendScheduledNow, updateScheduled } from "@/lib/crm/chat-scheduled";
 import { createHook, deleteHook, listHooks, rotateHookSecret, setHookPaused } from "@/lib/crm/chat-hooks";
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -156,4 +157,20 @@ export async function rotateHookSecretAction(hookId: string): Promise<ChatResult
 
 export async function deleteHookAction(hookId: string): Promise<ChatResult<{ deleted: true }>> {
   return run("Couldn't delete the webhook. Try again.", (actor) => deleteHook(actor, hookId));
+}
+
+export async function scheduleMessageAction(input: ChatScheduledInput): Promise<ChatResult<{ item: ChatScheduledItem; duplicate: boolean }>> {
+  return run("Couldn't schedule the message. Try again.", (actor) => scheduleMessage(actor, input));
+}
+
+export async function updateScheduledAction(id: string, change: ChatScheduledChange): Promise<ChatResult<{ item: ChatScheduledItem }>> {
+  return run("Couldn't save the message. Try again.", (actor) => updateScheduled(actor, id, change));
+}
+
+export async function cancelScheduledAction(id: string): Promise<ChatResult<{ cancelled: boolean }>> {
+  return run("Couldn't cancel the message. Try again.", (actor) => cancelScheduled(actor, id));
+}
+
+export async function sendScheduledNowAction(id: string): Promise<ChatResult<{ post: ChatPost | null }>> {
+  return run("Couldn't send. Try again.", (actor) => sendScheduledNow(actor, id));
 }

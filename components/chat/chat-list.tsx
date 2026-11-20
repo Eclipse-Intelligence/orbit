@@ -17,6 +17,7 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import BellOffIcon from "@/public/assets/images/chat/bell-off.svg";
 import ThreadsIcon from "@/public/assets/images/chat/threads.svg";
 import UnreadsIcon from "@/public/assets/images/chat/unreads.svg";
+import ClockIcon from "@/public/assets/images/chat/clock.svg";
 import BookmarkIcon from "@/public/assets/images/chat/bookmark.svg";
 
 const LONG_PRESS_MS = 450;
@@ -24,7 +25,8 @@ const MOVE_SLOP = 10;
 
 export function listViews(sidebar: ChatSidebar | null): ChatView[] {
   const { starred, rooms, dms } = orderedConversations(sidebar);
-  return [{ kind: "threads" }, { kind: "unreads" }, { kind: "saved" }, ...[...starred, ...rooms, ...dms].map((conversation) => ({ kind: "room" as const, id: conversation.id }))];
+  const scheduled: ChatView[] = (sidebar?.scheduled ?? 0) > 0 ? [{ kind: "scheduled" }] : [];
+  return [{ kind: "threads" }, { kind: "unreads" }, { kind: "saved" }, ...scheduled, ...[...starred, ...rooms, ...dms].map((conversation) => ({ kind: "room" as const, id: conversation.id }))];
 }
 
 function Badge({ count, accent, label, className }: { count: number; accent: boolean; label: string; className?: string }) {
@@ -270,6 +272,7 @@ export default function ChatList({
   const { starred, rooms, dms } = orderedConversations(sidebar);
   const threads = sidebar?.threads ?? { unread: 0, mentions: 0 };
   const unreadConversations = sidebar?.unreadConversations ?? 0;
+  const scheduledCount = sidebar?.scheduled ?? 0;
   const activeId = view.kind === "room" ? view.id : null;
 
   return (
@@ -293,6 +296,13 @@ export default function ChatList({
           <BookmarkIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate">Saved</span>
         </Item>
+        {(scheduledCount > 0 || view.kind === "scheduled") && (
+          <Item view={{ kind: "scheduled" }} active={view.kind === "scheduled"} unread={false}>
+            <ClockIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">Scheduled</span>
+            <Badge count={scheduledCount} accent={false} label={scheduledCount === 1 ? "scheduled message" : "scheduled messages"} />
+          </Item>
+        )}
       </ul>
       {error && !sidebar && (
         <p role="alert" className="caption-style text-danger px-2 pt-3">
