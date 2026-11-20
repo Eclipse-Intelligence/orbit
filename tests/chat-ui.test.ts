@@ -8,10 +8,11 @@ import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseCha
 import {
   appendCards,
   chatReducer,
+  dropCards,
   loadsLatestFirst,
   needsCatchUp,
   newerCursor,
-  refreshCards,
+  replaceCards,
   EMPTY_CHAT,
   lastOwnMessage,
   localMessage,
@@ -394,23 +395,59 @@ describe("chat review fixes", () => {
     }
   });
 
-  it("merges refreshed thread cards without dropping later pages", () => {
-    const card = (id: string, unread: number) => ({ conversation: { id: ROOM, kind: "room" as const, name: "sales", people: [] }, root: message({ id, at: "2026-11-11T08:00:00.000Z" }), latest: [], earlier: 0, unread, mentions: 0, lastReadAt: "" });
+  it("replaces thread cards on a reload, merges them only on Show more and drops cards that are gone", () => {
+    const card = (id: string, unread: number, conversationId = ROOM) => ({ conversation: { id: conversationId, kind: "room" as const, name: "sales", people: [] }, root: message({ id, at: "2026-11-11T08:00:00.000Z" }), latest: [], earlier: 0, unread, mentions: 0, lastReadAt: "" });
+    const other = "55555555-5555-4555-8555-555555555555";
     const a = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000a", 0);
     const b = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000b", 0);
-    const c = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000c", 0);
+    const c = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000c", 0, other);
     assert.deepEqual(
-      refreshCards([a, b, c], [{ ...c, unread: 1 }, a]).map((item) => [item.root.id, item.unread]),
+      replaceCards([a, b, c], [{ ...c, unread: 1 }, a]).map((item) => [item.root.id, item.unread]),
       [
         [c.root.id, 1],
         [a.root.id, 0],
-        [b.root.id, 0],
       ],
     );
+    assert.deepEqual(replaceCards([a, b], []), []);
     assert.deepEqual(
       appendCards([a], [a, b]).map((item) => item.root.id),
       [a.root.id, b.root.id],
     );
+    assert.deepEqual(
+      dropCards([a, b, c], { conversationId: ROOM }).map((item) => item.root.id),
+      [c.root.id],
+    );
+    assert.deepEqual(
+      dropCards([a, b, c], { rootId: b.root.id }).map((item) => item.root.id),
+      [a.root.id, c.root.id],
+    );
+    const unchanged = [a, b];
+    assert.equal(dropCards(unchanged, { conversationId: other }), unchanged);
+    assert.equal(dropCards(unchanged, {}), unchanged);
+  });
+
+  it("ignores an edit that arrives after the message was deleted", () => {
+    const root = message({ at: "2026-11-11T08:00:00.000Z", replyCount: 1, body: "Secret" });
+    const lone = message({ at: "2026-11-11T08:05:00.000Z", body: "Gone" });
+    const reply = message({ at: "2026-11-11T08:10:00.000Z", parentId: root.id, body: "Reply" });
+    let state = chatReducer(loaded([root, lone]), {
+      type: "thread",
+      thread: { conversation: null as never, root, replies: [reply], hasOlder: false, hasNewer: false, following: true, lastReadAt: null },
+      mode: "replace",
+    });
+    state = chatReducer(state, { type: "deleted", conversationId: ROOM, messageId: root.id, parentId: null, root: null });
+    state = chatReducer(state, { type: "deleted", conversationId: ROOM, messageId: lone.id, parentId: null, root: null });
+    state = chatReducer(state, { type: "deleted", conversationId: ROOM, messageId: reply.id, parentId: root.id, root: { id: root.id, replyCount: 0, lastReplyAt: null, replyAuthors: [] } });
+    for (const edited of [root, lone, reply]) state = chatReducer(state, { type: "edited", message: { ...edited, body: "Edited after delete", editedAt: "2026-11-11T08:20:00.000Z" } });
+    assert.equal(state.timelines[ROOM].messages.length, 1);
+    assert.equal(state.timelines[ROOM].messages[0].body, "");
+    assert.ok(state.timelines[ROOM].messages[0].deletedAt);
+    assert.equal(state.threads[root.id].root?.body, "");
+    assert.ok(state.threads[root.id].root?.deletedAt);
+    assert.deepEqual(state.threads[root.id].timeline.messages, []);
+    const live = message({ at: "2026-11-11T09:00:00.000Z", body: "Before" });
+    const edited = chatReducer(loaded([live]), { type: "edited", message: { ...live, body: "After", editedAt: "2026-11-11T09:01:00.000Z" } });
+    assert.equal(edited.timelines[ROOM].messages[0].body, "After");
   });
 
   it("catches up from before your own send when it lands without a live connection", () => {

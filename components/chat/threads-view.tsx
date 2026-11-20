@@ -10,7 +10,7 @@ import Composer from "@/components/chat/composer";
 import { PhoneBack } from "@/components/chat/room-view";
 import { chatApi } from "@/lib/chat/client";
 import { shortWhen } from "@/lib/chat/format";
-import { appendCards, applyPreviews, applyReactions, refreshCards } from "@/lib/chat/timeline";
+import { appendCards, applyPreviews, applyReactions, dropCards, replaceCards } from "@/lib/chat/timeline";
 import { isDirect, type ChatMessage, type ChatThreadCard, type ChatThreads } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
@@ -112,8 +112,8 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
     chatApi
       .threads()
       .then((page) => {
-        receive(page.threads, refreshCards);
-        setNext((current) => current ?? page.next);
+        receive(page.threads, replaceCards);
+        setNext(page.next);
         setError(null);
       })
       .catch((failure: Error) => setError(failure.message));
@@ -136,6 +136,8 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
       setCards((current) => current?.map((card) => ({ ...card, root: apply([card.root])[0], latest: apply(card.latest) })) ?? current);
       return;
     }
+    if (event.type === "removed") setCards((current) => (current ? dropCards(current, { conversationId: event.conversationId }) : current));
+    if (event.type === "delete" && !event.parentId) setCards((current) => (current ? dropCards(current, { rootId: event.messageId }) : current));
     if (event.type === "message" && !event.message.parentId) return;
     if (event.type === "read" || event.type === "scheduled") return;
     window.clearTimeout(settle.current);

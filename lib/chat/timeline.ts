@@ -205,6 +205,11 @@ export function setMyReaction(list: ChatMessage[], messageId: string, emoji: str
   });
 }
 
+function editedMessage(list: ChatMessage[], message: ChatMessage, gone: string[]) {
+  if (gone.includes(message.id) || list.some((item) => item.id === message.id && item.deletedAt)) return list;
+  return replaceMessage(list, keepReactions(list, message));
+}
+
 function keepReactions(list: ChatMessage[], message: ChatMessage) {
   const stored = list.find((item) => item.id === message.id);
   return stored ? { ...message, reactions: stored.reactions, reactionsAt: stored.reactionsAt } : message;
@@ -401,17 +406,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "edited": {
       const { message } = action;
       let next = updateTimeline(state, message.conversationId, (timeline) => {
-        const messages = replaceMessage(timeline.messages, keepReactions(timeline.messages, message));
+        const messages = editedMessage(timeline.messages, message, timeline.gone);
         return messages === timeline.messages ? timeline : { ...timeline, messages };
       });
       if (message.parentId) {
         next = updateThread(next, message.parentId, (thread) => {
-          const messages = replaceMessage(thread.timeline.messages, keepReactions(thread.timeline.messages, message));
+          const messages = editedMessage(thread.timeline.messages, message, thread.timeline.gone);
           return messages === thread.timeline.messages ? thread : { ...thread, timeline: { ...thread.timeline, messages } };
         });
       } else {
         next = updateThread(next, message.id, (thread) =>
-          thread.root
+          thread.root && !thread.root.deletedAt
             ? { ...thread, root: { ...keepReactions([thread.root], message), replyCount: thread.root.replyCount, replyAuthors: thread.root.replyAuthors, lastReplyAt: thread.root.lastReplyAt } }
             : thread,
         );
@@ -555,9 +560,13 @@ export function appendCards(current: ChatThreadCard[], incoming: ChatThreadCard[
   return [...current, ...incoming.filter((card) => !seen.has(card.root.id))];
 }
 
-export function refreshCards(current: ChatThreadCard[], fresh: ChatThreadCard[]) {
-  const updated = new Set(fresh.map((card) => card.root.id));
-  return [...fresh, ...current.filter((card) => !updated.has(card.root.id))];
+export function replaceCards(_current: ChatThreadCard[], fresh: ChatThreadCard[]) {
+  return fresh;
+}
+
+export function dropCards(current: ChatThreadCard[], gone: { conversationId?: string; rootId?: string }) {
+  const kept = current.filter((card) => card.conversation.id !== gone.conversationId && card.root.id !== gone.rootId);
+  return kept.length === current.length ? current : kept;
 }
 
 export function sidebarBadge(sidebar: ChatSidebar | null) {
