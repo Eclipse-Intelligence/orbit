@@ -389,6 +389,7 @@ function workingState(all: MessageRow[], conversation: ConversationRow, job: Job
   const rows = all.filter((row) => row.steering !== "waiting");
   const updatedAt = conversation.updated_at;
   if (job) {
+    if (conversation.stopped_at && new Date(conversation.stopped_at).getTime() >= new Date(job.created_at).getTime()) return null;
     const done = new Set(job.events.filter((event) => event.status === "done").map((event) => event.id));
     const running = [...job.events].reverse().find((event) => event.status === "running" && !done.has(event.id));
     return { where: "mac", steps: done.size, current: running?.label ?? null, since: new Date(job.claimed_at ?? job.created_at).toISOString() };
@@ -1151,7 +1152,7 @@ export async function stopConversation(actor: UserActor, id: string) {
     await readConversation(db, actor, id);
     await db.query("update crm.assistant_conversations set stopped_at = now() where id = $1", [id]);
     await db.query(
-      "update crm.ai_companion_jobs set status = 'cancelled', finished_at = now() where conversation_id = $1 and agent_mail_id is not null and status in ('queued', 'running')",
+      "update crm.ai_companion_jobs set status = 'cancelled', finished_at = now() where conversation_id = $1 and status in ('queued', 'running') and finished_at is null",
       [id],
     );
     await moveWaiting(db, id, null);

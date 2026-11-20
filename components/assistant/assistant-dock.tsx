@@ -1125,6 +1125,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
     abortStreams();
     recovering.current += 1;
     waiting.current = false;
+    setWorking(null);
     setNotice(null);
     const queued = shownMessages.current.filter((message) => message.waiting && message.id.startsWith("local-"));
     putBack(queued.flatMap((message) => unsent.current.get(message.id) ?? []));
@@ -1549,7 +1550,7 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
               </button>
               <AttachButton compact id="assistant-files" onFiles={(picked) => void files.add(picked)} />
               <span className="flex-1" />
-              {busy && (
+              {(busy || Boolean(working)) && (
                 <Button variant="secondary" size="icon" type="button" aria-label="Stop" className="shrink-0" onClick={stopTurn}>
                   <StopIcon aria-hidden className="size-3.5" />
                 </Button>
