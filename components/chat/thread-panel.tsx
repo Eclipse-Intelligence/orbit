@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Button from "@/components/_ui/button";
+import { FileDrop } from "@/components/chat/attachments";
 import { roomLabel, useChat } from "@/components/chat/chat-context";
 import ChatMessageRow from "@/components/chat/chat-message";
 import Composer from "@/components/chat/composer";
@@ -43,6 +44,9 @@ export default function ThreadPanel({
   const place = where ? (where.kind === "dm" ? where.name : roomLabel(where)) : "";
   const backLabel = where ? (where.kind === "dm" ? where.name : `# ${where.name}`) : "Chat";
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
+  const addFiles = useRef<((files: File[]) => void) | null>(null);
+  const target = root?.conversationId ?? where?.id ?? null;
+  const uploadTo = useCallback(() => Promise.resolve({ id: target, error: target ? null : "Couldn't upload. Try again." }), [target]);
   if (ready && !divider.ready) setDivider({ ready: true, id: firstUnreadReply(messages, timeline?.lastReadAt ?? null, viewer.id) });
 
   useEffect(() => {
@@ -69,7 +73,14 @@ export default function ThreadPanel({
   ) : null;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" role="region" aria-labelledby={`thread-${rootId}`}>
+    <FileDrop
+      label="Drop to add to the thread"
+      disabled={!root || archived}
+      onFiles={(files) => addFiles.current?.(files)}
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      role="region"
+      labelledBy={`thread-${rootId}`}
+    >
       <header className="flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-4 max-md:h-auto max-md:px-3 max-md:py-2.5">
         <PhoneBack label={backLabel} onClick={onClose} />
         <div className="flex min-w-0 flex-col gap-1 max-md:flex-1 max-md:items-center">
@@ -135,7 +146,9 @@ export default function ThreadPanel({
             autoFocus
             onEscape={onClose}
             disabled={!root || Boolean(root.deletedAt && root.replyCount === 0)}
-            onSend={(text, mentions) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions }) : Promise.resolve(null))}
+            uploadTo={uploadTo}
+            fileRef={addFiles}
+            onSend={(text, mentions, attachments) => (root ? send({ conversationId: root.conversationId, parentId: rootId, text, mentions, attachments }) : Promise.resolve(null))}
             onEditLast={() => {
               const own = lastOwnMessage(messages, viewer.id);
               if (!own) return false;
@@ -145,6 +158,6 @@ export default function ThreadPanel({
           />
         )}
       </div>
-    </div>
+    </FileDrop>
   );
 }

@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import SectionHeader from "@/components/crm/section-header";
 import type { Viewer } from "@/components/crm/viewer";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
+import { useNoFileNavigation } from "@/components/chat/attachments";
 import { ChatContext, type ChatContextValue, type ChatEditing, type ChatWorkspace } from "@/components/chat/chat-context";
 import { NewMessageDialog, NewRoomDialog } from "@/components/chat/chat-dialogs";
 import ChatList, { listViews } from "@/components/chat/chat-list";
@@ -21,7 +22,7 @@ import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit"
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
 import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
 import { chatReducer, EMPTY_CHAT, loadsLatestFirst, localMessage, needsCatchUp, newestServerId, type ChatState } from "@/lib/chat/timeline";
-import type { ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
+import type { ChatAttachment, ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -128,6 +129,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
 
   useKeyboardFit(pane, detail && !threadId);
   useKeyboardFit(threadPane, Boolean(threadId));
+  useNoFileNavigation();
 
   useEffect(() => {
     if (!useCompaniesStore.getState().chat && initial.sidebar) useCompaniesStore.getState().setChat(initial.sidebar);
@@ -224,11 +226,13 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   );
 
   const send = useCallback(
-    (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; discardOnFailure?: boolean }) => {
+    (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; attachments?: ChatAttachment[]; discardOnFailure?: boolean }) => {
       const body = messageBody(input.text, input.mentions);
-      if (!body || !input.conversationId) return Promise.resolve(null);
+      const attachments = input.attachments ?? [];
+      if ((!body && attachments.length === 0) || !input.conversationId) return Promise.resolve(null);
       if (!input.parentId) setHeld((current) => (current?.conversationId === input.conversationId ? null : current));
       const message = localMessage({
+        attachments,
         clientKey: newClientKey(),
         conversationId: input.conversationId,
         parentId: input.parentId,

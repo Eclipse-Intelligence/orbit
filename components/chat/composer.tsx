@@ -1,21 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type FocusEvent, type KeyboardEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import Button from "@/components/_ui/button";
 import MentionInput from "@/components/assistant/mention-input";
+import { UploadQueue } from "@/components/chat/attachments";
 import { useChat } from "@/components/chat/chat-context";
 import EmojiPopover from "@/components/chat/emoji-popover";
+import { attachmentQueued, queuedAttachment, useUploads, type QueuedFile, type UploadTarget } from "@/components/chat/use-uploads";
 import { messageBody } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
-import { draftKey, formatBarDefault, pushRecentEmoji, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, type FormatScope } from "@/lib/chat/client";
+import { draftKey, formatBarDefault, pushRecentEmoji, readDraft, readFormatBar, subscribeFormatBar, writeDraft, writeFormatBar, writeQueuedFiles, type FormatScope } from "@/lib/chat/client";
 import { applyEdit, formatEdit, mentionEdit, shortcodeAt, type FormatAction, type TextEdit } from "@/lib/chat/compose";
+import { pasteAttaches } from "@/lib/chat/files";
 import { formatsAt, insideCodeFence, markdownMarks, type FormatKind } from "@/lib/chat/markdown";
-import { CHAT_BODY_MAX } from "@/lib/chat/types";
+import { CHAT_BODY_MAX, type ChatAttachment } from "@/lib/chat/types";
 import { liveMentions, type Mention } from "@/lib/mentions";
 import { physicalComboMatches, SHORTCUT_BY_ID } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 import ArrowUpIcon from "@/public/assets/images/assistant/arrow-up.svg";
 import AtIcon from "@/public/assets/images/chat/at.svg";
+import AttachIcon from "@/public/assets/images/chat/attach.svg";
 import BoldIcon from "@/public/assets/images/chat/bold.svg";
 import CodeBlockIcon from "@/public/assets/images/chat/code-block.svg";
 import CodeIcon from "@/public/assets/images/chat/code.svg";
@@ -154,6 +158,11 @@ export function ComposerBox({
   submitVerb = "send",
   actions,
   phoneAction,
+  phoneLead,
+  attach,
+  queue,
+  queued,
+  onPasteFiles,
   onChange,
   onSubmit,
   onKeyDown,
@@ -173,6 +182,11 @@ export function ComposerBox({
   submitVerb?: "send" | "save";
   actions: ReactNode;
   phoneAction?: ReactNode;
+  phoneLead?: ReactNode;
+  attach?: ReactNode;
+  queue?: ReactNode;
+  queued?: boolean;
+  onPasteFiles?: (files: File[]) => void;
   onChange: (value: string, mentions: Mention[]) => void;
   onSubmit: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
@@ -300,6 +314,14 @@ export function ComposerBox({
     }
   }
 
+  function paste(event: ClipboardEvent<HTMLDivElement>) {
+    if (!onPasteFiles) return;
+    const files = Array.from(event.clipboardData?.files ?? []);
+    if (!pasteAttaches(Array.from(event.clipboardData?.types ?? []), files.length)) return;
+    event.preventDefault();
+    onPasteFiles(files);
+  }
+
   function blur(event: FocusEvent<HTMLDivElement>) {
     if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
     setFocused(false);
@@ -313,6 +335,7 @@ export function ComposerBox({
       className="relative flex flex-col"
       onFocus={() => setFocused(true)}
       onBlur={blur}
+      onPaste={paste}
       onSelect={(event) => {
         if (!(event.target instanceof HTMLTextAreaElement)) return;
         setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
@@ -340,6 +363,7 @@ export function ComposerBox({
       )}
       <div
         data-chat-composer={composer ? "" : undefined}
+        data-chat-queued={queued ? "" : undefined}
         className={cn(
           "border-line-strong bg-secondary focus-within:border-ring flex flex-col rounded-lg border",
           oneRow && "max-md:rounded-[22px]",
@@ -351,7 +375,8 @@ export function ComposerBox({
       >
         {shown && <Toolbar onRun={run} active={active} className="border-line-subtle overflow-x-auto overscroll-contain border-b px-1.5 py-1 max-md:hidden" />}
         <div className="flex items-end gap-2">
-          <div className={cn("min-w-0 flex-1 px-3.5 pt-2.5 pb-1", oneRow && "max-md:py-[9px] max-md:pl-4")}>
+          {oneRow && phoneLead && <div className="shrink-0 p-[3px] pr-0 md:hidden">{phoneLead}</div>}
+          <div className={cn("min-w-0 flex-1 px-3.5 pt-2.5 pb-1", oneRow && "max-md:py-[9px] max-md:pl-4", oneRow && phoneLead && "max-md:pl-1")}>
             <MentionInput
               id={id}
               inputRef={inputRef}
@@ -384,15 +409,17 @@ export function ComposerBox({
             </div>
           )}
         </div>
+        {queue}
         <div className={cn("flex items-center gap-0.5 px-1.5 pt-0.5 pb-1.5", oneRow && "max-md:hidden")}>
-          <Button variant="ghost" size="none" aria-label="Mention someone" title="Mention someone" onMouseDown={(event) => event.preventDefault()} onClick={mention} className={iconButton}>
-            <AtIcon aria-hidden className="size-3.5" />
-          </Button>
+          {attach}
           <EmojiPopover open={emojiOpen} onOpenChange={setEmojiOpen} onPick={(emoji) => insertEmoji(emoji)} align="start" trigger>
             <Button variant="ghost" size="none" aria-label="Emoji" title="Emoji" onMouseDown={(event) => event.preventDefault()} className={cn(iconButton, "aria-expanded:bg-surface-active aria-expanded:text-foreground")}>
               <SmileIcon aria-hidden className="size-3.5" />
             </Button>
           </EmojiPopover>
+          <Button variant="ghost" size="none" aria-label="Mention someone" title="Mention someone" onMouseDown={(event) => event.preventDefault()} onClick={mention} className={iconButton}>
+            <AtIcon aria-hidden className="size-3.5" />
+          </Button>
           <span aria-hidden className="bg-line-strong mx-1 h-4 w-px shrink-0 max-md:hidden" />
           <span className="max-md:hidden">
             <FormatToggle shown={shown} onToggle={() => setShown(!shown)} />
@@ -429,6 +456,8 @@ export default function Composer({
   restoreOnFailure,
   hideFailure,
   fallbackDraft,
+  uploadTo,
+  fileRef,
   onSend,
   onEditLast,
   onEscape,
@@ -446,8 +475,10 @@ export default function Composer({
   disabled?: boolean;
   restoreOnFailure?: boolean;
   hideFailure?: boolean;
-  fallbackDraft?: { text: string; mentions: Mention[] } | null;
-  onSend: (text: string, mentions: Mention[]) => Promise<string | null>;
+  fallbackDraft?: { text: string; mentions: Mention[]; attachments?: ChatAttachment[] } | null;
+  uploadTo?: UploadTarget;
+  fileRef?: MutableRefObject<((files: File[]) => void) | null>;
+  onSend: (text: string, mentions: Mention[], files: ChatAttachment[]) => Promise<string | null>;
   onEditLast?: () => boolean;
   onEscape?: () => void;
   onTyping?: (typing: boolean) => void;
@@ -461,16 +492,43 @@ export default function Composer({
   const [failure, setFailure] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<string | null>(null);
   const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
+  const uploads = useUploads(uploadTo);
   if (hydrated && loaded !== key) {
     const stored = readDraft(key);
     const draft = !stored.text.trim() && fallbackDraft?.text.trim() ? fallbackDraft : stored;
     setLoaded(key);
     setValue(draft.text);
     setMentions(draft.mentions);
+    if (fallbackDraft?.attachments?.length) uploads.restore(fallbackDraft.attachments.map(attachmentQueued));
   }
+  const { reset: resetUploads, abandon: abandonUploads, add: addFiles, ready: readyUploads } = uploads;
+  const uploadKey = useRef(key);
+  const picker = useRef<HTMLInputElement>(null);
   const length = value.trim() ? messageBody(value, mentions).length : 0;
   const over = length > CHAT_BODY_MAX;
-  const blocked = !value.trim() || disabled || over;
+  const blocked = (!value.trim() && uploads.ready.length === 0) || disabled || over || uploads.uploading || uploads.failed;
+
+  useEffect(() => {
+    if (uploadKey.current === key) return;
+    uploadKey.current = key;
+    resetUploads();
+  }, [key, resetUploads]);
+
+  useEffect(() => () => abandonUploads(), [abandonUploads]);
+
+  useEffect(() => {
+    writeQueuedFiles(key, readyUploads.map(queuedAttachment));
+  }, [key, readyUploads]);
+
+  useEffect(() => () => writeQueuedFiles(key, []), [key]);
+
+  useEffect(() => {
+    if (!fileRef) return;
+    fileRef.current = disabled ? null : addFiles;
+    return () => {
+      fileRef.current = null;
+    };
+  }, [fileRef, addFiles, disabled]);
 
   useEffect(() => {
     if (!autoFocus || !window.matchMedia("(pointer: fine)").matches) return;
@@ -490,18 +548,38 @@ export default function Composer({
     if (blocked) return;
     const text = value;
     const sent = mentions;
+    const files: QueuedFile[] = uploads.take();
     setValue("");
     setMentions([]);
     setFailure(null);
     onTyping?.(false);
     input.current?.focus({ preventScroll: true });
-    void onSend(text, sent).then((error) => {
+    void onSend(text, sent, files.map(queuedAttachment)).then((error) => {
       if (!error || !restoreOnFailure) return;
       setFailure(error);
       setValue((current) => (current ? current : text));
       setMentions((current) => (current.length ? current : sent));
+      uploads.restore(files);
       window.requestAnimationFrame(() => caretToEnd(input.current));
     });
+  }
+
+  function attachButton(phone: boolean) {
+    if (!uploadTo) return null;
+    return (
+      <Button
+        variant={phone ? "secondary" : "ghost"}
+        size="none"
+        aria-label="Attach files"
+        title="Attach files"
+        disabled={disabled}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => picker.current?.click()}
+        className={cn("hit", phone ? "size-[38px] rounded-full" : "size-[30px] shrink-0 rounded-md pointer-coarse:size-11")}
+      >
+        <AttachIcon aria-hidden className="size-3.5" />
+      </Button>
+    );
   }
 
   function sendButton(phone: boolean) {
@@ -536,11 +614,16 @@ export default function Composer({
         roomMention={roomMention}
         actions={sendButton(false)}
         phoneAction={sendButton(true)}
+        phoneLead={attachButton(true)}
+        attach={attachButton(false)}
+        queue={<UploadQueue files={uploads.files} onRemove={uploads.remove} onRetry={uploads.retry} />}
+        queued={uploads.files.length > 0}
+        onPasteFiles={uploadTo && !disabled ? uploads.add : undefined}
         onChange={change}
         onSubmit={send}
         onBlur={() => onTyping?.(false)}
         onKeyDown={(event) => {
-          if (event.key === "Escape" && value === "" && onEscape) {
+          if (event.key === "Escape" && value === "" && uploads.files.length === 0 && onEscape) {
             event.preventDefault();
             onEscape();
             return;
@@ -550,6 +633,26 @@ export default function Composer({
           }
         }}
       />
+      {uploadTo && (
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          tabIndex={-1}
+          aria-hidden
+          onChange={(event) => {
+            const picked = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            uploads.add(picked);
+          }}
+        />
+      )}
+      {uploads.notice && (
+        <p role="status" className="caption-style text-danger px-1">
+          {uploads.notice}
+        </p>
+      )}
       {over && (
         <p role="status" className="caption-style text-danger px-1">
           Messages can be up to {CHAT_BODY_MAX.toLocaleString("en-GB")} characters. This one is {length.toLocaleString("en-GB")}.

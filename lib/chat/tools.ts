@@ -50,6 +50,7 @@ export function chatMessage(message: ChatMessage) {
     ...(message.hook ? { fromWebhook: true, webhook: { title: message.hook.title, url: message.hook.url, formatted: message.hook.block } } : {}),
     text: message.deletedAt ? null : message.body,
     format: message.format,
+    ...(message.attachments.length > 0 ? { attachments: message.attachments.map((file) => ({ name: file.name, type: file.contentType, size: file.size })) } : {}),
     deleted: Boolean(message.deletedAt),
     mentions: message.mentions,
     replies: message.replyCount,

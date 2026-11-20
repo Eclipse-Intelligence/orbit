@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
+import { useNoFileNavigation } from "@/components/chat/attachments";
 import { ChatContext, useChat } from "@/components/chat/chat-context";
 import ChatMessageRow from "@/components/chat/chat-message";
 import Composer from "@/components/chat/composer";
@@ -19,7 +20,8 @@ export function holdEscape(discussion: Discussion | null) {
   const active = document.activeElement;
   if (active instanceof HTMLTextAreaElement) {
     if (active.getAttribute("aria-expanded") === "true" || active.getAttribute("aria-label") === "Edit message") return true;
-    if (active.closest("[data-chat-composer]") && active.value.trim()) return true;
+    const composer = active.closest("[data-chat-composer]");
+    if (composer && (active.value.trim() || composer.hasAttribute("data-chat-queued"))) return true;
   }
   if (discussion?.threadId) {
     discussion.context.closeThread();
@@ -29,6 +31,7 @@ export function holdEscape(discussion: Discussion | null) {
 }
 
 export function DiscussionProvider({ discussion, children }: { discussion: Discussion; children: ReactNode }) {
+  useNoFileNavigation();
   return <ChatContext.Provider value={discussion.context}>{children}</ChatContext.Provider>;
 }
 
@@ -145,12 +148,14 @@ export function DiscussionComposer({
       autoFocus={autoFocus}
       disabled={prompting || (Boolean(parentId) && (!root || Boolean(root.deletedAt && root.replyCount === 0)))}
       onEscape={onEscape}
-      onSend={(text, mentions) =>
+      uploadTo={discussion.ensureConversation}
+      onSend={(text, mentions, attachments) =>
         discussion.context.send({
           conversationId: discussion.conversationId ?? "",
           parentId,
           text,
           mentions,
+          attachments,
         })
       }
       onEditLast={() => {

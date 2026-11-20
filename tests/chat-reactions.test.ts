@@ -118,6 +118,7 @@ describe("reactions in the timeline", () => {
     createdAt: "2026-11-19T10:00:00.000Z",
     hook: null,
     reactions: [],
+    attachments: [],
   } satisfies ChatMessage;
 
   it("toggles on and off locally and ignores an older live event", () => {

@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import Tag from "@/components/_ui/tag";
 import { setRoomArchivedAction } from "@/app/(crm)/chat/actions";
 import { AvatarStack, ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar, setChatViewing, useChatEvents } from "@/components/chat/chat-live";
+import { FileDrop } from "@/components/chat/attachments";
 import Composer from "@/components/chat/composer";
 import MessageList from "@/components/chat/message-list";
 import { NotifyButton } from "@/components/chat/notify-menu";
@@ -139,6 +140,8 @@ export default function RoomView({
   const ready = timeline?.status === "ready";
   const messages = useMemo(() => timeline?.messages ?? [], [timeline]);
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
+  const addFiles = useRef<((files: File[]) => void) | null>(null);
+  const uploadTo = useCallback(() => Promise.resolve({ id: conversationId, error: null }), [conversationId]);
   if (ready && !divider.ready) setDivider({ ready: true, id: firstUnread(messages, timeline?.lastReadAt ?? null, viewer.id) ?? timeline?.firstUnreadId ?? null });
   const [heldShown, setHeldShown] = useState<string | null>(null);
   if (held && held !== heldShown) {
@@ -196,7 +199,7 @@ export default function RoomView({
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <FileDrop label={`Drop to add to ${title || "this conversation"}`} disabled={!info || archived} onFiles={(files) => addFiles.current?.(files)} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-[52px] shrink-0 items-center gap-2 pr-3 pl-5 max-md:h-auto max-md:px-3 max-md:py-2.5">
         <PhoneBack label="Chat" onClick={back} />
         <div className="flex min-w-0 flex-col max-md:flex-1 max-md:items-center">
@@ -303,7 +306,9 @@ export default function RoomView({
               disabled={!info}
               onTyping={typing.send}
               roomMention={info?.kind === "room" && (members?.length ?? 0) <= ROOM_MENTION_MAX_MEMBERS}
-              onSend={(text, mentions) => send({ conversationId, parentId: null, text, mentions })}
+              uploadTo={uploadTo}
+              fileRef={addFiles}
+              onSend={(text, mentions, attachments) => send({ conversationId, parentId: null, text, mentions, attachments })}
               onEditLast={() => {
                 const own = lastOwnMessage(messages, viewer.id);
                 if (!own) return false;
@@ -314,6 +319,6 @@ export default function RoomView({
           </>
         )}
       </div>
-    </div>
+    </FileDrop>
   );
 }

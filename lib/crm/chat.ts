@@ -13,6 +13,7 @@ import {
   CHAT_TOPIC_MAX,
   chatLevel,
   EMPTY_HOOK_CARD,
+  type ChatAttachment,
   type ChatConversation,
   type ChatDiscussion,
   type ChatHookCard,
@@ -39,6 +40,8 @@ import {
   type ChatUnreads,
 } from "@/lib/chat/types";
 import { discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
+import { filesTitle } from "@/lib/chat/files";
+import { checkUploads, cleanAttachmentIds, removeChatAttachments } from "@/lib/crm/chat-attachments";
 import { chatEmoji } from "@/lib/chat/emoji";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
@@ -76,6 +79,7 @@ type MessageRow = {
   created_at: Stamp;
   reply_authors: ChatPerson[] | null;
   hook: { title?: unknown; url?: unknown; block?: unknown } | null;
+  attachments: ChatAttachment[] | null;
   reactions: ReactionRow[] | null;
 };
 
@@ -146,6 +150,12 @@ function messageColumns(alias = "m") {
         limit 3
       ) a
     ), '[]'::json) else '[]'::json end as reply_authors,
+    case when ${alias}.attachment_count > 0 and ${alias}.deleted_at is null then coalesce((
+      select json_agg(json_build_object('id', f.id, 'name', f.name, 'contentType', f.content_type, 'size', f.size, 'width', f.width, 'height', f.height)
+        order by array_position(${alias}.attachment_ids, f.id))
+      from crm.chat_attachments f
+      where f.message_id = ${alias}.id
+    ), '[]'::json) else '[]'::json end as attachments,
     ${reactionsColumn(alias)}`;
 }
 
@@ -195,6 +205,7 @@ function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     deletedAt: iso(row.deleted_at),
     createdAt: iso(row.created_at),
     hook: row.deleted_at && row.hook ? { ...EMPTY_HOOK_CARD } : hookCard(row.hook),
+    attachments: row.deleted_at ? [] : (row.attachments ?? []),
     reactions: row.deleted_at ? [] : toReactions(row.reactions, viewerId),
   };
 }
@@ -312,9 +323,9 @@ function pageSize(limit: unknown, fallback = CHAT_PAGE_SIZE) {
   return Math.min(CHAT_PAGE_MAX, Math.max(1, value));
 }
 
-function cleanBody(body: unknown) {
+function cleanBody(body: unknown, options: { allowEmpty?: boolean } = {}) {
   const text = typeof body === "string" ? body.replace(NUL, "").replace(/\r\n?/g, "\n").trim() : "";
-  if (!text) throw new CrmError("invalid_input", "Write a message first.", 400, { field: "body" });
+  if (!text && !options.allowEmpty) throw new CrmError("invalid_input", "Write a message first.", 400, { field: "body" });
   if (text.length > CHAT_BODY_MAX) throw new CrmError("invalid_input", "Keep messages to 10,000 characters.", 400, { field: "body" });
   return text;
 }
@@ -1005,7 +1016,7 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
   });
 }
 
-type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown };
+type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown; attachmentIds?: unknown };
 
 function chatHref(conversationId: string, message: ChatMessage) {
   return message.parentId ? `/chat/${conversationId}?thread=${message.parentId}` : `/chat/${conversationId}?message=${message.id}`;
@@ -1073,6 +1084,8 @@ function postAlerts(actor: UserActor, conversation: ConversationRow, members: Me
   const others = members.filter((member) => member.user_id !== actor.userId);
   const { reached, jobs } = mentionJobs(actor, conversation, members, message, dm ? [] : message.mentions);
   if (!message.parentId) {
+    const filesOnly = !message.body.trim() && message.attachments.length > 0;
+    const sender = message.via ? `${name} via ${message.via.name}` : name;
     for (const other of others) {
       if (reached.has(other.user_id) || memberLevel(conversation, other) !== "all") continue;
       jobs.push(
@@ -1082,7 +1095,11 @@ function postAlerts(actor: UserActor, conversation: ConversationRow, members: Me
           tag,
           body: null,
           key: dm ? `chat:dm:${conversation.id}:${millis(other.last_read_at)}` : `chat:room:${conversation.id}:${millis(other.last_read_at)}`,
-          title: dm ? `${name} sent you a message` : `${message.via ? `${name} via ${message.via.name}` : name} posted in #${conversation.name ?? ""}`.slice(0, 200),
+          title: dm
+            ? filesOnly
+              ? `${name} sent you ${filesTitle(message.attachments.length)}`
+              : `${name} sent you a message`
+            : (filesOnly ? `${sender} sent ${filesTitle(message.attachments.length)} in #${conversation.name ?? ""}` : `${sender} posted in #${conversation.name ?? ""}`).slice(0, 200),
         }),
       );
     }
@@ -1165,10 +1182,16 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
   return { message, root: root ? toRoot(root) : null, duplicate: true };
 }
 
-export async function postMessage(actor: UserActor, input: PostInput, options: { viaWorkflowId?: string; charge?: () => Promise<void>; roomMention?: boolean } = {}): Promise<ChatPost> {
+export async function postMessage(
+  actor: UserActor,
+  input: PostInput,
+  options: { viaWorkflowId?: string; charge?: () => Promise<void>; roomMention?: boolean; fetchImpl?: typeof fetch } = {},
+): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
-  const body = cleanBody(input.body);
+  const attachmentIds = cleanAttachmentIds(input.attachmentIds);
+  if (attachmentIds.length > 0 && (options.viaWorkflowId || options.charge)) throw new CrmError("invalid_input", "Only people can attach files.", 400, { field: "files" });
+  const body = cleanBody(input.body, { allowEmpty: attachmentIds.length > 0 });
   const clientKey = cleanClientKey(input.clientKey);
   const format = cleanFormat(input.format);
   const roomMention = options.roomMention === true && !options.viaWorkflowId;
@@ -1177,6 +1200,22 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
   const mentions = memberMentions(body, format, everyone);
   const repeatCheck = options.charge ? body : undefined;
   try {
+    if (attachmentIds.length > 0) {
+      const earlier = await withActor(actor, async (db) => {
+        const conversation = await readConversation(db, actor, conversationId);
+        const found = await existingPost(db, actor, clientKey, conversationId, parentId);
+        if (!found) writable(conversation);
+        return found;
+      });
+      if (earlier) return earlier;
+      try {
+        await checkUploads(actor, conversationId, attachmentIds, options.fetchImpl);
+      } catch (error) {
+        const raced = await withActor(actor, (db) => existingPost(db, actor, clientKey, conversationId, parentId));
+        if (raced) return raced;
+        throw error;
+      }
+    }
     if (options.charge) {
       const before = await withActor(actor, async (db) => {
         const conversation = await readConversation(db, actor, conversationId);
@@ -1200,11 +1239,11 @@ export async function postMessage(actor: UserActor, input: PostInput, options: {
       }
       const via = options.viaWorkflowId ?? null;
       const inserted = await db.query<{ id: string }>(
-        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions${via ? ", via_workflow_id" : ""})
-         values ($1, $2, $3, $4, $5, $6, $7::uuid[]${via ? ", $8" : ""})
+        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions, attachment_ids${via ? ", via_workflow_id" : ""})
+         values ($1, $2, $3, $4, $5, $6, $7::uuid[], $8::uuid[]${via ? ", $9" : ""})
          on conflict on constraint chat_messages_author_client_key do nothing
          returning id`,
-        [conversationId, parentId, actor.userId, clientKey, body, format, mentions, ...(via ? [via] : [])],
+        [conversationId, parentId, actor.userId, clientKey, body, format, mentions, attachmentIds, ...(via ? [via] : [])],
       );
       if (!inserted.rows[0]) {
         const raced = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
@@ -1266,16 +1305,24 @@ async function ownMessage(db: Db, actor: UserActor, id: string) {
   return message;
 }
 
-export async function editMessage(actor: UserActor, id: string, body: unknown, options: { format?: unknown; roomMention?: boolean } = {}): Promise<ChatMessage> {
+export async function editMessage(
+  actor: UserActor,
+  id: string,
+  body: unknown,
+  options: { format?: unknown; roomMention?: boolean; removeAttachmentIds?: unknown } = {},
+): Promise<ChatMessage> {
   const messageId = checkId(id, "message");
-  const text = cleanBody(body);
+  const text = cleanBody(body, { allowEmpty: true });
+  const removing = cleanAttachmentIds(options.removeAttachmentIds);
   const asked = options.format === "plain" || options.format === "markdown" ? options.format : null;
   try {
     const followed = await query<{ user_id: string }>("select user_id from private.chat_message_followers($1, $2)", [actor.userId, messageId]);
     const followersBefore = new Set(followed.rows.map((row) => row.user_id));
-    return await withActor(actor, async (db) => {
+    const edited = await withActor(actor, async (db) => {
       const current = await ownMessage(db, actor, messageId);
       if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
+      const kept = current.attachments.filter((file) => !removing.includes(file.id));
+      if (!text && kept.length === 0) throw new CrmError("invalid_input", "Delete the message instead.", 400, { field: "body" });
       const conversation = await readConversation(db, actor, current.conversationId);
       const format = asked ?? current.format;
       const usesRoom = await checkRoomMention(db, conversation, current.parentId, text, format, options.roomMention === true);
@@ -1296,16 +1343,28 @@ export async function editMessage(actor: UserActor, id: string, body: unknown, o
       const addedSet = new Set(added);
       const everyone =
         roomWide(conversation, message) && !current.everyone ? listening.filter((member) => !before.has(member.user_id) && !addedSet.has(member.user_id)).map((member) => member.user_id) : [];
-      afterPost(
-        db,
-        members.map((member) => member.user_id),
-        { type: "edit", conversationId: current.conversationId, message },
+      const jobs =
         conversation.kind === "room" || conversation.kind === "dm"
           ? [...mentionAlert(actor, conversation, message, added), ...mentionAlert(actor, conversation, message, everyone, { everyone: true })]
-          : subjectAlerts(actor, conversation, { ...message, parentId: null, mentions: message.mentions.filter((person) => !before.has(person)) }, tagged),
-      );
-      return message;
+          : subjectAlerts(actor, conversation, { ...message, parentId: null, mentions: message.mentions.filter((person) => !before.has(person)) }, tagged);
+      const audience = members.map((member) => member.user_id);
+      if (removing.length === 0) afterPost(db, audience, { type: "edit", conversationId: current.conversationId, message }, jobs);
+      return { message, audience, jobs };
     });
+    if (removing.length === 0) return edited.message;
+    let failure: unknown = null;
+    try {
+      await removeChatAttachments(actor, messageId, removing);
+    } catch (error) {
+      failure = error;
+    }
+    const message = await withActor(actor, async (db) => {
+      const latest = (await readMessage(db, messageId, actor.userId)) ?? edited.message;
+      afterPost(db, edited.audience, { type: "edit", conversationId: latest.conversationId, message: latest }, edited.jobs);
+      return latest;
+    });
+    if (failure) throw failure;
+    return message;
   } catch (error) {
     chatFailure(error);
   }

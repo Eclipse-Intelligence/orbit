@@ -282,6 +282,7 @@ export async function postViaHook(
       deletedAt: null,
       createdAt: iso(row.created_at)!,
       hook: hookCard(row.hook),
+      attachments: [],
       reactions: [],
     };
     const members = row.member_ids ?? [];

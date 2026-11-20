@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useLayoutEffect, useMemo, useRef, type Dispatch } from "react";
-import { deleteMessageAction, editMessageAction, markAllReadAction, markUnreadAction, postMessageAction, reactAction, setNotifyAction } from "@/app/(crm)/chat/actions";
+import { deleteMessageAction, discardChatUploadsAction, editMessageAction, markAllReadAction, markUnreadAction, postMessageAction, reactAction, setNotifyAction } from "@/app/(crm)/chat/actions";
 import { chatJoined, echoChatEvent, refreshChatSidebar } from "@/components/chat/chat-live";
 import { chatApi, draftKey, readDraft, writeDraft } from "@/lib/chat/client";
 import { encodeChatMentions } from "@/lib/chat/compose";
@@ -20,7 +20,7 @@ export type ChatTimelineActions = {
   loadThread: (rootId: string, mode: "latest" | "older" | "newer") => void;
   deliver: (message: ChatMessage) => Promise<string | null>;
   retry: (message: ChatMessage) => void;
-  edit: (message: ChatMessage, text: string, mentions: Mention[]) => Promise<boolean>;
+  edit: (message: ChatMessage, text: string, mentions: Mention[], removeAttachmentIds?: string[]) => Promise<boolean>;
   remove: (message: ChatMessage) => Promise<boolean>;
   react: (message: ChatMessage, emoji: string) => void;
   markRead: (conversationId: string, upTo: string | null) => void;
@@ -126,7 +126,14 @@ export function useChatActions(
   const deliver = useCallback(
     async (message: ChatMessage) => {
       const clientKey = message.clientKey ?? "";
-      const result = await postMessageAction({ conversationId: message.conversationId, parentId: message.parentId, body: message.body, format: message.format, clientKey }).catch(() => ({
+      const result = await postMessageAction({
+        conversationId: message.conversationId,
+        parentId: message.parentId,
+        body: message.body,
+        format: message.format,
+        clientKey,
+        attachmentIds: message.attachments.map((file) => file.id),
+      }).catch(() => ({
         error: SEND_FAILED,
       }));
       if ("ok" in result && result.ok) {
@@ -154,11 +161,14 @@ export function useChatActions(
   );
 
   const edit = useCallback(
-    async (message: ChatMessage, text: string, mentions: Mention[]) => {
+    async (message: ChatMessage, text: string, mentions: Mention[], removeAttachmentIds: string[] = []) => {
       const body = messageBody(text, mentions);
-      if (!body || body === message.body) return true;
-      dispatch({ type: "edited", message: { ...message, body, format: "markdown", mentions: memberIds(body), editedAt: new Date().toISOString() } });
-      const result = await editMessageAction(message.id, body, "markdown").catch(() => ({ error: "Couldn't save the message. Try again." }));
+      const removing = new Set(removeAttachmentIds);
+      const attachments = message.attachments.filter((file) => !removing.has(file.id));
+      if (!body && attachments.length === 0) return false;
+      if (body === message.body && attachments.length === message.attachments.length) return true;
+      dispatch({ type: "edited", message: { ...message, body, format: "markdown", mentions: memberIds(body), attachments, editedAt: new Date().toISOString() } });
+      const result = await editMessageAction(message.id, body, "markdown", [...removing]).catch(() => ({ error: "Couldn't save the message. Try again." }));
       if ("ok" in result && result.ok) {
         dispatch({ type: "edited", message: result.message });
         return true;
@@ -174,6 +184,7 @@ export function useChatActions(
     async (message: ChatMessage) => {
       if (isLocal(message)) {
         dispatch({ type: "discard", message });
+        if (message.attachments.length > 0) void discardChatUploadsAction(message.attachments.map((file) => file.id)).catch(() => undefined);
         return true;
       }
       const thread = message.parentId ? latest.current.threads[message.parentId]?.root : null;

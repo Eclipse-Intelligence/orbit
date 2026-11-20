@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { pasteAttaches } from "@/lib/chat/files";
 import { dayLabel, shortWhen } from "@/lib/chat/format";
 import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseChatLocation } from "@/lib/chat/routes";
 import {
@@ -50,6 +51,7 @@ function message(input: Partial<ChatMessage> & { at: string }): ChatMessage {
     deletedAt: null,
     createdAt: input.at,
     hook: null,
+    attachments: [],
     ...input,
     reactions: input.reactions ?? [],
   };
@@ -458,6 +460,17 @@ describe("chat review fixes", () => {
     assert.equal(loadsLatestFirst(loaded([message({ at: "2026-11-11T08:00:00.000Z" })]).timelines[ROOM]), false);
     assert.equal(loadsLatestFirst(loaded([message({ at: "2026-11-11T08:00:00.000Z" })], { hasNewer: true }).timelines[ROOM]), true);
     assert.equal(loadsLatestFirst(chatReducer(EMPTY_CHAT, { type: "loading", conversationId: ROOM }).timelines[ROOM]), false);
+  });
+});
+
+
+describe("pasting files", () => {
+  it("attaches files unless the clipboard holds rich text from an app like Office", () => {
+    assert.equal(pasteAttaches(["Files", "text/plain"], 1), true);
+    assert.equal(pasteAttaches(["Files"], 2), true);
+    assert.equal(pasteAttaches(["text/plain", "text/html", "Files"], 1), false);
+    assert.equal(pasteAttaches(["text/plain", "text/rtf", "Files"], 1), false);
+    assert.equal(pasteAttaches(["text/plain"], 0), false);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { ChatPage, ChatPerson, ChatRoom, ChatSidebar, ChatThread, ChatThreads, ChatUnreads } from "@/lib/chat/types";
+import type { ChatAttachment, ChatPage, ChatPerson, ChatRoom, ChatSidebar, ChatThread, ChatThreads, ChatUnreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 
 const TIMEOUT_MS = 15_000;
@@ -171,4 +171,23 @@ export function writeDraft(key: string, draft: ChatDraft) {
     if (draft.text.trim()) localStorage.setItem(key, JSON.stringify(draft));
     else localStorage.removeItem(key);
   } catch {}
+}
+
+const queuedFiles = new Map<string, ChatAttachment[]>();
+const handedOff = new Set<string>();
+
+export function writeQueuedFiles(key: string, files: ChatAttachment[]) {
+  if (files.length > 0) queuedFiles.set(key, files);
+  else queuedFiles.delete(key);
+}
+
+export function takeQueuedFiles(key: string) {
+  const files = queuedFiles.get(key) ?? [];
+  queuedFiles.delete(key);
+  for (const file of files) handedOff.add(file.id);
+  return files;
+}
+
+export function releaseHandedOff(id: string) {
+  return handedOff.delete(id);
 }

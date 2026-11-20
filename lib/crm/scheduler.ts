@@ -348,6 +348,12 @@ export async function handleCronRequest(
     console.error("Chat file sweep failed", error);
   }
   try {
+    const { sweepChatAttachments } = await import("@/lib/crm/chat-attachments");
+    await sweepChatAttachments();
+  } catch (error) {
+    console.error("Chat attachment sweep failed", error);
+  }
+  try {
     const { backfillCallHealth } = await import("@/lib/crm/call-health");
     await backfillCallHealth({ budgetMs: 12_000 });
   } catch (error) {
