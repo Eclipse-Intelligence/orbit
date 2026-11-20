@@ -103,6 +103,7 @@ export function localMessage(input: {
     attachments: input.attachments ?? [],
     previews: [],
     reactions: [],
+    quotedId: null,
   };
 }
 
@@ -153,7 +154,7 @@ export function replaceMessage(list: ChatMessage[], message: ChatMessage) {
 }
 
 export function blankDeleted(message: ChatMessage): ChatMessage {
-  return { ...message, body: "", mentions: [], everyone: false, attachments: [], previews: [], reactions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
+  return { ...message, body: "", mentions: [], everyone: false, attachments: [], previews: [], reactions: [], quotedId: null, hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
 }
 
 export function removeRoot(list: ChatMessage[], id: string) {

@@ -274,6 +274,7 @@ function chatMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
     hook: null,
     attachments: [],
     previews: [],
+    quotedId: null,
     reactions: [],
     ...overrides,
   };

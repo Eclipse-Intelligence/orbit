@@ -6,6 +6,7 @@ import type { ChatContextValue, ChatEditing } from "@/components/chat/chat-conte
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { useEmojiPrefs } from "@/components/chat/reactions";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
+import { NO_PINS } from "@/components/chat/use-pins";
 import { useSavedMessages } from "@/components/chat/use-saved";
 import { draftKey, newClientKey, readDraft, takeQueuedFiles, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
@@ -385,6 +386,7 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       memberNames: NO_NAMES,
       emoji,
       saved,
+      pins: NO_PINS,
       discussion: true,
     }),
     [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, messageLink, send, emoji, saved],

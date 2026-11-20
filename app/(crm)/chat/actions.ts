@@ -2,7 +2,7 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import type { ChatFormat } from "@/lib/chat/markdown";
-import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatNotifyInput, ChatPost, ChatReacted, ChatRemindWhen, ChatResult, ChatSavedState, ChatScheduledChange, ChatScheduledInput, ChatScheduledItem, ChatUpload } from "@/lib/chat/types";
+import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatNotifyInput, ChatPinned, ChatPost, ChatReacted, ChatRemindWhen, ChatResult, ChatSavedState, ChatScheduledChange, ChatScheduledInput, ChatScheduledItem, ChatUpload } from "@/lib/chat/types";
 import {
   addRoomMembers,
   createRoom,
@@ -13,11 +13,12 @@ import {
   markConversationUnread,
   openDm,
   openGroup,
-  postMessage,
+  postFromWeb,
   reactToMessage,
   removeLinkPreview,
   removeRoomMember,
   setConversationNotify,
+  setMessagePinned,
   setRoomArchived,
   updateRoom,
 } from "@/lib/crm/chat";
@@ -89,7 +90,11 @@ export async function postMessageAction(input: {
   clientKey: string;
   attachmentIds?: string[];
 }): Promise<ChatResult<ChatPost>> {
-  return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}, { roomMention: true, linkPreviews: {} }));
+  return run("Couldn't send. Try again.", (actor) => postFromWeb(actor, input ?? {}));
+}
+
+export async function shareMessageAction(input: { conversationId: string; body: string; clientKey: string; quotedMessageId: string }): Promise<ChatResult<ChatPost>> {
+  return run("Couldn't share the message. Try again.", (actor) => postFromWeb(actor, { ...(input ?? {}), format: "plain" }));
 }
 
 export async function editMessageAction(id: string, body: string, format?: ChatFormat, removeAttachmentIds?: string[]): Promise<ChatResult<{ message: ChatMessage }>> {
@@ -129,6 +134,10 @@ export async function deleteMessageAction(id: string): Promise<ChatResult<{ dele
 
 export async function reactAction(messageId: string, emoji: string, want?: boolean): Promise<ChatResult<ChatReacted>> {
   return run("Couldn't react. Try again.", (actor) => reactToMessage(actor, messageId, emoji, { want: typeof want === "boolean" ? want : null }));
+}
+
+export async function pinMessageAction(messageId: string, pinned: boolean): Promise<ChatResult<ChatPinned>> {
+  return run(pinned ? "Couldn't pin the message. Try again." : "Couldn't unpin the message. Try again.", (actor) => setMessagePinned(actor, messageId, pinned === true));
 }
 
 export async function saveMessageAction(messageId: string, saved: boolean): Promise<ChatResult<ChatSavedState>> {

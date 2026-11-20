@@ -40,6 +40,8 @@ export const CHAT_TOPIC_MAX = 250;
 export const CHAT_ARCHIVED = "This room is archived.";
 export const CHAT_FILES_MAX = 10;
 export const CHAT_FILE_MAX_BYTES = 25 * 1024 * 1024;
+export const CHAT_PINS_MAX = 50;
+export const CHAT_QUOTES_MAX = 50;
 
 export type ChatAttachment = { id: string; name: string; contentType: string; size: number; width: number | null; height: number | null };
 
@@ -127,8 +129,28 @@ export type ChatMessage = {
   attachments: ChatAttachment[];
   previews: ChatLinkPreview[];
   reactions: ChatReaction[];
+  quotedId: string | null;
   reactionsAt?: string;
 };
+
+export type ChatQuote = {
+  id: string;
+  conversationId: string;
+  author: { id: string | null; name: string };
+  excerpt: string;
+  files: number;
+  createdAt: string;
+  place: string;
+  href: string;
+};
+
+export type ChatQuotes = { quotes: ChatQuote[] };
+
+export type ChatPin = { message: ChatMessage; pinnedBy: ChatPerson | null };
+
+export type ChatPins = { pins: ChatPin[] };
+
+export type ChatPinned = { messageId: string; conversationId: string; pinned: boolean; changed: boolean };
 
 export type ChatRoot = { id: string; replyCount: number; lastReplyAt: string | null; replyAuthors: ChatPerson[] };
 
@@ -268,7 +290,8 @@ export type ChatLiveEvent =
   | { type: "removed"; conversationId: string }
   | { type: "scheduled"; conversationId: string }
   | { type: "reaction"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string }
-  | { type: "previews"; conversationId: string; messageId: string; parentId: string | null; previews: ChatLinkPreview[] };
+  | { type: "previews"; conversationId: string; messageId: string; parentId: string | null; previews: ChatLinkPreview[] }
+  | { type: "pins"; conversationId: string };
 
 export type ChatTyping = { conversationId: string; user: ChatPerson; typing: boolean };
 

@@ -4,6 +4,7 @@ import { useContext, useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname } from "next/navigation";
 import { DocsContext } from "@/components/docs/use-docs";
 import { chatApi } from "@/lib/chat/client";
+import { applyQuoteEvent } from "@/lib/chat/quotes";
 import { sidebarRead } from "@/lib/chat/timeline";
 import type { ChatLiveEvent } from "@/lib/chat/types";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -137,12 +138,13 @@ export default function ChatLive() {
             userId,
             (event) => {
               for (const listener of listeners) listener(event);
+              applyQuoteEvent(event);
               if (event.type === "read") {
                 const conversationId = event.conversationId;
                 useCompaniesStore.getState().setChat((current) => (current ? sidebarRead(current, conversationId) : current));
                 return;
               }
-              if (event.type === "reaction" || event.type === "previews") return;
+              if (event.type === "reaction" || event.type === "previews" || event.type === "pins") return;
               if (event.type === "message" && event.conversationId === viewing && !event.message.parentId) return;
               soon();
             },
