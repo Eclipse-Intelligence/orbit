@@ -19,6 +19,11 @@ type Loader = (ids: string[]) => Promise<ChatQuote[]>;
 const entries = new Map<string, Entry>();
 const inflight = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
+const generations = new Map<string, number>();
+
+function generation(id: string) {
+  return generations.get(id) ?? 0;
+}
 
 function fresh(id: string, now: number) {
   const entry = entries.get(id);
@@ -51,6 +56,7 @@ export function applyQuoteEvent(event: ChatLiveEvent, now = Date.now()) {
   if (event.type === "edit") {
     const entry = entries.get(event.message.id);
     if (!entry?.quote) return;
+    generations.set(event.message.id, generation(event.message.id) + 1);
     entries.set(event.message.id, { at: 0, quote: entry.quote });
     void loadQuotes([event.message.id]);
     return;
@@ -72,15 +78,21 @@ export async function loadQuotes(ids: string[], options: { load?: Loader; now?: 
   const missing = [...new Set(ids)].filter((id) => !fresh(id, now()) && !inflight.has(id));
   for (let start = 0; start < missing.length; start += CHAT_QUOTES_MAX) {
     const batch = missing.slice(start, start + CHAT_QUOTES_MAX);
+    const started = new Map(batch.map((id) => [id, generation(id)]));
     const request = load(batch)
       .then((quotes) => {
         const at = now();
-        for (const id of batch) entries.set(id, { at, quote: quotes.find((quote) => quote.id === id) ?? null });
+        for (const id of batch) {
+          if (generation(id) !== started.get(id)) continue;
+          entries.set(id, { at, quote: quotes.find((quote) => quote.id === id) ?? null });
+        }
         changed();
       })
       .catch(() => undefined)
       .finally(() => {
         for (const id of batch) inflight.delete(id);
+        const edited = batch.filter((id) => generation(id) !== started.get(id));
+        if (edited.length > 0) void loadQuotes(edited, options);
       });
     for (const id of batch) inflight.set(id, request);
   }

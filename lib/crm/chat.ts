@@ -1339,6 +1339,12 @@ export async function checkScheduledPost(
   return { conversationId, parentId, body, format };
 }
 
+const WEB_POST = { roomMention: true, linkPreviews: {} } as const;
+
+export function postFromWeb(actor: UserActor, input: PostInput, overrides: { linkPreviews?: PreviewTransport } = {}) {
+  return postMessage(actor, input, { ...WEB_POST, ...overrides });
+}
+
 export async function postMessage(
   actor: UserActor,
   input: PostInput,

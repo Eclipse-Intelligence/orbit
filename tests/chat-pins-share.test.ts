@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { runTool } from "@/lib/assistant/tools";
 import { applyQuoteEvent, cachedQuote, loadQuotes, QUOTE_UNAVAILABLE, quoteView, requestQuote } from "@/lib/chat/quotes";
 import { CHAT_PINS_MAX, CHAT_QUOTES_MAX, type ChatQuote } from "@/lib/chat/types";
-import { chatWorkSettled, createRoom, deleteMessage, editMessage, getPins, listMessages, listThread, openDiscussion, openDm, openGroup, postMessage, setMessagePinned, setRoomArchived } from "@/lib/crm/chat";
+import { chatWorkSettled, createRoom, postFromWeb, deleteMessage, editMessage, getPins, listMessages, listThread, openDiscussion, openDm, openGroup, postMessage, setMessagePinned, setRoomArchived } from "@/lib/crm/chat";
 import { searchChat } from "@/lib/crm/chat-search";
 import { listSaved, setMessageSaved } from "@/lib/crm/chat-saved";
 import { cleanQuoteIds, getMessages } from "@/lib/crm/chat-quotes";
@@ -320,6 +320,23 @@ describe("pins and shared messages", () => {
       await sql("delete from crm.chat_saved");
     });
 
+    it("shares with the web's post options: @room in the note alerts the room and a link in it gets a preview", async () => {
+      const crowd = (await createRoom(mark, { name: "standup", memberIds: [sam.userId, priya.userId] })).id;
+      const original = (await postMessage(sam, { conversationId: sales, body: "Renewal numbers" })).message;
+      const page = "https://news.example/story";
+      const fetchImpl = (async () => new Response('<head><title>Outage report</title><meta property="og:description" content="Some calls failed."></head>', { status: 200, headers: { "content-type": "text/html" } })) as typeof fetch;
+      await sql("truncate crm.notifications");
+      const shared = await postFromWeb(mark, { conversationId: crowd, body: `@room see this ${page}`, format: "plain", clientKey: "share-room", quotedMessageId: original.id }, { linkPreviews: { fetchImpl, lookup: async () => ["93.184.216.34"] } });
+      await chatWorkSettled();
+      assert.equal(shared.message.everyone, true);
+      assert.equal(shared.message.quotedId, original.id);
+      const titles = (await sql("select title from crm.notifications where user_id = $1", [sam.userId])).rows.map((row) => row.title);
+      assert.ok(titles.includes("Mark mentioned @room in #standup"), JSON.stringify(titles));
+      const previews = await sql("select title from crm.chat_link_previews where message_id = $1", [shared.message.id]);
+      assert.deepEqual(previews.rows.map((row) => row.title), ["Outage report"]);
+      await refused(postMessage(mark, { conversationId: crowd, body: "@room again", quotedMessageId: original.id, clientKey: "no-web" }), /can't use @room/);
+    });
+
     it("shows nothing of the original to the target's members through alerts either", async () => {
       const dm = await openDm(mark, priya.userId);
       await sql("update crm.chat_members set notify = 'all' where conversation_id = $1", [dm.id]);
@@ -623,6 +640,29 @@ describe("pins and shared messages", () => {
         globalThis.fetch = real;
         stop();
       }
+    });
+
+    it("keeps an edit that lands while an older fetch of the same quote is still running", async () => {
+      const id = "00000000-0000-4000-8000-0000000000d1";
+      const stale = { ...quote, id, conversationId: "room-r", excerpt: "Old text" };
+      await loadQuotes([id], { load: async () => [stale] });
+      let release: (quotes: ChatQuote[]) => void = () => undefined;
+      const slow = new Promise<ChatQuote[]>((resolve) => {
+        release = resolve;
+      });
+      let fetches = 0;
+      const load = async () => {
+        fetches += 1;
+        return fetches === 1 ? slow : [{ ...stale, excerpt: "New text" }];
+      };
+      const loading = loadQuotes([id], { load, now: () => Date.now() + 60_000 });
+      applyQuoteEvent({ type: "edit", conversationId: "room-r", message: { id } as never });
+      assert.equal(fetches, 1);
+      release([stale]);
+      await loading;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(fetches, 2);
+      assert.equal(cachedQuote(id)?.excerpt, "New text");
     });
 
     it("asks once for the ids several messages want in the same moment", async () => {

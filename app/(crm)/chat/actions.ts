@@ -13,7 +13,7 @@ import {
   markConversationUnread,
   openDm,
   openGroup,
-  postMessage,
+  postFromWeb,
   reactToMessage,
   removeLinkPreview,
   removeRoomMember,
@@ -90,11 +90,11 @@ export async function postMessageAction(input: {
   clientKey: string;
   attachmentIds?: string[];
 }): Promise<ChatResult<ChatPost>> {
-  return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}, { roomMention: true, linkPreviews: {} }));
+  return run("Couldn't send. Try again.", (actor) => postFromWeb(actor, input ?? {}));
 }
 
 export async function shareMessageAction(input: { conversationId: string; body: string; clientKey: string; quotedMessageId: string }): Promise<ChatResult<ChatPost>> {
-  return run("Couldn't share the message. Try again.", (actor) => postMessage(actor, { ...(input ?? {}), format: "plain" }));
+  return run("Couldn't share the message. Try again.", (actor) => postFromWeb(actor, { ...(input ?? {}), format: "plain" }));
 }
 
 export async function editMessageAction(id: string, body: string, format?: ChatFormat, removeAttachmentIds?: string[]): Promise<ChatResult<{ message: ChatMessage }>> {
