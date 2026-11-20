@@ -9,6 +9,7 @@ import { memberIds, messageBody, useChatActions } from "@/components/chat/use-ch
 import { draftKey, newClientKey, readDraft, takeQueuedFiles, writeDraft } from "@/lib/chat/client";
 import { discussionCount, discussionHref, draftSubjectKey } from "@/lib/chat/discussions";
 import type { ChatLocation } from "@/lib/chat/routes";
+import { DISCUSSION_LINK_LABELS } from "@/lib/chat/task-text";
 import { chatReducer, EMPTY_CHAT, localMessage, needsCatchUp, type ChatAction, type ChatState, type ThreadState, type Timeline } from "@/lib/chat/timeline";
 import type { ChatAttachment, ChatDiscussion, ChatMessage, ChatNeedsShare, ChatPerson, ChatSubject, ChatSubjectKind } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
@@ -344,15 +345,17 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
 
   const closeThread = useCallback(() => setThreadId(null), []);
 
+  const messageLink = useCallback(() => ({ href: discussionHref(subject), label: DISCUSSION_LINK_LABELS[subject.kind] }), [subject]);
+
   const copyLink = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}${discussionHref(subject)}`);
+      await navigator.clipboard.writeText(`${window.location.origin}${messageLink().href}`);
       return true;
     } catch {
       setNotice("Couldn't copy the link. Try again.");
       return false;
     }
-  }, [subject]);
+  }, [messageLink]);
 
   const emoji = useEmojiPrefs(viewer.id);
   const context = useMemo<ChatContextValue>(
@@ -372,12 +375,13 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       closeThread,
       conversation: () => null,
       copyLink,
+      messageLink,
       send: (input) => send(input),
       memberNames: NO_NAMES,
       emoji,
       discussion: true,
     }),
-    [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, send, emoji],
+    [actions, viewer, now, state.failed, editing, closeThread, openThread, copyLink, messageLink, send, emoji],
   );
 
   const loaded = timeline?.status === "ready" && !timeline.hasOlder;

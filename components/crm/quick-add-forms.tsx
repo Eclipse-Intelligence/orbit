@@ -15,6 +15,7 @@ import Field from "@/components/_ui/field";
 import { Input } from "@/components/_ui/input";
 import { recordSelectClass } from "@/components/crm/record-form";
 import RecordPicker, { type PickedRecord } from "@/components/crm/record-picker";
+import type { AddTaskSeed } from "@/components/crm/add-task-event";
 import TaskPad, { type PadThread } from "@/components/crm/task-pad";
 import { TagChip, TagOptions, TagPopover } from "@/components/crm/tags";
 import { createCompanyAction, type CompanyActionState } from "@/app/(crm)/actions";
@@ -35,6 +36,7 @@ export type QuickAddNotice = { message: string; href?: string; link?: string };
 type FormProps = {
   prefill: QuickAddPrefill;
   thread?: PadThread | null;
+  seed?: AddTaskSeed | null;
   setup: QuickAddSetup | null;
   viewerId: string;
   onDone: (notice: QuickAddNotice) => void;
@@ -207,7 +209,7 @@ function TagsField({ id, suggestions }: { id: string; suggestions: QuickAddSetup
   );
 }
 
-export function QuickTaskForm({ prefill, thread, setup, viewerId, onDone }: FormProps) {
+export function QuickTaskForm({ prefill, thread, seed, setup, viewerId, onDone }: FormProps) {
   return (
     <>
       <DialogTitle className="sr-only">{TITLES.task}</DialogTitle>
@@ -217,6 +219,9 @@ export function QuickTaskForm({ prefill, thread, setup, viewerId, onDone }: Form
         initialContact={prefill.contact}
         initialCompany={prefill.company}
         thread={thread ?? null}
+        start={seed ? { title: seed.title, due: null, durationMinutes: null, repeat: null } : null}
+        link={seed?.link ?? null}
+        caretAtEnd={Boolean(seed)}
         members={setup?.members ?? []}
         viewerId={viewerId}
         autoFocus

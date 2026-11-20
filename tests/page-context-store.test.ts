@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { FOCUS_GRACE_MS, focusOnPage, focusTaskForAsk, holdPageFocus, pageSnapshot, releasePageFocus, unpinPageFocus, usePageContextStore } from "@/stores/page-context-store";
+import { FOCUS_GRACE_MS, focusChatThreadForAsk, focusOnPage, focusTaskForAsk, holdPageFocus, pageSnapshot, releasePageFocus, unpinPageFocus, usePageContextStore } from "@/stores/page-context-store";
 
 const place = { pathname: "/tasks", search: "" };
 let now = 1_000_000;
@@ -139,5 +139,33 @@ describe("the page focus a message is sent with", () => {
     focusOnPage("task", "b");
     assert.deepEqual(sent(), { kind: "task", id: "b" });
     assert.equal(usePageContextStore.getState().focus?.pinned, undefined);
+  });
+
+  it("sends the Chat thread asked about until the assistant closes, only from the page it was asked on", () => {
+    place.pathname = "/chat/room";
+    focusChatThreadForAsk("root");
+    later(10 * 60_000);
+    assert.deepEqual(sent(), { kind: "chat_thread", id: "root" });
+    place.pathname = "/tasks";
+    assert.equal(sent(), null);
+    place.pathname = "/chat/room";
+    focusChatThreadForAsk("root");
+    unpinPageFocus();
+    later(FOCUS_GRACE_MS - 1);
+    assert.deepEqual(sent(), { kind: "chat_thread", id: "root" });
+    unpinPageFocus();
+    later(FOCUS_GRACE_MS + 1);
+    assert.equal(sent(), null);
+  });
+
+  it("starts the minute when the assistant closes, not when the thread was asked about", () => {
+    place.pathname = "/chat/room";
+    focusChatThreadForAsk("root");
+    later(10 * 60_000);
+    unpinPageFocus();
+    later(FOCUS_GRACE_MS - 1);
+    assert.deepEqual(sent(), { kind: "chat_thread", id: "root" });
+    later(2);
+    assert.equal(sent(), null);
   });
 });

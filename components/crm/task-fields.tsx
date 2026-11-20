@@ -850,12 +850,12 @@ const DOC_LINK = "text-soft underline decoration-white/35 underline-offset-[3px]
 
 function DescriptionText({ parts }: { parts: DescriptionPart[] }) {
   return parts.map((part) =>
-    part.kind === "doc" ? (
-      <Link key={part.start} href={pageHref(part.id)} className={DOC_LINK}>
+    part.kind === "text" ? (
+      <LinkedText key={part.start} text={part.text} />
+    ) : (
+      <Link key={part.start} href={part.kind === "doc" ? pageHref(part.id) : part.href} className={DOC_LINK}>
         {part.label}
       </Link>
-    ) : (
-      <LinkedText key={part.start} text={part.text} />
     ),
   );
 }

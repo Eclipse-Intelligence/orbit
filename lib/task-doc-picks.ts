@@ -1,4 +1,5 @@
 import type { DocPick } from "@/lib/docs/client-types";
+import { orbitPath } from "@/lib/chat/task-text";
 import { docQueryAt } from "@/lib/task-pad";
 
 export function privateDocWarning(doc: Pick<DocPick, "folderPath">) {
@@ -38,13 +39,25 @@ const SPACE_START = /^[ \t]/;
 
 export const PRIVATE_DOC_NOTE = "Linked. Private docs aren't named in the description.";
 
+const ORBIT_LINK = /\[([^[\]\n]{1,80})\]\((\/[^\s()<>"\\[\]]{0,500})\)/g;
+
 export function hasDocReference(text: string) {
   return new RegExp(DOC_REFERENCE.source).test(text);
 }
 
+export function hasOrbitLink(text: string) {
+  for (const match of text.matchAll(ORBIT_LINK)) if (orbitPath(match[2])) return true;
+  return false;
+}
+
+export function descriptionPreview(text: string | null | undefined) {
+  const line = (text ?? "").trim().split("\n")[0]?.trim() ?? "";
+  return line.replace(ORBIT_LINK, (whole, label: string, path: string) => (orbitPath(path) ? label : whole));
+}
+
 export function showsDescriptionLinks(text: string, layout: "panel" | "row", editing: boolean) {
   if (editing) return false;
-  return hasDocReference(text) || (layout === "panel" && WEB_ADDRESS.test(text));
+  return hasDocReference(text) || hasOrbitLink(text) || (layout === "panel" && WEB_ADDRESS.test(text));
 }
 
 export function docReferenceTitle(title: string | null | undefined) {
@@ -116,7 +129,10 @@ export function textEdit(before: string, after: string) {
   return { start, end: before.length - tail, insert: after.slice(start, after.length - tail) };
 }
 
-export type DescriptionPart = { kind: "text"; text: string; start: number } | { kind: "doc"; id: string; label: string; start: number };
+export type DescriptionPart =
+  | { kind: "text"; text: string; start: number }
+  | { kind: "doc"; id: string; label: string; start: number }
+  | { kind: "link"; href: string; label: string; start: number; length: number };
 
 type ReferenceDoc = { id: string; title: string | null; readable: boolean };
 
@@ -126,14 +142,22 @@ export function descriptionParts(text: string, docs: ReferenceDoc[]): Descriptio
     const key = docReferenceTitle(doc.title).toLowerCase();
     if (doc.readable && !open.has(key)) open.set(key, doc.id);
   }
-  const parts: DescriptionPart[] = [];
-  let last = 0;
+  const found: { start: number; length: number; part: DescriptionPart }[] = [];
   for (const match of text.matchAll(DOC_REFERENCE)) {
     const id = open.get(docReferenceTitle(match[1]).toLowerCase());
-    if (!id) continue;
-    if (match.index > last) parts.push({ kind: "text", text: text.slice(last, match.index), start: last });
-    parts.push({ kind: "doc", id, label: match[1], start: match.index });
-    last = match.index + match[0].length;
+    if (id) found.push({ start: match.index, length: match[0].length, part: { kind: "doc", id, label: match[1], start: match.index } });
+  }
+  for (const match of text.matchAll(ORBIT_LINK)) {
+    if (orbitPath(match[2])) found.push({ start: match.index, length: match[0].length, part: { kind: "link", href: match[2], label: match[1], start: match.index, length: match[0].length } });
+  }
+  found.sort((left, right) => left.start - right.start);
+  const parts: DescriptionPart[] = [];
+  let last = 0;
+  for (const item of found) {
+    if (item.start < last) continue;
+    if (item.start > last) parts.push({ kind: "text", text: text.slice(last, item.start), start: last });
+    parts.push(item.part);
+    last = item.start + item.length;
   }
   if (last < text.length) parts.push({ kind: "text", text: text.slice(last), start: last });
   return parts;
@@ -148,10 +172,11 @@ function shownLength(text: string) {
 export function partsSourceOffset(text: string, parts: DescriptionPart[], shown: number) {
   let seen = 0;
   for (const part of parts) {
-    const length = part.kind === "doc" ? part.label.length : shownLength(part.text);
+    const length = part.kind === "text" ? shownLength(part.text) : part.label.length;
     if (shown <= seen + length) {
       if (part.kind === "text") return part.start + sourceOffset(part.text, shown - seen);
       const inside = shown - seen;
+      if (part.kind === "link") return inside === 0 ? part.start : inside === length ? part.start + part.length : part.start + 1 + inside;
       return inside === 0 ? part.start : inside === length ? part.start + length + 4 : part.start + 2 + inside;
     }
     seen += length;

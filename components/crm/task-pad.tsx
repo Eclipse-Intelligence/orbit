@@ -50,6 +50,7 @@ import { RepeatIcon, RepeatPicker, type RepeatDraft } from "@/components/crm/tas
 import { dayKey } from "@/lib/crm/working-days";
 import { endWords, repeatInputOf, repeatPhrase, repeatPresets, sameRule } from "@/lib/task-repeat";
 import { DocPickHeader, DocPickNotice, DocPickOptions, DocPickPopover, useDocPicks } from "@/components/crm/task-doc-picker";
+import { orbitLink } from "@/lib/chat/task-text";
 import type { DocPick } from "@/lib/docs/client-types";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { cn } from "@/lib/utils";
@@ -59,6 +60,7 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 import BuildingIcon from "@/public/assets/images/companies/sidebar/building.svg";
 import ClipboardIcon from "@/public/assets/images/companies/sidebar/clipboard.svg";
 import ListIcon from "@/public/assets/images/companies/sidebar/list.svg";
+import LinkIcon from "@/public/assets/images/settings/link.svg";
 import MailIcon from "@/public/assets/images/mail/mail-open.svg";
 import ClockIcon from "@/public/assets/images/tasks/clock.svg";
 import UserCircleIcon from "@/public/assets/images/tasks/user-circle.svg";
@@ -461,6 +463,8 @@ function StaticChip({ icon: ChipIcon, label, name, variant }: { icon: Icon; labe
 
 export type PadThread = { key: string; subject: string | null };
 
+export type PadLink = { label: string; href: string };
+
 export type PadStart = { title: string; due: string | null; durationMinutes: number | null; repeat: RepeatDraft | null };
 
 function ThreadChip({ thread, variant, onRemove }: { thread: PadThread; variant: Variant; onRemove: () => void }) {
@@ -470,6 +474,16 @@ function ThreadChip({ thread, variant, onRemove }: { thread: PadThread; variant:
     <button type="button" aria-label={subject ? `Email: ${subject}. Remove` : "Email. Remove"} onClick={onRemove} className={cn(chipClass("on", variant), "max-w-[18em]")}>
       <MailIcon aria-hidden />
       <span className="truncate">{label}</span>
+      <XIcon aria-hidden />
+    </button>
+  );
+}
+
+function LinkChip({ link, variant, onRemove }: { link: PadLink; variant: Variant; onRemove: () => void }) {
+  return (
+    <button type="button" aria-label={`Link: ${link.label}. Remove`} onClick={onRemove} className={cn(chipClass("on", variant), "max-w-[18em]")}>
+      <LinkIcon aria-hidden />
+      <span className="truncate">{link.label}</span>
       <XIcon aria-hidden />
     </button>
   );
@@ -494,6 +508,8 @@ export default function TaskPad({
   initialContact = null,
   initialCompany = null,
   thread = null,
+  link = null,
+  caretAtEnd = false,
   autoFocus = false,
   members = [],
   viewerId = null,
@@ -509,6 +525,8 @@ export default function TaskPad({
   initialContact?: PadRecord | null;
   initialCompany?: PadRecord | null;
   thread?: PadThread | null;
+  link?: PadLink | null;
+  caretAtEnd?: boolean;
   autoFocus?: boolean;
   members?: AssignableMember[];
   viewerId?: string | null;
@@ -542,6 +560,7 @@ export default function TaskPad({
   const [opportunity, setOpportunity] = useState<Override<PadRecord | null>>(unset);
   const [list, setList] = useState<Override<string | null>>(unset);
   const [owner, setOwner] = useState<string | null>(viewerId);
+  const [linkDropped, setLinkDropped] = useState(false);
   const [unpinned, setUnpinned] = useState<string | null>(null);
   const pinned = thread && unpinned !== thread.key ? thread : null;
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -569,6 +588,11 @@ export default function TaskPad({
     const timer = window.setTimeout(() => setMidnight(Date.now()), wait);
     return () => window.clearTimeout(timer);
   }, [midnight]);
+  useEffect(() => {
+    const field = input.current;
+    if (!caretAtEnd || !field) return;
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [caretAtEnd]);
   const parsed = useMemo(() => parseTaskText(text, notBefore(midnight)), [text, midnight]);
   const aiFits = ai !== null && ai.text === text && parsed.unsure;
   const assignable = Boolean(viewerId) && members.length > 1;
@@ -907,6 +931,7 @@ export default function TaskPad({
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
+      ...(link && !linkDropped ? { description: orbitLink(link.label, link.href) } : {}),
       ...(docs.length > 0 ? { docIds: docs.map((doc) => doc.id) } : {}),
       ...(fromReminderId ? { fromReminderId } : {}),
     };
@@ -1197,6 +1222,19 @@ export default function TaskPad({
       </button>
     </DocPickPopover>,
   ];
+  if (link && !linkDropped) {
+    chips.push(
+      <LinkChip
+        key="link"
+        link={link}
+        variant={variant}
+        onRemove={() => {
+          setLinkDropped(true);
+          focusAt();
+        }}
+      />,
+    );
+  }
   if (pinned) {
     chips.push(
       <ThreadChip

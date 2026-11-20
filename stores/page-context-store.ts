@@ -66,6 +66,10 @@ export function focusTaskForAsk(id: string, options: { closesPanel: boolean }) {
   focusOnPage("task", id, options.closesPanel ? { pinned: true } : {});
 }
 
+export function focusChatThreadForAsk(rootId: string) {
+  usePageContextStore.getState().setFocus({ kind: "chat_thread", id: rootId, path: window.location.pathname, closedAt: Date.now(), pinned: true });
+}
+
 export function releasePageFocus(kind: PageFocusKind, id: string, options: { now?: boolean } = {}) {
   const { focus, setFocus } = usePageContextStore.getState();
   if (!focus || focus.kind !== kind || focus.id !== id || holders.has(holderKey(kind, id))) return;

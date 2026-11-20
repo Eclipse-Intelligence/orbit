@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/_ui/dropdown-menu";
 import { Kbd } from "@/components/_ui/command";
+import { ADD_TASK_EVENT, type AddTaskSeed } from "@/components/crm/add-task-event";
 import {
   QuickCompanyForm,
   QuickContactForm,
@@ -206,6 +207,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   const [notice, setNotice] = useState<(QuickAddNotice & { id: number }) | null>(null);
   const [opening, setOpening] = useState(0);
   const [thread, setThread] = useState<PadThread | null>(null);
+  const [seed, setSeed] = useState<AddTaskSeed | null>(null);
   const threadAsked = useRef(0);
   const choosing = useRef(false);
   const returnTo = useRef<HTMLElement | null>(null);
@@ -219,7 +221,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
   const openReminders = useCompaniesStore((state) => state.openReminders);
 
   const start = useCallback(
-    (next: QuickAddKind) => {
+    (next: QuickAddKind, seeded: AddTaskSeed | null = null) => {
       if (next === "email") {
         setMenuOpen(false);
         const contact = quickAddPrefill(pathname, record, "email").contact;
@@ -245,12 +247,29 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
           () => asked === threadAsked.current && setThread(null),
         );
       }
+      setSeed(seeded);
       setKind(next);
       setDialogOpen(true);
       loadSetup();
     },
     [loadSetup, openComposer, openReminders, pathname, record],
   );
+
+  const starting = useRef(start);
+  useEffect(() => {
+    starting.current = start;
+  });
+
+  useEffect(() => {
+    function add(event: Event) {
+      const detail = (event as CustomEvent<AddTaskSeed>).detail;
+      if (!detail || typeof detail.title !== "string") return;
+      event.preventDefault();
+      starting.current("task", detail);
+    }
+    window.addEventListener(ADD_TASK_EVENT, add);
+    return () => window.removeEventListener(ADD_TASK_EVENT, add);
+  }, []);
 
   useShortcut("quick-add", () => changeMenu(!menuOpen));
   useShortcut("create-task", () => start("task"));
@@ -377,7 +396,7 @@ export default function QuickAdd({ viewerId }: { viewerId: string }) {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         {kind === "task" ? (
           <TaskSheet>
-            <QuickTaskForm key={opening} {...formProps} thread={thread} />
+            <QuickTaskForm key={opening} {...formProps} thread={thread} seed={seed} />
           </TaskSheet>
         ) : (
           <DialogContent className="max-w-[440px]" aria-describedby={undefined}>
