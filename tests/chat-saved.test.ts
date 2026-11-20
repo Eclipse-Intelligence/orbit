@@ -10,8 +10,8 @@ import { createCompany } from "@/lib/crm/companies";
 import { CrmError } from "@/lib/crm/errors";
 import { readReminderInput } from "@/lib/crm/reminder-input";
 import { descriptionParts } from "@/lib/task-doc-picks";
-import { orbitPath } from "@/lib/chat/task-text";
-import { isReminderLink, reminderLinkMarkdown } from "@/lib/crm/reminder-link";
+import { orbitLink, orbitPath } from "@/lib/chat/task-text";
+import { isReminderLink, REMINDER_LINK_LABEL, reminderOrbitPath } from "@/lib/crm/reminder-link";
 import { completeReminder, createReminder, getReminder, listReminders } from "@/lib/crm/reminders";
 import { createTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
@@ -55,11 +55,11 @@ describe("saved routes and labels", () => {
   });
 
   it("writes a link description that Orbit's own task text accepts, whatever characters the path has", () => {
-    assert.equal(reminderLinkMarkdown("/chat/x?message=1"), "[Open message](/chat/x?message=1)");
-    const awkward = reminderLinkMarkdown('/chat/x?a=[b](c)<d>"e"');
-    assert.ok(awkward);
-    assert.equal(orbitPath(awkward.slice(awkward.indexOf("](") + 2, -1)), true);
-    assert.deepEqual(descriptionParts(awkward, []).filter((part) => part.kind === "link").length, 1);
+    assert.equal(reminderOrbitPath("/chat/x?message=1"), "/chat/x?message=1");
+    const path = reminderOrbitPath('/chat/x?a=[b](c)<d>"e"');
+    assert.ok(path);
+    assert.equal(orbitPath(path), true);
+    assert.deepEqual(descriptionParts(orbitLink(REMINDER_LINK_LABEL, path), []).filter((part) => part.kind === "link").length, 1);
   });
 
   it("accepts only paths inside Orbit as a reminder link", () => {
