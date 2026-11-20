@@ -48,6 +48,29 @@ describe("Turn into task", () => {
     await gone(mark, reminder.id);
   });
 
+  it("carries a reminder's link into the task description as a markdown link, and leaves other tasks alone", async () => {
+    const link = "/chat/6b77a718-65ec-4679-9420-bd40ecdc4ffb?thread=43d4e049-9fd7-4dee-80ac-dddbca518bad";
+    const { reminder } = await createReminder(mark, { title: "Chat message from Lena", dueOn: "2030-03-06" }, { link });
+    await addPadTask(mark, { title: "Chat message from Lena", dueAt: "2030-03-06", remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: reminder.id });
+    const description = async (title: string) => (await getAdminPool().query<{ description: string | null }>("select description from crm.tasks where title = $1", [title])).rows[0].description;
+    assert.equal(await description("Chat message from Lena"), `[Open message](${link})`);
+    await gone(mark, reminder.id);
+
+    const plain = await createReminder(mark, { title: "Plain reminder", dueOn: "2030-03-06" });
+    await addPadTask(mark, { title: "Plain reminder", dueAt: "2030-03-06", remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: plain.reminder.id });
+    assert.equal(await description("Plain reminder"), null);
+    await addPadTask(mark, { title: "No reminder at all", dueAt: "2030-03-06", remindMinutes: null, clickupListId: null, key: randomUUID() });
+    assert.equal(await description("No reminder at all"), null);
+
+    const awkward = await createReminder(mark, { title: "Awkward link" }, { link: "/chat/x?a=(b)" });
+    await addPadTask(mark, { title: "Awkward link", dueAt: null, remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: awkward.reminder.id });
+    assert.equal(await description("Awkward link"), "[Open message](/chat/x?a=%28b%29)");
+
+    const theirs = await createReminder(sam, { title: "Sam's link" }, { link: "/chat/secret?message=1" });
+    await addPadTask(mark, { title: "Not Sam's", dueAt: null, remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: theirs.reminder.id });
+    assert.equal(await description("Not Sam's"), null);
+  });
+
   it("keeps the task when the reminder can't be removed, and Try again with the same key only removes it", async () => {
     const { reminder } = await createReminder(mark, { title: "Book flights", dueOn: "2030-03-05" });
     const key = randomUUID();

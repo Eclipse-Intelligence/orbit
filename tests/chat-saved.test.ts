@@ -60,6 +60,37 @@ describe("saved routes and labels", () => {
   });
 });
 
+describe("the saved ids store", () => {
+  it("retries a failed load instead of staying wrong, and keeps marks made meanwhile", async () => {
+    const { useChatSaved } = await import("@/stores/chat-saved-store");
+    const real = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("offline");
+      return new Response(JSON.stringify({ ids: ["a", "b"] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const settled = () => new Promise((resolve) => setTimeout(resolve, 20));
+      useChatSaved.getState().load();
+      await settled();
+      assert.equal(useChatSaved.getState().loaded, false);
+      assert.equal(useChatSaved.getState().loading, false);
+      useChatSaved.getState().load();
+      useChatSaved.getState().mark("c", true);
+      useChatSaved.getState().mark("a", false);
+      await settled();
+      assert.equal(calls, 2);
+      assert.equal(useChatSaved.getState().loaded, true);
+      assert.deepEqual([...useChatSaved.getState().ids].sort(), ["b", "c"]);
+      useChatSaved.getState().load();
+      assert.equal(calls, 2);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});
+
 describe("saved messages", () => {
   let mark: UserActor;
   let sam: UserActor;
@@ -259,6 +290,36 @@ describe("saved messages", () => {
       const deleted = (await postMessage(sam, { conversationId: room, body: "Gone" })).message;
       await deleteMessage(sam, deleted.id);
       await refused(remindAboutMessage(mark, deleted.id, "none"), /That message was deleted\./);
+    });
+
+    it("sets tomorrow's reminder on London's tomorrow in British Summer Time, when UTC is still the day before", async () => {
+      const { message } = await postMessage(sam, { conversationId: room, body: "Summer" });
+      const late = Date.parse("2026-07-01T23:30:00Z");
+      const { reminder } = await remindAboutMessage(mark, message.id, "tomorrow", { now: late });
+      assert.equal(reminder.dueOn, "2026-07-03");
+      const winter = await remindAboutMessage(mark, message.id, "tomorrow", { now: Date.parse("2026-12-01T23:30:00Z") });
+      assert.equal(winter.reminder.dueOn, "2026-12-02");
+    });
+
+    it("answers not found, never deleted, to someone who can't see a deleted message", async () => {
+      const dm = await openDm(sam, priya.userId);
+      const { message } = await postMessage(sam, { conversationId: dm.id, body: "Gone and private" });
+      await deleteMessage(sam, message.id);
+      for (const outsider of [mark, ada, olly]) {
+        await refused(setMessageSaved(outsider, message.id, true), /Message not found\./);
+        await refused(remindAboutMessage(outsider, message.id, "none"), /Message not found\./);
+      }
+      await refused(setMessageSaved(priya, message.id, true), /That message was deleted\./);
+    });
+
+    it("replays the first reminder when a Remind me is retried with the same key, even seconds later", async () => {
+      const { message } = await postMessage(sam, { conversationId: room, body: "Retry" });
+      const key = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+      const first = await remindAboutMessage(mark, message.id, "hour", { now: Date.parse("2026-11-20T10:00:00Z"), idempotencyKey: key });
+      const second = await remindAboutMessage(mark, message.id, "hour", { now: Date.parse("2026-11-20T10:00:07.321Z"), idempotencyKey: key });
+      assert.equal(second.reminder.id, first.reminder.id);
+      const other = await remindAboutMessage(mark, message.id, "hour", { now: Date.parse("2026-11-20T10:00:00Z"), idempotencyKey: "1a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d" });
+      assert.notEqual(other.reminder.id, first.reminder.id);
     });
 
     it("sets one reminder for a repeated key", async () => {

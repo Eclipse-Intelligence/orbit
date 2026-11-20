@@ -6,7 +6,7 @@ import { formatDateLabel, todayValue } from "@/lib/date-input";
 import { padDueHasTime, padReading, padRepeatDue, parseTaskText, readingKey, type PadMark, type PadRepeat } from "@/lib/task-pad";
 import { repeatInputOf, ruleWords, WORKWEEK, weekdayOf, type MonthWeek, type RepeatEnds, type RepeatInput, type RepeatRule, type Weekday } from "@/lib/task-repeat";
 
-export const REMINDER_LINK_LABEL = "Open message";
+export { REMINDER_LINK_LABEL } from "@/lib/crm/reminder-link";
 
 export type HeldTick = { snapshot: Reminder; doneId: string | null };
 

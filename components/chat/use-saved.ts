@@ -6,6 +6,7 @@ import { newClientKey } from "@/lib/chat/client";
 import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage, ChatRemindWhen } from "@/lib/chat/types";
 import { useChatSaved } from "@/stores/chat-saved-store";
+import { useCompaniesStore } from "@/stores/companies-store";
 
 export const SAVE_FAILED = "Couldn't save the message. Try again.";
 export const UNSAVE_FAILED = "Couldn't remove it from Saved. Try again.";
@@ -31,6 +32,7 @@ export function useSavedMessages(report: (message: string) => void, enabled = tr
     reporter.current = report;
   });
   const reminding = useRef(new Set<string>());
+  const keys = useRef(new Map<string, string>());
 
   useEffect(() => {
     if (enabled) useChatSaved.getState().load();
@@ -40,6 +42,7 @@ export function useSavedMessages(report: (message: string) => void, enabled = tr
 
   const save = useCallback((message: ChatMessage, saved: boolean) => {
     if (isLocal(message) || message.deletedAt) return;
+    useChatSaved.getState().load();
     useChatSaved.getState().mark(message.id, saved);
     void saveMessageAction(message.id, saved)
       .catch(() => ({ error: saved ? SAVE_FAILED : UNSAVE_FAILED }))
@@ -53,9 +56,19 @@ export function useSavedMessages(report: (message: string) => void, enabled = tr
   const remind = useCallback((message: ChatMessage, when: ChatRemindWhen) => {
     if (isLocal(message) || message.deletedAt || reminding.current.has(message.id)) return;
     reminding.current.add(message.id);
-    void remindAboutMessageAction(message.id, when, newClientKey())
+    const attempt = `${message.id}:${when}`;
+    const key = keys.current.get(attempt) ?? newClientKey();
+    keys.current.set(attempt, key);
+    void remindAboutMessageAction(message.id, when, key)
       .catch(() => ({ error: REMIND_FAILED }))
-      .then((result) => reporter.current("ok" in result && result.ok ? REMINDER_ADDED : "error" in result ? result.error : REMIND_FAILED))
+      .then((result) => {
+        const added = "ok" in result && result.ok;
+        if (added) {
+          keys.current.delete(attempt);
+          useCompaniesStore.getState().touchReminders("chat");
+        }
+        reporter.current(added ? REMINDER_ADDED : "error" in result ? result.error : REMIND_FAILED);
+      })
       .finally(() => reminding.current.delete(message.id));
   }, []);
 

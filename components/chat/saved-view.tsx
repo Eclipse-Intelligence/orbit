@@ -87,7 +87,6 @@ export default function SavedView() {
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const loaded = useChatSaved((store) => store.loaded);
   const ids = useChatSaved((store) => store.ids);
 
   const receive = useCallback((incoming: ChatSavedItem[], merge: (current: ChatSavedItem[], incoming: ChatSavedItem[]) => ChatSavedItem[]) => {
@@ -104,6 +103,7 @@ export default function SavedView() {
         setError(null);
       })
       .catch((failure: Error) => setError(failure.message));
+    useChatSaved.getState().load();
   }, [receive]);
 
   useEffect(() => {
@@ -129,7 +129,7 @@ export default function SavedView() {
       .finally(() => setLoadingMore(false));
   }
 
-  const shown = items?.filter((item) => !loaded || ids.has(item.message.id)) ?? null;
+  const shown = items?.filter((item) => ids.has(item.message.id)) ?? null;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">

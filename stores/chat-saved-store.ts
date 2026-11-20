@@ -6,7 +6,7 @@ type ChatSavedState = {
   loaded: boolean;
   loading: boolean;
   changed: Map<string, boolean>;
-  load: (options?: { force?: boolean }) => void;
+  load: () => void;
   mark: (messageId: string, saved: boolean) => void;
 };
 
@@ -15,9 +15,9 @@ export const useChatSaved = create<ChatSavedState>((set, get) => ({
   loaded: false,
   loading: false,
   changed: new Map(),
-  load: ({ force = false } = {}) => {
+  load: () => {
     const { loaded, loading } = get();
-    if (loading || (loaded && !force)) return;
+    if (loading || loaded) return;
     set({ loading: true, changed: new Map() });
     chatApi
       .savedIds()

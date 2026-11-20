@@ -327,13 +327,13 @@ function readLink(value: unknown) {
 export async function createReminder(
   actor: Actor,
   input: ReminderInput,
-  options: { now?: number; idempotencyKey?: string | null; link?: string | null } = {},
+  options: { now?: number; idempotencyKey?: string | null; link?: string | null; fingerprint?: unknown } = {},
 ) {
   const person = personOf(actor, "tasks:write");
   const link = readLink(options.link);
   if (!options.idempotencyKey) return addReminder(person, input, link, options.now);
   const key = options.idempotencyKey;
-  const hashed = link ? { ...input, link } : input;
+  const hashed = options.fingerprint ?? (link ? { ...input, link } : input);
   return withActor(person, async (db) => (await replayOrRun(db, person, key, requestHash("create_reminder", hashed), 201, () => addReminder(person, input, link, options.now, db))).body);
 }
 

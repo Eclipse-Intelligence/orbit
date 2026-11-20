@@ -179,5 +179,5 @@ export async function remindAboutMessage(
   const row = await withActor(actor, (db) => readableMessage(db, messageId));
   const link = savedMessageHref(row.conversation_id, { id: row.id, parentId: row.parent_id }, subjectOf(row));
   const timing = wanted === "hour" ? { dueAt: new Date(now + HOUR_MS).toISOString() } : wanted === "tomorrow" ? { dueOn: shiftDay(dayKeyAt(new Date(now)), 1) } : {};
-  return createReminder(actor, { title: reminderTitle(row.author_name), ...timing }, { now, idempotencyKey: options.idempotencyKey ?? null, link });
+  return createReminder(actor, { title: reminderTitle(row.author_name), ...timing }, { now, idempotencyKey: options.idempotencyKey ?? null, link, fingerprint: { messageId, when: wanted } });
 }
