@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import Button from "@/components/_ui/button";
 import { DiscussionComposer, DiscussionMessages, DiscussionNotice, DiscussionProvider, DiscussionThread } from "@/components/chat/discussion";
-import { caretToEnd } from "@/components/chat/composer";
+import { caretToEnd, COMPOSER_INPUT } from "@/components/chat/composer";
 import { useDiscussion, type Discussion } from "@/components/chat/use-discussion";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import type { ChatPerson } from "@/lib/chat/types";
@@ -39,7 +39,7 @@ function AddPrompt({ discussion, onAdd }: { discussion: Discussion; onAdd: AddPe
     const pane = box.current?.closest("[data-chat-room-pane]") ?? null;
     discussion.settleNeedsShare(added);
     window.setTimeout(() => {
-      const area = pane?.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea");
+      const area = pane?.querySelector<HTMLElement>(COMPOSER_INPUT);
       area?.focus({ preventScroll: true });
       caretToEnd(area);
     }, 0);
@@ -144,7 +144,7 @@ export default function ThreadNotes({
     if (!reveal || revealed.current || discussion.status !== "ready") return;
     revealed.current = true;
     section.current?.scrollIntoView({ block: "nearest" });
-    section.current?.querySelector<HTMLTextAreaElement>("[data-chat-composer] textarea")?.focus({ preventScroll: true });
+    section.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   }, [reveal, discussion.status]);
 
   if (layout === "below") {

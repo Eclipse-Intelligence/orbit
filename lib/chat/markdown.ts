@@ -23,7 +23,7 @@ export type MarkRange = { start: number; end: number };
 
 export type FormatKind = "bold" | "italic" | "strike" | "link" | "bullets" | "numbers" | "code" | "codeBlock" | "quote";
 
-export type FormatSpan = MarkRange & { kind: FormatKind };
+export type FormatSpan = MarkRange & { kind: FormatKind; href?: string };
 
 type Collect = { marks: MarkRange[]; codes: MarkRange[]; spans: FormatSpan[] } | null;
 
@@ -250,7 +250,7 @@ function parseInline(src: string, from: number, to: number, collect: Collect, in
         flush();
         out.push({ type: "link", href: link.href, children: parseInline(src, at + 1, link.labelEnd, collect, true) });
         collect?.marks.push({ start: at, end: at + 1 }, { start: link.labelEnd, end: link.end });
-        collect?.spans.push({ kind: "link", start: at, end: link.end });
+        collect?.spans.push({ kind: "link", start: at, end: link.end, href: link.href });
         at = link.end;
         continue;
       }
@@ -426,6 +426,11 @@ function collected(src: string) {
   const collect = { marks: [] as MarkRange[], codes: [] as MarkRange[], spans: [] as FormatSpan[] };
   parseBlocks(src, collect);
   return collect;
+}
+
+export function markdownLayout(src: string): { marks: MarkRange[]; spans: FormatSpan[] } {
+  const { marks, spans } = collected(src);
+  return { marks, spans };
 }
 
 export function markdownMarks(src: string): MarkRange[] {

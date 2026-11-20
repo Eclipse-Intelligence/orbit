@@ -9,6 +9,7 @@ import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { useNoFileNavigation } from "@/components/chat/attachments";
 import { ChatContext, type ChatContextValue, type ChatEditing, type ChatWorkspace } from "@/components/chat/chat-context";
 import { NewMessageDialog, NewRoomDialog } from "@/components/chat/chat-dialogs";
+import { chatInputText } from "@/components/chat/chat-input";
 import ChatList, { listViews } from "@/components/chat/chat-list";
 import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { useEmojiPrefs } from "@/components/chat/reactions";
@@ -79,7 +80,8 @@ function parentOf(location: ChatLocation): ChatLocation {
 
 function composerHasText() {
   const active = document.activeElement;
-  return active instanceof HTMLTextAreaElement && active.value.length > 0;
+  if (active instanceof HTMLTextAreaElement) return active.value.length > 0;
+  return (chatInputText(active)?.length ?? 0) > 0;
 }
 
 export default function ChatScreen({ viewer, workspaces, initial, now: initialNow }: { viewer: Viewer; workspaces: ChatWorkspace[]; initial: ChatInitial; now: number }) {

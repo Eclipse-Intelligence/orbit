@@ -5,7 +5,7 @@ import Button from "@/components/_ui/button";
 import { useNoFileNavigation } from "@/components/chat/attachments";
 import { ChatContext, useChat } from "@/components/chat/chat-context";
 import ChatMessageRow from "@/components/chat/chat-message";
-import Composer from "@/components/chat/composer";
+import Composer, { chatInputText } from "@/components/chat/composer";
 import type { Discussion } from "@/components/chat/use-discussion";
 import { dayOf } from "@/lib/chat/format";
 import { isLocal, lastOwnMessage, newestServerId, startsGroup } from "@/lib/chat/timeline";
@@ -18,10 +18,17 @@ export const NOTE_PLACEHOLDER = "Note… @ to tag";
 
 export function holdEscape(discussion: Discussion | null) {
   const active = document.activeElement;
+  if (active?.closest("[data-chat-link-form]")) return true;
   if (active instanceof HTMLTextAreaElement) {
     if (active.getAttribute("aria-expanded") === "true" || active.getAttribute("aria-label") === "Edit message") return true;
     const composer = active.closest("[data-chat-composer]");
     if (composer && (active.value.trim() || composer.hasAttribute("data-chat-queued"))) return true;
+  }
+  const typed = chatInputText(active);
+  if (typed !== null && active) {
+    if (active.getAttribute("aria-expanded") === "true" || active.getAttribute("aria-label") === "Edit message") return true;
+    const composer = active.closest("[data-chat-composer]");
+    if (composer && (typed.trim() || composer.hasAttribute("data-chat-queued"))) return true;
   }
   if (discussion?.threadId) {
     discussion.context.closeThread();
