@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { Client } from "pg";
-import { chatWorkSettled, createRoom, editMessage, listConversations, postFromWeb, postMessage, searchMessages, setConversationNotify, updateRoom } from "@/lib/crm/chat";
+import { chatWorkSettled, createRoom, deleteMessage, editMessage, listConversations, listThreads, postFromWeb, postMessage, searchMessages, setConversationNotify, updateRoom } from "@/lib/crm/chat";
 import { prepareChatUpload } from "@/lib/crm/chat-attachments";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
@@ -192,6 +192,45 @@ describe("chat area review fixes", () => {
       await postMessage(mark, { conversationId: flows, body: "Digest", clientKey: key() }, { viaWorkflowId: workflow.id });
       assert.equal((await sidebarEntry(mark, flows)).unread, 1);
       assert.deepEqual(await titles(mark.userId), ["Mark via Weekly digest posted in #area-flows"]);
+    });
+  });
+
+  describe("threads list", () => {
+    it("keeps a thread while a reply is live, with its deleted root, and drops it when everything is deleted", async () => {
+      const where = await room("area-threads");
+      const root = (await postMessage(sam, { conversationId: where, body: "Starting a thread", clientKey: key() })).message;
+      const reply = (await postMessage(mark, { conversationId: where, parentId: root.id, body: "A live reply", clientKey: key() })).message;
+      const second = (await postMessage(mark, { conversationId: where, parentId: root.id, body: "Another reply", clientKey: key() })).message;
+      const listed = async () => (await listThreads(mark)).threads.filter((card) => card.conversation.id === where);
+      assert.equal((await listed()).length, 1);
+      await deleteMessage(sam, root.id);
+      const [card] = await listed();
+      assert.ok(card.root.deletedAt);
+      assert.equal(card.root.body, "");
+      assert.deepEqual(
+        card.latest.map((message) => message.body),
+        ["A live reply", "Another reply"],
+      );
+      await deleteMessage(mark, reply.id);
+      assert.equal((await listed()).length, 1);
+      await deleteMessage(mark, second.id);
+      assert.deepEqual(await listed(), []);
+    });
+
+    it("returns as many cards as asked for, up to 50", async () => {
+      const crowd = await room("area-crowd");
+      for (let index = 0; index < 52; index += 1) {
+        const root = (await postMessage(sam, { conversationId: crowd, body: `Topic ${index}`, clientKey: key() })).message;
+        await postMessage(mark, { conversationId: crowd, parentId: root.id, body: "Reply", clientKey: key() });
+      }
+      const inCrowd = (page: Awaited<ReturnType<typeof listThreads>>) => page.threads.filter((card) => card.conversation.id === crowd).length;
+      assert.equal(inCrowd(await listThreads(mark)), 20);
+      const wider = await listThreads(mark, { limit: 35 });
+      assert.equal(wider.threads.length, 35);
+      assert.ok(wider.next);
+      const capped = await listThreads(mark, { limit: 500 });
+      assert.equal(capped.threads.length, 50);
+      assert.ok(capped.next);
     });
   });
 

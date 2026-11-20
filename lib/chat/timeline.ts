@@ -1,5 +1,5 @@
 import type { ChatAttachment, ChatConversation, ChatLinkPreview, ChatMessage, ChatNotifyInput, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
-import { EMPTY_HOOK_CARD, isDirect } from "@/lib/chat/types";
+import { CHAT_THREADS_MAX, CHAT_THREADS_PAGE, EMPTY_HOOK_CARD, isDirect } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
 const GROUP_GAP_MS = 5 * 60_000;
@@ -560,12 +560,18 @@ export function appendCards(current: ChatThreadCard[], incoming: ChatThreadCard[
   return [...current, ...incoming.filter((card) => !seen.has(card.root.id))];
 }
 
-export function replaceCards(_current: ChatThreadCard[], fresh: ChatThreadCard[]) {
-  return fresh;
+export function reloadLimit(loaded: number) {
+  return Math.min(CHAT_THREADS_MAX, Math.max(CHAT_THREADS_PAGE, loaded));
 }
 
-export function dropCards(current: ChatThreadCard[], gone: { conversationId?: string; rootId?: string }) {
-  const kept = current.filter((card) => card.conversation.id !== gone.conversationId && card.root.id !== gone.rootId);
+export function reloadCards(current: ChatThreadCard[], fresh: ChatThreadCard[], limit: number) {
+  if (current.length <= limit) return fresh;
+  const updated = new Set(fresh.map((card) => card.root.id));
+  return [...fresh, ...current.filter((card) => !updated.has(card.root.id))];
+}
+
+export function dropCards(current: ChatThreadCard[], conversationId: string) {
+  const kept = current.filter((card) => card.conversation.id !== conversationId);
   return kept.length === current.length ? current : kept;
 }
 

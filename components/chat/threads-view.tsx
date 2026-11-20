@@ -10,7 +10,7 @@ import Composer from "@/components/chat/composer";
 import { PhoneBack } from "@/components/chat/room-view";
 import { chatApi } from "@/lib/chat/client";
 import { shortWhen } from "@/lib/chat/format";
-import { appendCards, applyPreviews, applyReactions, dropCards, replaceCards } from "@/lib/chat/timeline";
+import { appendCards, applyPreviews, applyReactions, dropCards, reloadCards, reloadLimit } from "@/lib/chat/timeline";
 import { isDirect, type ChatMessage, type ChatThreadCard, type ChatThreads } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
@@ -108,12 +108,20 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
     });
   }, []);
 
+  const loaded = useRef<ChatThreadCard[] | null>(cards);
+
+  useEffect(() => {
+    loaded.current = cards;
+  }, [cards]);
+
   const reload = useCallback(() => {
+    const before = loaded.current?.length ?? 0;
+    const limit = reloadLimit(before);
     chatApi
-      .threads()
+      .threads({ limit })
       .then((page) => {
-        receive(page.threads, replaceCards);
-        setNext(page.next);
+        receive(page.threads, (current, fresh) => reloadCards(current, fresh, limit));
+        if (before <= limit) setNext(page.next);
         setError(null);
       })
       .catch((failure: Error) => setError(failure.message));
@@ -136,8 +144,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
       setCards((current) => current?.map((card) => ({ ...card, root: apply([card.root])[0], latest: apply(card.latest) })) ?? current);
       return;
     }
-    if (event.type === "removed") setCards((current) => (current ? dropCards(current, { conversationId: event.conversationId }) : current));
-    if (event.type === "delete" && !event.parentId) setCards((current) => (current ? dropCards(current, { rootId: event.messageId }) : current));
+    if (event.type === "removed") setCards((current) => (current ? dropCards(current, event.conversationId) : current));
     if (event.type === "message" && !event.message.parentId) return;
     if (event.type === "read" || event.type === "scheduled") return;
     window.clearTimeout(settle.current);
@@ -148,7 +155,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
     if (!next || loadingMore) return;
     setLoadingMore(true);
     chatApi
-      .threads(next)
+      .threads({ cursor: next })
       .then((page) => {
         receive(page.threads, appendCards);
         setNext(page.next);

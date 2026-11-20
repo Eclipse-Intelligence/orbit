@@ -42,6 +42,8 @@ import {
   type ChatThreadCard,
   type ChatThreads,
   type ChatUnreads,
+  CHAT_THREADS_MAX,
+  CHAT_THREADS_PAGE,
   groupName,
   isChatKind,
   isDirect,
@@ -130,8 +132,6 @@ type MemberRow = { user_id: string; last_read_at: Stamp; notify: ChatNotify; mut
 export type LinkedRoom = { conversationId: string; memberIds: string[] };
 
 const THREAD_CARD_REPLIES = 2;
-const THREADS_PAGE_SIZE = 20;
-const THREADS_PAGE_MAX = 50;
 const SEARCH_LIMIT = 30;
 const UNREADS_PER_CONVERSATION = 20;
 const MENTION_MAX = 50;
@@ -1012,7 +1012,7 @@ function threadsCursor(cursor: ThreadsCursor) {
 }
 
 export async function listThreads(actor: UserActor, options: { cursor?: string | null; limit?: number } = {}): Promise<ChatThreads> {
-  const limit = Math.min(THREADS_PAGE_MAX, pageSize(options.limit, THREADS_PAGE_SIZE));
+  const limit = Math.min(CHAT_THREADS_MAX, pageSize(options.limit, CHAT_THREADS_PAGE));
   const cursor = readThreadsCursor(options.cursor);
   return withActor(actor, async (db) => {
     const result = await db.query<

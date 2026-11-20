@@ -9,10 +9,11 @@ import {
   appendCards,
   chatReducer,
   dropCards,
+  reloadCards,
+  reloadLimit,
   loadsLatestFirst,
   needsCatchUp,
   newerCursor,
-  replaceCards,
   EMPTY_CHAT,
   lastOwnMessage,
   localMessage,
@@ -395,35 +396,41 @@ describe("chat review fixes", () => {
     }
   });
 
-  it("replaces thread cards on a reload, merges them only on Show more and drops cards that are gone", () => {
+  it("reloads thread cards without losing the loaded pages, and drops cards of a conversation you left", () => {
     const card = (id: string, unread: number, conversationId = ROOM) => ({ conversation: { id: conversationId, kind: "room" as const, name: "sales", people: [] }, root: message({ id, at: "2026-11-11T08:00:00.000Z" }), latest: [], earlier: 0, unread, mentions: 0, lastReadAt: "" });
     const other = "55555555-5555-4555-8555-555555555555";
     const a = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000a", 0);
     const b = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000b", 0);
     const c = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000c", 0, other);
     assert.deepEqual(
-      replaceCards([a, b, c], [{ ...c, unread: 1 }, a]).map((item) => [item.root.id, item.unread]),
+      reloadCards([a, b, c], [{ ...c, unread: 1 }, a], 3).map((item) => [item.root.id, item.unread]),
       [
         [c.root.id, 1],
         [a.root.id, 0],
       ],
     );
-    assert.deepEqual(replaceCards([a, b], []), []);
+    assert.deepEqual(reloadCards([a, b], [], 20), []);
+    assert.deepEqual(
+      reloadCards([a, b, c], [{ ...c, unread: 1 }], 1).map((item) => [item.root.id, item.unread]),
+      [
+        [c.root.id, 1],
+        [a.root.id, 0],
+        [b.root.id, 0],
+      ],
+    );
+    assert.equal(reloadLimit(0), 20);
+    assert.equal(reloadLimit(35), 35);
+    assert.equal(reloadLimit(120), 50);
     assert.deepEqual(
       appendCards([a], [a, b]).map((item) => item.root.id),
       [a.root.id, b.root.id],
     );
     assert.deepEqual(
-      dropCards([a, b, c], { conversationId: ROOM }).map((item) => item.root.id),
+      dropCards([a, b, c], ROOM).map((item) => item.root.id),
       [c.root.id],
     );
-    assert.deepEqual(
-      dropCards([a, b, c], { rootId: b.root.id }).map((item) => item.root.id),
-      [a.root.id, c.root.id],
-    );
     const unchanged = [a, b];
-    assert.equal(dropCards(unchanged, { conversationId: other }), unchanged);
-    assert.equal(dropCards(unchanged, {}), unchanged);
+    assert.equal(dropCards(unchanged, other), unchanged);
   });
 
   it("ignores an edit that arrives after the message was deleted", () => {
