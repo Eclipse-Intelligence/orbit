@@ -342,7 +342,10 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   }, [roomId, roomMessage, loadMessages, loadRoom]);
 
   useEffect(() => {
-    if (!threadId) return;
+    if (!threadId) {
+      openedThread.current = null;
+      return;
+    }
     const key = `thread:${threadId}`;
     if (fresh.current.has(key)) {
       fresh.current.delete(key);
