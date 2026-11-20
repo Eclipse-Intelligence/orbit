@@ -6,7 +6,7 @@ import type { ChatLocation } from "@/lib/chat/routes";
 import type { EmojiPrefs } from "@/components/chat/reactions";
 import type { ChatTimelineActions } from "@/components/chat/use-chat-actions";
 import type { ChatSavedActions } from "@/components/chat/use-saved";
-import type { ChatAttachment, ChatConversation, ChatMessage, ChatPerson } from "@/lib/chat/types";
+import { chatLabel, type ChatAttachment, type ChatConversation, type ChatMessage, type ChatPerson } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { personParticipant } from "@/lib/docs/participants";
 import { cn } from "@/lib/utils";
@@ -64,6 +64,16 @@ export function AvatarStack({ people, size = "xs", ringClass }: { people: ChatPe
   );
 }
 
+export function GroupAvatar({ people, className }: { people: ChatPerson[]; className?: string }) {
+  const [first, second] = people;
+  return (
+    <span aria-hidden className={cn("relative inline-block size-5 shrink-0", className)}>
+      {first && <ChatAvatar person={first} size="xs" ring className="absolute top-0 left-0 size-3.5 text-[0px]" />}
+      {second && <ChatAvatar person={second} size="xs" ring className="absolute right-0 bottom-0 size-3.5 text-[0px]" />}
+    </span>
+  );
+}
+
 export function roomLabel(conversation: Pick<ChatConversation, "kind" | "name">) {
-  return conversation.kind === "dm" ? conversation.name : `#${conversation.name}`;
+  return chatLabel(conversation);
 }

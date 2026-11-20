@@ -8,14 +8,14 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadio
 import FilterChip from "@/components/_ui/filter-chip";
 import { Label } from "@/components/_ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
-import { ChatAvatar, useChat } from "@/components/chat/chat-context";
+import { ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { PhoneBack } from "@/components/chat/room-view";
 import SearchField, { SearchHint, type SearchBox } from "@/components/chat/search-field";
 import { chatApi } from "@/lib/chat/client";
 import { stampWhen } from "@/lib/chat/format";
 import { parseChatLocation } from "@/lib/chat/routes";
 import { searchFilterCount, searchParts, searchReady, writeSearchQuery } from "@/lib/chat/search";
-import type { ChatPerson, ChatSearchHit, ChatSearchQuery } from "@/lib/chat/types";
+import { isDirect, type ChatPerson, type ChatSearchHit, type ChatSearchQuery } from "@/lib/chat/types";
 import { formatDateLabel } from "@/lib/date-input";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -49,6 +49,7 @@ function where(hit: ChatSearchHit, multi: boolean) {
     return subject.title ? `${noun}: ${subject.title}` : noun;
   }
   if (conversation.kind === "dm") return `Direct message with ${conversation.name}`;
+  if (conversation.kind === "group_dm") return `Group message with ${conversation.name}`;
   return `#${conversation.name}${multi && conversation.workspaceName ? ` · ${conversation.workspaceName}` : ""}`;
 }
 
@@ -148,11 +149,11 @@ function Filters({ query, onChange }: { query: ChatSearchQuery; onChange: (query
   const conversations = useMemo(() => sidebar?.conversations ?? [], [sidebar]);
   const archived = useMemo(() => sidebar?.archived ?? [], [sidebar]);
   const rooms = conversations.filter((item) => item.kind === "room");
-  const dms = conversations.filter((item) => item.kind === "dm");
+  const dms = conversations.filter((item) => isDirect(item.kind));
   const inLabel = useMemo(() => {
     if (!query.in) return null;
     const found = conversations.find((item) => item.id === query.in);
-    if (found) return found.kind === "dm" ? found.name : `#${found.name}`;
+    if (found) return roomLabel(found);
     const old = archived.find((item) => item.id === query.in);
     return old ? `#${old.name}` : "A conversation";
   }, [query.in, conversations, archived]);

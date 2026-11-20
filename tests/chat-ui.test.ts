@@ -230,8 +230,8 @@ describe("chat timeline", () => {
 describe("chat sidebar badge", () => {
   const sidebar: ChatSidebar = {
     conversations: [
-      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
-      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0, notify: "default", muteMentions: false, starred: false },
+      { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, people: [], topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
+      { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, people: [], topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 0, mentions: 0, notify: "default", muteMentions: false, starred: false },
     ],
     archived: [],
     threads: { unread: 0, mentions: 0 },
@@ -367,7 +367,7 @@ describe("chat review fixes", () => {
   });
 
   it("merges refreshed thread cards without dropping later pages", () => {
-    const card = (id: string, unread: number) => ({ conversation: { id: ROOM, kind: "room" as const, name: "sales" }, root: message({ id, at: "2026-11-11T08:00:00.000Z" }), latest: [], earlier: 0, unread, mentions: 0, lastReadAt: "" });
+    const card = (id: string, unread: number) => ({ conversation: { id: ROOM, kind: "room" as const, name: "sales", people: [] }, root: message({ id, at: "2026-11-11T08:00:00.000Z" }), latest: [], earlier: 0, unread, mentions: 0, lastReadAt: "" });
     const a = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000a", 0);
     const b = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000b", 0);
     const c = card("aaaaaaaa-aaaa-4aaa-8aaa-00000000000c", 0);
@@ -491,8 +491,8 @@ describe("chat notify and unread state", () => {
   it("updates one conversation's settings and clears every unread count", () => {
     const sidebar: ChatSidebar = {
       conversations: [
-        { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
-        { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 2, mentions: 0, notify: "default", muteMentions: false, starred: false },
+        { id: ROOM, kind: "room", name: "sales", workspaceId: null, workspaceName: null, dmUser: null, people: [], topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 3, mentions: 1, notify: "default", muteMentions: false, starred: false },
+        { id: SAM, kind: "dm", name: "Sam", workspaceId: null, workspaceName: null, dmUser: { id: SAM, name: "Sam" }, people: [], topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread: 2, mentions: 0, notify: "default", muteMentions: false, starred: false },
       ],
       archived: [],
       threads: { unread: 1, mentions: 1 },

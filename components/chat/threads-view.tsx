@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import Tag from "@/components/_ui/tag";
-import { ChatAvatar, useChat } from "@/components/chat/chat-context";
+import { ChatAvatar, GroupAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import ChatMessageRow from "@/components/chat/chat-message";
 import { useChatEvents } from "@/components/chat/chat-live";
 import Composer from "@/components/chat/composer";
@@ -11,7 +11,7 @@ import { PhoneBack } from "@/components/chat/room-view";
 import { chatApi } from "@/lib/chat/client";
 import { shortWhen } from "@/lib/chat/format";
 import { appendCards, applyReactions, refreshCards } from "@/lib/chat/timeline";
-import type { ChatMessage, ChatThreadCard, ChatThreads } from "@/lib/chat/types";
+import { isDirect, type ChatMessage, type ChatThreadCard, type ChatThreads } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
 const SETTLE_MS = 500;
@@ -25,7 +25,7 @@ function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean })
   return (
     <article
       className={cn("rounded-2xl pt-3 pb-2", unread ? "bg-surface-raised" : "bg-surface-panel")}
-      aria-label={`Thread in ${card.conversation.kind === "dm" ? card.conversation.name : `#${card.conversation.name}`}`}
+      aria-label={`Thread in ${roomLabel(card.conversation)}`}
     >
       <div className="flex items-center gap-2 px-4 pb-1.5 max-md:px-3 md:pointer-coarse:pb-3.5">
         <button
@@ -33,11 +33,15 @@ function Card({ card, open: expanded }: { card: ChatThreadCard; open: boolean })
           onClick={open}
           className="ui-style hit flex min-w-0 items-center gap-2 rounded-md font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/60 max-md:min-h-11"
         >
-          {card.conversation.kind === "dm" ? (
+          {isDirect(card.conversation.kind) ? (
             <>
-              <ChatAvatar person={other ? { id: other.id ?? card.conversation.id, name: other.name } : { id: card.conversation.id, name: card.conversation.name }} size="xs" />
+              {card.conversation.kind === "group_dm" ? (
+                <GroupAvatar people={card.conversation.people} />
+              ) : (
+                <ChatAvatar person={other ? { id: other.id ?? card.conversation.id, name: other.name } : { id: card.conversation.id, name: card.conversation.name }} size="xs" />
+              )}
               <span className="truncate">{card.conversation.name}</span>
-              <span className="caption-style text-subtle font-normal max-sm:hidden">Direct message</span>
+              <span className="caption-style text-subtle font-normal max-sm:hidden">{card.conversation.kind === "group_dm" ? "Group message" : "Direct message"}</span>
             </>
           ) : (
             <span className={cn("truncate", !unread && "text-soft")}>

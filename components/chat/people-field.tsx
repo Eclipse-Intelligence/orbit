@@ -31,6 +31,7 @@ export default function PeopleField({
   onChange,
   loading,
   autoFocus,
+  max,
 }: {
   inputId: string;
   people: ChatCandidate[];
@@ -38,6 +39,7 @@ export default function PeopleField({
   onChange: (selected: ChatCandidate[]) => void;
   loading?: boolean;
   autoFocus?: boolean;
+  max?: number;
 }) {
   const listId = useId();
   const input = useRef<HTMLInputElement>(null);
@@ -45,8 +47,9 @@ export default function PeopleField({
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState<number | null>(null);
   const chosen = new Set(selected.map((person) => person.id));
-  const options = matchPeople(people, query, chosen).slice(0, MAX_SHOWN);
-  const showList = open && (options.length > 0 || loading || query.trim().length > 0);
+  const full = max !== undefined && selected.length >= max;
+  const options = full ? [] : matchPeople(people, query, chosen).slice(0, MAX_SHOWN);
+  const showList = !full && open && (options.length > 0 || loading || query.trim().length > 0);
   const active = highlight === null ? (query.trim() ? 0 : null) : Math.min(highlight, Math.max(0, options.length - 1));
   const activeId = showList && active !== null && options[active] ? `${listId}-${options[active].id}` : undefined;
 
@@ -117,6 +120,7 @@ export default function PeopleField({
           aria-activedescendant={activeId}
           autoComplete="off"
           autoFocus={autoFocus}
+          readOnly={full}
           placeholder={selected.length ? "" : "Add people…"}
           onChange={(event) => {
             setQuery(event.target.value);

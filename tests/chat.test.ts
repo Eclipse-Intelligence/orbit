@@ -482,7 +482,7 @@ describe("chat", () => {
         card.latest.map((message) => message.body),
         ["Second reply", `Third ${tag(sam)}`],
       );
-      assert.deepEqual(card.conversation, { id: room, kind: "room", name: "paging" });
+      assert.deepEqual(card.conversation, { id: room, kind: "room", name: "paging", people: [] });
       assert.equal(view.threads[0].unread > 0, true);
       await markThreadRead(sam, root.message.id);
       assert.equal((await listThreads(sam)).threads.find((item) => item.root.id === root.message.id)!.unread, 0);

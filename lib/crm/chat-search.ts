@@ -3,6 +3,7 @@ import { discussionHref } from "@/lib/chat/discussions";
 import { cleanFormat } from "@/lib/chat/markdown";
 import { messageHref } from "@/lib/chat/routes";
 import { searchExcerpt } from "@/lib/chat/search";
+import { directName, GROUP_PEOPLE, type PeopleRow } from "@/lib/crm/chat";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, pgFailure } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
@@ -102,7 +103,7 @@ function writeCursor(row: { created_key: string; id: string }) {
   return Buffer.from(JSON.stringify({ t: row.created_key, id: row.id })).toString("base64url");
 }
 
-function toHit(row: SearchRow, text: string, full: boolean): ChatSearchHit {
+function toHit(row: SearchRow, text: string, full: boolean, groups: Map<string, PeopleRow[]>): ChatSearchHit {
   const kind = row.conversation_kind;
   const discussion = kind === "task" || kind === "doc" || kind === "mail_thread";
   const subject = discussion && row.subject_id ? { kind: kind as ChatSubjectKind, id: row.subject_id, title: row.subject_title?.trim() || null } : null;
@@ -116,7 +117,7 @@ function toHit(row: SearchRow, text: string, full: boolean): ChatSearchHit {
     excerpt: searchExcerpt(row.body, cleanFormat(row.format), text),
     ...(full ? { text: row.body } : {}),
     files: row.files ?? [],
-    conversation: { kind, name: kind === "dm" ? row.conversation_name || FORMER : (row.conversation_name ?? ""), workspaceName: row.workspace_name, archived: row.archived },
+    conversation: { kind, name: directName(kind, { name: row.conversation_name, dmName: row.conversation_name, people: groups.get(row.conversation_id) ?? null }), workspaceName: row.workspace_name, archived: row.archived },
     subject,
     href: subject ? discussionHref({ kind: subject.kind, id: subject.id }) : messageHref(row.conversation_id, { id: row.id, parentId }),
   };
@@ -146,13 +147,17 @@ export async function searchChat(actor: UserActor, input: ChatSearchInput, optio
   const more = rows.length > limit;
   const page = rows.slice(0, limit);
   if (page.length === 0) return { hits: [], next: null };
-  const seen = await withActor(actor, async (db) => {
+  const { seen, groups } = await withActor(actor, async (db) => {
     const result = await db.query<{ id: string }>("select id from crm.chat_messages where id = any($1::uuid[])", [page.map((row) => row.id)]);
-    return new Set(result.rows.map((row) => row.id));
+    const groupIds = [...new Set(page.filter((row) => row.conversation_kind === "group_dm").map((row) => row.conversation_id))];
+    const people = groupIds.length
+      ? await db.query<{ id: string; people: PeopleRow[] | null }>(`select c.id, ${GROUP_PEOPLE("c", "$2")} as people from crm.chat_conversations c where c.id = any($1::uuid[])`, [groupIds, actor.userId])
+      : { rows: [] };
+    return { seen: new Set(result.rows.map((row) => row.id)), groups: new Map(people.rows.map((row) => [row.id, row.people ?? []])) };
   });
   const last = page[page.length - 1];
   return {
-    hits: page.filter((row) => seen.has(row.id)).map((row) => toHit(row, text, options.agent === true)),
+    hits: page.filter((row) => seen.has(row.id)).map((row) => toHit(row, text, options.agent === true, groups)),
     next: more ? writeCursor(last) : null,
   };
 }

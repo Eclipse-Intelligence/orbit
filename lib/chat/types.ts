@@ -1,6 +1,26 @@
 import type { ChatFormat } from "@/lib/chat/markdown";
 
-export type ChatKind = "room" | "dm" | "task" | "doc" | "mail_thread";
+export type ChatKind = "room" | "dm" | "group_dm" | "task" | "doc" | "mail_thread";
+
+export const CHAT_GROUP_MAX = 8;
+
+export function isDirect(kind: ChatKind) {
+  return kind === "dm" || kind === "group_dm";
+}
+
+export function isChatKind(kind: ChatKind) {
+  return kind === "room" || isDirect(kind);
+}
+
+export function groupName(names: string[]) {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+export function chatLabel(conversation: { kind: ChatKind; name: string }) {
+  return conversation.kind === "room" ? `#${conversation.name}` : conversation.name;
+}
 
 export type ChatSubjectKind = "task" | "doc" | "mail_thread";
 
@@ -41,7 +61,7 @@ export type ChatLevel = Exclude<ChatNotify, "default">;
 
 export function chatLevel(kind: ChatKind, notify: ChatNotify): ChatLevel {
   if (notify !== "default") return notify;
-  return kind === "dm" ? "all" : "mentions";
+  return isDirect(kind) ? "all" : "mentions";
 }
 
 export type ChatConversation = {
@@ -51,6 +71,7 @@ export type ChatConversation = {
   workspaceId: string | null;
   workspaceName: string | null;
   dmUser: ChatPerson | null;
+  people: ChatPerson[];
   topic: string | null;
   archivedAt: string | null;
   createdAt: string;
@@ -133,7 +154,7 @@ export type ChatThread = {
 };
 
 export type ChatThreadCard = {
-  conversation: { id: string; kind: ChatKind; name: string };
+  conversation: { id: string; kind: ChatKind; name: string; people: ChatPerson[] };
   root: ChatMessage;
   latest: ChatMessage[];
   earlier: number;

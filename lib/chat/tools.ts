@@ -1,4 +1,4 @@
-import { CHAT_CLIENT_KEY_MAX, type ChatConversation, type ChatMessage, type ChatReaction, type ChatSearchHit } from "@/lib/chat/types";
+import { CHAT_CLIENT_KEY_MAX, chatLabel, isChatKind, type ChatConversation, type ChatKind, type ChatMessage, type ChatReaction, type ChatSearchHit } from "@/lib/chat/types";
 import { chatEmoji, emojiByCode } from "@/lib/chat/emoji";
 import { checkChatPost, getConversation, listChatPeople, listConversations, listMessages, listThread, messageKind, openDm, ownPostWithKey, postMessage, reactToMessage } from "@/lib/crm/chat";
 import { searchChat } from "@/lib/crm/chat-search";
@@ -26,8 +26,8 @@ const NO_TEAMMATE = () => new CrmError("not_found", "Couldn't find that teammate
 
 const NOT_CHAT = () => new CrmError("not_found", "Conversation not found. Task, doc and shared email discussions aren't reachable here.", 404, { field: "conversationId" });
 
-function chatOnly<T extends { kind: string }>(conversation: T) {
-  if (conversation.kind !== "room" && conversation.kind !== "dm") throw NOT_CHAT();
+function chatOnly<T extends { kind: ChatKind }>(conversation: T) {
+  if (!isChatKind(conversation.kind)) throw NOT_CHAT();
   return conversation;
 }
 
@@ -41,9 +41,10 @@ export function chatConversation(conversation: ChatConversation) {
   return {
     id: conversation.id,
     kind: conversation.kind,
-    name: conversation.kind === "room" ? `#${conversation.name}` : conversation.name,
+    name: chatLabel(conversation),
     workspace: conversation.workspaceName,
     person: conversation.dmUser,
+    ...(conversation.kind === "group_dm" ? { people: conversation.people } : {}),
     ...(conversation.topic ? { topic: conversation.topic } : {}),
     ...(conversation.archivedAt ? { archived: true } : {}),
     unread: conversation.unread,
@@ -128,7 +129,7 @@ export function chatHit(hit: ChatSearchHit) {
   return {
     id: hit.id,
     threadId: hit.parentId,
-    conversation: { id: hit.conversationId, kind: hit.conversation.kind, name: hit.conversation.kind === "room" ? `#${hit.conversation.name}` : hit.conversation.name },
+    conversation: { id: hit.conversationId, kind: hit.conversation.kind, name: chatLabel(hit.conversation) },
     author: { id: hit.author.id, name: hit.author.name },
     text: hit.text ?? hit.excerpt,
     ...(hit.files.length > 0 ? { attachments: hit.files.map((file) => ({ name: file.name })) } : {}),

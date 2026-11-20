@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Button from "@/components/_ui/button";
 import Tag from "@/components/_ui/tag";
-import { ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
+import { ChatAvatar, GroupAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import ChatMessageRow from "@/components/chat/chat-message";
 import { useChatEvents } from "@/components/chat/chat-live";
 import { PhoneBack } from "@/components/chat/room-view";
 import { chatApi } from "@/lib/chat/client";
-import type { ChatUnreadGroup } from "@/lib/chat/types";
+import { isDirect, type ChatUnreadGroup } from "@/lib/chat/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 
@@ -24,9 +24,13 @@ function Group({ group, onRead }: { group: ChatUnreadGroup; onRead: (id: string)
     <article className="bg-surface-raised rounded-2xl pt-3 pb-2" aria-label={`Unread in ${roomLabel(conversation)}`}>
       <div className="flex items-center gap-2 px-4 pb-1.5 max-md:px-3 md:pointer-coarse:pb-3.5">
         <Button variant="link" size="none" onClick={open} className="ui-style hit text-foreground flex min-w-0 items-center gap-2 font-medium max-md:min-h-11">
-          {conversation.kind === "dm" ? (
+          {isDirect(conversation.kind) ? (
             <>
-              <ChatAvatar person={conversation.dmUser ?? (other ? { id: other.id ?? conversation.id, name: other.name } : { id: conversation.id, name: conversation.name })} size="xs" />
+              {conversation.kind === "group_dm" ? (
+                <GroupAvatar people={conversation.people} />
+              ) : (
+                <ChatAvatar person={conversation.dmUser ?? (other ? { id: other.id ?? conversation.id, name: other.name } : { id: conversation.id, name: conversation.name })} size="xs" />
+              )}
               <span className="truncate">{conversation.name}</span>
             </>
           ) : (

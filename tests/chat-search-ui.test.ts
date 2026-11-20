@@ -15,6 +15,7 @@ function conversation(input: Partial<ChatConversation> & { id: string; name: str
     workspaceId: null,
     workspaceName: null,
     dmUser: null,
+    people: [],
     topic: null,
     archivedAt: null,
     createdAt: "",
