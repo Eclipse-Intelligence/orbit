@@ -143,6 +143,8 @@ const HASH_TARGETS: Record<string, string> = {
   "iphone-shortcut": SETTINGS_PATHS.apiTokens,
   brand: SETTINGS_PATHS.brand,
   playbook: SETTINGS_PATHS.brand,
+  business: `${SETTINGS_PATHS.brand}#business-details`,
+  "business-details": SETTINGS_PATHS.brand,
   knowledge: SETTINGS_PATHS.knowledge,
   proof: SETTINGS_PATHS.knowledge,
   team: SETTINGS_PATHS.team,

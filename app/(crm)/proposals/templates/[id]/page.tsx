@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import TemplateEditor from "@/components/proposals/template-editor";
 import { getUserActor } from "@/lib/auth/user";
+import { getBusinessDetails } from "@/lib/crm/business-details";
 import { CrmError } from "@/lib/crm/errors";
 import { getTemplate } from "@/lib/proposals/catalogue";
 import { knowledgeOptions } from "@/lib/proposals/knowledge";
@@ -18,12 +19,13 @@ export default async function TemplatePage({ params }: { params: Promise<{ id: s
     throw error;
   });
   if (!template) notFound();
-  const knowledge = await knowledgeOptions(user, null);
+  const [knowledge, business] = await Promise.all([knowledgeOptions(user, null), getBusinessDetails(user)]);
   return (
     <TemplateEditor
       viewer={{ id: user.userId, name: user.fullName || user.email, email: user.email, role: user.role, workspaceName: user.workspaceName }}
       template={template}
       knowledge={knowledge}
+      business={business}
     />
   );
 }

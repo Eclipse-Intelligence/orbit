@@ -223,6 +223,12 @@ export type Totals = Record<Billing, number>;
 
 type Party = { name: string; email: string; title: string | null; company: string };
 
+export type BusinessDetails = { name: string; address: string; phone: string; email: string; website: string };
+
+export const BUSINESS_LIMITS: Record<keyof BusinessDetails, number> = { name: 200, address: 500, phone: 50, email: 254, website: 300 };
+
+export const EMPTY_BUSINESS: BusinessDetails = { name: "", address: "", phone: "", email: "", website: "" };
+
 type RenderedBlock = Block;
 
 export type Content = {
@@ -234,6 +240,7 @@ export type Content = {
   logo?: string | null;
   client: Party;
   sender: Party;
+  business?: BusinessDetails;
   blocks: RenderedBlock[];
   items: Item[];
   totals: Totals;
@@ -496,6 +503,53 @@ export function readingLabel(seconds: number) {
   if (seconds < 60) return `${Math.max(1, Math.round(seconds))} sec`;
   const minutes = Math.round(seconds / 60);
   return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} hr ${minutes % 60} min`;
+}
+
+export function senderCompany(content: Pick<Content, "sender" | "business">) {
+  return content.business ? content.business.name.trim() || content.sender.name : content.sender.company;
+}
+
+export const BUSINESS_NAME_FIELD = "workspace.name";
+
+export function missingMessage(missing: string[]) {
+  const fields = missing.filter((item) => item !== BUSINESS_NAME_FIELD).map((item) => `{{${item}}}`);
+  const business = missing.includes(BUSINESS_NAME_FIELD);
+  if (fields.length && business) return `Fill in ${fields.join(", ")} and add a business name in Settings › Brand before sending.`;
+  if (business) return "Add a business name in Settings › Brand before sending.";
+  return fields.length ? `Fill in ${fields.join(", ")} before sending.` : "";
+}
+
+function hexChannels(hex: string) {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  return match ? match.slice(1).map((part) => parseInt(part, 16)) : null;
+}
+
+export function bandAccent(hex: string) {
+  const rgb = hexChannels(hex);
+  if (!rgb) return "#ffffff";
+  const [r, g, b] = rgb.map((value) => {
+    const unit = value / 255;
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.05 ? "#ffffff" : hex.toLowerCase();
+}
+
+export type BusinessLine = { key: keyof BusinessDetails; text: string; href: string | null };
+
+export function businessLines(business: BusinessDetails | undefined): BusinessLine[] {
+  if (!business) return [];
+  const lines: BusinessLine[] = [];
+  const name = business.name.trim();
+  const address = business.address.trim();
+  const phone = business.phone.trim();
+  const email = business.email.trim();
+  const website = business.website.trim();
+  if (name) lines.push({ key: "name", text: name, href: null });
+  if (address) lines.push({ key: "address", text: address, href: null });
+  if (phone) lines.push({ key: "phone", text: phone, href: /^[+\d][\d\s().-]{3,}$/.test(phone) ? `tel:${phone.replace(/[^\d+]/g, "")}` : null });
+  if (email) lines.push({ key: "email", text: email, href: /^[^\s@]+@[^\s@]+$/.test(email) ? `mailto:${email}` : null });
+  if (website) lines.push({ key: "website", text: website.replace(/^https?:\/\//i, "").replace(/\/$/, ""), href: safeHref(/^https?:\/\//i.test(website) ? website : `https://${website}`) });
+  return lines;
 }
 
 export function accentText(hex: string) {

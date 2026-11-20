@@ -24,7 +24,7 @@ import {
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Product } from "@/lib/proposals/catalogue";
 import type { DocumentDetail } from "@/lib/proposals/documents";
-import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
+import { BILLING_LABELS, BUSINESS_NAME_FIELD, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, senderCompany, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 import HoldButton from "@/components/_ui/hold-button";
@@ -352,9 +352,19 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                   />
                 )}
 
-                {doc.missing.length > 0 && (
+                {doc.missing.some((item) => item !== BUSINESS_NAME_FIELD) && (
                   <p role="status" className="caption-style text-[var(--tag-amber-text)]">
-                    Missing: {doc.missing.map((item) => `{{${item}}}`).join(", ")}. Add them to the company or contact, or edit the text.
+                    Missing:{" "}
+                    {doc.missing
+                      .filter((item) => item !== BUSINESS_NAME_FIELD)
+                      .map((item) => `{{${item}}}`)
+                      .join(", ")}
+                    . Add them to the company or contact, or edit the text.
+                  </p>
+                )}
+                {doc.missing.includes(BUSINESS_NAME_FIELD) && (
+                  <p role="status" className="caption-style text-[var(--tag-amber-text)]">
+                    Add a business name in Settings › Brand to fill in {"{{workspace.name}}"}.
                   </p>
                 )}
                 {doc.placeholders.length > 0 && (
@@ -388,7 +398,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                 documentId={doc.id}
                 initial={doc.steps}
                 clientCompany={doc.companyName}
-                ourCompany={viewer.workspaceName}
+                ourCompany={senderCompany(doc.version?.content ?? doc.preview)}
                 contactFirstName={doc.contactName.split(/\s+/)[0] || "them"}
                 canEmail={Boolean(doc.link)}
                 onSteps={(steps) => setDoc((current) => ({ ...current, steps }))}
@@ -725,7 +735,7 @@ function CountersignDialog({
           <label className="caption-style text-soft flex items-start gap-2.5 rounded-xl bg-white/[0.03] p-3 leading-[1.5]">
             <input type="checkbox" checked={agree} onChange={(event) => setAgree(event.target.checked)} className="mt-0.5 size-4 shrink-0" />
             <span>
-              I agree to sign this electronically for {doc.version?.content.sender.company ?? viewer.workspaceName}. My electronic signature has the same effect as a handwritten
+              I agree to sign this electronically for {senderCompany(doc.version?.content ?? doc.preview)}. My electronic signature has the same effect as a handwritten
               signature.
             </span>
           </label>

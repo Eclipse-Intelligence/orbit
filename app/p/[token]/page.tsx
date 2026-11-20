@@ -6,6 +6,7 @@ import StandaloneBack from "@/components/_common/standalone-back";
 import ProposalPage from "@/components/proposals/proposal-page";
 import { getUserActor } from "@/lib/auth/user";
 import { clientIp } from "@/lib/booking/book";
+import { logoIsDark } from "@/lib/proposals/png";
 import { openDocument } from "@/lib/proposals/public";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +32,7 @@ export default async function PublicProposalPage({ params }: { params: Promise<{
   if (!document) notFound();
   return (
     <>
-      <ProposalPage token={token} initial={document} preview={preview} />
+      <ProposalPage token={token} initial={document} preview={preview} logoDark={logoIsDark(document.content.logo)} />
       <StandaloneBack />
     </>
   );

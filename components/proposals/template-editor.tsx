@@ -14,11 +14,13 @@ import { BlockEditor, type KnowledgeOption } from "@/components/proposals/block-
 import type { Template } from "@/lib/proposals/catalogue";
 import {
   consentText,
+  EMPTY_BUSINESS,
   fieldValues,
   LOGO_MAX_LENGTH,
   renderBlocks,
   totalsOf,
   type Block,
+  type BusinessDetails,
   type Content,
   type Item,
   type TemplateStatus,
@@ -107,14 +109,20 @@ function LogoField({ logo, company, onChange }: { logo: string | null; company: 
   );
 }
 
-function samplePreview(template: { kind: Template["kind"]; blocks: Block[]; accent: string; logo: string | null; validDays: number }, viewer: Viewer, now: number): Content {
+function samplePreview(
+  template: { kind: Template["kind"]; blocks: Block[]; accent: string; logo: string | null; validDays: number },
+  viewer: Viewer,
+  business: BusinessDetails,
+  now: number,
+): Content {
+  const ourCompany = business.name.trim() || viewer.name;
   const validUntil = new Date(now + template.validDays * 86_400_000).toISOString().slice(0, 10);
   const items = template.kind === "proposal" ? SAMPLE_ITEMS : [];
   const values = fieldValues({
     company: { name: "Acme Ltd", domain: "acme.com", website: "https://acme.com" },
     contact: { name: "Jane Doe", firstName: "Jane", lastName: "Doe", jobTitle: "Operations Director", email: "jane@acme.com" },
     sender: { name: viewer.name, email: viewer.email },
-    workspace: { name: viewer.workspaceName },
+    workspace: { name: business.name.trim() },
     proposal: { title: template.kind === "nda" ? "NDA with Acme Ltd" : "Proposal for Acme Ltd", currency: "GBP", validUntil, items },
   });
   return {
@@ -125,16 +133,27 @@ function samplePreview(template: { kind: Template["kind"]; blocks: Block[]; acce
     accent: template.accent,
     logo: template.logo,
     client: { name: "Jane Doe", email: "jane@acme.com", title: "Operations Director", company: "Acme Ltd" },
-    sender: { name: viewer.name, email: viewer.email, title: null, company: viewer.workspaceName },
+    sender: { name: viewer.name, email: viewer.email, title: null, company: ourCompany },
+    business,
     blocks: renderBlocks(template.blocks, values).blocks,
     items,
     totals: totalsOf(items),
-    consent: consentText(template.kind, viewer.workspaceName, template.blocks.some((block) => block.type === "terms")),
+    consent: consentText(template.kind, ourCompany, template.blocks.some((block) => block.type === "terms")),
     issuedAt: new Date(now).toISOString(),
   };
 }
 
-export default function TemplateEditor({ viewer, template, knowledge = [] }: { viewer: Viewer; template: Template; knowledge?: KnowledgeOption[] }) {
+export default function TemplateEditor({
+  viewer,
+  template,
+  knowledge = [],
+  business = EMPTY_BUSINESS,
+}: {
+  viewer: Viewer;
+  template: Template;
+  knowledge?: KnowledgeOption[];
+  business?: BusinessDetails;
+}) {
   const router = useRouter();
   const [name, setName] = useState(template.name);
   const [status, setStatus] = useState<TemplateStatus>(template.status);
@@ -146,7 +165,7 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
   const [message, setMessage] = useState<{ text: string; tone: "status" | "alert" } | null>(null);
   const [view, setView] = useState<"edit" | "preview">("edit");
   const [now] = useState(() => Date.now());
-  const preview = samplePreview({ kind: template.kind, blocks, accent, logo, validDays: Number(validDays) || 30 }, viewer, now);
+  const preview = samplePreview({ kind: template.kind, blocks, accent, logo, validDays: Number(validDays) || 30 }, viewer, business, now);
 
   async function save(nextStatus = status) {
     setBusy(true);
@@ -259,7 +278,7 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
                 <Input id="template-days" type="number" min={1} max={365} value={validDays} onChange={(event) => setValidDays(event.target.value)} />
               </div>
             </div>
-            <LogoField logo={logo} company={viewer.workspaceName} onChange={setLogo} />
+            <LogoField logo={logo} company={business.name || viewer.name} onChange={setLogo} />
             {template.kind === "nda" && <p className="caption-style text-subtle">Have a solicitor check this wording.</p>}
             <BlockEditor blocks={blocks} onChange={setBlocks} kind={template.kind} knowledge={knowledge} />
           </div>

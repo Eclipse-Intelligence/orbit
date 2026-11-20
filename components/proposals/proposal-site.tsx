@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import ProposalBand from "@/components/proposals/proposal-band";
 import ProposalDocument, { Signatures, type SiteExtras } from "@/components/proposals/proposal-document";
-import { shows, tabsOf, type Content } from "@/lib/proposals/model";
+import { bandAccent, shows, tabsOf, type Content } from "@/lib/proposals/model";
 import { cn } from "@/lib/utils";
 
 type SignatureView = Parameters<typeof Signatures>[0]["signatures"][number];
@@ -12,7 +13,14 @@ export const SIGN_TAB = "sign";
 export function visibleTabs(content: Content, extras?: SiteExtras) {
   const all = tabsOf(content.blocks);
   if (!all || extras?.preview) return all;
-  return all.filter((tab) => tab.blocks.some((block) => shows(block, { booking: Boolean(extras?.booking), steps: extras?.steps ? extras.steps.length > 0 : undefined })));
+  return all.filter((tab) =>
+    tab.blocks.some((block) =>
+      shows(block, {
+        booking: Boolean(extras?.booking),
+        steps: extras?.steps ? extras.steps.length > 0 : undefined,
+      }),
+    ),
+  );
 }
 
 function scrollTop(element: HTMLElement) {
@@ -23,6 +31,10 @@ function scrollTop(element: HTMLElement) {
   return 0;
 }
 
+function Actions({ render, select }: { render: (select: (slug: string) => void) => ReactNode; select: (slug: string) => void }) {
+  return render(select);
+}
+
 export default function ProposalSite({
   content,
   signatures = [],
@@ -31,9 +43,13 @@ export default function ProposalSite({
   active: controlled,
   onActive,
   signLabel = "Sign",
-  sticky,
+  page,
   followHash,
   extras,
+  logoDark,
+  actions,
+  lead,
+  footer,
 }: {
   content: Content;
   signatures?: SignatureView[];
@@ -42,9 +58,13 @@ export default function ProposalSite({
   active?: string;
   onActive?: (slug: string) => void;
   signLabel?: string;
-  sticky?: string;
+  page?: boolean;
   followHash?: boolean;
   extras?: SiteExtras;
+  logoDark?: boolean;
+  actions?: (select: (slug: string) => void) => ReactNode;
+  lead?: ReactNode;
+  footer?: ReactNode;
 }) {
   const tabs = visibleTabs(content, extras);
   const [own, setOwn] = useState(tabs?.[0]?.slug ?? SIGN_TAB);
@@ -52,7 +72,7 @@ export default function ProposalSite({
   const list = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLDivElement>(null);
-  const panel = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const base = useId();
   const choose = (slug: string) => {
     if (onActive) onActive(slug);
@@ -79,32 +99,42 @@ export default function ProposalSite({
     list.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [requested]);
 
-  if (!tabs) {
-    return (
-      <ProposalDocument content={content} signatures={signatures} compact={compact} extras={extras}>
-        {children}
-      </ProposalDocument>
-    );
-  }
-
-  const entries = [...tabs.map((tab) => ({ slug: tab.slug, label: tab.label })), { slug: SIGN_TAB, label: signLabel }];
-  const active = entries.some((entry) => entry.slug === requested) ? requested : entries[0].slug;
-  const current = tabs.find((tab) => tab.slug === active);
+  const entries = tabs ? [...tabs.map((tab) => ({ slug: tab.slug, label: tab.label })), { slug: SIGN_TAB, label: signLabel }] : [];
+  const active = entries.some((entry) => entry.slug === requested) ? requested : (entries[0]?.slug ?? SIGN_TAB);
+  const current = tabs?.find((tab) => tab.slug === active);
+  const accent = bandAccent(content.accent);
 
   function reveal() {
-    const element = panel.current;
+    const target = body.current;
     const top = root.current;
     const strip = bar.current;
-    if (!element || !top || !strip) return;
-    const stuck = Boolean(sticky);
-    const edge = stuck ? strip.getBoundingClientRect().bottom : scrollTop(top);
-    if (element.getBoundingClientRect().top >= edge) return;
+    if (!target || !top) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    top.style.scrollMarginTop = stuck ? `${strip.getBoundingClientRect().top}px` : "";
-    top.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+    if (page && strip) {
+      if (target.getBoundingClientRect().top >= strip.getBoundingClientRect().bottom) return;
+      target.style.scrollMarginTop = `${strip.offsetHeight}px`;
+      target.scrollIntoView({
+        block: "start",
+        behavior: reduce ? "auto" : "smooth",
+      });
+      return;
+    }
+    if (target.getBoundingClientRect().top >= scrollTop(top)) return;
+    top.scrollIntoView({
+      block: "start",
+      behavior: reduce ? "auto" : "smooth",
+    });
   }
 
   function select(slug: string) {
+    if (!tabs) {
+      if (slug === SIGN_TAB)
+        document.getElementById("sign")?.scrollIntoView({
+          block: "start",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        });
+      return;
+    }
     reveal();
     choose(slug);
     if (followHash) window.history.replaceState(null, "", `#${slug}`);
@@ -114,59 +144,99 @@ export default function ProposalSite({
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft" && event.key !== "Home" && event.key !== "End") return;
     event.preventDefault();
     const index = entries.findIndex((entry) => entry.slug === active);
-    const next =
-      event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + entries.length) % entries.length;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + entries.length) % entries.length;
     select(entries[next].slug);
     list.current?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
   }
 
-  return (
-    <div ref={root} className={cn("flex flex-col", compact ? "gap-8" : "gap-10 sm:gap-12")}>
-      <div ref={bar} className={cn("paper -mx-5 px-5 sm:-mx-8 sm:px-8", sticky && "sticky z-10", sticky)}>
-        <div
-          ref={list}
-          role="tablist"
-          aria-label="Sections"
-          onKeyDown={onKeyDown}
-          className="border-border flex gap-1 overflow-x-auto border-b [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        >
-          {entries.map((entry) => {
-            const selected = entry.slug === active;
-            return (
-              <button
-                key={entry.slug}
-                type="button"
-                role="tab"
-                id={`${base}-${entry.slug}-tab`}
-                aria-selected={selected}
-                aria-controls={selected ? `${base}-${entry.slug}-panel` : undefined}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => select(entry.slug)}
-                className={cn(
-                  "relative -mb-px flex h-12 shrink-0 cursor-pointer items-center px-3 text-[14.5px] whitespace-nowrap outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-inset sm:px-4",
-                  selected ? "text-foreground font-semibold" : "text-subtle hover:text-foreground",
-                )}
-              >
-                {entry.label}
-                <span
-                  aria-hidden
-                  className={cn("absolute inset-x-3 bottom-0 h-0.5 rounded-full transition-opacity duration-150 sm:inset-x-4", selected ? "opacity-100" : "opacity-0")}
-                  style={{ backgroundColor: content.accent }}
-                />
-              </button>
-            );
-          })}
+  const showBar = Boolean(tabs) || Boolean(actions);
+  const bodyClass = cn("flex w-full flex-col", compact ? "gap-8" : "gap-10 sm:gap-12");
+  const inside = (
+    <>
+      {lead}
+      {tabs ? (
+        <div role="tabpanel" id={`${base}-${active}-panel`} aria-labelledby={`${base}-${active}-tab`} tabIndex={-1} className="outline-none">
+          {current ? (
+            <ProposalDocument content={content} blocks={current.blocks} compact={compact} withSignatures={false} extras={extras} />
+          ) : (
+            <Signatures content={content} signatures={signatures}>
+              {children}
+            </Signatures>
+          )}
         </div>
-      </div>
-      <div ref={panel} role="tabpanel" id={`${base}-${active}-panel`} aria-labelledby={`${base}-${active}-tab`} tabIndex={-1} className="outline-none">
-        {current ? (
-          <ProposalDocument content={content} blocks={current.blocks} compact={compact} withSignatures={false} extras={extras} />
-        ) : (
-          <Signatures content={content} signatures={signatures}>
-            {children}
-          </Signatures>
-        )}
-      </div>
+      ) : (
+        <ProposalDocument content={content} signatures={signatures} compact={compact} extras={extras}>
+          {children}
+        </ProposalDocument>
+      )}
+      {footer}
+    </>
+  );
+
+  return (
+    <div ref={root} className="flex flex-col">
+      <ProposalBand content={content} logoDark={logoDark} compact={!page} rounded={page ? undefined : showBar ? "top" : "all"} />
+      {showBar && (
+        <div
+          ref={bar}
+          className={cn("night border-t border-white/[0.07] bg-[#0e0e12] shadow-[0_1px_0_rgb(0_0_0/0.08)]", page ? "sticky top-0 z-20" : "rounded-b-2xl")}
+        >
+          <div className={cn("mx-auto flex max-w-[56em] items-center gap-3", page ? "px-5 sm:px-8" : "px-5 sm:px-7")}>
+            {tabs ? (
+              <div
+                ref={list}
+                role="tablist"
+                aria-label="Sections"
+                onKeyDown={onKeyDown}
+                className="-ml-3 flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] max-sm:pr-6 max-sm:[mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)] sm:-ml-4 [&::-webkit-scrollbar]:hidden"
+              >
+                {entries.map((entry) => {
+                  const selected = entry.slug === active;
+                  return (
+                    <button
+                      key={entry.slug}
+                      type="button"
+                      role="tab"
+                      id={`${base}-${entry.slug}-tab`}
+                      aria-selected={selected}
+                      aria-controls={selected ? `${base}-${entry.slug}-panel` : undefined}
+                      tabIndex={selected ? 0 : -1}
+                      onClick={() => select(entry.slug)}
+                      className={cn(
+                        "relative flex h-12 shrink-0 cursor-pointer items-center px-3 text-[14.5px] whitespace-nowrap transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-inset sm:px-4",
+                        selected ? "text-foreground font-semibold" : "text-subtle hover:text-foreground",
+                      )}
+                    >
+                      {entry.label}
+                      <span
+                        aria-hidden
+                        className={cn("absolute inset-x-3 bottom-0 h-0.5 rounded-full transition-opacity duration-150 sm:inset-x-4", selected ? "opacity-100" : "opacity-0")}
+                        style={{ backgroundColor: accent }}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <span className="text-subtle min-w-0 flex-1 truncate py-3.5 text-[14px]">{content.title}</span>
+            )}
+            {actions && (
+              <div className="flex shrink-0 items-center gap-2 py-2">
+                <Actions render={actions} select={select} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {page ? (
+        <main ref={body} className={cn(bodyClass, "mx-auto max-w-[56em] px-5 pt-10 pb-28 sm:px-8 sm:pt-14")}>
+          {inside}
+        </main>
+      ) : (
+        <div ref={body} className={cn(bodyClass, "pt-8")}>
+          {inside}
+        </div>
+      )}
     </div>
   );
 }

@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getUserActor } from "@/lib/auth/user";
 import { draftBrandFromWebsite, saveBrandPlaybook, saveBrandProfile, type BrandDraft, type BrandProfile } from "@/lib/crm/brand";
+import { saveBusinessDetails } from "@/lib/crm/business-details";
 import { CrmError } from "@/lib/crm/errors";
+import type { BusinessDetails } from "@/lib/proposals/model";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 
 type Result<T> = { error?: string; field?: string } & T;
@@ -47,6 +49,17 @@ export async function saveBrandPlaybookAction(input: unknown): Promise<Result<{ 
   const user = await requireUser();
   try {
     const saved = await saveBrandPlaybook(user, input, { ...WEB, operation: "save_cold_email_playbook" });
+    revalidatePath(SETTINGS_PATHS.brand, "layout");
+    return { saved };
+  } catch (error) {
+    return failure(error, "Couldn't save. Try again.");
+  }
+}
+
+export async function saveBusinessDetailsAction(input: unknown): Promise<Result<{ saved?: BusinessDetails }>> {
+  const user = await requireUser();
+  try {
+    const saved = await saveBusinessDetails(user, input, { ...WEB, operation: "save_business_details" });
     revalidatePath(SETTINGS_PATHS.brand, "layout");
     return { saved };
   } catch (error) {

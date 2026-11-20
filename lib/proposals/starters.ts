@@ -13,7 +13,7 @@ export const STARTER_TEMPLATES: Starter[] = [
     settings: { accent: "#4124fb", validDays: 30, logo: null },
     blocks: [
       { id: "t1", type: "tab", label: "Overview" },
-      { id: "b1", type: "cover", title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}, {{workspace.name}}.", image: "" },
+      { id: "b1", type: "cover", title: "{{proposal.title}}", subtitle: "Prepared for {{contact.name}} at {{company.name}} by {{sender.name}}.", image: "" },
       {
         id: "b2",
         type: "section",
