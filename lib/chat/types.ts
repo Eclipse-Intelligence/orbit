@@ -67,7 +67,7 @@ export type ChatNotifyInput = { notify?: ChatNotify; muteMentions?: boolean; sta
 
 export type ChatSidebar = {
   conversations: ChatConversation[];
-  archived: { id: string; name: string }[];
+  archived: { id: string; name: string; workspaceName: string | null }[];
   threads: { unread: number; mentions: number };
   unreadConversations: number;
   mentioned: boolean;

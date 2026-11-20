@@ -124,7 +124,6 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const [bottomSignal, setBottomSignal] = useState(0);
   const [threadBottomSignal, setThreadBottomSignal] = useState(0);
   const [draft, setDraft] = useState<{ text: string; href: string } | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
   const searchTimer = useRef(0);
   const opener = useRef<HTMLElement | null>(null);
   const pane = useRef<HTMLDivElement>(null);
@@ -140,6 +139,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const [held, setHeld] = useState<{ conversationId: string; messageId: string } | null>(null);
   if (held && held.conversationId !== roomId) setHeld(null);
   const threadId = location.thread;
+  const roomMessage = threadId ? null : location.message;
   const detail = view.kind !== "home";
 
   useKeyboardFit(pane, detail && !threadId);
@@ -332,12 +332,12 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       return;
     }
     const timeline = latest.current.state.timelines[roomId];
-    const message = location.message;
+    const message = roomMessage;
     if (!timeline || timeline.status === "error") loadMessages(roomId, "latest", message ?? "unread");
     else if (message && !timeline.messages.some((item) => item.id === message)) loadMessages(roomId, "latest", message);
     else if (timeline.status === "ready" && !timeline.hasNewer) loadMessages(roomId, "newer");
     loadRoom(roomId);
-  }, [roomId, location.message, loadMessages, loadRoom]);
+  }, [roomId, roomMessage, loadMessages, loadRoom]);
 
   useEffect(() => {
     if (!threadId) return;
@@ -497,10 +497,16 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   useShortcut("chat-new-message", () => setNewMessage(true));
   useShortcut("chat-new-room", () => setNewRoom(true));
   useShortcut("chat-search", () => {
-    const input = searchRef.current;
-    if (!input || input.getClientRects().length === 0) return false;
-    input.focus();
-    input.select();
+    const focusField = () => {
+      const input = [...document.querySelectorAll<HTMLInputElement>("[data-chat-search-input]")].find((item) => item.getClientRects().length > 0);
+      if (!input) return false;
+      input.focus();
+      input.select();
+      return true;
+    };
+    if (focusField()) return;
+    if (latest.current.location.view.kind !== "search") go({ view: { kind: "search", query: EMPTY_SEARCH }, thread: null, message: null });
+    window.setTimeout(focusField, 80);
   });
   useShortcut("chat-room-settings", () => setSettings({ open: true, adding: false }), roomForSettings?.conversation.kind === "room");
   useShortcut("chat-close-thread", () => {
@@ -564,7 +570,6 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
             onNewRoom={() => setNewRoom(true)}
             onNewMessage={() => setNewMessage(true)}
             search={searchBox}
-            searchRef={searchRef}
             className={cn(detail ? "max-md:hidden" : "max-md:flex-1")}
           />
           {!detail && (
@@ -608,7 +613,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                   room={room}
                   roomError={state.roomErrors[view.id] ?? null}
                   timeline={state.timelines[view.id] ?? null}
-                  focusId={location.message}
+                  focusId={roomMessage}
                   bottomSignal={bottomSignal}
                   held={held?.conversationId === view.id ? held.messageId : null}
                   onSettings={() => setSettings({ open: true, adding: false })}
@@ -627,7 +632,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                 slide === "thread" && "max-md:motion-safe:animate-enter-from-right",
               )}
             >
-              <ThreadPanel key={threadId} rootId={threadId} thread={thread} conversation={roomId ? entry : null} bottomSignal={threadBottomSignal} onClose={closeThread} />
+              <ThreadPanel key={threadId} rootId={threadId} focusId={location.message} thread={thread} conversation={roomId ? entry : null} bottomSignal={threadBottomSignal} onClose={closeThread} />
             </div>
           )}
         </div>

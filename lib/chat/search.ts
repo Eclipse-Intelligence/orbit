@@ -28,7 +28,7 @@ function dayValue(value: string | null) {
 
 export function readSearchQuery(params: URLSearchParams): ChatSearchQuery {
   return {
-    q: (params.get("q") ?? "").slice(0, CHAT_SEARCH_TEXT_MAX),
+    q: Array.from(params.get("q") ?? "").slice(0, CHAT_SEARCH_TEXT_MAX).join(""),
     in: idValue(params.get("in")),
     from: idValue(params.get("from")),
     file: params.get("file") === "1",
@@ -47,12 +47,16 @@ export function writeSearchQuery(query: ChatSearchQuery, params = new URLSearchP
   return params;
 }
 
-export function sameSearch(left: ChatSearchQuery, right: ChatSearchQuery) {
-  return left.q === right.q && left.in === right.in && left.from === right.from && left.file === right.file && left.after === right.after && left.before === right.before;
-}
-
 export function searchFilterCount(query: ChatSearchQuery) {
   return [query.in, query.from, query.file, query.after, query.before].filter(Boolean).length;
+}
+
+function isHighSurrogate(code: number) {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(code: number) {
+  return code >= 0xdc00 && code <= 0xdfff;
 }
 
 function escapeRegExp(text: string) {
@@ -87,6 +91,8 @@ export function searchExcerpt(body: string, format: ChatFormat, text: string) {
     const space = plain.lastIndexOf(" ", end);
     if (space > end - SNAP && space > start) end = space;
   }
+  if (start > 0 && isLowSurrogate(plain.charCodeAt(start))) start += 1;
+  if (end < plain.length && isHighSurrogate(plain.charCodeAt(end - 1))) end -= 1;
   return `${start > 0 ? "…" : ""}${plain.slice(start, end)}${end < plain.length ? "…" : ""}`;
 }
 

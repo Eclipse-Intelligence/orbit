@@ -42,7 +42,9 @@ export default async function ChatPage({
   const threadParam = single(search.thread);
   const messageParam = single(search.message);
   const thread = view.kind !== "home" && view.kind !== "search" && isChatId(threadParam) ? threadParam.toLowerCase() : null;
-  const message = view.kind === "room" && isChatId(messageParam) ? messageParam.toLowerCase() : null;
+  const wanted = isChatId(messageParam) ? messageParam.toLowerCase() : null;
+  const message = view.kind === "room" && !thread ? wanted : null;
+  const threadFocus = thread ? wanted : null;
   const roomId = view.kind === "room" ? view.id : null;
 
   const [sidebar, workspaces, room, page, threadData, threads] = await Promise.all([
@@ -55,7 +57,7 @@ export default async function ChatPage({
   ]);
 
   const initial: ChatInitial = {
-    location: { view, thread, message },
+    location: { view, thread, message: message ?? threadFocus },
     sidebar: "error" in sidebar ? null : sidebar,
     room,
     page,

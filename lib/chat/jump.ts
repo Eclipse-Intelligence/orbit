@@ -5,7 +5,6 @@ export type ChatJump = {
   kind: ChatKind;
   name: string;
   unread: number;
-  mentions: number;
   archived: boolean;
   workspaceName: string | null;
 };
@@ -36,12 +35,11 @@ export function chatJumps(sidebar: ChatSidebar | null, text: string): ChatJump[]
       kind: conversation.kind,
       name: conversation.name,
       unread: conversation.unread,
-      mentions: conversation.mentions,
       archived: false,
       workspaceName: conversation.workspaceName,
     }));
   if (wanted.length === 0) return live.filter((item) => item.unread > 0).slice(0, UNREAD_SHOWN);
-  const old = (sidebar.archived ?? []).map<ChatJump>((room) => ({ id: room.id, kind: "room", name: room.name, unread: 0, mentions: 0, archived: true, workspaceName: null }));
+  const old = (sidebar.archived ?? []).map<ChatJump>((room) => ({ id: room.id, kind: "room", name: room.name, unread: 0, archived: true, workspaceName: room.workspaceName }));
   return [...live, ...old].filter((item) => matches(item, wanted)).slice(0, JUMPS_SHOWN);
 }
 

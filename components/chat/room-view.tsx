@@ -23,6 +23,7 @@ import SearchIcon from "@/public/assets/images/_common/search.svg";
 import SlidersIcon from "@/public/assets/images/chat/sliders.svg";
 
 const HEADER_AVATARS = 4;
+const THREAD_BESIDE_ROOM = "(min-width: 1280px)";
 
 function firstUnread(messages: ChatMessage[], lastReadAt: string | null, viewerId: string) {
   if (!lastReadAt) return null;
@@ -153,7 +154,12 @@ export default function RoomView({
   }, []);
   useShortcut("chat-find", findInRoom);
   const jumpTo = useCallback(
-    (message: ChatMessage) => go({ view: { kind: "room", id: conversationId }, thread: null, message: message.parentId ?? message.id }, { replace: true }),
+    (message: ChatMessage) => {
+      const view = { kind: "room" as const, id: conversationId };
+      const sideBySide = window.matchMedia(THREAD_BESIDE_ROOM).matches;
+      if (message.parentId && sideBySide) go({ view, thread: message.parentId, message: message.id }, { replace: true });
+      else go({ view, thread: null, message: message.parentId ?? message.id }, { replace: true });
+    },
     [go, conversationId],
   );
   const uploadTo = useCallback(() => Promise.resolve({ id: conversationId, error: null }), [conversationId]);

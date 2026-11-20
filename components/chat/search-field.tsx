@@ -1,6 +1,6 @@
 "use client";
 
-import type { KeyboardEvent, Ref } from "react";
+import type { KeyboardEvent } from "react";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
@@ -17,16 +17,16 @@ export type SearchBox = {
   onEscape: () => void;
 };
 
-export function SearchHint({ value, id }: { value: string; id: string }) {
+export function SearchHint({ value, id, className }: { value: string; id: string; className?: string }) {
   const length = searchLength(value);
   return (
-    <p id={id} role="status" className="caption-style text-subtle px-2 pt-1.5 empty:hidden">
+    <p id={id} role="status" className={cn("caption-style text-subtle px-2 pt-1.5 empty:hidden", className)}>
       {length > 0 && length < CHAT_SEARCH_MIN ? `Type at least ${CHAT_SEARCH_MIN} characters.` : ""}
     </p>
   );
 }
 
-export default function SearchField({ box, inputRef, hintId, className }: { box: SearchBox; inputRef?: Ref<HTMLInputElement>; hintId: string; className?: string }) {
+export default function SearchField({ box, hintId, className }: { box: SearchBox; hintId: string; className?: string }) {
   const shortcut = useShortcutHint("chat-search");
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -44,7 +44,7 @@ export default function SearchField({ box, inputRef, hintId, className }: { box:
     <div className={cn("relative", className)}>
       <SearchIcon aria-hidden className="text-subtle pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
       <Input
-        ref={inputRef}
+        data-chat-search-input=""
         type="search"
         role="searchbox"
         inputMode="search"

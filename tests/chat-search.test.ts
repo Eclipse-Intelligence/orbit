@@ -23,7 +23,7 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import { createTask } from "@/lib/crm/tasks";
 import type { Actor, UserActor, WorkspaceRole } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { createDoc } from "@/lib/docs/store";
+import { createDoc, shareDoc } from "@/lib/docs/store";
 import { setLiveTesting } from "@/lib/docs/live/broadcast";
 import { createCrmMcpServer } from "@/server/mcp/server";
 import { createAgent, createUser, resetDatabase, useServerlessPool } from "./helpers";
@@ -259,6 +259,17 @@ describe("who can find what", () => {
     for (const outsider of [mark, sam, priya, ada]) assert.deepEqual(await hitIds(outsider, "wyvern"), []);
   });
 
+  it("stops showing a doc's discussion to everyone once the doc isn't shared", async () => {
+    const doc = await createDoc(mark, { title: "Briefly shared", content: "Agenda", shared: true }, PROVENANCE);
+    const note = await say(mark, (await openDiscussion(mark, { kind: "doc", id: doc.id })).conversationId, "Okapi pricing thoughts");
+    for (const member of [priya, ada, sam]) assert.deepEqual(await hitIds(member, "okapi"), [note.id]);
+    assert.deepEqual(await hitIds(olly, "okapi"), []);
+    await shareDoc(mark, doc.id, false, PROVENANCE);
+    for (const member of [priya, ada, sam, mark]) assert.deepEqual(await hitIds(member, "okapi"), [], member.fullName ?? "");
+    await shareDoc(mark, doc.id, true, PROVENANCE);
+    assert.deepEqual(await hitIds(priya, "okapi"), [note.id]);
+  });
+
   it("stops showing a room's history to someone who was removed from it", async () => {
     const room = await createRoom(mark, { name: "leavers", memberIds: [sam.userId, priya.userId] });
     const kept = await say(sam, room.id, "Notes about the narwhal launch");
@@ -333,7 +344,7 @@ describe("what a search matches", () => {
     const found = await find(mark, "platypus", { in: room });
     assert.deepEqual(found.hits.map((hit) => hit.id), [reply.id]);
     assert.equal(found.hits[0].parentId, root.id);
-    assert.equal(found.hits[0].href, `/chat/${room}?thread=${root.id}`);
+    assert.equal(found.hits[0].href, `/chat/${room}?thread=${root.id}&message=${reply.id}`);
   });
 
   it("opens task, doc and shared email hits through the thing they are about", async () => {
@@ -385,9 +396,13 @@ describe("the minimum length and bad input", () => {
     for (const short of ["", "  ", "ab", " a  ", "🙂🙂", "é "]) await refused(find(mark, short), /Type at least 3 characters to search\./);
     await refused(searchChat(mark, { text: undefined }), /Type at least 3 characters/);
     await refused(searchChat(mark, { text: 42 }), /Type at least 3 characters/);
-    assert.ok((await find(mark, "abc")).hits.length >= 0);
-    assert.ok((await find(mark, "🙂🙂🙂")).hits.length >= 0);
-    assert.ok((await find(mark, "a b")).hits.length >= 0);
+    const room = (await createRoom(mark, { name: "short-words", memberIds: [] })).id;
+    const plain = await say(mark, room, "Notes on abc");
+    const emoji = await say(mark, room, "Party 🙂🙂🙂 tonight");
+    const spaced = await say(mark, room, "Count a b c with me");
+    assert.deepEqual(await hitIds(mark, "abc", { in: room }), [plain.id]);
+    assert.deepEqual(await hitIds(mark, "🙂🙂🙂", { in: room }), [emoji.id]);
+    assert.deepEqual(await hitIds(mark, "a b", { in: room }), [spaced.id]);
   });
 
   it("refuses ids, flags, dates and cursors it can't read", async () => {
@@ -544,8 +559,9 @@ describe("agent tools", () => {
     const discussion = await mcp(sam, { query: TOKEN, conversation_id: discussions.task });
     assert.equal(discussion.isError, true);
     assert.match(discussion.content[0].text, /^not_found: Conversation not found\. Task, doc and shared email discussions aren't reachable here\.$/);
-    const viaTool = (await runTool(priya, "team_chat", { action: "search", query: TOKEN, conversationId: rooms.sales })) as { error?: string };
-    assert.ok(viaTool.error === undefined || /not found/i.test(viaTool.error));
+    const viaTool = (await runTool(priya, "team_chat", { action: "search", query: TOKEN, conversationId: rooms.sales })) as { error?: string; results?: unknown };
+    assert.match(viaTool.error ?? "", /not found/i);
+    assert.equal(viaTool.results, undefined);
   });
 
   it("filter by teammate, by email, by their own name, and by files and dates", async () => {
@@ -592,6 +608,8 @@ describe("agent tools", () => {
 });
 
 describe("who gets the tool", () => {
+  useServerlessPool();
+
   it("lists chat_search for personal tokens and never for agent tokens", async () => {
     const names = async (actor: Actor) => {
       const server = createCrmMcpServer(actor, actor.type === "user" ? { personal: { tokenId: "00000000-0000-4000-8000-0000000000aa", canSend: false } } : {});

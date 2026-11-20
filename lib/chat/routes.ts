@@ -57,7 +57,7 @@ export function parseChatLocation(pathname: string, search: URLSearchParams | st
   const params = typeof search === "string" ? new URLSearchParams(search) : search;
   const view: ChatView = parsed.kind === "search" ? { kind: "search", query: readSearchQuery(params) } : parsed;
   const thread = view.kind === "home" || view.kind === "search" ? null : idParam(params, "thread");
-  const message = view.kind === "room" ? idParam(params, "message") : null;
+  const message = view.kind === "room" || thread ? idParam(params, "message") : null;
   return { view, thread, message };
 }
 
@@ -76,8 +76,10 @@ export function chatLocationHref(location: { view: ChatView; thread?: string | n
               ? CHAT_SEARCH_PATH
               : `${CHAT_PATH}/${view.id}`;
   const params = view.kind === "search" ? writeSearchQuery(view.query) : new URLSearchParams();
-  if (location.thread && view.kind !== "home" && view.kind !== "search") params.set("thread", location.thread);
-  else if (location.message && view.kind === "room") params.set("message", location.message);
+  if (location.thread && view.kind !== "home" && view.kind !== "search") {
+    params.set("thread", location.thread);
+    if (location.message) params.set("message", location.message);
+  } else if (location.message && view.kind === "room") params.set("message", location.message);
   const query = params.toString();
   return query ? `${path}?${query}` : path;
 }
@@ -88,7 +90,7 @@ export function roomHref(conversationId: string) {
 
 export function messageHref(conversationId: string, message: { id: string; parentId: string | null }) {
   return message.parentId
-    ? chatLocationHref({ view: { kind: "room", id: conversationId }, thread: message.parentId })
+    ? chatLocationHref({ view: { kind: "room", id: conversationId }, thread: message.parentId, message: message.id })
     : chatLocationHref({ view: { kind: "room", id: conversationId }, message: message.id });
 }
 

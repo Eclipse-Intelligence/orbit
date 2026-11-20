@@ -525,9 +525,10 @@ export async function listConversations(actor: UserActor): Promise<ChatSidebar> 
        where t.user_id = $1 and r.last_reply_at > t.last_read_at`,
       [actor.userId],
     );
-    const archived = await db.query<{ id: string; name: string }>(
-      `select c.id, c.name from crm.chat_conversations c
+    const archived = await db.query<{ id: string; name: string; workspace_name: string | null }>(
+      `select c.id, c.name, w.name as workspace_name from crm.chat_conversations c
        join crm.chat_members me on me.conversation_id = c.id and me.user_id = $1
+       left join crm.workspaces w on w.id = c.workspace_id
        where c.kind = 'room' and c.archived_at is not null
        order by lower(c.name), c.id`,
       [actor.userId],
@@ -536,7 +537,7 @@ export async function listConversations(actor: UserActor): Promise<ChatSidebar> 
     const threadCounts = threads.rows[0] ?? { unread: 0, mentions: 0 };
     return {
       conversations,
-      archived: archived.rows.map((row) => ({ id: row.id, name: row.name })),
+      archived: archived.rows.map((row) => ({ id: row.id, name: row.name, workspaceName: row.workspace_name })),
       threads: threadCounts,
       unreadConversations: conversations.filter((conversation) => conversation.unread > 0).length,
       mentioned: threadCounts.mentions > 0 || conversations.some((conversation) => conversation.mentions > 0 || (conversation.kind === "dm" && conversation.unread > 0)),

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { chatJumps, jumpLabel } from "@/lib/chat/jump";
-import { chatLocationHref, chatSegments, parseChatLocation, sameView } from "@/lib/chat/routes";
-import { EMPTY_SEARCH, readSearchQuery, sameSearch, searchExcerpt, searchFilterCount, searchLength, searchParts, searchReady, writeSearchQuery } from "@/lib/chat/search";
+import { chatLocationHref, chatSegments, messageHref, parseChatLocation, sameView } from "@/lib/chat/routes";
+import { EMPTY_SEARCH, readSearchQuery, searchExcerpt, searchFilterCount, searchLength, searchParts, searchReady, writeSearchQuery } from "@/lib/chat/search";
 import type { ChatConversation, ChatSidebar } from "@/lib/chat/types";
 import { matchingShortcuts, SHORTCUTS } from "@/lib/shortcuts";
 
@@ -47,6 +47,15 @@ describe("search text", () => {
     const excerpt = searchExcerpt(long, "plain", "NEEDLE");
     assert.ok(excerpt.startsWith("…") && excerpt.endsWith("…") && excerpt.includes("needle"));
     assert.ok(excerpt.length <= 205);
+    const emoji = `${"😀".repeat(70)} needle ${"😀".repeat(70)}`;
+    const cut = searchExcerpt(emoji, "plain", "needle");
+    assert.doesNotMatch(cut, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+    for (const lead of [59, 60, 61, 62]) {
+      const shifted = searchExcerpt(`${"😀".repeat(lead / 2)}${lead % 2 ? "x" : ""}needle${"😀".repeat(150)}`, "plain", "needle");
+      assert.doesNotMatch(shifted, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/, String(lead));
+    }
+    assert.equal(readSearchQuery(new URLSearchParams(`q=${"😀".repeat(150)}`)).q, "😀".repeat(150));
+    assert.equal(Array.from(readSearchQuery(new URLSearchParams(`q=${"😀".repeat(300)}`)).q).length, 200);
     const early = searchExcerpt(`needle${" after".repeat(60)}`, "plain", "needle");
     assert.ok(!early.startsWith("…") && early.endsWith("…"));
   });
@@ -72,12 +81,20 @@ describe("search in the address", () => {
     const query = { q: "sso plan", in: ROOM, from: PERSON, file: true, after: "2026-11-01", before: "2026-11-20" };
     const params = writeSearchQuery(query);
     assert.deepEqual(readSearchQuery(params), query);
-    assert.equal(sameSearch(query, readSearchQuery(params)), true);
     assert.equal(searchFilterCount(query), 5);
     assert.equal(searchFilterCount({ ...EMPTY_SEARCH, q: "plan" }), 0);
     const broken = readSearchQuery(new URLSearchParams("q=plan&in=nope&from=1&file=yes&after=2026-13-45&before=tomorrow"));
     assert.deepEqual(broken, { ...EMPTY_SEARCH, q: "plan" });
     assert.equal(readSearchQuery(new URLSearchParams(`q=${"x".repeat(500)}`)).q.length, 200);
+  });
+
+  it("carries a reply's id with its thread so the thread can highlight it", () => {
+    const reply = { id: PERSON, parentId: ROOM };
+    assert.equal(messageHref(ROOM, reply), `/chat/${ROOM}?thread=${ROOM}&message=${PERSON}`);
+    assert.deepEqual(parseChatLocation(`/chat/${ROOM}`, `?thread=${ROOM}&message=${PERSON}`), { view: { kind: "room", id: ROOM }, thread: ROOM, message: PERSON });
+    assert.equal(chatLocationHref({ view: { kind: "room", id: ROOM }, thread: ROOM, message: PERSON }), `/chat/${ROOM}?thread=${ROOM}&message=${PERSON}`);
+    assert.equal(chatLocationHref({ view: { kind: "room", id: ROOM }, thread: null, message: PERSON }), `/chat/${ROOM}?message=${PERSON}`);
+    assert.deepEqual(parseChatLocation("/chat/threads", `?message=${PERSON}`), { view: { kind: "threads" }, thread: null, message: null });
   });
 
   it("routes the results page and never carries a thread or message with it", () => {
@@ -102,7 +119,7 @@ describe("jump to a conversation", () => {
       conversation({ id: "a5", name: "Priya Nair", kind: "dm", lastMessageAt: "2026-11-11T10:00:00.000Z", workspaceName: null }),
       conversation({ id: "a6", name: "launch", workspaceName: "Ridgeon", lastMessageAt: "2026-11-01T09:00:00.000Z" }),
     ],
-    archived: [{ id: "z1", name: "sales-2024" }],
+    archived: [{ id: "z1", name: "sales-2024", workspaceName: "Ridgeon" }],
     threads: { unread: 0, mentions: 0 },
     unreadConversations: 3,
     mentioned: true,
@@ -117,7 +134,8 @@ describe("jump to a conversation", () => {
   it("matches names and workspaces, with unread first and then the newest, archived rooms last", () => {
     assert.deepEqual(chatJumps(sidebar, "sales").map((item) => item.id), ["a2", "a1", "z1"]);
     assert.deepEqual(chatJumps(sidebar, "#sales ops").map((item) => item.id), ["a2"]);
-    assert.deepEqual(chatJumps(sidebar, "ridgeon").map((item) => item.id), ["a6"]);
+    assert.deepEqual(chatJumps(sidebar, "ridgeon").map((item) => item.id), ["a6", "z1"]);
+    assert.equal(chatJumps(sidebar, "sales-2024")[0].workspaceName, "Ridgeon");
     assert.deepEqual(chatJumps(sidebar, "SAM").map((item) => item.id), ["a3"]);
     assert.deepEqual(chatJumps(sidebar, "nothing like it"), []);
     assert.equal(chatJumps(sidebar, "sales").find((item) => item.id === "z1")?.archived, true);

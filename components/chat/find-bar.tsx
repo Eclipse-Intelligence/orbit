@@ -12,6 +12,7 @@ import SearchIcon from "@/public/assets/images/_common/search.svg";
 
 const FIND_DEBOUNCE_MS = 250;
 const FIND_PAGE = 30;
+const KEEP_FOCUS_MS = 150;
 
 type Found = { key: string; messages: ChatMessage[]; error: string | null };
 
@@ -21,6 +22,10 @@ export default function FindBar({ conversationId, focusSignal, onJump, onClose }
   const [position, setPosition] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const jump = useRef(onJump);
+  const goTo = useRef((message: ChatMessage) => {
+    jump.current(message);
+    window.setTimeout(() => input.current?.focus({ preventScroll: true }), KEEP_FOCUS_MS);
+  });
   const wanted = text.trim();
   const ready = searchReady(wanted);
   const key = `${conversationId}:${wanted}`;
@@ -46,7 +51,7 @@ export default function FindBar({ conversationId, focusSignal, onJump, onClose }
           if (stale) return;
           setFound({ key, messages: result.messages, error: null });
           setPosition(0);
-          if (result.messages[0]) jump.current(result.messages[0]);
+          if (result.messages[0]) goTo.current(result.messages[0]);
         })
         .catch((failure: Error) => {
           if (!stale) setFound({ key, messages: [], error: failure.message });
@@ -62,7 +67,7 @@ export default function FindBar({ conversationId, focusSignal, onJump, onClose }
     if (messages.length === 0) return;
     const next = (position + direction + messages.length) % messages.length;
     setPosition(next);
-    jump.current(messages[next]);
+    goTo.current(messages[next]);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -98,15 +103,17 @@ export default function FindBar({ conversationId, focusSignal, onJump, onClose }
       <span role="status" className="caption-style text-subtle shrink-0 px-1 tabular-nums">
         {status}
       </span>
-      <Button variant="ghost" size="icon-sm" aria-label="Previous match" title="Previous match" disabled={messages.length === 0} onClick={() => step(-1)} className="hit">
-        <ChevronDownIcon aria-hidden className="size-3 rotate-180" />
-      </Button>
-      <Button variant="ghost" size="icon-sm" aria-label="Next match" title="Next match" disabled={messages.length === 0} onClick={() => step(1)} className="hit">
-        <ChevronDownIcon aria-hidden className="size-3" />
-      </Button>
-      <Button variant="ghost" size="icon-sm" aria-label="Close find" title="Close find" onClick={onClose} className="hit">
-        <RemoveIcon aria-hidden className="size-3" />
-      </Button>
+      <span className="flex shrink-0 items-center gap-1 pointer-coarse:gap-5">
+        <Button variant="ghost" size="icon-sm" aria-label="Previous match" title="Previous match" disabled={messages.length === 0} onClick={() => step(-1)} className="hit">
+          <ChevronDownIcon aria-hidden className="size-3 rotate-180" />
+        </Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Next match" title="Next match" disabled={messages.length === 0} onClick={() => step(1)} className="hit">
+          <ChevronDownIcon aria-hidden className="size-3" />
+        </Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Close find" title="Close find" onClick={onClose} className="hit">
+          <RemoveIcon aria-hidden className="size-3" />
+        </Button>
+      </span>
     </div>
   );
 }

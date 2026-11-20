@@ -31,12 +31,14 @@ function AskAboutThread({ root }: { root: ChatMessage }) {
 
 export default function ThreadPanel({
   rootId,
+  focusId,
   thread,
   conversation,
   bottomSignal,
   onClose,
 }: {
   rootId: string;
+  focusId: string | null;
   thread: ThreadState | null;
   conversation: ChatConversation | null;
   bottomSignal: number;
@@ -119,7 +121,7 @@ export default function ThreadPanel({
         </div>
       ) : (
         <MessageList
-          key={rootId}
+          key={`${rootId}:${focusId ?? ""}`}
           messages={messages}
           ready={ready}
           dividerId={divider.id}
@@ -130,7 +132,7 @@ export default function ThreadPanel({
           loadError={timeline?.error ?? null}
           hasOlder={timeline?.hasOlder ?? false}
           hasNewer={timeline?.hasNewer ?? false}
-          focusId={null}
+          focusId={focusId}
           readOnly={archived}
           header={header}
           label="Thread replies"

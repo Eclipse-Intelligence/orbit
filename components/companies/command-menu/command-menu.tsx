@@ -227,7 +227,7 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
             <CommandGroup heading="Chat">
               {jumps.map((jump) => (
                 <CommandItem key={jump.id} value={`chat-${jump.id}`} onSelect={() => go(() => router.push(roomHref(jump.id)))}>
-                  <span className="truncate">{jumpLabel(jump)}</span>
+                  <span className="truncate">{jumpLabel(jump)}{multi && jump.workspaceName ? ` · ${jump.workspaceName}` : ""}</span>
                   {jump.archived && <span className="caption-style text-subtle shrink-0">Archived</span>}
                   {jump.unread > 0 && (
                     <span className="caption-style text-subtle ml-auto shrink-0 tabular-nums">

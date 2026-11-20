@@ -266,8 +266,9 @@ export default function SearchView({ query, box, hintId, onQuery }: { query: Cha
   const [results, setResults] = useState<Results | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [moreError, setMoreError] = useState<string | null>(null);
+  const [moreFailure, setMoreFailure] = useState<{ key: string; message: string } | null>(null);
   const current = results?.key === key ? results : null;
+  const moreError = moreFailure?.key === key ? moreFailure.message : null;
 
   useEffect(() => {
     if (!ready) return;
@@ -289,11 +290,11 @@ export default function SearchView({ query, box, hintId, onQuery }: { query: Cha
     if (!current?.next || loadingMore) return;
     const cursor = current.next;
     setLoadingMore(true);
-    setMoreError(null);
+    setMoreFailure(null);
     chatApi
       .search(query, cursor)
       .then((found) => setResults((latest) => (latest?.key === key ? { ...latest, hits: [...latest.hits, ...found.hits], next: found.next } : latest)))
-      .catch((failure: Error) => setMoreError(failure.message))
+      .catch((failure: Error) => setMoreFailure({ key, message: failure.message }))
       .finally(() => setLoadingMore(false));
   }
 
@@ -313,10 +314,10 @@ export default function SearchView({ query, box, hintId, onQuery }: { query: Cha
           </span>
         )}
       </header>
-      <SearchHint id={`${hintId}-pane`} value={box.value} />
+      <SearchHint id={`${hintId}-pane`} value={box.value} className="md:hidden" />
       <Filters query={query} onChange={onQuery} />
       <div className="border-border flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain border-t">
-        {!ready && <p className="caption-style text-subtle px-5 py-10 text-center">Type at least 3 characters.</p>}
+        {!ready && !box.value.trim() && <p className="caption-style text-subtle px-5 py-10 text-center">Type at least 3 characters.</p>}
         {ready && !current && (
           <p role="status" className="caption-style text-subtle px-5 py-10 text-center">
             Searching…

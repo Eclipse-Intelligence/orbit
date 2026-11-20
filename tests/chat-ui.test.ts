@@ -83,7 +83,7 @@ describe("chat routes", () => {
     assert.equal(chatLocationHref({ view: { kind: "threads" }, thread }), `/chat/threads?thread=${thread}`);
     assert.equal(chatLocationHref({ view: { kind: "home" }, thread }), "/chat");
     assert.equal(messageHref(ROOM, { id: thread, parentId: null }), `/chat/${ROOM}?message=${thread}`);
-    assert.equal(messageHref(ROOM, { id: SAM, parentId: thread }), `/chat/${ROOM}?thread=${thread}`);
+    assert.equal(messageHref(ROOM, { id: SAM, parentId: thread }), `/chat/${ROOM}?thread=${thread}&message=${SAM}`);
   });
 });
 
