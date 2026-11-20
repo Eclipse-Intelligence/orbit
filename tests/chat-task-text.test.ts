@@ -81,7 +81,9 @@ describe("an Orbit link in a task description", () => {
     const message = orbitLink(CHAT_LINK_LABEL, messageHref(ROOM, { id: MESSAGE, parentId: null }));
     assert.equal(message, `[Message in Chat](/chat/${ROOM}?message=${MESSAGE})`);
     const reply = orbitLink(CHAT_LINK_LABEL, messageHref(ROOM, { id: MESSAGE, parentId: ROOT }));
-    assert.equal(reply, `[Message in Chat](/chat/${ROOM}?thread=${ROOT})`);
+    assert.equal(reply, `[Message in Chat](/chat/${ROOM}?thread=${ROOT}&message=${MESSAGE})`);
+    assert.equal(hasOrbitLink(reply), true);
+    assert.deepEqual(descriptionParts(reply, []).map((part) => part.kind), descriptionParts(message, []).map((part) => part.kind));
     for (const kind of ["task", "doc", "mail_thread"] as const) {
       const text = orbitLink(DISCUSSION_LINK_LABELS[kind], discussionHref({ kind, id: RECORD }));
       assert.equal(hasOrbitLink(text), true, kind);
