@@ -356,7 +356,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
               event.preventDefault();
               go({ view: { kind: "saved" }, thread: null, message: null });
             }}
-            className="caption-style text-subtle hover:text-soft hit mt-1 inline-flex min-h-5 items-center gap-1 self-start rounded outline-none focus-visible:ring-2 focus-visible:ring-ring/60 pointer-coarse:mt-2 pointer-coarse:mb-1.5"
+            className="caption-style text-subtle hover:text-soft hit mt-1 inline-flex min-h-5 items-center gap-1 self-start rounded outline-none focus-visible:ring-2 focus-visible:ring-ring/60 pointer-coarse:mt-2.5 pointer-coarse:mb-1.5"
           >
             <BookmarkIcon aria-hidden className="text-primary size-3 fill-current" />
             Saved
