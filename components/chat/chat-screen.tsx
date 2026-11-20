@@ -11,17 +11,19 @@ import { ChatContext, type ChatContextValue, type ChatEditing, type ChatWorkspac
 import { NewMessageDialog, NewRoomDialog } from "@/components/chat/chat-dialogs";
 import { chatInputText } from "@/components/chat/chat-input";
 import ChatList, { listViews } from "@/components/chat/chat-list";
-import { useChatEvents, useChatJoined } from "@/components/chat/chat-live";
+import { chatJoined, useChatEvents, useChatJoined } from "@/components/chat/chat-live";
 import { useEmojiPrefs } from "@/components/chat/reactions";
 import RoomSettings from "@/components/chat/room-settings";
 import RoomView from "@/components/chat/room-view";
 import SavedView from "@/components/chat/saved-view";
+import ScheduledView from "@/components/chat/scheduled-view";
 import type { SearchBox } from "@/components/chat/search-field";
 import SearchView from "@/components/chat/search-view";
 import ThreadPanel from "@/components/chat/thread-panel";
 import ThreadsView from "@/components/chat/threads-view";
 import UnreadsView from "@/components/chat/unreads-view";
 import { memberIds, messageBody, useChatActions } from "@/components/chat/use-chat-actions";
+import { useScheduledMessages } from "@/components/chat/use-scheduled";
 import { useSavedMessages } from "@/components/chat/use-saved";
 import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
@@ -115,6 +117,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const [notice, setNotice] = useState<string | null>(null);
   const actions = useChatActions(dispatch, state, viewer.id, setNotice);
   const saved = useSavedMessages(setNotice);
+  const schedule = useScheduledMessages(setNotice, (post) => dispatch({ type: "incoming", message: post.message, root: post.root, unsynced: !chatJoined() }));
   const [editing, setEditing] = useState<ChatEditing>(null);
   const [now, setNow] = useState(initialNow);
   const [newRoom, setNewRoom] = useState(false);
@@ -551,8 +554,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const memberNames = useMemo(() => new Map((members ?? []).map((member) => [member.id.toLowerCase(), member.name])), [members]);
   const emoji = useEmojiPrefs(me.id);
   const context = useMemo<ChatContextValue>(
-    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji, saved }),
-    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji, saved],
+    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji, saved, schedule }),
+    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji, saved, schedule],
   );
 
   const entry: ChatConversation | null = roomId ? (sidebar?.conversations.find((item) => item.id === roomId) ?? room?.conversation ?? null) : null;
@@ -615,6 +618,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                 <UnreadsView />
               ) : view.kind === "saved" ? (
                 <SavedView />
+              ) : view.kind === "scheduled" ? (
+                <ScheduledView />
               ) : view.kind === "search" ? (
                 <SearchView query={view.query} box={searchBox} hintId="chat-search-hint" onQuery={changeFilters} />
               ) : view.kind === "room" ? (

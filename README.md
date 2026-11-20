@@ -109,6 +109,14 @@ A message you write shows a preview under it for the first two https links in it
 
 **Remind me about this** (the bell on the toolbar, or the long-press menu) makes a reminder, In 1 hour, Tomorrow or No date. It is titled "Chat message from <first name>" and links to the message, and never carries the message's text, because reminder titles go to push notifications and Outlook. The reminders card shows the link as **Open message**.
 
+### Scheduled messages
+
+The arrow beside Send (on a phone, the clock beside Send) is **Send later**: In 1 hour, Tomorrow at 09:00, Monday at 09:00 (left out when tomorrow is Monday) or Custom time, in London time. It works in rooms, direct and group messages and thread replies, with text, formatting, mentions and files. Task, doc and shared email discussions don't have it. A line above the composer shows how many messages you have scheduled there and when the next goes out, with **View**.
+
+**Scheduled**, below Saved in the Chat list (it shows while you have any), lists every message you have scheduled, with those that weren't sent first. Each can be edited (text, time, and removing files; not adding them), **Send now**, or deleted with **Hold to delete**, which deletes its files too. Scheduled messages are private to you: nobody else can see them or their files, owners and admins included, until they are sent. At most 100 at a time, up to a year ahead.
+
+`/api/cron/mail-due` posts due messages every minute through the normal posting code, keyed by the schedule's id, so a retried or overlapping run never posts twice. If the room was archived, you left it, the thread was deleted, everyone else left a group, or the other person left your workspaces before it was due, the message isn't sent: it shows under Scheduled as not sent with the reason (you can edit and send it again or delete it) and you get a notification that carries no message text. A temporary fault (storage down, say) is retried each minute, five times. Failed messages are removed after 30 days. MCP, REST and the assistant's `team_chat` can't schedule.
+
 ### Incoming webhooks
 
 A room can take posts from other tools, for example Google Analytics alerts into #alerts through Zapier or Make. Anyone in the room can set one up in Room settings › Incoming webhooks: press **Add incoming webhook**, name it, and copy the URL and the secret (shown once). Pause stops posts without losing the URL, Rotate secret replaces the secret at once, and Hold to delete deletes the hook (its messages stay). Anyone in the room can delete a hook message from its menu.
@@ -542,7 +550,7 @@ Mail, workflows and campaigns need more jobs, made the same way with their own n
 | --- | --- | --- | --- |
 | `orbit-mail` | `*/15 * * * *` (every fifteen minutes) | `/api/cron/mail` | The safety net behind mail change notifications, and what renews their subscriptions: syncs every connected mailbox not synced in the last minute into the Mail mirror (backfill included, up to four minutes a run), then for each user sends due mail and prepares replies and reminders (`prepareMail`). |
 | `orbit-workflows` | `*/2 * * * *` (every two minutes) | `/api/cron/workflows` | Runs workflows for up to about four and a half minutes, including Ask AI steps that search the web (`maxDuration` 300). |
-| `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Finishes queued archive, trash, inbox and snooze moves, sends scheduled emails, brings snoozed conversations back, raises No reply reminders, sends meeting and task reminders and picks up agent mailbox jobs left behind (`maxDuration` 300). |
+| `orbit-mail-due` | `* * * * *` (every minute) | `/api/cron/mail-due` | Finishes queued archive, trash, inbox and snooze moves, sends scheduled emails and scheduled Chat messages, brings snoozed conversations back, raises No reply reminders, sends meeting and task reminders and picks up agent mailbox jobs left behind (`maxDuration` 300). |
 | `orbit-campaigns` | `*/5 * * * *` (every five minutes) | `/api/cron/campaigns` | Syncs every connected campaign tool: campaigns, totals, steps, prospects and events, carrying a first sync over several runs (`maxDuration` 300, stops starting work after about four and a half minutes). |
 | `orbit-learn` | `*/10 1-5 * * *` (every ten minutes, 1am to 6am UTC) | `/api/cron/learn` | Nightly learning (see Learning). Each part runs once a day, so the extra runs only pick up what an earlier run didn't finish. |
 

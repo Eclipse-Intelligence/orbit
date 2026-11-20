@@ -95,6 +95,7 @@ export type ChatSidebar = {
   archived: { id: string; name: string; workspaceName: string | null }[];
   threads: { unread: number; mentions: number };
   unreadConversations: number;
+  scheduled: number;
   mentioned: boolean;
 };
 
@@ -192,6 +193,36 @@ export type ChatSavedState = { messageId: string; saved: boolean };
 export const CHAT_REMIND_WHEN = ["hour", "tomorrow", "none"] as const;
 
 export type ChatRemindWhen = (typeof CHAT_REMIND_WHEN)[number];
+
+export type ChatScheduledStatus = "pending" | "sending" | "failed";
+
+export type ChatScheduledItem = {
+  id: string;
+  conversation: { id: string; kind: ChatKind; name: string | null };
+  parentId: string | null;
+  body: string;
+  format: ChatFormat;
+  attachments: ChatAttachment[];
+  sendAt: string;
+  status: ChatScheduledStatus;
+  failure: string | null;
+  createdAt: string;
+};
+
+export type ChatScheduled = { items: ChatScheduledItem[] };
+
+export type ChatScheduledInput = {
+  id: string;
+  conversationId: string;
+  parentId?: string | null;
+  body: string;
+  format?: ChatFormat;
+  attachmentIds?: string[];
+  sendAt: string;
+};
+
+export type ChatScheduledChange = { body?: string; format?: ChatFormat; sendAt?: string; removeAttachmentIds?: string[] };
+
 export const CHAT_SEARCH_MIN = 3;
 export const CHAT_SEARCH_PAGE = 30;
 export const CHAT_SEARCH_MAX = 50;
@@ -235,6 +266,7 @@ export type ChatLiveEvent =
   | { type: "thread-read"; conversationId: string; messageId: string; lastReadAt: string }
   | { type: "conversation"; conversationId: string }
   | { type: "removed"; conversationId: string }
+  | { type: "scheduled"; conversationId: string }
   | { type: "reaction"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string }
   | { type: "previews"; conversationId: string; messageId: string; parentId: string | null; previews: ChatLinkPreview[] };
 

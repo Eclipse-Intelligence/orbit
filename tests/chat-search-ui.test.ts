@@ -123,6 +123,7 @@ describe("jump to a conversation", () => {
     archived: [{ id: "z1", name: "sales-2024", workspaceName: "Ridgeon" }],
     threads: { unread: 0, mentions: 0 },
     unreadConversations: 3,
+    scheduled: 0,
     mentioned: true,
   };
 

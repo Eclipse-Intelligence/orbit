@@ -234,7 +234,7 @@ describe("group messages in the sidebar", () => {
   const entry = (id: string, kind: ChatConversation["kind"], unread: number, starred = false): ChatConversation => ({
     id, kind, name: kind === "room" ? "sales" : "Ana and Ben", workspaceId: null, workspaceName: null, dmUser: null, people: [], topic: null, archivedAt: null, createdAt: "", lastMessageAt: null, lastReadAt: "", unread, mentions: 0, notify: "default", muteMentions: false, starred,
   });
-  const sidebar: ChatSidebar = { conversations: [entry(ROOM, "room", 1), entry(GROUP, "group_dm", 2)], archived: [], threads: { unread: 0, mentions: 0 }, unreadConversations: 2, mentioned: true };
+  const sidebar: ChatSidebar = { conversations: [entry(ROOM, "room", 1), entry(GROUP, "group_dm", 2)], archived: [], threads: { unread: 0, mentions: 0 }, unreadConversations: 2, scheduled: 0, mentioned: true };
 
   it("lists a group under direct messages, and starred ones after starred rooms", () => {
     const listed = orderedConversations(sidebar);
@@ -262,6 +262,7 @@ describe("chat sidebar badge", () => {
     archived: [],
     threads: { unread: 0, mentions: 0 },
     unreadConversations: 1,
+    scheduled: 0,
     mentioned: true,
   };
 
@@ -523,6 +524,7 @@ describe("chat notify and unread state", () => {
       archived: [],
       threads: { unread: 1, mentions: 1 },
       unreadConversations: 2,
+      scheduled: 0,
       mentioned: true,
     };
     const muted = sidebarNotify(sidebar, ROOM, { notify: "mute", starred: true });

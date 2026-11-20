@@ -137,7 +137,7 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
       return;
     }
     if (event.type === "message" && !event.message.parentId) return;
-    if (event.type === "read") return;
+    if (event.type === "read" || event.type === "scheduled") return;
     window.clearTimeout(settle.current);
     settle.current = window.setTimeout(reload, SETTLE_MS);
   });

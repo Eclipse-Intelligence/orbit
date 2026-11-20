@@ -11,6 +11,7 @@ import { sweepWaitingSteers } from "@/lib/assistant/chat";
 import { processTaskReminders } from "@/lib/task-reminder-push";
 import { processReminderPushes } from "@/lib/reminder-push";
 import { rollDueSeries } from "@/lib/crm/task-series";
+import { processDueScheduled } from "@/lib/crm/chat-scheduled";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -23,6 +24,10 @@ async function handle(request: Request) {
   const deadline = started + 45_000;
   const moves = await processAllPendingMail(Date.now() + 25_000).catch((error) => {
     console.error("Queued mail moves failed", error instanceof Error ? error.name : "unknown");
+    return null;
+  });
+  const scheduled = await processDueScheduled({ deadline: Date.now() + 20_000 }).catch((error) => {
+    console.error("Scheduled chat messages failed", error instanceof Error ? error.name : "unknown");
     return null;
   });
   const users = await processAllDueMail(deadline - 10_000).catch((error) => {
@@ -70,7 +75,7 @@ async function handle(request: Request) {
     console.error("Waiting assistant messages sweep failed", error instanceof Error ? error.name : "unknown");
     return 0;
   });
-  return Response.json({ users, moves, calendar, repeats, taskReminders, reminders, taskBlocks, seriesBlocks, reminderBlocks, agentMail, polled, steering });
+  return Response.json({ users, moves, scheduled, calendar, repeats, taskReminders, reminders, taskBlocks, seriesBlocks, reminderBlocks, agentMail, polled, steering });
 }
 
 export const GET = handle;
