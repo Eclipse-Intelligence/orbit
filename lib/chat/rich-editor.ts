@@ -1,6 +1,7 @@
 import { defaultKeymap, history, historyKeymap, invertedEffects } from "@codemirror/commands";
 import {
   Annotation,
+  Compartment,
   EditorSelection,
   EditorState,
   Facet,
@@ -23,6 +24,7 @@ import {
   linkAt,
   normalSpans,
   sameLook,
+  sliceMarkdown,
   toMarkdown,
   withRange,
   type InlineKind,
@@ -274,8 +276,10 @@ export function lineToggle(state: EditorState, kind: BlockKind): TransactionSpec
   return { effects: setRich.of({ spans, lines }), userEvent: "input.format" };
 }
 
-export function linkEdit(state: EditorState, input: { from: number; to: number; href: string | null; text?: string }): TransactionSpec {
+export function linkEdit(state: EditorState, target: { from: number; to: number; href: string | null; text?: string }): TransactionSpec {
   const meta = state.field(richField);
+  const from = Math.min(Math.max(0, target.from), state.doc.length);
+  const input = { ...target, from, to: Math.min(Math.max(from, target.to), state.doc.length) };
   const text = input.text ?? state.sliceDoc(input.from, input.to);
   const replacing = input.text !== undefined && input.text !== state.sliceDoc(input.from, input.to);
   const end = input.from + text.length;
@@ -364,10 +368,25 @@ const markdownShortcuts = EditorState.transactionFilter.of((tr) => {
 });
 
 const undoFormats = invertedEffects.of((tr) => {
-  if (tr.docChanged || !tr.effects.some((effect) => effect.is(setRich))) return [];
+  if (!tr.docChanged && !tr.effects.some((effect) => effect.is(setRich))) return [];
   const before = tr.startState.field(richField);
   return [setRich.of({ spans: before.spans, lines: before.lines })];
 });
+
+const historySlot = new Compartment();
+
+export function reloadMarkdown(state: EditorState, markdown: string): TransactionSpec[] {
+  const doc = fromMarkdown(markdown);
+  return [
+    {
+      changes: minimalChange(state.doc.toString(), doc.text),
+      effects: [setRich.of({ spans: doc.spans, lines: doc.lines }), historySlot.reconfigure([])],
+      selection: EditorSelection.cursor(doc.text.length),
+      annotations: [fromProps.of(true), Transaction.addToHistory.of(false)],
+    },
+    { effects: historySlot.reconfigure(history()), annotations: [fromProps.of(true)] },
+  ];
+}
 
 const LINE_CLASS: Record<BlockKind, string> = {
   bullets: "chat-li chat-li-bullet",
@@ -391,14 +410,21 @@ export function richDecorations(state: EditorState): DecorationSet {
   const meta = state.field(richField);
   const labels = state.facet(mentionLabels);
   const ranges: Range<Decoration>[] = [];
-  let number = 0;
+  const numbers: number[] = [];
+  const widest: number[] = [];
+  for (let index = 0; index < meta.lines.length; index += 1) {
+    if (meta.lines[index].kind !== "numbers") continue;
+    numbers[index] = meta.lines[index - 1]?.kind === "numbers" ? numbers[index - 1] + 1 : (meta.lines[index].start ?? 1);
+  }
+  for (let index = meta.lines.length - 1; index >= 0; index -= 1) {
+    if (meta.lines[index].kind === "numbers") widest[index] = meta.lines[index + 1]?.kind === "numbers" ? widest[index + 1] : numbers[index];
+  }
   for (let index = 1; index <= state.doc.lines; index += 1) {
     const line = state.doc.line(index);
     const kind = meta.lines[index - 1]?.kind ?? "text";
-    if (kind === "numbers") number = meta.lines[index - 2]?.kind === "numbers" ? number + 1 : (meta.lines[index - 1].start ?? 1);
     if (kind === "code") {
-      const first = meta.lines[index - 2]?.kind !== "code";
-      const last = meta.lines[index]?.kind !== "code";
+      const first = meta.lines[index - 2]?.kind !== "code" || Boolean(meta.lines[index - 1].open);
+      const last = meta.lines[index]?.kind !== "code" || Boolean(meta.lines[index]?.open);
       ranges.push(
         Decoration.line({
           class: `${LINE_CLASS.code}${first ? " chat-code-first" : ""}${last ? " chat-code-last" : ""}`,
@@ -409,8 +435,8 @@ export function richDecorations(state: EditorState): DecorationSet {
     if (kind === "numbers")
       ranges.push(
         Decoration.line({
-          class: LINE_CLASS.numbers,
-          attributes: { "data-n": `${number}.` },
+          class: `${LINE_CLASS.numbers} chat-li-w${Math.min(3, String(widest[index - 1]).length)}`,
+          attributes: { "data-n": `${numbers[index - 1]}.` },
         }).range(line.from),
       );
     else if (kind !== "text") ranges.push(Decoration.line({ class: LINE_CLASS[kind] }).range(line.from));
@@ -435,12 +461,13 @@ export function runSpec(view: EditorView, spec: TransactionSpec) {
   return true;
 }
 
-export function chatInputSettings(options: { placeholder: string; label: string; id: string }): Extension[] {
+export function chatInputSettings(options: { placeholder: string; label: string; id: string; enterKeyHint: string }): Extension[] {
   return [
     placeholder(options.placeholder),
     EditorView.contentAttributes.of({
       id: options.id,
       "aria-label": options.label,
+      enterkeyhint: options.enterKeyHint,
     }),
   ];
 }
@@ -451,8 +478,16 @@ export function chatEditorExtensions(): Extension[] {
     undoFormats,
     decorations,
     markdownShortcuts,
-    history(),
+    historySlot.of(history()),
     EditorView.lineWrapping,
+    EditorView.clipboardOutputFilter.of((text, state) => {
+      const range = state.selection.main;
+      if (state.selection.ranges.length !== 1 || range.empty || state.sliceDoc(range.from, range.to) !== text) return text;
+      return sliceMarkdown(richDoc(state), range.from, range.to);
+    }),
+    EditorView.domEventHandlers({
+      drop: (event) => Boolean(event.dataTransfer?.files.length),
+    }),
     Prec.high(
       keymap.of([
         {

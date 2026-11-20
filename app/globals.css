@@ -753,6 +753,28 @@ html[data-sidebar-resizing] * {
   font-variant-numeric: tabular-nums;
 }
 
+.chat-input .cm-line.chat-li-w2 {
+  padding-left: 2em;
+}
+
+.chat-input .cm-line.chat-li-w2::before {
+  width: 1.6em;
+}
+
+.chat-input .cm-line.chat-li-w3 {
+  padding-left: 2.6em;
+}
+
+.chat-input .cm-line.chat-li-w3::before {
+  width: 2.2em;
+}
+
+.chat-input .cm-line.chat-li .cm-placeholder,
+.chat-input .cm-line.chat-quote .cm-placeholder,
+.chat-input .cm-line.chat-code-line .cm-placeholder {
+  display: none !important;
+}
+
 .chat-input .cm-line.chat-quote {
   border-left: 2px solid var(--line-strong);
   padding-left: 12px;

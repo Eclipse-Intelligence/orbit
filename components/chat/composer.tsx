@@ -160,6 +160,7 @@ function LinkForm({ target, onSave, onRemove, onCancel }: { target: LinkTarget; 
   return (
     <form
       aria-label="Link"
+      data-chat-link-form=""
       className="border-line-subtle flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5"
       onSubmit={(event) => {
         event.preventDefault();
@@ -461,6 +462,8 @@ export function ComposerBox({
               onKeyDown={keyDown}
               onCaret={caretMoved}
               onPaste={paste}
+              onReload={() => setLinking(null)}
+              enterKeyHint={submitVerb === "save" ? "done" : "send"}
             />
           </div>
           {collapsed && (

@@ -18,6 +18,7 @@ export const NOTE_PLACEHOLDER = "Note… @ to tag";
 
 export function holdEscape(discussion: Discussion | null) {
   const active = document.activeElement;
+  if (active?.closest("[data-chat-link-form]")) return true;
   if (active instanceof HTMLTextAreaElement) {
     if (active.getAttribute("aria-expanded") === "true" || active.getAttribute("aria-label") === "Edit message") return true;
     const composer = active.closest("[data-chat-composer]");

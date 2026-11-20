@@ -11,7 +11,7 @@ export type InlineSpan = {
 
 export type LineKind = "text" | "bullets" | "numbers" | "quote" | "code";
 
-export type RichLine = { kind: LineKind; start?: number; language?: string };
+export type RichLine = { kind: LineKind; start?: number; language?: string; open?: boolean };
 
 export type RichDoc = { text: string; lines: RichLine[]; spans: InlineSpan[] };
 
@@ -27,7 +27,6 @@ const OPEN: Record<Exclude<InlineKind, "link">, string> = {
 const BULLET = /^[-*•][ \t]+/;
 const NUMBERED = /^(\d{1,9})[.)][ \t]+/;
 const QUOTE = /^>[ \t]?/;
-const WORD = /[\p{L}\p{N}]/u;
 const SPACE = /\s/;
 const FENCE_LENGTH = 3;
 
@@ -67,7 +66,7 @@ export function fromMarkdown(src: string): RichDoc {
       const range = fenceRangeAt(src, fence.start + FENCE_LENGTH);
       const body = range ? src.slice(range.content.from, range.content.to) : "";
       const language = range?.content.language ? src.slice(range.content.language.start, range.content.language.end).trim() : "";
-      body.split("\n").forEach((part, index) => push(part, index === 0 && language ? { kind: "code", language } : { kind: "code" }));
+      body.split("\n").forEach((part, index) => push(part, index > 0 ? { kind: "code" } : language ? { kind: "code", open: true, language } : { kind: "code", open: true }));
       const after = src.indexOf("\n", fence.end);
       if (after < 0) break;
       start = after + 1;
@@ -167,9 +166,6 @@ function writable(text: string, formats: Format[]) {
       drop(formats, kind, to, run.to);
     }
   }
-  for (const run of runsOf(formats, "italic")) {
-    if (WORD.test(text[run.from - 1] ?? "") || WORD.test(text[run.to] ?? "")) drop(formats, "italic", run.from, run.to);
-  }
   for (const run of runsOf(formats, "code")) {
     if (text.slice(run.from, run.to).includes("`")) drop(formats, "code", run.from, run.to);
   }
@@ -179,40 +175,132 @@ function writable(text: string, formats: Format[]) {
   }
 }
 
-function opener(kind: InlineKind) {
+function opener(kind: InlineKind, star = false) {
+  if (kind === "italic" && star) return "*";
   return kind === "link" ? "[" : OPEN[kind];
 }
 
-function closer(kind: InlineKind, href: string | undefined) {
+function closer(kind: InlineKind, href: string | undefined, star = false) {
+  if (kind === "italic" && star) return "*";
   return kind === "link" ? `](${href ?? ""})` : OPEN[kind];
+}
+
+type Open = { kind: InlineKind; href?: string };
+
+type Emitted = { out: string } | { drop: InlineKind; from: number; to: number };
+
+function carries(format: Format, item: Open) {
+  return format.kinds.has(item.kind) && (item.kind !== "link" || format.href === item.href);
+}
+
+function extent(formats: Format[], index: number, item: Open) {
+  let end = index;
+  while (end < formats.length && carries(formats[end], item)) end += 1;
+  return end;
+}
+
+function spaceRun(text: string, index: number, step: 1 | -1) {
+  let edge = index;
+  while (edge >= 0 && edge < text.length && SPACE.test(text[edge])) edge += step;
+  return step === 1 ? { from: index, to: edge } : { from: edge + 1, to: index + 1 };
+}
+
+function emit(text: string, formats: Format[], star: boolean): Emitted {
+  let out = "";
+  let stack: Open[] = [];
+  let index = 0;
+  while (index <= text.length) {
+    const format = formats[index] ?? { kinds: new Set<InlineKind>() };
+    let keep = 0;
+    while (keep < stack.length && carries(format, stack[keep])) keep += 1;
+    const wanted: Open[] = INLINE_ORDER.filter((kind) => format.kinds.has(kind) && !stack.slice(0, keep).some((item) => item.kind === kind)).map((kind) => ({
+      kind,
+      href: kind === "link" ? format.href : undefined,
+    }));
+    const code = stack.slice(0, keep).findIndex((item) => item.kind === "code");
+    if (code >= 0 && wanted.length > 0) keep = code;
+    for (let pop = stack.length - 1; pop >= keep; pop -= 1) {
+      const item = stack[pop];
+      if (item.kind !== "code" && item.kind !== "link" && SPACE.test(text[index - 1] ?? "")) return { drop: item.kind, ...spaceRun(text, index - 1, -1) };
+      out += closer(item.kind, item.href, star);
+    }
+    stack = stack.slice(0, keep);
+    if (index === text.length) break;
+    const opening = INLINE_ORDER.filter((kind) => format.kinds.has(kind) && !stack.some((item) => item.kind === kind))
+      .map((kind) => ({ kind, href: kind === "link" ? format.href : undefined }))
+      .sort((left, right) => {
+        if (left.kind === "code" || right.kind === "code") return left.kind === "code" ? 1 : -1;
+        return extent(formats, index, right) - extent(formats, index, left) || INLINE_ORDER.indexOf(left.kind) - INLINE_ORDER.indexOf(right.kind);
+      });
+    for (const item of opening) {
+      if (item.kind !== "code" && item.kind !== "link" && SPACE.test(text[index])) return { drop: item.kind, ...spaceRun(text, index, 1) };
+      out += opener(item.kind, star);
+      stack.push(item);
+    }
+    let end = index + 1;
+    while (end < text.length && formatKey(formats[end]) === formatKey(format)) end += 1;
+    out += text.slice(index, end);
+    index = end;
+  }
+  return { out };
+}
+
+function lineLook(text: string, formats: Format[]) {
+  return formats.map((format, index) => (SPACE.test(text[index]) ? "" : formatKey(format)));
 }
 
 export function inlineMarkdown(text: string, spans: InlineSpan[]) {
   if (!text) return "";
   const formats = charFormats(text, spans);
   writable(text, formats);
-  let out = "";
-  let stack: { kind: InlineKind; href?: string }[] = [];
-  let index = 0;
-  while (index < text.length) {
-    const key = formatKey(formats[index]);
-    let end = index + 1;
-    while (end < text.length && formatKey(formats[end]) === key) end += 1;
-    const format = formats[index];
-    const wanted = INLINE_ORDER.filter((kind) => format.kinds.has(kind)).map((kind) => ({ kind, href: kind === "link" ? format.href : undefined }));
-    let keep = 0;
-    while (keep < stack.length && keep < wanted.length && stack[keep].kind === wanted[keep].kind && stack[keep].href === wanted[keep].href) keep += 1;
-    for (let pop = stack.length - 1; pop >= keep; pop -= 1) out += closer(stack[pop].kind, stack[pop].href);
-    stack = stack.slice(0, keep);
-    for (const item of wanted.slice(keep)) {
-      out += opener(item.kind);
-      stack.push(item);
+  let star = false;
+  let literal: boolean | undefined;
+  for (let attempt = 0; attempt < text.length * INLINE_ORDER.length + 4; attempt += 1) {
+    const result = emit(text, formats, star);
+    if ("drop" in result) {
+      drop(formats, result.drop, result.from, result.to);
+      continue;
     }
-    out += text.slice(index, end);
-    index = end;
+    const back = fromMarkdown(result.out);
+    if (back.lines.length !== 1 || back.lines[0].kind !== "text") return result.out;
+    if (back.text !== text) {
+      if (literal === undefined) literal = fromMarkdown(text).text !== text;
+      if (literal) return result.out;
+      if (!star && formats.some((format) => format.kinds.has("italic"))) {
+        star = true;
+        continue;
+      }
+      if (!formats.some((format) => format.kinds.size > 0)) return text;
+      star = false;
+      let at = 0;
+      while (at < text.length && text[at] === back.text[at]) at += 1;
+      let dropped = false;
+      for (const kind of INLINE_ORDER) {
+        for (const run of runsOf(formats, kind)) {
+          if (run.from !== at && run.to !== at) continue;
+          drop(formats, kind, run.from, run.to);
+          dropped = true;
+        }
+      }
+      if (!dropped) {
+        for (const format of formats) {
+          format.kinds.clear();
+          format.href = undefined;
+        }
+      }
+      continue;
+    }
+    const wanted = lineLook(text, formats);
+    const got = lineLook(text, charFormats(text, back.spans));
+    const wrong = wanted.findIndex((key, index) => key !== got[index]);
+    if (wrong < 0) return result.out;
+    for (const kind of INLINE_ORDER) {
+      if (!formats[wrong].kinds.has(kind)) continue;
+      const run = runsOf(formats, kind).find((candidate) => candidate.from <= wrong && wrong < candidate.to);
+      if (run) drop(formats, kind, run.from, run.to);
+    }
   }
-  for (let pop = stack.length - 1; pop >= 0; pop -= 1) out += closer(stack[pop].kind, stack[pop].href);
-  return out;
+  return text;
 }
 
 export function toMarkdown(doc: RichDoc): string {
@@ -224,7 +312,7 @@ export function toMarkdown(doc: RichDoc): string {
     const line = doc.lines[index] ?? { kind: "text" };
     if (line.kind === "code") {
       let last = index;
-      while (last + 1 < parts.length && doc.lines[last + 1]?.kind === "code") last += 1;
+      while (last + 1 < parts.length && doc.lines[last + 1]?.kind === "code" && !doc.lines[last + 1]?.open) last += 1;
       out.push(`\`\`\`${line.language ?? ""}`, ...parts.slice(index, last + 1), "```");
       index = last;
       number = 0;
@@ -353,4 +441,28 @@ export function cleanHref(input: string): string | null {
   }
   if (depth !== 0 || /[<>"]/.test(href)) return null;
   return href;
+}
+
+export function sliceMarkdown(doc: RichDoc, from: number, to: number): string {
+  const starts = lineStarts(doc.text);
+  const lineOf = (pos: number) => {
+    let line = 0;
+    while (line + 1 < starts.length && starts[line + 1] <= pos) line += 1;
+    return line;
+  };
+  const first = lineOf(from);
+  const last = lineOf(to);
+  const lineEnd = (line: number) => (line + 1 < starts.length ? starts[line + 1] - 1 : doc.text.length);
+  const lines: RichLine[] = [];
+  for (let line = first; line <= last; line += 1) {
+    const kind = doc.lines[line]?.kind ?? "text";
+    const whole = from <= starts[line] && to >= lineEnd(line);
+    const keep = first === last ? whole : line > first || from === starts[line] || kind === "code";
+    if (!keep) lines.push({ kind: "text" });
+    else if (line === first && kind === "code") lines.push({ ...doc.lines[line], kind, open: true });
+    else lines.push(line === first ? { ...doc.lines[line], kind } : { kind, open: doc.lines[line]?.open });
+  }
+  const spans = doc.spans.filter((span) => span.from < to && span.to > from).map((span) => ({ ...span, from: Math.max(span.from, from) - from, to: Math.min(span.to, to) - from }));
+  const text = doc.text.slice(from, to);
+  return toMarkdown({ text, lines, spans: normalSpans(text, lines, spans) });
 }

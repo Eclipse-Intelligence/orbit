@@ -20,6 +20,7 @@ import {
   loadMarkdown,
   mentionLabels,
   newline,
+  reloadMarkdown,
   richField,
   runSpec,
   stateMarkdown,
@@ -86,6 +87,7 @@ function contentAttributes(options: { expanded: boolean; listId: string }) {
   return EditorView.contentAttributes.of({
     "aria-expanded": options.expanded ? "true" : "false",
     "aria-autocomplete": "list",
+    role: "combobox",
     ...(options.expanded ? { "aria-controls": options.listId } : {}),
   });
 }
@@ -105,6 +107,8 @@ export default function ChatInput({
   onKeyDown,
   onCaret,
   onPaste,
+  onReload,
+  enterKeyHint = "send",
 }: {
   id: string;
   handle: Ref<ChatInputHandle>;
@@ -120,14 +124,17 @@ export default function ChatInput({
   onKeyDown?: (event: KeyboardEvent) => void;
   onCaret?: (caret: ChatCaret) => void;
   onPaste?: (event: ClipboardEvent) => boolean;
+  onReload?: () => void;
+  enterKeyHint?: "send" | "done";
 }) {
   const host = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const emitted = useRef(value);
+  const echoes = useRef<string[]>([]);
   const known = useRef(mentions);
   const picked = useRef<Mention[]>([]);
-  const initial = useRef({ value, placeholder, ariaLabel, id, autoFocus });
+  const initial = useRef({ value, placeholder, ariaLabel, id, autoFocus, enterKeyHint });
   const settings = useRef(new Compartment());
   const labels = useRef(new Compartment());
   const aria = useRef(new Compartment());
@@ -142,6 +149,7 @@ export default function ChatInput({
     onKeyDown,
     onCaret,
     onPaste,
+    onReload,
     open,
     options,
     highlight,
@@ -197,6 +205,7 @@ export default function ChatInput({
       onKeyDown,
       onCaret,
       onPaste,
+      onReload,
       open,
       options,
       highlight,
@@ -217,6 +226,7 @@ export default function ChatInput({
             placeholder: start.placeholder,
             label: start.ariaLabel,
             id: start.id,
+            enterKeyHint: start.enterKeyHint,
           }),
         ),
         labels.current.of(mentionLabels.of({ names: [], room: false })),
@@ -271,10 +281,10 @@ export default function ChatInput({
               }
               now.onKeyDown?.(event);
               if (event.defaultPrevented) return true;
-              if (composing(event) || event.key !== "Enter" || event.altKey || event.metaKey || event.ctrlKey) return false;
+              if (composing(event) || event.key !== "Enter") return false;
               event.preventDefault();
               if (event.shiftKey) return runSpec(view, newline(view.state));
-              if (inCodeBlock(view.state) && view.state.selection.main.empty) return runSpec(view, newline(view.state, { exitCode: true }));
+              if (!event.altKey && inCodeBlock(view.state) && view.state.selection.main.empty) return runSpec(view, newline(view.state, { exitCode: true }));
               now.onSubmit();
               return true;
             },
@@ -292,6 +302,7 @@ export default function ChatInput({
               const markdown = stateMarkdown(state);
               if (markdown !== emitted.current) {
                 emitted.current = markdown;
+                echoes.current = [...echoes.current.slice(-50), markdown];
                 latest.current.onChange(markdown, liveMentions(markdown, known.current));
               }
             }
@@ -331,16 +342,24 @@ export default function ChatInput({
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || value === emitted.current) return;
+    if (!view) return;
+    const echo = echoes.current.indexOf(value);
+    if (echo >= 0) {
+      echoes.current = echoes.current.slice(echo + 1);
+      return;
+    }
+    if (value === stateMarkdown(view.state)) return;
+    echoes.current = [];
     emitted.current = value;
-    view.dispatch(loadMarkdown(view.state, value));
+    for (const spec of reloadMarkdown(view.state, value)) view.dispatch(spec);
+    latest.current.onReload?.();
   }, [value]);
 
   useEffect(() => {
     viewRef.current?.dispatch({
-      effects: settings.current.reconfigure(chatInputSettings({ placeholder, label: ariaLabel, id })),
+      effects: settings.current.reconfigure(chatInputSettings({ placeholder, label: ariaLabel, id, enterKeyHint })),
     });
-  }, [placeholder, ariaLabel, id]);
+  }, [placeholder, ariaLabel, id, enterKeyHint]);
 
   useEffect(() => {
     viewRef.current?.dispatch({
