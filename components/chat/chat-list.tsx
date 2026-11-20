@@ -8,6 +8,7 @@ import { ChatAvatar, GroupAvatar, roomLabel, useChat } from "@/components/chat/c
 import { conversationLevel, NotifyItems } from "@/components/chat/notify-menu";
 import SearchField, { SearchHint, type SearchBox } from "@/components/chat/search-field";
 import { chatLocationHref, type ChatView } from "@/lib/chat/routes";
+import { orderedConversations } from "@/lib/chat/order";
 import { isDirect, type ChatConversation, type ChatSidebar } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -20,16 +21,6 @@ import BookmarkIcon from "@/public/assets/images/chat/bookmark.svg";
 
 const LONG_PRESS_MS = 450;
 const MOVE_SLOP = 10;
-
-export function orderedConversations(sidebar: ChatSidebar | null) {
-  const conversations = sidebar?.conversations ?? [];
-  const starred = conversations.filter((conversation) => conversation.starred);
-  return {
-    starred: [...starred.filter((conversation) => conversation.kind === "room"), ...starred.filter((conversation) => isDirect(conversation.kind))],
-    rooms: conversations.filter((conversation) => conversation.kind === "room" && !conversation.starred),
-    dms: conversations.filter((conversation) => isDirect(conversation.kind) && !conversation.starred),
-  };
-}
 
 export function listViews(sidebar: ChatSidebar | null): ChatView[] {
   const { starred, rooms, dms } = orderedConversations(sidebar);

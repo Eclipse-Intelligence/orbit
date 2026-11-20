@@ -200,6 +200,7 @@ export function NewMessageDialog({ open, onOpenChange, onOpened }: { open: boole
               People
             </label>
             <PeopleField inputId={inputId} people={people.people} selected={chosen} onChange={setChosen} loading={people.loading} max={CHAT_GROUP_MAX - 1} autoFocus />
+            {!people.loading && !people.error && people.people.length === 0 && <span className="caption-style text-subtle">No one shares a workspace with you yet.</span>}
             <span className="caption-style text-subtle">Up to {CHAT_GROUP_MAX} people, including you. To add someone, start a new message with everyone.</span>
             {(error || people.error) && (
               <p role="alert" className="caption-style text-danger">

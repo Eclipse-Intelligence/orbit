@@ -115,6 +115,7 @@ describe("group direct messages", () => {
   let sam: UserActor;
   let priya: UserActor;
   let ada: UserActor;
+  let admin: UserActor;
   let olly: UserActor;
   let quin: UserActor;
   let crowd: UserActor[];
@@ -149,7 +150,10 @@ describe("group direct messages", () => {
     mark = await createUser("mark@group.test", "Mark Ridgeon");
     sam = await member("sam@group.test", "Sam Okafor");
     priya = await member("priya@group.test", "Priya Nair");
-    ada = await member("ada@group.test", "Ada Admin");
+    ada = await member("ada@group.test", "Ada Member");
+    admin = await member("admin@group.test", "Alex Admin");
+    await sql("update crm.workspace_members set role = 'admin' where workspace_id = $1 and user_id = $2", [mark.workspaceId, admin.userId]);
+    admin = { ...admin, role: "admin", scopes: scopesForRole("admin") };
     olly = await createUser("olly@elsewhere.test", "Olly Outside");
     quin = await createUser("quin@second.test", "Quin Second");
     await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [quin.workspaceId, mark.userId]);
@@ -298,7 +302,7 @@ describe("group direct messages", () => {
     });
 
     it("never shows the conversation, its messages, reactions, saved items or search hits to someone outside it", async () => {
-      for (const outsider of [ada, olly, quin]) {
+      for (const outsider of [admin, ada, olly, quin]) {
         assert.ok(!(await listConversations(outsider)).conversations.some((conversation) => conversation.id === group.id));
         await refused(getConversation(outsider, group.id), /Conversation not found/);
         await refused(getRoom(outsider, group.id), /Conversation not found/);
