@@ -17,6 +17,7 @@ import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageLinks from "@/components/chat/link-previews";
 import MessageBody from "@/components/chat/message-body";
 import { askLabel, CREATE_TASK_LABEL, useOrbitActions } from "@/components/chat/orbit-actions";
+import QuotedMessage from "@/components/chat/quoted-message";
 import Reactions from "@/components/chat/reactions";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
 import { REMIND_CHOICES } from "@/components/chat/use-saved";
@@ -29,6 +30,7 @@ import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
 import { mentionsIn, plainMentions, ROOM_MENTION_MAX_MEMBERS, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
+import { useChatShare } from "@/stores/chat-share-store";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import BellIcon from "@/public/assets/images/chat/bell.svg";
@@ -36,6 +38,8 @@ import BookmarkIcon from "@/public/assets/images/chat/bookmark.svg";
 import CopyIcon from "@/public/assets/images/assistant/copy.svg";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import MoreIcon from "@/public/assets/images/_common/more.svg";
+import PinIcon from "@/public/assets/images/chat/pin.svg";
+import ShareIcon from "@/public/assets/images/chat/share.svg";
 import TaskIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
 import SmilePlusIcon from "@/public/assets/images/chat/smile-plus.svg";
@@ -48,6 +52,7 @@ import UnreadIcon from "@/public/assets/images/chat/unreads.svg";
 const LONG_PRESS_MS = 450;
 const MOVE_SLOP = 10;
 const CLICK_GUARD_MS = 700;
+const SHARE_LABEL = "Share message";
 
 type Props = {
   message: ChatMessage;
@@ -76,7 +81,7 @@ function EditBox({ message, pane, onDone }: { message: ChatMessage; pane: ChatPa
   const [saving, setSaving] = useState(false);
   const [removed, setRemoved] = useState<string[]>([]);
   const kept = message.attachments.filter((file) => !removed.includes(file.id));
-  const empty = !value.trim() && kept.length === 0;
+  const empty = !value.trim() && kept.length === 0 && !message.quotedId;
 
   async function save() {
     if (empty || saving) return;
@@ -145,7 +150,7 @@ function ToolButton({ label, title, onClick, children, className }: { label: str
 
 function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop, readOnly = false }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion, saved, go } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion, saved, pins, go, conversation } = chat;
   const unreadHint = useShortcutHint("chat-mark-unread");
   const [picking, setPicking] = useState(false);
   const quick = chat.emoji.recent.slice(0, QUICK_REACTIONS);
@@ -174,6 +179,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const canReact = !local && !deleted && !readOnly;
   const canSave = canSaveMessage(message);
   const isSaved = canSave && saved.isSaved(message.id);
+  const canShare = canSave;
+  const canPin = canSave && !readOnly && !discussion && pins.known(message.conversationId);
+  const isPinned = canSave && pins.isPinned(message);
+  const pinLabel = isPinned ? "Unpin" : conversation(message.conversationId)?.kind === "room" ? "Pin to room" : "Pin to conversation";
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {
@@ -319,6 +328,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         ) : (
           <>
             {message.body && <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} everyone={message.everyone} className={cn(error && "text-soft")} />}
+            {message.quotedId && <QuotedMessage id={message.quotedId} />}
             <MessageAttachments message={message} />
             {!local && <MessageLinks message={message} viewerId={viewer.id} canRemove={!readOnly} />}
           </>
@@ -348,6 +358,12 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             </span>
             {message.lastReplyAt && <span className="text-subtle">Last reply {shortWhen(message.lastReplyAt, now)}</span>}
           </button>
+        )}
+        {isPinned && !isEditing && (
+          <span className="caption-style text-subtle mt-1 inline-flex items-center gap-1 self-start">
+            <PinIcon aria-hidden className="size-3" />
+            Pinned
+          </span>
         )}
         {isSaved && !isEditing && (
           <Link
@@ -425,7 +441,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
               <TrashIcon aria-hidden className="size-3.5" />
             </ToolButton>
           )}
-          {(orbit.canCreateTask || orbit.canAsk) && (
+          {(orbit.canCreateTask || orbit.canAsk || canShare || canPin) && (
             <DropdownMenu modal={false} open={more} onOpenChange={setMore}>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm" aria-label="More actions" title="More actions">
@@ -433,6 +449,20 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[220px]" onCloseAutoFocus={runAfterClose}>
+                {canPin && (
+                  <DropdownMenuItem onSelect={() => pins.pin(message, !isPinned)}>
+                    <PinIcon aria-hidden className={cn("size-3.5 shrink-0", isPinned ? "text-foreground" : "text-subtle")} />
+                    {pinLabel}
+                  </DropdownMenuItem>
+                )}
+                {canShare && (
+                  <DropdownMenuItem onSelect={() => {
+                      afterMenu.current = () => useChatShare.getState().open(message);
+                    }}>
+                    <ShareIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
+                    {SHARE_LABEL}
+                  </DropdownMenuItem>
+                )}
                 {orbit.canCreateTask && (
                   <DropdownMenuItem onSelect={() => {
                       afterMenu.current = orbit.createTask;
@@ -573,6 +603,16 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           {canMarkUnread && (
             <SheetAction onClick={() => act(() => void markUnread(message.conversationId, message.id))} icon={<UnreadIcon aria-hidden className="size-4" />}>
               Mark unread
+            </SheetAction>
+          )}
+          {canPin && (
+            <SheetAction onClick={() => act(() => pins.pin(message, !isPinned))} icon={<PinIcon aria-hidden className={cn("size-4", isPinned && "text-primary")} />}>
+              {pinLabel}
+            </SheetAction>
+          )}
+          {canShare && (
+            <SheetAction onClick={() => actAfterClose(() => useChatShare.getState().open(message))} icon={<ShareIcon aria-hidden className="size-4" />}>
+              {SHARE_LABEL}
             </SheetAction>
           )}
           {orbit.canCreateTask && (

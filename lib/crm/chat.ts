@@ -26,6 +26,9 @@ import {
   type ChatNotifyInput,
   type ChatPage,
   type ChatPerson,
+  type ChatPin,
+  type ChatPinned,
+  type ChatPins,
   type ChatPost,
   type ChatReacted,
   type ChatReaction,
@@ -89,6 +92,7 @@ export type MessageRow = {
   attachments: ChatAttachment[] | null;
   previews: StoredPreview[] | null;
   reactions: ReactionRow[] | null;
+  quoted_id: string | null;
 };
 
 type ReactionRow = { emoji: string; people: { id: string; name: string | null }[] };
@@ -149,7 +153,7 @@ function millis(value: Stamp) {
 
 export function messageColumns(alias = "m") {
   return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.kind, ${alias}.author_user_id, ${alias}.author_name, ${alias}.via_workflow_id, ${alias}.via_workflow_name, ${alias}.client_key, ${alias}.body, ${alias}.format,
-    ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at, ${alias}.hook,
+    ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at, ${alias}.hook, ${alias}.quoted_message_id as quoted_id,
     case when ${alias}.reply_count > 0 then coalesce((
       select json_agg(json_build_object('id', a.author_user_id, 'name', a.author_name) order by a.latest desc)
       from (
@@ -224,6 +228,7 @@ export function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     attachments: row.deleted_at ? [] : (row.attachments ?? []),
     previews: row.deleted_at ? [] : previewsOf(row.previews, row.body, row.format),
     reactions: row.deleted_at ? [] : toReactions(row.reactions, viewerId),
+    quotedId: row.deleted_at ? null : row.quoted_id,
   };
 }
 
@@ -1094,7 +1099,7 @@ export async function searchMessages(actor: UserActor, id: string, text: unknown
   });
 }
 
-type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown; attachmentIds?: unknown };
+type PostInput = { conversationId: unknown; parentId?: unknown; body: unknown; format?: unknown; clientKey?: unknown; attachmentIds?: unknown; quotedMessageId?: unknown };
 
 function chatHref(conversationId: string, message: ChatMessage) {
   return message.parentId ? `/chat/${conversationId}?thread=${message.parentId}&message=${message.id}` : `/chat/${conversationId}?message=${message.id}`;
@@ -1279,6 +1284,17 @@ async function checkRoomMention(db: Db, conversation: ConversationRow, parentId:
   return true;
 }
 
+const NOT_QUOTABLE = () => new CrmError("invalid_input", "That message can't be shared.", 400, { field: "quotedMessageId" });
+
+async function checkQuotable(db: Db, conversation: ConversationRow, quotedId: string) {
+  if (!isChatKind(conversation.kind)) throw new CrmError("invalid_input", "Share a message in a room or a direct message.", 400, { field: "quotedMessageId" });
+  const found = await db.query<{ kind: string; deleted_at: Stamp | null }>("select kind, deleted_at from crm.chat_messages where id = $1", [quotedId]);
+  const original = found.rows[0];
+  if (!original) throw notFound("message");
+  if (original.deleted_at) throw new CrmError("invalid_input", "That message was deleted.", 400, { field: "quotedMessageId" });
+  if (original.kind !== "message") throw NOT_QUOTABLE();
+}
+
 async function existingPost(db: Db, actor: UserActor, clientKey: string, conversationId: string, parentId: string | null, body?: string): Promise<ChatPost | null> {
   const existing = await db.query<{ id: string; body: string }>("select id, body from crm.chat_messages where author_user_id = $1 and client_key = $2", [actor.userId, clientKey]);
   if (!existing.rows[0]) return null;
@@ -1332,7 +1348,10 @@ export async function postMessage(
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
   const attachmentIds = cleanAttachmentIds(input.attachmentIds);
   if (attachmentIds.length > 0 && (options.viaWorkflowId || options.charge)) throw new CrmError("invalid_input", "Only people can attach files.", 400, { field: "files" });
-  const body = cleanBody(input.body, { allowEmpty: attachmentIds.length > 0 });
+  const quotedId = input.quotedMessageId === undefined || input.quotedMessageId === null ? null : checkId(input.quotedMessageId, "message");
+  if (quotedId && (options.viaWorkflowId || options.charge)) throw new CrmError("invalid_input", "Only people can share a message.", 400, { field: "quotedMessageId" });
+  if (quotedId && parentId) throw new CrmError("invalid_input", "Share a message in the conversation, not in a thread.", 400, { field: "quotedMessageId" });
+  const body = cleanBody(input.body, { allowEmpty: attachmentIds.length > 0 || quotedId !== null });
   const clientKey = cleanClientKey(input.clientKey);
   const format = cleanFormat(input.format);
   const roomMention = options.roomMention === true && !options.viaWorkflowId;
@@ -1372,16 +1391,17 @@ export async function postMessage(
       const earlier = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
       if (earlier) return earlier;
       writable(conversation);
+      if (quotedId) await checkQuotable(db, conversation, quotedId);
       await checkRoomMention(db, conversation, parentId, body, format, roomMention);
       const tagged = await tagFromDiscussion(db, actor, conversation, peopleMentioned(mentions));
       await assertReachable(db, conversation);
       const via = options.viaWorkflowId ?? null;
       const inserted = await db.query<{ id: string }>(
-        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions, attachment_ids${via ? ", via_workflow_id" : ""})
-         values ($1, $2, $3, $4, $5, $6, $7::uuid[], $8::uuid[]${via ? ", $9" : ""})
+        `insert into crm.chat_messages (conversation_id, parent_id, author_user_id, client_key, body, format, mentions, attachment_ids, quoted_message_id${via ? ", via_workflow_id" : ""})
+         values ($1, $2, $3, $4, $5, $6, $7::uuid[], $8::uuid[], $9::uuid${via ? ", $10" : ""})
          on conflict on constraint chat_messages_author_client_key do nothing
          returning id`,
-        [conversationId, parentId, actor.userId, clientKey, body, format, mentions, attachmentIds, ...(via ? [via] : [])],
+        [conversationId, parentId, actor.userId, clientKey, body, format, mentions, attachmentIds, quotedId, ...(via ? [via] : [])],
       );
       if (!inserted.rows[0]) {
         const raced = await existingPost(db, actor, clientKey, conversationId, parentId, repeatCheck);
@@ -1465,7 +1485,7 @@ export async function editMessage(
       const current = await ownMessage(db, actor, messageId);
       if (current.via) throw new CrmError("invalid_input", "Messages sent by a workflow can't be edited. Delete it instead.", 400);
       const kept = current.attachments.filter((file) => !removing.includes(file.id));
-      if (!text && kept.length === 0) throw new CrmError("invalid_input", "Delete the message instead.", 400, { field: "body" });
+      if (!text && kept.length === 0 && !current.quotedId) throw new CrmError("invalid_input", "Delete the message instead.", 400, { field: "body" });
       const conversation = await readConversation(db, actor, current.conversationId);
       const format = asked ?? current.format;
       const usesRoom = await checkRoomMention(db, conversation, current.parentId, text, format, options.roomMention === true);
@@ -1600,6 +1620,55 @@ export async function reactToMessage(actor: UserActor, id: string, emoji: unknow
     }
     return { conversationId: toggled.conversation_id, messageId, parentId: toggled.parent_id, emoji: value, present: toggled.present, changed: toggled.changed, reactions, at };
   });
+}
+
+type PinRow = MessageRow & { pinned_ts: Stamp; pinned_by: string | null; pinned_by_name: string | null };
+
+export async function getPins(actor: UserActor, id: string): Promise<ChatPins> {
+  const conversationId = checkId(id, "conversation");
+  return withActor(actor, async (db) => {
+    const conversation = await readConversation(db, actor, conversationId);
+    if (!isChatKind(conversation.kind)) throw notFound("conversation");
+    const result = await db.query<PinRow>(
+      `select p.pinned_at as pinned_ts, p.pinned_by, ${MEMBER_NAME("cm", "pp")} as pinned_by_name, ${messageColumns("m")}
+       from crm.chat_pins p
+       join crm.chat_messages m on m.id = p.message_id and m.deleted_at is null
+       left join crm.chat_members cm on cm.conversation_id = p.conversation_id and cm.user_id = p.pinned_by
+       left join crm.profiles pp on pp.id = p.pinned_by
+       where p.conversation_id = $1
+       order by p.pinned_at desc, p.message_id desc`,
+      [conversationId],
+    );
+    const pins: ChatPin[] = result.rows.map((row) => ({
+      message: toMessage(row, actor.userId),
+      pinnedAt: iso(row.pinned_ts),
+      pinnedBy: row.pinned_by ? { id: row.pinned_by, name: row.pinned_by_name || FORMER } : null,
+    }));
+    return { pins };
+  });
+}
+
+export async function setMessagePinned(actor: UserActor, id: string, pinned: boolean): Promise<ChatPinned> {
+  const messageId = checkId(id, "message");
+  let result: { changed: boolean; pinned: boolean; conversation_id: string; line_id: string | null };
+  try {
+    const rows = await query<typeof result>("select changed, pinned, conversation_id, line_id from private.chat_set_pin($1, $2, $3)", [actor.userId, messageId, pinned]);
+    result = rows.rows[0];
+  } catch (error) {
+    chatFailure(error);
+  }
+  const conversationId = result.conversation_id;
+  if (result.changed) {
+    await withActor(actor, async (db) => {
+      const members = (await memberIds(db, conversationId)).map((member) => member.user_id);
+      const line = result.line_id ? await readMessage(db, result.line_id, actor.userId) : null;
+      afterChatCommit(db, async () => {
+        if (line) await broadcast(members, { type: "message", conversationId, message: line, root: null });
+        await broadcast(members, { type: "pins", conversationId });
+      });
+    });
+  }
+  return { messageId, conversationId, pinned: result.pinned, changed: result.changed };
 }
 
 export async function markConversationRead(actor: UserActor, id: string, upTo?: string | null): Promise<{ lastReadAt: string }> {

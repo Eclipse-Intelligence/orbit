@@ -10,6 +10,7 @@ import { useChatEvents } from "@/components/chat/chat-live";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageLinks from "@/components/chat/link-previews";
 import MessageBody from "@/components/chat/message-body";
+import QuotedMessage from "@/components/chat/quoted-message";
 import { PhoneBack } from "@/components/chat/room-view";
 import { REMIND_CHOICES } from "@/components/chat/use-saved";
 import { chatApi } from "@/lib/chat/client";
@@ -52,6 +53,7 @@ function Row({ item }: { item: ChatSavedItem }) {
         ) : (
           <>
             {message.body && <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} everyone={message.everyone} />}
+            {message.quotedId && <QuotedMessage id={message.quotedId} />}
             <MessageAttachments message={message} />
             <MessageLinks message={message} viewerId={viewer.id} canRemove={!conversation.archived} />
           </>

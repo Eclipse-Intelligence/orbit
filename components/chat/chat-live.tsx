@@ -142,7 +142,7 @@ export default function ChatLive() {
                 useCompaniesStore.getState().setChat((current) => (current ? sidebarRead(current, conversationId) : current));
                 return;
               }
-              if (event.type === "reaction" || event.type === "previews") return;
+              if (event.type === "reaction" || event.type === "previews" || event.type === "pins") return;
               if (event.type === "message" && event.conversationId === viewing && !event.message.parentId) return;
               soon();
             },

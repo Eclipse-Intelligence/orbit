@@ -1,5 +1,5 @@
 import type { ChatRecordCard, RecordRef } from "@/lib/chat/links";
-import type { ChatAttachment, ChatPage, ChatPerson, ChatRoom, ChatSaved, ChatSavedIds, ChatScheduled, ChatSearch, ChatSearchQuery, ChatSearchResult, ChatSidebar, ChatThread, ChatThreads, ChatUnreads } from "@/lib/chat/types";
+import type { ChatAttachment, ChatPage, ChatPerson, ChatPins, ChatQuotes, ChatRoom, ChatSaved, ChatSavedIds, ChatScheduled, ChatSearch, ChatSearchQuery, ChatSearchResult, ChatSidebar, ChatThread, ChatThreads, ChatUnreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 
 const TIMEOUT_MS = 15_000;
@@ -42,6 +42,8 @@ export const chatApi = {
   saved: (cursor?: string | null) => request<ChatSaved>(`/api/chat/saved${query({ cursor })}`, "Couldn't load saved messages. Try again."),
   savedIds: () => request<ChatSavedIds>("/api/chat/saved/ids", "Couldn't load saved messages. Try again."),
   scheduled: () => request<ChatScheduled>("/api/chat/scheduled", "Couldn't load scheduled messages. Try again."),
+  pins: (id: string) => request<ChatPins>(`/api/chat/${id}/pins`, "Couldn't load the pinned messages. Try again."),
+  quotes: (ids: string[]) => request<ChatQuotes>(`/api/chat/quotes?${ids.map((id) => `id=${id}`).join("&")}`, "Couldn't load the message. Try again."),
   people: (workspaceId?: string | null) =>
     request<{ people: (ChatPerson & { email: string | null })[] }>(`/api/chat/people${query({ workspace: workspaceId })}`, "Couldn't load people. Try again."),
   search: (wanted: ChatSearchQuery, cursor?: string | null) =>

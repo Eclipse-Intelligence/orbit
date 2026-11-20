@@ -12,12 +12,16 @@ import FindBar from "@/components/chat/find-bar";
 import Composer from "@/components/chat/composer";
 import MessageList from "@/components/chat/message-list";
 import { NotifyButton } from "@/components/chat/notify-menu";
+import PinnedPanel from "@/components/chat/pinned-panel";
+import { usePinsSync } from "@/components/chat/use-pins";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { useTyping } from "@/components/chat/use-typing";
+import { useChatPins } from "@/stores/chat-pins-store";
 import { isLocal, lastOwnMessage, newestServerId, typingLine, type Timeline } from "@/lib/chat/timeline";
 import { isDirect, type ChatConversation, type ChatMessage, type ChatRoom } from "@/lib/chat/types";
 import { ROOM_MENTION_MAX_MEMBERS } from "@/lib/mentions";
 import ArchiveIcon from "@/public/assets/images/chat/archive.svg";
+import PinIcon from "@/public/assets/images/chat/pin.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import SearchIcon from "@/public/assets/images/_common/search.svg";
@@ -148,6 +152,9 @@ export default function RoomView({
   const addFiles = useRef<((files: File[]) => void) | null>(null);
   const [finding, setFinding] = useState(false);
   const [findSignal, setFindSignal] = useState(0);
+  const [pinned, setPinned] = useState(false);
+  const pinCount = useChatPins((store) => store.rooms[conversationId]?.length ?? 0);
+  usePinsSync(conversationId);
   const { go } = chat;
   const findInRoom = useCallback(() => {
     setFinding(true);
@@ -266,6 +273,12 @@ export default function RoomView({
               <SearchIcon aria-hidden className="size-3.5" />
             </Button>
           )}
+          {info && pinCount > 0 && (
+            <Button variant="ghost" size="sm" aria-label={`Pinned messages: ${pinCount}`} title="Pinned messages" onClick={() => setPinned(true)} className="hit text-soft gap-1.5 px-2 max-md:size-11 max-md:px-0">
+              <PinIcon aria-hidden className="size-3.5 shrink-0" />
+              <span className="tabular-nums">{pinCount}</span>
+            </Button>
+          )}
           {conversation && <NotifyButton conversation={conversation} />}
           {!dm && info && (
             <Button variant="ghost" size="icon" aria-label="Room settings" title="Room settings" onClick={onSettings} className="hit max-md:size-11">
@@ -275,6 +288,7 @@ export default function RoomView({
           {(dm || !info) && !conversation && <span aria-hidden className="size-11 md:hidden" />}
         </span>
       </header>
+      {info && <PinnedPanel open={pinned} onOpenChange={setPinned} conversation={info} />}
       {finding && <FindBar conversationId={conversationId} focusSignal={findSignal} onJump={jumpTo} onClose={() => setFinding(false)} />}
       {roomError && !info ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

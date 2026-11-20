@@ -10,6 +10,7 @@ import { useOrbitActions } from "@/components/chat/orbit-actions";
 import MessageList from "@/components/chat/message-list";
 import ScheduledNote from "@/components/chat/scheduled-note";
 import { PhoneBack, useVisible } from "@/components/chat/room-view";
+import { usePinsSync } from "@/components/chat/use-pins";
 import { isLocal, lastOwnMessage, newestServerId, type ThreadState } from "@/lib/chat/timeline";
 import { isDirect, type ChatConversation, type ChatMessage } from "@/lib/chat/types";
 import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
@@ -61,6 +62,7 @@ export default function ThreadPanel({
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
   const addFiles = useRef<((files: File[]) => void) | null>(null);
   const target = root?.conversationId ?? where?.id ?? null;
+  usePinsSync(target);
   const uploadTo = useCallback(() => Promise.resolve({ id: target, error: target ? null : "Couldn't upload. Try again." }), [target]);
   if (ready && !divider.ready) setDivider({ ready: true, id: firstUnreadReply(messages, timeline?.lastReadAt ?? null, viewer.id) });
 

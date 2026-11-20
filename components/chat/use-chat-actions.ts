@@ -166,7 +166,7 @@ export function useChatActions(
       const body = messageBody(text, mentions);
       const removing = new Set(removeAttachmentIds);
       const attachments = message.attachments.filter((file) => !removing.has(file.id));
-      if (!body && attachments.length === 0) return false;
+      if (!body && attachments.length === 0 && !message.quotedId) return false;
       if (body === message.body && attachments.length === message.attachments.length) return true;
       dispatch({ type: "edited", message: { ...message, body, format: "markdown", mentions: memberIds(body), attachments, editedAt: new Date().toISOString() } });
       const result = await editMessageAction(message.id, body, "markdown", [...removing]).catch(() => ({ error: "Couldn't save the message. Try again." }));
