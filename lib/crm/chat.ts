@@ -1622,7 +1622,7 @@ export async function reactToMessage(actor: UserActor, id: string, emoji: unknow
   });
 }
 
-type PinRow = MessageRow & { pinned_ts: Stamp; pinned_by: string | null; pinned_by_name: string | null };
+type PinRow = MessageRow & { pinned_by: string | null; pinned_by_name: string | null };
 
 export async function getPins(actor: UserActor, id: string): Promise<ChatPins> {
   const conversationId = checkId(id, "conversation");
@@ -1630,7 +1630,7 @@ export async function getPins(actor: UserActor, id: string): Promise<ChatPins> {
     const conversation = await readConversation(db, actor, conversationId);
     if (!isChatKind(conversation.kind)) throw notFound("conversation");
     const result = await db.query<PinRow>(
-      `select p.pinned_at as pinned_ts, p.pinned_by, ${MEMBER_NAME("cm", "pp")} as pinned_by_name, ${messageColumns("m")}
+      `select p.pinned_by, ${MEMBER_NAME("cm", "pp")} as pinned_by_name, ${messageColumns("m")}
        from crm.chat_pins p
        join crm.chat_messages m on m.id = p.message_id and m.deleted_at is null
        left join crm.chat_members cm on cm.conversation_id = p.conversation_id and cm.user_id = p.pinned_by
@@ -1641,7 +1641,6 @@ export async function getPins(actor: UserActor, id: string): Promise<ChatPins> {
     );
     const pins: ChatPin[] = result.rows.map((row) => ({
       message: toMessage(row, actor.userId),
-      pinnedAt: iso(row.pinned_ts),
       pinnedBy: row.pinned_by ? { id: row.pinned_by, name: row.pinned_by_name || FORMER } : null,
     }));
     return { pins };

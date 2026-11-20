@@ -89,9 +89,12 @@ export async function postMessageAction(input: {
   format?: ChatFormat;
   clientKey: string;
   attachmentIds?: string[];
-  quotedMessageId?: string | null;
 }): Promise<ChatResult<ChatPost>> {
   return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}, { roomMention: true, linkPreviews: {} }));
+}
+
+export async function shareMessageAction(input: { conversationId: string; body: string; clientKey: string; quotedMessageId: string }): Promise<ChatResult<ChatPost>> {
+  return run("Couldn't share the message. Try again.", (actor) => postMessage(actor, { ...(input ?? {}), format: "plain" }));
 }
 
 export async function editMessageAction(id: string, body: string, format?: ChatFormat, removeAttachmentIds?: string[]): Promise<ChatResult<{ message: ChatMessage }>> {

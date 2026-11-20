@@ -1,7 +1,7 @@
 import { chatApi } from "@/lib/chat/client";
-import { CHAT_QUOTES_MAX, type ChatQuote } from "@/lib/chat/types";
+import { CHAT_QUOTES_MAX, type ChatLiveEvent, type ChatQuote } from "@/lib/chat/types";
 
-export const QUOTE_FRESH_MS = 30_000;
+const QUOTE_FRESH_MS = 30_000;
 
 export const QUOTE_UNAVAILABLE = "Message unavailable";
 
@@ -36,27 +36,34 @@ export function subscribeQuotes(listener: () => void) {
   };
 }
 
-export function forgetQuotes() {
-  entries.clear();
-  inflight.clear();
-  changed();
-}
-
 export function cachedQuote(id: string): ChatQuote | null | undefined {
   const entry = entries.get(id);
   return entry ? entry.quote : undefined;
 }
 
-export function quoteGone(id: string, now = Date.now()) {
-  entries.set(id, { at: now, quote: null });
-  changed();
-}
-
-export function quoteEdited(id: string, excerpt: string) {
-  const entry = entries.get(id);
-  if (!entry?.quote) return;
-  entries.set(id, { at: entry.at, quote: { ...entry.quote, excerpt } });
-  changed();
+export function applyQuoteEvent(event: ChatLiveEvent, now = Date.now()) {
+  if (event.type === "delete") {
+    if (!entries.has(event.messageId)) return;
+    entries.set(event.messageId, { at: now, quote: null });
+    changed();
+    return;
+  }
+  if (event.type === "edit") {
+    const entry = entries.get(event.message.id);
+    if (!entry?.quote) return;
+    entries.set(event.message.id, { at: 0, quote: entry.quote });
+    void loadQuotes([event.message.id]);
+    return;
+  }
+  if (event.type === "removed") {
+    let touched = false;
+    for (const [id, entry] of entries) {
+      if (entry.quote?.conversationId !== event.conversationId) continue;
+      entries.set(id, { at: now, quote: null });
+      touched = true;
+    }
+    if (touched) changed();
+  }
 }
 
 export async function loadQuotes(ids: string[], options: { load?: Loader; now?: () => number } = {}): Promise<void> {

@@ -6,7 +6,7 @@ import Button from "@/components/_ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/_ui/dialog";
 import { NativeSelect } from "@/components/_ui/native-select";
 import { Textarea } from "@/components/_ui/textarea";
-import { postMessageAction } from "@/app/(crm)/chat/actions";
+import { shareMessageAction } from "@/app/(crm)/chat/actions";
 import { echoChatEvent } from "@/components/chat/chat-live";
 import { useComposer } from "@/components/mail/compose-dock";
 import { newClientKey } from "@/lib/chat/client";
@@ -17,7 +17,7 @@ import { CHAT_BODY_MAX, chatLabel, isDirect, type ChatConversation, type ChatMes
 import { useChatShare } from "@/stores/chat-share-store";
 import { useCompaniesStore } from "@/stores/companies-store";
 
-export const SHARE_FAILED = "Couldn't share the message. Try again.";
+const SHARE_FAILED = "Couldn't share the message. Try again.";
 
 function optionLabel(conversation: ChatConversation, all: ChatConversation[]) {
   const label = chatLabel(conversation);
@@ -50,7 +50,7 @@ function ShareForm({ message, onClose }: { message: ChatMessage; onClose: () => 
     setError(null);
     const text = comment.trim();
     if (!attempt.current || attempt.current.target !== target.id || attempt.current.comment !== text) attempt.current = { target: target.id, comment: text, key: newClientKey() };
-    const result = await postMessageAction({ conversationId: target.id, body: text, format: "plain", clientKey: attempt.current.key, quotedMessageId: message.id }).catch(() => ({ error: SHARE_FAILED }));
+    const result = await shareMessageAction({ conversationId: target.id, body: text, clientKey: attempt.current.key, quotedMessageId: message.id }).catch(() => ({ error: SHARE_FAILED }));
     setBusy(false);
     if ("ok" in result && result.ok) {
       echoChatEvent({ type: "message", conversationId: target.id, message: result.message, root: null });

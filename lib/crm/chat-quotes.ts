@@ -74,7 +74,6 @@ export async function getMessages(actor: UserActor, ids: unknown): Promise<ChatQ
     const quotes = result.rows.map<ChatQuote>((row) => ({
       id: row.id,
       conversationId: row.conversation_id,
-      parentId: row.parent_id,
       author: { id: row.author_user_id, name: row.author_name || FORMER },
       excerpt: searchExcerpt(row.body, cleanFormat(row.format), ""),
       files: row.attachment_count,

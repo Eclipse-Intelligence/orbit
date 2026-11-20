@@ -4,7 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { readFileSync } from "node:fs";
 import { runTool } from "@/lib/assistant/tools";
-import { cachedQuote, forgetQuotes, loadQuotes, QUOTE_UNAVAILABLE, quoteGone, quoteView, requestQuote } from "@/lib/chat/quotes";
+import { applyQuoteEvent, cachedQuote, loadQuotes, QUOTE_UNAVAILABLE, quoteView, requestQuote } from "@/lib/chat/quotes";
 import { CHAT_PINS_MAX, CHAT_QUOTES_MAX, type ChatQuote } from "@/lib/chat/types";
 import { chatWorkSettled, createRoom, deleteMessage, editMessage, getPins, listMessages, listThread, openDiscussion, openDm, openGroup, postMessage, setMessagePinned, setRoomArchived } from "@/lib/crm/chat";
 import { searchChat } from "@/lib/crm/chat-search";
@@ -536,7 +536,6 @@ describe("pins and shared messages", () => {
     const quote: ChatQuote = {
       id: MISSING,
       conversationId: sales,
-      parentId: null,
       author: { id: null, name: "Sam Okafor" },
       excerpt: "Renewal is on 1 December",
       files: 0,
@@ -547,15 +546,14 @@ describe("pins and shared messages", () => {
 
     it("says Message unavailable when the viewer can't see the original, and holds none of its text", async () => {
       const original = (await postMessage(sam, { conversationId: sales, body: SECRET })).message;
-      forgetQuotes();
       await loadQuotes([original.id], { load: async (ids) => (await getMessages(priya, ids)).quotes });
       assert.equal(cachedQuote(original.id), null);
       assert.equal(quoteView(cachedQuote(original.id), false), "unavailable");
       assert.equal(QUOTE_UNAVAILABLE, "Message unavailable");
-      forgetQuotes();
-      await loadQuotes([original.id], { load: async (ids) => (await getMessages(sam, ids)).quotes });
-      assert.equal(cachedQuote(original.id)?.excerpt, SECRET);
-      assert.equal(quoteView(cachedQuote(original.id), false), "shown");
+      const seen = (await postMessage(sam, { conversationId: sales, body: SECRET })).message;
+      await loadQuotes([seen.id], { load: async (ids) => (await getMessages(sam, ids)).quotes });
+      assert.equal(cachedQuote(seen.id)?.excerpt, SECRET);
+      assert.equal(quoteView(cachedQuote(seen.id), false), "shown");
     });
 
     it("tells loading, failed, unavailable and shown apart", () => {
@@ -569,7 +567,6 @@ describe("pins and shared messages", () => {
     });
 
     it("loads each id once, in batches of 50, and keeps what it learned", async () => {
-      forgetQuotes();
       const ids = Array.from({ length: 120 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
       const calls: string[][] = [];
       const load = async (wanted: string[]) => {
@@ -582,12 +579,53 @@ describe("pins and shared messages", () => {
       assert.equal(cachedQuote(ids[1]), null);
       await loadQuotes(ids, { load });
       assert.equal(calls.length, 3);
-      quoteGone(ids[0]);
-      assert.equal(cachedQuote(ids[0]), null);
+    });
+
+    it("turns a cached quote unavailable on a delete event, refetches it on an edit event and drops a conversation's quotes when removed", async () => {
+      const id = "00000000-0000-4000-8000-0000000000e1";
+      const other = "00000000-0000-4000-8000-0000000000e2";
+      const room = { a: "room-a", b: "room-b" };
+      const elsewhere = "00000000-0000-4000-8000-0000000000e3";
+      await loadQuotes([id, other, elsewhere], {
+        load: async (wanted) => wanted.map((item) => ({ ...quote, id: item, conversationId: item === elsewhere ? room.b : room.a })),
+      });
+      let notified = 0;
+      const { subscribeQuotes } = await import("@/lib/chat/quotes");
+      const stop = subscribeQuotes(() => {
+        notified += 1;
+      });
+      const real = globalThis.fetch;
+      const asked: string[] = [];
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        asked.push(String(input));
+        return new Response(JSON.stringify({ quotes: [{ ...quote, id, conversationId: room.a, excerpt: "Renewal moved to 8 December" }] }), { status: 200 });
+      }) as typeof fetch;
+      try {
+        const base = { conversationId: room.a, message: { id } as never };
+        applyQuoteEvent({ type: "edit", ...base });
+        assert.equal(cachedQuote(id)?.excerpt, "Renewal is on 1 December");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(asked.length >= 1 && asked[0].includes(`id=${id}`), true);
+        assert.equal(cachedQuote(id)?.excerpt, "Renewal moved to 8 December");
+        assert.ok(notified > 0);
+        applyQuoteEvent({ type: "edit", conversationId: room.a, message: { id: "00000000-0000-4000-8000-0000000000ff" } as never });
+        const before = asked.length;
+        applyQuoteEvent({ type: "delete", conversationId: room.a, messageId: other, parentId: null, root: null });
+        assert.equal(cachedQuote(other), null);
+        assert.equal(asked.length, before);
+        applyQuoteEvent({ type: "removed", conversationId: room.b });
+        assert.equal(cachedQuote(elsewhere), null);
+        assert.equal(cachedQuote(id)?.conversationId, room.a);
+        applyQuoteEvent({ type: "delete", conversationId: room.a, messageId: id, parentId: null, root: null });
+        assert.equal(cachedQuote(id), null);
+        assert.equal(quoteView(cachedQuote(id), false), "unavailable");
+      } finally {
+        globalThis.fetch = real;
+        stop();
+      }
     });
 
     it("asks once for the ids several messages want in the same moment", async () => {
-      forgetQuotes();
       const real = globalThis.fetch;
       const asked: string[] = [];
       globalThis.fetch = (async (input: RequestInfo | URL) => {

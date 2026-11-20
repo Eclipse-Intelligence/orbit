@@ -34,7 +34,7 @@ export default function QuotedMessage({ id }: { id: string }) {
   return <QuoteCard quote={quote} failed={failedId === id} onRetry={() => setAttempt((value) => value + 1)} />;
 }
 
-export function QuoteCard({ quote, failed, onRetry }: { quote: ChatQuote | null | undefined; failed: boolean; onRetry: () => void }) {
+function QuoteCard({ quote, failed, onRetry }: { quote: ChatQuote | null | undefined; failed: boolean; onRetry: () => void }) {
   const { now, go, discussion } = useChat();
   const view = quoteView(quote, failed);
   if (view === "unavailable") {

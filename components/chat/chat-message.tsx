@@ -150,7 +150,7 @@ function ToolButton({ label, title, onClick, children, className }: { label: str
 
 function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop, readOnly = false }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion, saved, pins, go, conversation } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion, saved, pins, go } = chat;
   const unreadHint = useShortcutHint("chat-mark-unread");
   const [picking, setPicking] = useState(false);
   const quick = chat.emoji.recent.slice(0, QUICK_REACTIONS);
@@ -182,7 +182,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const canShare = canSave;
   const canPin = canSave && !readOnly && !discussion && pins.known(message.conversationId);
   const isPinned = canSave && pins.isPinned(message);
-  const pinLabel = isPinned ? "Unpin" : conversation(message.conversationId)?.kind === "room" ? "Pin to room" : "Pin to conversation";
+  const pinLabel = isPinned ? "Unpin" : "Pin";
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
   function startPress(event: PointerEvent<HTMLDivElement>) {

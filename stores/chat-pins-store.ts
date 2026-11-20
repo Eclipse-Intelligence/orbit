@@ -39,7 +39,7 @@ export const useChatPins = create<ChatPinsState>((set, get) => ({
     set((current) => {
       const pins = current.rooms[message.conversationId];
       if (!pins || pins.some((pin) => pin.message.id === message.id)) return current;
-      return { rooms: { ...current.rooms, [message.conversationId]: [{ message, pinnedAt: new Date().toISOString(), pinnedBy: by }, ...pins] } };
+      return { rooms: { ...current.rooms, [message.conversationId]: [{ message, pinnedBy: by }, ...pins] } };
     }),
   remove: (conversationId, messageId) =>
     set((current) => {

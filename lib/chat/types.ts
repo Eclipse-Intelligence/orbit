@@ -136,7 +136,6 @@ export type ChatMessage = {
 export type ChatQuote = {
   id: string;
   conversationId: string;
-  parentId: string | null;
   author: { id: string | null; name: string };
   excerpt: string;
   files: number;
@@ -147,7 +146,7 @@ export type ChatQuote = {
 
 export type ChatQuotes = { quotes: ChatQuote[] };
 
-export type ChatPin = { message: ChatMessage; pinnedAt: string; pinnedBy: ChatPerson | null };
+export type ChatPin = { message: ChatMessage; pinnedBy: ChatPerson | null };
 
 export type ChatPins = { pins: ChatPin[] };
 

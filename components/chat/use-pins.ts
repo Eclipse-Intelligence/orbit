@@ -7,9 +7,9 @@ import { isLocal } from "@/lib/chat/timeline";
 import { CHAT_PINS_MAX, type ChatMessage, type ChatPerson } from "@/lib/chat/types";
 import { useChatPins } from "@/stores/chat-pins-store";
 
-export const PIN_FAILED = "Couldn't pin the message. Try again.";
-export const UNPIN_FAILED = "Couldn't unpin the message. Try again.";
-export const PINS_FULL = `A conversation can have up to ${CHAT_PINS_MAX} pinned messages. Unpin one first.`;
+const PIN_FAILED = "Couldn't pin the message. Try again.";
+const UNPIN_FAILED = "Couldn't unpin the message. Try again.";
+const PINS_FULL = `A conversation can have up to ${CHAT_PINS_MAX} pinned messages. Unpin one first.`;
 
 export type ChatPinActions = {
   known: (conversationId: string) => boolean;
