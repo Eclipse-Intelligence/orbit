@@ -8,7 +8,7 @@ import type { UserActor, WorkspaceRole } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { query } from "@/lib/db/pool";
 import { documentHref, hashToken, isExpired, logEvent, readRow, SIGNATURE_COLUMNS, toSignature, type SignatureRow } from "@/lib/proposals/documents";
-import { READING_SECONDS_MAX, READING_TABS_MAX, tabsOf, totalsOf, type Content, type DocumentStatus, type Step } from "@/lib/proposals/model";
+import { READING_SECONDS_MAX, READING_TABS_MAX, senderCompany, tabsOf, totalsOf, type Content, type DocumentStatus, type Step } from "@/lib/proposals/model";
 import { cleanSignerText, signatureImage } from "@/lib/proposals/signature";
 import { readSteps } from "@/lib/proposals/steps";
 import { pushToUser, type PushSender } from "@/lib/push";
@@ -425,7 +425,7 @@ export async function clientStep(token: string, stepId: string, input: { done?: 
     if (view.state === "withdrawn" || view.state === "replaced") throw new CrmError("conflict", stateMessage(view.state), 409);
     const step = view.steps.find((item) => item.id === stepId);
     if (!step) throw new CrmError("not_found", "That step isn't on this plan.", 404);
-    if (step.side !== "client") throw new CrmError("invalid_input", `${view.content.sender.company} ticks off its own steps.`, 400);
+    if (step.side !== "client") throw new CrmError("invalid_input", `${senderCompany(view.content)} ticks off its own steps.`, 400);
     if (Boolean(step.doneAt) === done) return null;
     if (done) await db.query("update crm.document_steps set done_at = now(), done_by = 'client', done_name = $2 where id = $1", [stepId, view.content.client.name.slice(0, 200)]);
     else await db.query("update crm.document_steps set done_at = null, done_by = null, done_name = null where id = $1", [stepId]);

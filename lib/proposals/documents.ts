@@ -1,5 +1,6 @@
 import { assertScope } from "@/lib/crm/scopes";
 import { createHash, randomBytes } from "node:crypto";
+import { readBusinessDetailsInDb } from "@/lib/crm/business-details";
 import { getCompany, readCompanyInDb } from "@/lib/crm/companies";
 import { getContact, readContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -15,6 +16,7 @@ import { getTemplate, parseBlocks, readBlocks, readSettings } from "@/lib/propos
 import {
   consentText,
   CURRENCIES,
+  senderCompany,
   fieldValues,
   renderBlocks,
   totalLabel,
@@ -258,13 +260,9 @@ async function partiesFor(db: Db, actor: Actor, row: { company_id: string; conta
   if (!company) throw new CrmError("not_found", "Company not found.", 404);
   if (!contact) throw new CrmError("not_found", "Contact not found.", 404);
   const owner = await db.query<{ full_name: string | null; email: string | null }>("select full_name, email from crm.profiles where id = $1", [row.owner_id]);
-  const workspace = await db.query<{ name: string }>("select name from crm.workspaces where id = $1", [actor.workspaceId]);
-  return {
-    company,
-    contact,
-    sender: { name: owner.rows[0]?.full_name || owner.rows[0]?.email || "Sender", email: owner.rows[0]?.email ?? "" },
-    workspaceName: workspace.rows[0]?.name ?? "Our company",
-  };
+  const sender = { name: owner.rows[0]?.full_name || owner.rows[0]?.email || "Sender", email: owner.rows[0]?.email ?? "" };
+  const business = await readBusinessDetailsInDb(db, actor.workspaceId);
+  return { company, contact, sender, business, ourCompany: business.name || sender.name };
 }
 
 async function templateLogo(db: Db, templateId: string, fallback: string | null) {
@@ -306,7 +304,7 @@ async function buildContent(db: Db, actor: Actor, row: DocumentRow, issuedAt: st
       email: parties.contact.email,
     },
     sender: parties.sender,
-    workspace: { name: parties.workspaceName },
+    workspace: { name: parties.ourCompany },
     proposal: { title: row.title, currency: row.currency, validUntil: row.valid_until, items },
   });
   const rendered = renderBlocks(readBlocks(row.blocks), values);
@@ -320,11 +318,12 @@ async function buildContent(db: Db, actor: Actor, row: DocumentRow, issuedAt: st
     accent: settings.accent,
     logo,
     client: { name: parties.contact.name, email: parties.contact.email ?? "", title: parties.contact.jobTitle, company: parties.company.name },
-    sender: { name: parties.sender.name, email: parties.sender.email, title: null, company: parties.workspaceName },
+    sender: { name: parties.sender.name, email: parties.sender.email, title: null, company: parties.ourCompany },
+    business: parties.business,
     blocks,
     items,
     totals: totalsOf(items),
-    consent: consentText(row.kind, parties.workspaceName, blocks.some((block) => block.type === "terms")),
+    consent: consentText(row.kind, parties.ourCompany, blocks.some((block) => block.type === "terms")),
     issuedAt,
   };
   return { content, missing, placeholders, contactEmail: parties.contact.email };
@@ -430,12 +429,13 @@ export async function createDocument(
     );
     const id = result.rows[0].id;
     const owner = await db.query<{ full_name: string | null; email: string | null }>("select full_name, email from crm.profiles where id = $1", [ownerId]);
-    const workspace = await db.query<{ name: string }>("select name from crm.workspaces where id = $1", [actor.workspaceId]);
+    const sender = { name: owner.rows[0]?.full_name || owner.rows[0]?.email || "Sender", email: owner.rows[0]?.email ?? "" };
+    const business = await readBusinessDetailsInDb(db, actor.workspaceId);
     const values = fieldValues({
       company: { name: company.name, domain: company.domain, website: company.website },
       contact: { name: contact.name, firstName: contact.firstName, lastName: contact.lastName, jobTitle: contact.jobTitle, email: contact.email },
-      sender: { name: owner.rows[0]?.full_name || owner.rows[0]?.email || "Sender", email: owner.rows[0]?.email ?? "" },
-      workspace: { name: workspace.rows[0]?.name ?? "Our company" },
+      sender,
+      workspace: { name: business.name || sender.name },
       proposal: { title, currency, validUntil: addDays(template.settings.validDays), items },
     });
     await seedSteps(db, actor, id, renderBlocks(template.blocks, values).blocks);
@@ -768,7 +768,7 @@ export async function countersignDocument(
         actor.fullName || actor.email,
         actor.email,
         typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 200) : null,
-        content.sender.company,
+        senderCompany(content),
         signatureText,
         image,
         content.consent,

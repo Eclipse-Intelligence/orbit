@@ -24,7 +24,7 @@ import {
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Product } from "@/lib/proposals/catalogue";
 import type { DocumentDetail } from "@/lib/proposals/documents";
-import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
+import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, senderCompany, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 import HoldButton from "@/components/_ui/hold-button";
@@ -388,7 +388,7 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                 documentId={doc.id}
                 initial={doc.steps}
                 clientCompany={doc.companyName}
-                ourCompany={viewer.workspaceName}
+                ourCompany={senderCompany(doc.preview)}
                 contactFirstName={doc.contactName.split(/\s+/)[0] || "them"}
                 canEmail={Boolean(doc.link)}
                 onSteps={(steps) => setDoc((current) => ({ ...current, steps }))}
@@ -725,7 +725,7 @@ function CountersignDialog({
           <label className="caption-style text-soft flex items-start gap-2.5 rounded-xl bg-white/[0.03] p-3 leading-[1.5]">
             <input type="checkbox" checked={agree} onChange={(event) => setAgree(event.target.checked)} className="mt-0.5 size-4 shrink-0" />
             <span>
-              I agree to sign this electronically for {doc.version?.content.sender.company ?? viewer.workspaceName}. My electronic signature has the same effect as a handwritten
+              I agree to sign this electronically for {senderCompany(doc.version?.content ?? doc.preview)}. My electronic signature has the same effect as a handwritten
               signature.
             </span>
           </label>

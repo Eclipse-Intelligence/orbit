@@ -9,6 +9,7 @@ import {
   parseBody,
   httpsImage,
   safeHref,
+  senderCompany,
   shows,
   videoSource,
   type Block,
@@ -92,7 +93,7 @@ function Body({ value }: { value: string }) {
   return <div className="flex flex-col gap-4">{out}</div>;
 }
 
-export function ProposalLogo({ src, company, className }: { src: string; company: string; className?: string }) {
+export function ProposalLogo({ src, company, className, white }: { src: string; company: string; className?: string; white?: boolean }) {
   return (
     <Asset
       type="image"
@@ -101,7 +102,7 @@ export function ProposalLogo({ src, company, className }: { src: string; company
       width={4}
       height={1}
       fit="contain"
-      mediaClassName="object-left"
+      mediaClassName={cn("object-left", white && "brightness-0 invert")}
       unoptimized
       className={cn("h-10 w-40", className)}
     />
@@ -124,7 +125,7 @@ export function Signatures({ content, signatures, children }: { content: Content
           const signed = signatures.find((item) => item.role === role);
           return (
             <div key={role} className="bg-card flex flex-col gap-2 rounded-2xl p-5 shadow-[0_0_0_1px_rgba(0,0,0,0.05)]">
-              <span className="text-subtle text-[12.5px] font-medium tracking-[0.04em] uppercase">For {party.company}</span>
+              <span className="text-subtle text-[12.5px] font-medium tracking-[0.04em] uppercase">For {role === "client" ? party.company : senderCompany(content)}</span>
               {signed ? (
                 signed.signatureImage ? (
                   <Image src={signed.signatureImage} alt={`Signature of ${signed.name}`} width={240} height={54} unoptimized className="h-[54px] w-auto self-start object-contain" />
@@ -195,7 +196,7 @@ function Steps({ block, content, extras }: { block: Extract<Block, { type: "step
       </div>
       <ol className="bg-card divide-border flex flex-col divide-y overflow-hidden rounded-2xl shadow-[0_0_0_1px_rgba(0,0,0,0.06)]">
         {steps.map((step) => {
-          const owner = step.side === "client" ? content.client.company : content.sender.company;
+          const owner = step.side === "client" ? content.client.company : senderCompany(content);
           const tickable = step.side === "client" && Boolean(extras.onToggleStep);
           const meta = [
             owner,
@@ -479,36 +480,7 @@ export default function ProposalDocument({
         if (block.type === "pricing" && content.items.length === 0 && !extras.preview) return null;
         if (block.type === "cover") {
           const cover = imageSrc(block.image);
-          return (
-            <header key={block.id} id={sectionId(index)} className="flex scroll-mt-24 flex-col gap-5">
-              {cover && <Asset type="image" src={cover} alt="" width={12} height={5} fit="cover" unoptimized className="mb-2 rounded-2xl shadow-[0_0_0_1px_rgba(0,0,0,0.05)]" />}
-              {content.logo ? (
-                <ProposalLogo src={content.logo} company={content.sender.company} className="mb-2" />
-              ) : (
-                <span aria-hidden className="block h-1.5 w-14 rounded-full" style={{ backgroundColor: content.accent }} />
-              )}
-              <h1 className="doc-title">{block.title || content.title}</h1>
-              {block.subtitle && <p className="doc-lead text-soft max-w-[34em]">{block.subtitle}</p>}
-              <dl className="text-subtle flex flex-wrap gap-x-6 gap-y-1 text-[13.5px]">
-                <div className="flex gap-1.5">
-                  <dt>Issued</dt>
-                  <dd className="text-foreground">{longDate(content.issuedAt)}</dd>
-                </div>
-                {content.validUntil && (
-                  <div className="flex gap-1.5">
-                    <dt>Valid until</dt>
-                    <dd className="text-foreground">{longDate(content.validUntil)}</dd>
-                  </div>
-                )}
-                <div className="flex gap-1.5">
-                  <dt>From</dt>
-                  <dd className="text-foreground">
-                    {content.sender.name}, {content.sender.company}
-                  </dd>
-                </div>
-              </dl>
-            </header>
-          );
+          return cover ? <Asset key={block.id} type="image" src={cover} alt="" width={12} height={5} fit="cover" unoptimized className="rounded-2xl shadow-[0_0_0_1px_rgba(0,0,0,0.05)]" /> : null;
         }
         const titled = "heading" in block && Boolean(block.heading);
         return (

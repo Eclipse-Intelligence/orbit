@@ -7,10 +7,14 @@ import {
   BILLINGS,
   formatMoney,
   longDate,
+  businessLines,
   parseBody,
+  senderCompany,
+  type Block,
   type Content,
   type Inline,
 } from "@/lib/proposals/model";
+import { logoForDarkBand } from "@/lib/proposals/png";
 
 export type PdfSignature = {
   role: "client" | "sender";
@@ -37,6 +41,10 @@ const MARGIN = 56;
 const INK = rgb(0.11, 0.11, 0.13);
 const MUTED = rgb(0.42, 0.43, 0.47);
 const RULE = rgb(0.88, 0.88, 0.9);
+const BAND = rgb(0.059, 0.059, 0.075);
+const ON_BAND = rgb(1, 1, 1);
+const ON_BAND_SOFT = rgb(0.78, 0.78, 0.8);
+const ON_BAND_MUTED = rgb(0.66, 0.66, 0.7);
 
 const REPLACEMENTS: Record<string, string> = { "\u00a0": " ", "\u202f": " " };
 const FONT_DIR = path.join(process.cwd(), "lib", "proposals", "fonts");
@@ -244,7 +252,7 @@ async function signatures(pdf: PDFDocument, writer: Writer, fonts: Fonts, conten
     const party = role === "client" ? content.client : content.sender;
     const signature = signed.find((item) => item.role === role);
     writer.space(110);
-    writer.lines([{ text: `For ${party.company}`, bold: true }], { size: 10 });
+    writer.lines([{ text: `For ${role === "client" ? party.company : senderCompany(content)}`, bold: true }], { size: 10 });
     let drawn = false;
     if (signature?.signatureImage?.startsWith("data:image/png;base64,")) {
       try {
@@ -276,6 +284,81 @@ async function signatures(pdf: PDFDocument, writer: Writer, fonts: Fonts, conten
   }
 }
 
+function wrap(text: string, font: PDFFont, size: number, width: number) {
+  const lines: string[] = [];
+  for (const paragraph of clean(text).split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && font.widthOfTextAtSize(next, size) > width) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = next;
+      }
+      while (font.widthOfTextAtSize(line, size) > width && line.length > 1) {
+        let cut = line.length - 1;
+        while (cut > 1 && font.widthOfTextAtSize(line.slice(0, cut), size) > width) cut -= 1;
+        lines.push(line.slice(0, cut));
+        line = line.slice(cut);
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+async function band(pdf: PDFDocument, writer: Writer, fonts: Fonts, content: Content, accent: RGB) {
+  const cover = content.blocks.find((block): block is Extract<Block, { type: "cover" }> => block.type === "cover");
+  const inner = WIDTH - MARGIN * 2;
+  const detailsWidth = 190;
+  const details = businessLines(content.business).flatMap((line) =>
+    wrap(line.text, line.key === "name" ? fonts.bold : fonts.regular, 8.5, detailsWidth).map((text) => ({ text, bold: line.key === "name" })),
+  );
+  const logoFile = logoForDarkBand(content.logo);
+  const logo = logoFile ? await pdf.embedPng(logoFile).catch(() => null) : null;
+  const logoBox = logo ? logo.scaleToFit(Math.min(170, inner - detailsWidth - 24), 40) : { width: 40, height: 5 };
+  const detailsHeight = details.length * 12;
+  const topHeight = Math.max(logoBox.height, detailsHeight);
+  const title = wrap(cover?.title || content.title, fonts.bold, 26, inner).slice(0, 4);
+  const subtitle = cover?.subtitle ? wrap(cover.subtitle, fonts.regular, 12, inner).slice(0, 8) : [];
+  const meta = [`Issued ${longDate(content.issuedAt)}`, content.validUntil ? `Valid until ${longDate(content.validUntil)}` : "", `From ${content.sender.name}`].filter(Boolean).join(" · ");
+  const metaLines = wrap(meta, fonts.regular, 9.5, inner);
+  const padding = 40;
+  const height = padding + topHeight + 44 + title.length * 32 + (subtitle.length ? 6 + subtitle.length * 17 : 0) + 12 + metaLines.length * 14 + padding;
+  const page = writer.page;
+  page.drawRectangle({ x: 0, y: HEIGHT - height, width: WIDTH, height, color: BAND });
+  page.drawRectangle({ x: 0, y: HEIGHT - height, width: WIDTH, height: 3, color: accent });
+  let y = HEIGHT - padding;
+  if (logo && logoFile) {
+    page.drawImage(logo, { x: MARGIN, y: y - logoBox.height, width: logoBox.width, height: logoBox.height });
+  } else {
+    page.drawRectangle({ x: MARGIN, y: y - 5, width: 40, height: 5, color: accent });
+  }
+  details.forEach((line, index) => {
+    const font = line.bold ? fonts.bold : fonts.regular;
+    page.drawText(line.text, { x: WIDTH - MARGIN - font.widthOfTextAtSize(line.text, 8.5), y: y - 9 - index * 12, size: 8.5, font, color: line.bold ? ON_BAND : ON_BAND_SOFT });
+  });
+  y -= topHeight + 44;
+  for (const line of title) {
+    page.drawText(line, { x: MARGIN, y: y - 24, size: 26, font: fonts.bold, color: ON_BAND });
+    y -= 32;
+  }
+  if (subtitle.length) {
+    y -= 6;
+    for (const line of subtitle) {
+      page.drawText(line, { x: MARGIN, y: y - 12, size: 12, font: fonts.regular, color: ON_BAND_SOFT });
+      y -= 17;
+    }
+  }
+  y -= 12;
+  for (const line of metaLines) {
+    page.drawText(line, { x: MARGIN, y: y - 9.5, size: 9.5, font: fonts.regular, color: ON_BAND_MUTED });
+    y -= 14;
+  }
+  writer.y = HEIGHT - height - 34;
+}
+
 export async function renderPdf(input: {
   content: Content;
   contentHash: string;
@@ -286,7 +369,7 @@ export async function renderPdf(input: {
 }) {
   const pdf = await PDFDocument.create();
   pdf.setTitle(clean(input.content.title));
-  pdf.setAuthor(clean(input.content.sender.company));
+  pdf.setAuthor(clean(senderCompany(input.content)));
   pdf.setCreator("Orbit");
   pdf.setCreationDate(new Date(input.content.issuedAt));
   pdf.setModificationDate(new Date(input.content.issuedAt));
@@ -299,36 +382,13 @@ export async function renderPdf(input: {
   };
   if (glyphs.size === 0) glyphs = new Set(fonts.regular.getCharacterSet());
   const accent = hexColour(input.content.accent);
-  const writer = new Writer(pdf, fonts, `${input.content.title} · ${input.content.sender.company} · Reference ${input.documentId.slice(0, 8)} v${input.versionNumber}`);
-  writer.page.drawRectangle({ x: 0, y: HEIGHT - 8, width: WIDTH, height: 8, color: accent });
+  const writer = new Writer(pdf, fonts, `${input.content.title} · ${senderCompany(input.content)} · Reference ${input.documentId.slice(0, 8)} v${input.versionNumber}`);
+  await band(pdf, writer, fonts, input.content, accent);
   for (const block of input.content.blocks) {
-    if (block.type === "tab" || block.type === "video" || block.type === "image" || block.type === "embed" || block.type === "booking" || block.type === "steps") continue;
+    if (block.type === "cover" || block.type === "tab" || block.type === "video" || block.type === "image" || block.type === "embed" || block.type === "booking" || block.type === "steps") continue;
     if (block.type === "documents" && block.items.length === 0) continue;
     if (block.type === "quote" && !block.quote.trim()) continue;
     if (block.type === "team" && !block.people.some((person) => person.name.trim())) continue;
-    if (block.type === "cover") {
-      writer.gap(30);
-      const logo = input.content.logo ? await pdf.embedPng(Buffer.from(input.content.logo.slice(input.content.logo.indexOf(",") + 1), "base64")).catch(() => null) : null;
-      if (logo) {
-        const scaled = logo.scaleToFit(170, 44);
-        writer.page.drawImage(logo, { x: MARGIN, y: writer.y - scaled.height, width: scaled.width, height: scaled.height });
-        writer.gap(scaled.height + 22);
-      }
-      writer.lines([{ text: block.title || input.content.title }], { size: 26, font: fonts.bold, leading: 32 });
-      if (block.subtitle) {
-        writer.gap(4);
-        writer.lines([{ text: block.subtitle }], { size: 12, color: MUTED });
-      }
-      writer.gap(6);
-      const meta = [
-        `Issued ${longDate(input.content.issuedAt)}`,
-        input.content.validUntil ? `Valid until ${longDate(input.content.validUntil)}` : "",
-      ].filter(Boolean);
-      writer.lines([{ text: meta.join("   ") }], { size: 9.5, color: MUTED });
-      writer.gap(18);
-      writer.rule(accent);
-      continue;
-    }
     writer.space(40);
     writer.gap(8);
     if ("heading" in block && block.heading) writer.lines([{ text: block.heading }], { size: 15, font: fonts.bold, leading: 20 });
