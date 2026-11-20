@@ -29,7 +29,7 @@ function Row({ item }: { item: ChatSavedItem }) {
       router.push(discussionHref(subject));
       return;
     }
-    go({ view: { kind: "room", id: conversation.id }, thread: message.parentId, message: message.parentId ? null : message.id });
+    go({ view: { kind: "room", id: conversation.id }, thread: message.parentId, message: message.id });
   }
 
   return (
