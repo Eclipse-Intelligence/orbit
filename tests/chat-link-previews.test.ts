@@ -13,6 +13,7 @@ import {
   listThread,
   openDiscussion,
   openDm,
+  openGroup,
   postMessage,
   removeLinkPreview,
   setRoomArchived,
@@ -452,6 +453,24 @@ describe("link previews", () => {
       assert.deepEqual((await previewsOf(sam, direct.id, dm.id)).map((preview) => preview.title), ["Widgets"]);
       await refused(listMessages(priya, dm.id), /not found/i);
       assert.deepEqual(await queryAsUser(priya.userId, "select id from crm.chat_link_previews where message_id = $1", [direct.id]), []);
+    });
+
+    it("previews links in group messages for their members only, and lets the author remove them", async () => {
+      const site = web(pages());
+      const group = await openGroup(mark, [sam.userId, priya.userId]);
+      const message = await post(mark, `Group link ${NEWS}`, site.transport, group.id);
+      assert.deepEqual((await previewsOf(priya, message.id, group.id)).map((preview) => preview.title), ["Outage report & follow-up"]);
+      assert.equal(previewEvents(priya.userId).length, 1);
+      const [stored] = await rows(message.id);
+      for (const outsider of [ada, olly]) {
+        await refused(listMessages(outsider, group.id), /not found/i);
+        assert.deepEqual(await queryAsUser(outsider.userId, "select id from crm.chat_link_previews where message_id = $1", [message.id]), []);
+        await refused(linkPreviewImage(outsider, stored.id, site.transport), /not found/i);
+      }
+      assert.equal((await linkPreviewImage(sam, stored.id, site.transport)).contentType, "image/png");
+      await refused(removeLinkPreview(sam, stored.id), /not found/i);
+      await removeLinkPreview(mark, stored.id);
+      assert.deepEqual(await previewsOf(priya, message.id, group.id), []);
     });
 
     it("follows the subject's own rules in task and doc discussions, admins included", async () => {
