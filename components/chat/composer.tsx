@@ -227,6 +227,7 @@ export function ComposerBox({
   onKeyDown,
   onBlur,
   roomMention,
+  historyKey,
 }: {
   id: string;
   inputRef: RefObject<ChatInputHandle | null>;
@@ -251,6 +252,7 @@ export function ComposerBox({
   onKeyDown?: (event: KeyboardEvent) => void;
   onBlur?: () => void;
   roomMention?: boolean;
+  historyKey?: string;
 }) {
   const { viewer, emoji: emojiPrefs } = useChat();
   const [shown, setShown] = useFormatBar(viewer.id, scope);
@@ -456,6 +458,7 @@ export function ComposerBox({
               ariaLabel={label}
               autoFocus={autoFocus}
               roomMention={roomMention}
+              historyKey={historyKey}
               onChange={onChange}
               onSubmit={onSubmit}
               onBlur={onBlur}
@@ -693,6 +696,7 @@ export default function Composer({
         over={over}
         composer
         roomMention={roomMention}
+        historyKey={key}
         actions={sendButton(false)}
         phoneAction={sendButton(true)}
         phoneLead={attachButton(true)}

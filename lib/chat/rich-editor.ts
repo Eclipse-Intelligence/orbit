@@ -1,4 +1,4 @@
-import { defaultKeymap, history, historyKeymap, invertedEffects } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, invertedEffects, redo } from "@codemirror/commands";
 import {
   Annotation,
   Compartment,
@@ -388,6 +388,13 @@ export function reloadMarkdown(state: EditorState, markdown: string): Transactio
   ];
 }
 
+export function resetHistory(): TransactionSpec[] {
+  return [
+    { effects: historySlot.reconfigure([]), annotations: [fromProps.of(true)] },
+    { effects: historySlot.reconfigure(history()), annotations: [fromProps.of(true)] },
+  ];
+}
+
 const LINE_CLASS: Record<BlockKind, string> = {
   bullets: "chat-li chat-li-bullet",
   numbers: "chat-li chat-li-number",
@@ -499,7 +506,7 @@ export function chatEditorExtensions(): Extension[] {
         },
       ]),
     ),
-    keymap.of([...historyKeymap, ...defaultKeymap.filter((binding) => !APP_KEYS.has(binding.key ?? ""))]),
+    keymap.of([{ key: "Mod-Shift-z", run: redo, preventDefault: true }, ...historyKeymap, ...defaultKeymap.filter((binding) => !APP_KEYS.has(binding.key ?? ""))]),
     EditorView.contentAttributes.of({
       "aria-multiline": "true",
       spellcheck: "true",

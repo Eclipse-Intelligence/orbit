@@ -13,6 +13,7 @@ import {
   loadMarkdown,
   newline,
   reloadMarkdown,
+  resetHistory,
   richDecorations,
   richDoc,
   stateMarkdown,
@@ -612,6 +613,20 @@ describe("chat rich composer: undo keeps formatting", () => {
     state = type(state, "next");
     state = run(state, undo);
     assert.equal(shown(state), "");
+  });
+
+  it("forgets the last conversation's edits when the box moves to another with the same text", () => {
+    let state = editor("");
+    state = type(state, "private note");
+    state = backspace(state);
+    for (const spec of reloadMarkdown(state, "")) state = apply(state, spec);
+    for (const spec of resetHistory()) state = apply(state, spec);
+    assert.equal(run(state, undo), state);
+    state = type(state, "hi");
+    state = run(state, undo);
+    assert.equal(shown(state), "");
+    state = run(state, redo);
+    assert.equal(shown(state), "hi");
   });
 });
 

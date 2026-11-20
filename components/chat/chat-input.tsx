@@ -21,6 +21,7 @@ import {
   mentionLabels,
   newline,
   reloadMarkdown,
+  resetHistory,
   richField,
   runSpec,
   stateMarkdown,
@@ -109,6 +110,7 @@ export default function ChatInput({
   onPaste,
   onReload,
   enterKeyHint = "send",
+  historyKey,
 }: {
   id: string;
   handle: Ref<ChatInputHandle>;
@@ -126,6 +128,7 @@ export default function ChatInput({
   onPaste?: (event: ClipboardEvent) => boolean;
   onReload?: () => void;
   enterKeyHint?: "send" | "done";
+  historyKey?: string;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -339,6 +342,14 @@ export default function ChatInput({
       viewRef.current = null;
     };
   }, [setHighlight]);
+
+  const historyFor = useRef(historyKey);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || historyFor.current === historyKey) return;
+    historyFor.current = historyKey;
+    for (const spec of resetHistory()) view.dispatch(spec);
+  }, [historyKey]);
 
   useEffect(() => {
     const view = viewRef.current;
