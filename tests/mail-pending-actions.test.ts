@@ -30,9 +30,10 @@ const CONVERSATIONS = [
   "conv-partial",
   "conv-late",
   "conv-mixed",
+  "conv-vanished",
 ];
 
-const EXTRA = ["conv-partial-2", "conv-partial-3", "conv-late-2", "conv-mixed-2"];
+const EXTRA = ["conv-partial-2", "conv-partial-3", "conv-late-2", "conv-mixed-2", "conv-vanished-2", "conv-vanished-3"];
 
 function message(id: string, conversationId: string) {
   return {
@@ -407,6 +408,13 @@ describe("queued mail moves", () => {
     await drain(outlook().fetchImpl);
     assert.deepEqual(await states(["conv-late-1", "conv-late-2"]), ["archive", "archive"]);
     assert.deepEqual(await rows("conv-late"), []);
+
+    const vanished = outlook((url, method) => (method === "POST" && /\/conv-vanished-[23]\/move$/.test(url) ? graphError(404, "ErrorItemNotFound") : undefined));
+    await queueMailAction(owner, { thread: thread("conv-vanished"), action: "archive", view: { role: "inbox" } });
+    await drain(vanished.fetchImpl);
+    assert.deepEqual(await rows("conv-vanished"), [], "emails already gone from Outlook finish the move");
+    assert.deepEqual(await takeMailRefusals(owner), []);
+    assert.equal(await roleOf("conv-vanished"), "archive");
 
     const mixed = outlook(failing("conv-mixed-2", () => graphError(400, "ErrorInvalidRequest"), 10));
     await queueMailAction(owner, { thread: thread("conv-mixed"), action: "archive", view: { role: "inbox" } });

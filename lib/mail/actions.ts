@@ -232,7 +232,7 @@ async function failureMessage(actor: UserActor, sourceId: string, error: unknown
   return error instanceof Error ? error.message : "Outlook didn't accept that change. Try again.";
 }
 
-export type MailActionResult = { changed: number; failed: number; problem: string | null; refused?: boolean };
+export type MailActionResult = { changed: number; failed: number; problem: string | null; refused?: boolean; gone?: boolean };
 
 function definiteRefusal(error: unknown) {
   return error instanceof GraphMailError && error.status >= 400 && error.status < 500 && ![401, 404, 408, 429].includes(error.status);
@@ -323,7 +323,7 @@ export async function applyMailAction(
       Object.assign(new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502), { cause: failures[0] })
     );
   }
-  return { changed: done.length, failed: failures.length, problem: await failureMessage(actor, sourceId, failures[0]), refused: failures.every(definiteRefusal) };
+  return { changed: done.length, failed: failures.length, problem: await failureMessage(actor, sourceId, failures[0]), refused: failures.every(definiteRefusal), gone: failures.every((failure) => failure instanceof GraphMailError && failure.status === 404) };
 }
 
 export function partialProblem(result: MailActionResult) {

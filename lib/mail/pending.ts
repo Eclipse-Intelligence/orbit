@@ -157,7 +157,7 @@ async function runRow(actor: UserActor, row: PendingRow, fetchImpl: typeof fetch
       { deadline: Math.min(deadline, Date.now() + ACTION_BUDGET_MS), origin: row.origin },
     );
     const problem = partialProblem(result);
-    if (!problem) outcome = { kind: "done" };
+    if (!problem || result.gone) outcome = { kind: "done" };
     else outcome = result.refused ? { kind: "refused", problem } : { kind: "transient", problem, waitMs: null };
   } catch (error) {
     outcome = classify(error);
