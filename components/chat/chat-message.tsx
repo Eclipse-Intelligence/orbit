@@ -14,6 +14,7 @@ import type { ChatInputHandle } from "@/components/chat/chat-input";
 import { ComposerBox, focusComposer } from "@/components/chat/composer";
 import EmojiPopover from "@/components/chat/emoji-popover";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
+import MessageLinks from "@/components/chat/link-previews";
 import MessageBody from "@/components/chat/message-body";
 import { askLabel, CREATE_TASK_LABEL, useOrbitActions } from "@/components/chat/orbit-actions";
 import Reactions from "@/components/chat/reactions";
@@ -319,6 +320,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           <>
             {message.body && <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} everyone={message.everyone} className={cn(error && "text-soft")} />}
             <MessageAttachments message={message} />
+            {!local && <MessageLinks message={message} viewerId={viewer.id} canRemove={!readOnly} />}
           </>
         )}
         {message.editedAt && !deleted && !isEditing && <span className="caption-style text-faint">Edited</span>}

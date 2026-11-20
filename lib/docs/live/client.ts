@@ -568,7 +568,7 @@ export async function watchLiveActivity(
   };
 }
 
-const CHAT_EVENT_TYPES: readonly string[] = ["message", "edit", "delete", "read", "unread", "thread-read", "conversation", "removed", "reaction"];
+const CHAT_EVENT_TYPES: readonly string[] = ["message", "edit", "delete", "read", "unread", "thread-read", "conversation", "removed", "reaction", "previews"];
 
 export async function watchChat(source: LiveTransportKind | LiveTransport, userId: string, onEvent: (event: ChatLiveEvent) => void, onJoined: (joined: boolean) => void) {
   const transport = typeof source === "string" ? await transportFor(source).catch(() => null) : source;

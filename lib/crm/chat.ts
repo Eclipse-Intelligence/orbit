@@ -46,6 +46,7 @@ import {
 import { discussionHref, readSubject, taskPanelHref } from "@/lib/chat/discussions";
 import { filesTitle } from "@/lib/chat/files";
 import { checkUploads, cleanAttachmentIds, removeChatAttachments } from "@/lib/crm/chat-attachments";
+import { hideLinkPreview, previewsOf, refreshLinkPreviews, type PreviewChange, type PreviewTransport, type StoredPreview } from "@/lib/crm/chat-link-previews";
 import { chatEmoji } from "@/lib/chat/emoji";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
@@ -55,6 +56,8 @@ import { assertScope } from "@/lib/crm/scopes";
 import { addTaskParticipantsInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { cleanFormat, formatMentions, usesRoomMention, type ChatFormat } from "@/lib/chat/markdown";
+import { previewUrls } from "@/lib/chat/links";
+import { siteOrigin } from "@/lib/site-url";
 import { query, type Db } from "@/lib/db/pool";
 import { peopleMentioned, ROOM_MENTION_MAX_MEMBERS, ROOM_SENTINEL } from "@/lib/mentions";
 import { publishLiveBatch, type LiveMessage } from "@/lib/docs/live/broadcast";
@@ -84,6 +87,7 @@ export type MessageRow = {
   reply_authors: ChatPerson[] | null;
   hook: { title?: unknown; url?: unknown; block?: unknown } | null;
   attachments: ChatAttachment[] | null;
+  previews: StoredPreview[] | null;
   reactions: ReactionRow[] | null;
 };
 
@@ -163,6 +167,11 @@ export function messageColumns(alias = "m") {
       from crm.chat_attachments f
       where f.message_id = ${alias}.id
     ), '[]'::json) else '[]'::json end as attachments,
+    case when ${alias}.deleted_at is null then coalesce((
+      select json_agg(json_build_object('id', p.id, 'url', p.url, 'title', p.title, 'description', p.description, 'site', p.site, 'image_url', p.image_url) order by p.position)
+      from crm.chat_link_previews p
+      where p.message_id = ${alias}.id
+    ), '[]'::json) else '[]'::json end as previews,
     ${reactionsColumn(alias)}`;
 }
 
@@ -213,6 +222,7 @@ export function toMessage(row: MessageRow, viewerId: string): ChatMessage {
     createdAt: iso(row.created_at),
     hook: row.deleted_at && row.hook ? { ...EMPTY_HOOK_CARD } : hookCard(row.hook),
     attachments: row.deleted_at ? [] : (row.attachments ?? []),
+    previews: row.deleted_at ? [] : previewsOf(row.previews, row.body, row.format),
     reactions: row.deleted_at ? [] : toReactions(row.reactions, viewerId),
   };
 }
@@ -1192,6 +1202,35 @@ function postAlerts(actor: UserActor, conversation: ConversationRow, members: Me
   return jobs;
 }
 
+async function announcePreviews(actor: UserActor, change: PreviewChange) {
+  await withActor(actor, async (db) => {
+    const message = await readMessage(db, change.messageId, actor.userId);
+    if (!message || message.deletedAt) return;
+    const members = await memberIds(db, message.conversationId);
+    broadcastAfterCommit(
+      db,
+      members.map((member) => member.user_id),
+      { type: "previews", conversationId: message.conversationId, messageId: message.id, parentId: message.parentId, previews: message.previews },
+    );
+  });
+}
+
+function schedulePreviews(db: Db, actor: UserActor, messageId: string, transport: PreviewTransport) {
+  afterChatCommit(db, async () => {
+    const change = await refreshLinkPreviews(messageId, transport);
+    if (change) await announcePreviews(actor, change);
+  });
+}
+
+export async function removeLinkPreview(actor: UserActor, id: unknown): Promise<{ removed: true }> {
+  try {
+    await announcePreviews(actor, await hideLinkPreview(actor, id));
+    return { removed: true };
+  } catch (error) {
+    chatFailure(error);
+  }
+}
+
 function afterPost(db: Db, userIds: string[], event: ChatLiveEvent, jobs: AlertJob[]) {
   afterChatCommit(db, async () => {
     await broadcast(userIds, event);
@@ -1252,7 +1291,7 @@ async function existingPost(db: Db, actor: UserActor, clientKey: string, convers
 export async function postMessage(
   actor: UserActor,
   input: PostInput,
-  options: { viaWorkflowId?: string; charge?: () => Promise<void>; roomMention?: boolean; fetchImpl?: typeof fetch } = {},
+  options: { viaWorkflowId?: string; charge?: () => Promise<void>; roomMention?: boolean; fetchImpl?: typeof fetch; linkPreviews?: PreviewTransport } = {},
 ): Promise<ChatPost> {
   const conversationId = checkId(input.conversationId, "conversation");
   const parentId = input.parentId ? checkId(input.parentId, "thread") : null;
@@ -1338,6 +1377,7 @@ export async function postMessage(
         { type: "message", conversationId, message, root, ...(subjectOf(conversation) ? { subject: subjectOf(conversation)! } : {}) },
         jobs,
       );
+      if (options.linkPreviews && !via && !options.charge && previewUrls(body, format, siteOrigin()).length > 0) schedulePreviews(db, actor, message.id, options.linkPreviews);
       return { message, root, duplicate: false };
     });
   } catch (error) {
@@ -1375,11 +1415,15 @@ async function ownMessage(db: Db, actor: UserActor, id: string) {
   return message;
 }
 
+function sameList(left: string[], right: string[]) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
 export async function editMessage(
   actor: UserActor,
   id: string,
   body: unknown,
-  options: { format?: unknown; roomMention?: boolean; removeAttachmentIds?: unknown } = {},
+  options: { format?: unknown; roomMention?: boolean; removeAttachmentIds?: unknown; linkPreviews?: PreviewTransport } = {},
 ): Promise<ChatMessage> {
   const messageId = checkId(id, "message");
   const text = cleanBody(body, { allowEmpty: true });
@@ -1407,6 +1451,9 @@ export async function editMessage(
       const updated = await db.query("update crm.chat_messages set body = $2, format = $5, mentions = $3::uuid[] where id = $1 and author_user_id = $4", [messageId, text, mentions, actor.userId, format]);
       if ((updated.rowCount ?? 0) === 0) throw notFound("message");
       const message = (await readMessage(db, messageId, actor.userId))!;
+      if (options.linkPreviews && !sameList(previewUrls(current.body, current.format, siteOrigin()), previewUrls(text, format, siteOrigin()))) {
+        schedulePreviews(db, actor, messageId, options.linkPreviews);
+      }
       const members = await memberIds(db, current.conversationId);
       const listening = members.filter((member) => member.user_id !== actor.userId && !followersBefore.has(member.user_id) && takesMentions(conversation, member));
       const added = conversation.kind === "room" ? listening.filter((member) => !before.has(member.user_id) && message.mentions.includes(member.user_id)).map((member) => member.user_id) : [];

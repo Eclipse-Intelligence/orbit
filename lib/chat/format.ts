@@ -42,6 +42,10 @@ export function dayLabel(iso: string, now: number) {
   return (sameYear ? DAY_MONTH : DAY_MONTH_YEAR).format(new Date(iso));
 }
 
+export function shortDate(iso: string) {
+  return DAY_MONTH_SHORT.format(new Date(iso));
+}
+
 export function shortWhen(iso: string, now: number) {
   const days = daysBetween(iso, now);
   if (days <= 0) return clockTime(iso);

@@ -15,6 +15,7 @@ import {
   openGroup,
   postMessage,
   reactToMessage,
+  removeLinkPreview,
   removeRoomMember,
   setConversationNotify,
   setRoomArchived,
@@ -87,11 +88,15 @@ export async function postMessageAction(input: {
   clientKey: string;
   attachmentIds?: string[];
 }): Promise<ChatResult<ChatPost>> {
-  return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}, { roomMention: true }));
+  return run("Couldn't send. Try again.", (actor) => postMessage(actor, input ?? {}, { roomMention: true, linkPreviews: {} }));
 }
 
 export async function editMessageAction(id: string, body: string, format?: ChatFormat, removeAttachmentIds?: string[]): Promise<ChatResult<{ message: ChatMessage }>> {
-  return run("Couldn't save the message. Try again.", async (actor) => ({ message: await editMessage(actor, id, body, { format, roomMention: true, removeAttachmentIds }) }));
+  return run("Couldn't save the message. Try again.", async (actor) => ({ message: await editMessage(actor, id, body, { format, roomMention: true, removeAttachmentIds, linkPreviews: {} }) }));
+}
+
+export async function removeLinkPreviewAction(id: string): Promise<ChatResult<{ removed: true }>> {
+  return run("Couldn't remove the preview. Try again.", (actor) => removeLinkPreview(actor, id));
 }
 
 export async function prepareChatUploadAction(

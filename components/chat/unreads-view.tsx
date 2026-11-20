@@ -8,6 +8,7 @@ import ChatMessageRow from "@/components/chat/chat-message";
 import { useChatEvents } from "@/components/chat/chat-live";
 import { PhoneBack } from "@/components/chat/room-view";
 import { chatApi } from "@/lib/chat/client";
+import { applyPreviews } from "@/lib/chat/timeline";
 import { isDirect, type ChatUnreadGroup } from "@/lib/chat/types";
 import { useCompaniesStore } from "@/stores/companies-store";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
@@ -97,6 +98,10 @@ export default function UnreadsView() {
   }, [unreadCount, reload]);
 
   useChatEvents((event) => {
+    if (event.type === "previews") {
+      setGroups((current) => current?.map((group) => ({ ...group, messages: applyPreviews(group.messages, event.messageId, event.previews) })) ?? current);
+      return;
+    }
     if (event.type === "message" && event.message.parentId) return;
     if (event.type === "thread-read") return;
     window.clearTimeout(settle.current);

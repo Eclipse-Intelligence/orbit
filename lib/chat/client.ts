@@ -1,3 +1,4 @@
+import type { ChatRecordCard, RecordRef } from "@/lib/chat/links";
 import type { ChatAttachment, ChatPage, ChatPerson, ChatRoom, ChatSaved, ChatSavedIds, ChatSearch, ChatSearchQuery, ChatSearchResult, ChatSidebar, ChatThread, ChatThreads, ChatUnreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 
@@ -48,6 +49,8 @@ export const chatApi = {
       "Couldn't search. Try again.",
     ),
   find: (id: string, text: string) => request<ChatSearchResult>(`/api/chat/${id}/search${query({ q: text })}`, "Couldn't search. Try again."),
+  records: (refs: RecordRef[]) =>
+    request<{ cards: ChatRecordCard[] }>(`/api/chat/records?${refs.map((ref) => `ref=${ref.kind}:${ref.id}`).join("&")}`, "Couldn't load the record. Try again."),
   markRead: (id: string, upTo: string | null) => markUpTo<{ lastReadAt: string }>(`/api/chat/${id}/read`, "Couldn't mark it read. Try again.", upTo),
   markThreadRead: (rootId: string, upTo: string | null) =>
     markUpTo<{ lastReadAt: string | null }>(`/api/chat/threads/${rootId}/read`, "Couldn't mark the thread read. Try again.", upTo),

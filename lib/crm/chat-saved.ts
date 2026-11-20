@@ -110,7 +110,7 @@ export async function listSavedIds(actor: UserActor): Promise<ChatSavedIds> {
 }
 
 type SavedRow = MessageRow &
-  SubjectColumns & { saved_at: string; saved_ts: Date; c_name: string | null; dm_name: string | null; c_people: PeopleRow[] | null; task_title: string | null; page_title: string | null };
+  SubjectColumns & { saved_at: string; saved_ts: Date; c_name: string | null; archived: boolean; dm_name: string | null; c_people: PeopleRow[] | null; task_title: string | null; page_title: string | null };
 
 export async function listSaved(actor: UserActor, options: { cursor?: string | null; limit?: number } = {}): Promise<ChatSaved> {
   const limit = pageSize(options.limit);
@@ -118,7 +118,7 @@ export async function listSaved(actor: UserActor, options: { cursor?: string | n
   return withActor(actor, async (db) => {
     const result = await db.query<SavedRow>(
       `select s.created_at::text as saved_at, s.created_at as saved_ts, ${messageColumns("m")},
-         c.kind as conversation_kind, c.name as c_name, c.task_id, c.page_id, c.mail_share_id, t.title as task_title, d.title as page_title,
+         c.kind as conversation_kind, c.name as c_name, c.archived_at is not null as archived, c.task_id, c.page_id, c.mail_share_id, t.title as task_title, d.title as page_title,
          case when c.kind = 'dm' then (
            select ${MEMBER_NAME("o", "op")} from crm.chat_members o left join crm.profiles op on op.id = o.user_id
            where o.conversation_id = c.id and o.user_id <> s.user_id limit 1
@@ -141,6 +141,7 @@ export async function listSaved(actor: UserActor, options: { cursor?: string | n
       conversation: {
         id: row.conversation_id,
         kind: row.conversation_kind,
+        archived: row.archived,
         name:
           row.conversation_kind === "task"
             ? (row.task_title ?? "")

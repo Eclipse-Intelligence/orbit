@@ -8,6 +8,7 @@ import { MessageAttachments } from "@/components/chat/attachments";
 import { ChatAvatar, useChat } from "@/components/chat/chat-context";
 import { useChatEvents } from "@/components/chat/chat-live";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
+import MessageLinks from "@/components/chat/link-previews";
 import MessageBody from "@/components/chat/message-body";
 import { PhoneBack } from "@/components/chat/room-view";
 import { REMIND_CHOICES } from "@/components/chat/use-saved";
@@ -52,6 +53,7 @@ function Row({ item }: { item: ChatSavedItem }) {
           <>
             {message.body && <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} everyone={message.everyone} />}
             <MessageAttachments message={message} />
+            <MessageLinks message={message} viewerId={viewer.id} canRemove={!conversation.archived} />
           </>
         )}
         <div className="-ml-2 flex flex-wrap items-center gap-1 pt-1">
@@ -113,6 +115,7 @@ export default function SavedView() {
   useChatEvents((event) => {
     if (event.type === "delete") setItems((current) => current?.filter((item) => item.message.id !== event.messageId) ?? current);
     else if (event.type === "removed") setItems((current) => current?.filter((item) => item.conversation.id !== event.conversationId) ?? current);
+    else if (event.type === "previews") setItems((current) => current?.map((item) => (item.message.id === event.messageId ? { ...item, message: { ...item.message, previews: event.previews } } : item)) ?? current);
     else if (event.type === "edit") setItems((current) => current?.map((item) => (item.message.id === event.message.id ? { ...item, message: event.message } : item)) ?? current);
   });
 

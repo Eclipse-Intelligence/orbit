@@ -481,6 +481,7 @@ describe("discussion helpers", () => {
       deletedAt: null,
       createdAt: "2026-11-11T10:00:00.000Z",
       reactions: [],
+      previews: [],
     };
     assert.equal(
       discussionCount([

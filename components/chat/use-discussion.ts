@@ -207,6 +207,9 @@ export function useDiscussion(kind: ChatSubjectKind, id: string, person: ChatPer
       case "reaction":
         dispatch({ type: "reactions", conversationId: event.conversationId, messageId: event.messageId, parentId: event.parentId, reactions: event.reactions, at: event.at });
         return;
+      case "previews":
+        dispatch({ type: "previews", conversationId: event.conversationId, messageId: event.messageId, parentId: event.parentId, previews: event.previews });
+        return;
       case "thread-read":
         dispatch({
           type: "thread-read",
