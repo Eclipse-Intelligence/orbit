@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { memo, useId, useRef, useState, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import Button from "@/components/_ui/button";
@@ -21,6 +22,8 @@ import { REMIND_CHOICES } from "@/components/chat/use-saved";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
 import { pushRecentEmoji, QUICK_REACTIONS } from "@/lib/chat/client";
 import { clockTime, fullTime, shortWhen, stampWhen } from "@/lib/chat/format";
+import { CHAT_SAVED_PATH } from "@/lib/chat/routes";
+import { canSaveMessage } from "@/lib/chat/saved";
 import { isLocal } from "@/lib/chat/timeline";
 import type { ChatMessage } from "@/lib/chat/types";
 import { mentionsIn, plainMentions, ROOM_MENTION_MAX_MEMBERS, type Mention } from "@/lib/mentions";
@@ -141,7 +144,7 @@ function ToolButton({ label, title, onClick, children, className }: { label: str
 
 function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, highlighted, tabStop, readOnly = false }: Props) {
   const chat = useChat();
-  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion, saved } = chat;
+  const { viewer, now, failed, editing, setEditing, retry, remove, react, copyLink, openThread, memberNames, markUnread, discussion, saved, go } = chat;
   const unreadHint = useShortcutHint("chat-mark-unread");
   const [picking, setPicking] = useState(false);
   const quick = chat.emoji.recent.slice(0, QUICK_REACTIONS);
@@ -168,7 +171,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const canDelete = (own || (Boolean(message.hook) && !local)) && !deleted && (!readOnly || local);
   const canMarkUnread = pane === "room" && !discussion && !inThread && !message.parentId && !local && !deleted && message.kind !== "event";
   const canReact = !local && !deleted && !readOnly;
-  const canSave = !local && !deleted && message.kind !== "event";
+  const canSave = canSaveMessage(message);
   const isSaved = canSave && saved.isSaved(message.id);
   const author = { id: message.author.id ?? `former:${message.author.name}`, name: message.author.name };
 
@@ -343,6 +346,21 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             </span>
             {message.lastReplyAt && <span className="text-subtle">Last reply {shortWhen(message.lastReplyAt, now)}</span>}
           </button>
+        )}
+        {isSaved && !isEditing && (
+          <Link
+            href={CHAT_SAVED_PATH}
+            aria-label="Saved. Open Saved"
+            onClick={(event) => {
+              if (discussion || event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+              event.preventDefault();
+              go({ view: { kind: "saved" }, thread: null, message: null });
+            }}
+            className="caption-style text-subtle hover:text-soft hit mt-1 inline-flex min-h-5 items-center gap-1 self-start rounded outline-none focus-visible:ring-2 focus-visible:ring-ring/60 pointer-coarse:mt-2 pointer-coarse:mb-1.5"
+          >
+            <BookmarkIcon aria-hidden className="text-primary size-3 fill-current" />
+            Saved
+          </Link>
         )}
       </div>
       {!isEditing && !local && !deleted && (
