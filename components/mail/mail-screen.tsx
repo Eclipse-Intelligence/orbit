@@ -58,7 +58,7 @@ import { useTeamUnread } from "@/components/crm/attention";
 import PushPrompt from "@/components/push/push-prompt";
 import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/mail/reconnect-notice";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
-import ThreadList from "@/components/mail/thread-list";
+import ThreadList, { SWIPE_SETTLE_MS } from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
 import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { useComposer } from "@/components/mail/compose-dock";
@@ -771,9 +771,23 @@ export default function MailScreen({
     const { query: target } = latest.current;
     if (early.current.has(key)) return;
     removing.current.add(key);
-    const started = postMove(key, primaryMove(), target.query ? "search" : target.view);
+    const action = primaryMove();
+    const started = postMove(key, action, target.query ? "search" : target.view);
     started.catch(() => undefined);
     early.current.set(key, started);
+    window.setTimeout(() => {
+      if (early.current.get(key) !== started) return;
+      early.current.delete(key);
+      started
+        .then(() => showToast({ message: DONE_LABEL[action] }))
+        .catch((error: Error) => {
+          if (!flagReconnect(error, {})) showToast({ message: error.message, tone: "alert" });
+        })
+        .finally(() => {
+          removing.current.delete(key);
+          settleNav();
+        });
+    }, SWIPE_SETTLE_MS);
   }
 
   function act(key: string, action: ReaderAction, until?: string, detail?: string, silent = false) {

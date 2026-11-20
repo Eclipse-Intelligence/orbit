@@ -269,17 +269,18 @@ describe("mail action failures", () => {
   });
 
   it("never lets Capture or a returning snooze treat a partly failed change as done", async () => {
-    const failing = (id: string) => outlook((url, method) => (method === "POST" && url.endsWith(`/${id}/move`) ? serverError(500) : undefined));
+    const failing = (id: string, status = 500) =>
+      outlook((url, method) => (method === "POST" && url.endsWith(`/${id}/move`) ? (status === 500 ? serverError(500) : Response.json({ error: { code: "ErrorInvalidRequest", message: "Try again later." } }, { status })) : undefined));
     const queued = await runCaptureAction(owner, { kind: "reply-done", thread: thread("conv-capture-archive") });
     assert.equal(queued.queued, true);
-    await runPendingMailActions(owner, { fetchImpl: failing("capture-archive-2").fetchImpl });
+    await runPendingMailActions(owner, { fetchImpl: failing("capture-archive-2", 400).fetchImpl });
     assert.deepEqual([await roleOf("capture-archive-1"), await roleOf("capture-archive-2")], ["archive", "inbox"]);
     const refusals = await takeMailRefusals(owner);
     assert.match(refusals[0]?.problem ?? "", /Couldn't change 1 email in this conversation\. Try again later\./);
 
     const until = new Date(Date.now() + 3_600_000).toISOString();
     await runCaptureAction(owner, { kind: "reply-snooze", thread: thread("conv-capture-snooze"), until });
-    await runPendingMailActions(owner, { fetchImpl: failing("capture-snooze-2").fetchImpl });
+    await runPendingMailActions(owner, { fetchImpl: failing("capture-snooze-2", 400).fetchImpl });
     assert.deepEqual([await roleOf("capture-snooze-1"), await roleOf("capture-snooze-2")], ["snoozed", "inbox"]);
     assert.match((await takeMailRefusals(owner))[0]?.problem ?? "", /Couldn't change 1 email in this conversation\./);
 

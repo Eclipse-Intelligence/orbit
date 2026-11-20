@@ -40,6 +40,7 @@ function swallowNextClick() {
 const OUT_MS = 180;
 const COLLAPSE_MS = 220;
 const LEAVE_MS = COLLAPSE_MS + 60;
+export const SWIPE_SETTLE_MS = OUT_MS + COLLAPSE_MS + 1000;
 
 function Row({
   thread,

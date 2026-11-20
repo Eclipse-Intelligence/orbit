@@ -32,7 +32,7 @@ const RETRY_AFTER_CAP_MS = 15 * 60_000;
 const RECONNECT_WAIT_MS = 5 * 60_000;
 const GIVE_UP_MS = 24 * 60 * 60_000;
 const MIN_STEP_MS = 8_000;
-const GAVE_UP = "Outlook didn't accept that change. Try again.";
+const GAVE_UP = "Outlook refused it.";
 
 export async function queueMailAction(
   actor: UserActor,
@@ -157,14 +157,15 @@ async function runRow(actor: UserActor, row: PendingRow, fetchImpl: typeof fetch
       { deadline: Math.min(deadline, Date.now() + ACTION_BUDGET_MS), origin: row.origin },
     );
     const problem = partialProblem(result);
-    outcome = problem ? { kind: "refused", problem } : { kind: "done" };
+    if (!problem) outcome = { kind: "done" };
+    else outcome = result.refused ? { kind: "refused", problem } : { kind: "transient", problem, waitMs: null };
   } catch (error) {
     outcome = classify(error);
-    if (outcome.kind !== "done" && outcome.kind !== "refused" && Date.now() - row.created_at.getTime() > GIVE_UP_MS) {
-      outcome = { kind: "refused", problem: GAVE_UP };
-    }
-    if (outcome.kind === "transient" || outcome.kind === "reconnect") console.error("Queued mail move will retry", { action: row.action, mailbox: row.source_id, attempts: row.attempts + 1 });
   }
+  if ((outcome.kind === "transient" || outcome.kind === "reconnect") && Date.now() - row.created_at.getTime() > GIVE_UP_MS) {
+    outcome = { kind: "refused", problem: GAVE_UP };
+  }
+  if (outcome.kind === "transient" || outcome.kind === "reconnect") console.error("Queued mail move will retry", { action: row.action, mailbox: row.source_id, attempts: row.attempts + 1 });
   await settle(actor, row, outcome);
 }
 

@@ -27,7 +27,12 @@ const CONVERSATIONS = [
   "conv-other",
   "conv-trash",
   "conv-origin",
+  "conv-partial",
+  "conv-late",
+  "conv-mixed",
 ];
+
+const EXTRA = ["conv-partial-2", "conv-partial-3", "conv-late-2", "conv-mixed-2"];
 
 function message(id: string, conversationId: string) {
   return {
@@ -83,7 +88,10 @@ function outlook(handler: Handler = () => undefined) {
       return Response.json({ value: Object.entries(FOLDERS).map(([name, folder]) => ({ id: folder, displayName: name, childFolderCount: 0, totalItemCount: 0 })) });
     }
     const folder = url.match(/\/me\/mailFolders\/([^/]+)\/messages\/delta/)?.[1];
-    const value = folder === "f-inbox" && !url.includes("token=") ? CONVERSATIONS.map((conversation) => message(messageId(conversation), conversation)) : [];
+    const value =
+      folder === "f-inbox" && !url.includes("token=")
+        ? [...CONVERSATIONS.map((conversation) => message(messageId(conversation), conversation)), ...EXTRA.map((id) => message(id, id.replace(/-\d$/, "")))]
+        : [];
     return Response.json({ value, "@odata.deltaLink": `${GRAPH}/me/mailFolders/${folder ?? "x"}/messages/delta?$deltatoken=done` });
   };
   const moves = (conversation: string) => calls.filter((call) => call === `POST ${GRAPH}/me/messages/${messageId(conversation)}/move`).length;
@@ -357,5 +365,52 @@ describe("queued mail moves", () => {
     } finally {
       setLiveTesting(null);
     }
+  });
+
+  it("retries a partly moved thread when the failures were only temporary, and finishes it", async () => {
+    const failing = (id: string, make: () => Response | Error, times: number): Handler => {
+      let used = 0;
+      return (url, method) => {
+        if (method !== "POST" || !url.endsWith(`/${id}/move`) || used >= times) return undefined;
+        used += 1;
+        return make();
+      };
+    };
+    const states = async (ids: string[]) =>
+      (
+        await getAdminPool().query<{ role: string }>(
+          "select f.role from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id where m.provider_message_id = any($1) order by m.provider_message_id",
+          [ids],
+        )
+      ).rows.map((row) => row.role);
+
+    const server = outlook(failing("conv-partial-2", () => graphError(503, "ServiceUnavailable"), 3));
+    await queueMailAction(owner, { thread: thread("conv-partial"), action: "archive", view: { role: "inbox" } });
+    await drain(server.fetchImpl);
+    const [waiting] = await rows("conv-partial");
+    assert.equal(waiting.attempts, 1);
+    assert.equal(waiting.refused_at, null, "a server error is not Outlook refusing");
+    assert.deepEqual(await states(["conv-partial-1", "conv-partial-2", "conv-partial-3"]), ["archive", "inbox", "archive"]);
+    assert.ok(!(await inbox()).includes(thread("conv-partial")));
+    assert.deepEqual(await takeMailRefusals(owner), []);
+    await makeDue("conv-partial");
+    await drain(outlook().fetchImpl);
+    assert.deepEqual(await states(["conv-partial-1", "conv-partial-2", "conv-partial-3"]), ["archive", "archive", "archive"]);
+    assert.deepEqual(await rows("conv-partial"), []);
+
+    const slow = outlook(failing("conv-late-2", () => new DOMException("The operation was aborted due to timeout", "TimeoutError"), 1));
+    await queueMailAction(owner, { thread: thread("conv-late"), action: "archive", view: { role: "inbox" } });
+    await runPendingMailActions(owner, { deadline: Date.now() + 12_000, fetchImpl: slow.fetchImpl });
+    assert.equal((await rows("conv-late"))[0]?.refused_at ?? null, null, "running out of time is not a refusal");
+    assert.ok((await rows("conv-late")).length === 1 || (await roleOf("conv-late")) === "archive");
+    await makeDue("conv-late");
+    await drain(outlook().fetchImpl);
+    assert.deepEqual(await states(["conv-late-1", "conv-late-2"]), ["archive", "archive"]);
+    assert.deepEqual(await rows("conv-late"), []);
+
+    const mixed = outlook(failing("conv-mixed-2", () => graphError(400, "ErrorInvalidRequest"), 10));
+    await queueMailAction(owner, { thread: thread("conv-mixed"), action: "archive", view: { role: "inbox" } });
+    await drain(mixed.fetchImpl);
+    assert.ok((await rows("conv-mixed"))[0].refused_at, "a definite refusal of part of a thread is still shown");
   });
 });
