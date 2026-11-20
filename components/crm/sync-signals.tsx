@@ -3,8 +3,12 @@
 import { useContext, useEffect, useRef, useSyncExternalStore } from "react";
 import { DocsContext } from "@/components/docs/use-docs";
 import type { SyncedKind } from "@/lib/docs/live/protocol";
+import { createSignalMerge } from "@/lib/signal-merge";
+import { syncOrigin } from "@/lib/sync-origin";
 
 const SETTLE_MS = 400;
+const MAIL_SETTLE_MS = 2_000;
+const MAIL_MAX_WAIT_MS = 5_000;
 
 type Listener = (kind: SyncedKind) => void;
 
@@ -34,26 +38,27 @@ export function useSyncSignalsLive() {
   );
 }
 
-export function useSyncSignal(kind: SyncedKind, handler: () => void) {
+export function useSyncSignal(kind: SyncedKind, handler: () => void, hold?: () => boolean) {
   const latest = useRef(handler);
+  const holding = useRef(hold);
   useEffect(() => {
     latest.current = handler;
+    holding.current = hold;
   });
   useEffect(() => {
-    let timer = 0;
-    const run = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => latest.current(), SETTLE_MS);
-    };
+    const merge = createSignalMerge(
+      { settleMs: kind === "mail" ? MAIL_SETTLE_MS : SETTLE_MS, maxWaitMs: kind === "mail" ? MAIL_MAX_WAIT_MS : undefined, hold: () => holding.current?.() === true },
+      () => latest.current(),
+    );
     const listener: Listener = (signalled) => {
-      if (signalled === kind) run();
+      if (signalled === kind) merge.request();
     };
     listeners.add(listener);
-    rejoins.add(run);
+    rejoins.add(merge.request);
     return () => {
-      window.clearTimeout(timer);
+      merge.cancel();
       listeners.delete(listener);
-      rejoins.delete(run);
+      rejoins.delete(merge.request);
     };
   }, [kind]);
 }
@@ -77,7 +82,7 @@ export default function SyncSignals() {
       .then((module) =>
         module.watchSyncSignals(
           transport,
-          { userId, workspaceId },
+          { userId, workspaceId, origin: syncOrigin() },
           (kind) => {
             for (const listener of [...listeners]) listener(kind);
           },

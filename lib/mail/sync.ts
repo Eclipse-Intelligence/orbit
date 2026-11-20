@@ -101,6 +101,7 @@ export type MailSyncReport = {
   stored: number;
   removed: number;
   moved: number;
+  changed: number;
   backfilling: number;
   paused: boolean;
   errors: string[];
@@ -275,10 +276,20 @@ async function claim(actor: UserActor, sourceId: string, until: number) {
 
 async function refreshFolders(actor: UserActor, source: Source, token: string, fetchImpl: typeof fetch, deadline: number) {
   const folders = await listMicrosoftFolders(token, fetchImpl, { deadline });
-  await withActor(actor, async (db) => {
+  return withActor(actor, async (db) => {
     const ids: string[] = [];
+    const known = await db.query<{ provider_folder_id: string; name: string; role: string; parent_provider_id: string | null; skipped: boolean }>(
+      "select provider_folder_id, name, role, parent_provider_id, sync_state = 'skipped' as skipped from crm.mail_folders where source_id = $1",
+      [source.id],
+    );
+    const before = new Map(known.rows.map((row) => [row.provider_folder_id, row]));
+    let changed = false;
     for (const folder of folders) {
       ids.push(folder.providerId);
+      const existing = before.get(folder.providerId);
+      const role = folder.providerId === source.snooze_folder_id ? "snoozed" : folder.role;
+      const skipped = SKIPPED_ROLES.includes(folder.role);
+      if (!existing || existing.name !== folder.name || existing.role !== role || existing.parent_provider_id !== folder.parentProviderId || existing.skipped !== skipped) changed = true;
       await db.query(
         `insert into crm.mail_folders (
            workspace_id, user_id, source_id, provider_folder_id, parent_provider_id, name, role,
@@ -309,8 +320,9 @@ async function refreshFolders(actor: UserActor, source: Source, token: string, f
         ],
       );
     }
-    await db.query("delete from crm.mail_folders where source_id = $1 and not (provider_folder_id = any($2::text[]))", [source.id, ids]);
+    const removed = await db.query("delete from crm.mail_folders where source_id = $1 and not (provider_folder_id = any($2::text[]))", [source.id, ids]);
     await db.query("update crm.mail_sources set folders_synced_at = now() where id = $1", [source.id]);
+    return changed || (removed.rowCount ?? 0) > 0;
   });
 }
 
@@ -359,10 +371,14 @@ async function storePage(
   const inserted: string[] = [];
   const touched = new Set<string>();
   const quiet = !shareVisibleRole(folder.role);
+  let changed = 0;
+  const others = new Set<string>();
+  let exact = false;
   if (rows.length > 0) {
-    const result = await db.query<{ id: string; inserted: boolean; thread_key: string | null; before_thread: string | null; changed: boolean }>(
+    const result = await db.query<{ id: string; inserted: boolean; thread_key: string | null; before_thread: string | null; changed: boolean; differs: boolean; before_folder: string | null }>(
       `with before as (
-         select m.provider_message_id, m.folder_id, m.is_draft, m.thread_key
+         select m.provider_message_id, m.folder_id, m.is_draft, m.thread_key, m.is_read, m.is_flagged, m.has_attachments, m.subject, m.snippet,
+           m.from_email, m.from_name, m.received_at, m.sent_at, m.focused, m.tracking_id
          from crm.mail_messages m
          where m.source_id = $3 and m.provider_message_id in (select x.provider_message_id from jsonb_to_recordset($5::jsonb) as x(provider_message_id text))
        ),
@@ -409,15 +425,22 @@ async function storePage(
          web_link = excluded.web_link,
          tracking_id = excluded.tracking_id,
          focused = coalesce(excluded.focused, crm.mail_messages.focused)
-       returning id, provider_message_id, folder_id, is_draft, thread_key, (xmax = 0) as inserted
+       returning id, provider_message_id, folder_id, is_draft, thread_key, is_read, is_flagged, has_attachments, subject, snippet,
+         from_email, from_name, received_at, sent_at, focused, tracking_id, (xmax = 0) as inserted
        )
        select s.id, s.inserted, s.thread_key, b.thread_key as before_thread,
-         (b.provider_message_id is not null and (b.folder_id <> s.folder_id or b.is_draft <> s.is_draft or b.thread_key is distinct from s.thread_key)) as changed
+         b.folder_id as before_folder,
+         (b.provider_message_id is not null and (b.folder_id <> s.folder_id or b.is_draft <> s.is_draft or b.thread_key is distinct from s.thread_key)) as changed,
+         (b.provider_message_id is not null and (b.folder_id, b.thread_key, b.is_draft, b.is_read, b.is_flagged, b.has_attachments, b.subject, b.snippet, b.from_email, b.from_name, b.received_at, b.sent_at, b.focused, b.tracking_id)
+           is distinct from (s.folder_id, s.thread_key, s.is_draft, s.is_read, s.is_flagged, s.has_attachments, s.subject, s.snippet, s.from_email, s.from_name, s.received_at, s.sent_at, s.focused, s.tracking_id)) as differs
        from stored s left join before b on b.provider_message_id = s.provider_message_id`,
       [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows), arrivals],
     );
     for (const row of result.rows) {
       if (row.inserted) inserted.push(row.id);
+      if (row.inserted || row.differs) changed += 1;
+      if (!row.inserted && row.differs) exact = true;
+      if (row.before_folder && row.before_folder !== folder.id) others.add(row.before_folder);
       if (row.inserted && quiet) continue;
       if (!row.inserted && !row.changed) continue;
       if (row.thread_key) touched.add(row.thread_key);
@@ -425,10 +448,12 @@ async function storePage(
     }
   }
   for (const message of messages.filter((item) => item.partial)) {
-    await db.query(
-      "update crm.mail_messages set is_read = $3, is_flagged = $4, focused = coalesce($5, focused) where source_id = $1 and provider_message_id = $2",
+    const partial = await db.query(
+      `update crm.mail_messages set is_read = $3, is_flagged = $4, focused = coalesce($5, focused)
+       where source_id = $1 and provider_message_id = $2 and (is_read, is_flagged, focused) is distinct from ($3, $4, coalesce($5, focused))`,
       [source.id, message.providerId, message.isRead, message.isFlagged, message.focused],
     );
+    changed += partial.rowCount ?? 0;
   }
   if (removals.moved.length > 0) {
     const moved = await db.query<{ thread_key: string | null }>(
@@ -439,6 +464,11 @@ async function storePage(
       [source.id, folder.id, JSON.stringify(removals.moved)],
     );
     for (const row of moved.rows) if (row.thread_key) touched.add(row.thread_key);
+    changed += moved.rows.length;
+    if (moved.rows.length > 0) {
+      exact = true;
+      for (const item of removals.moved) others.add(item.folder_id);
+    }
   }
   if (removals.deleted.length > 0) {
     const deleted = await db.query<{ thread_key: string | null }>(
@@ -446,8 +476,20 @@ async function storePage(
       [folder.id, removals.deleted],
     );
     if (!quiet) for (const row of deleted.rows) if (row.thread_key) touched.add(row.thread_key);
+    changed += deleted.rows.length;
+    if (deleted.rows.length > 0) exact = true;
   }
-  return { stored: rows.length, inserted, touched: [...touched] };
+  others.delete(folder.id);
+  if (others.size > 0) await recountFolders(db, [...others]);
+  return { stored: rows.length, inserted, touched: [...touched], changed, exact, added: inserted.length };
+}
+
+export async function recountFolders(db: Db, folderIds: string[]) {
+  if (folderIds.length === 0) return;
+  await db.query(
+    "update crm.mail_folders f set synced_count = (select count(*)::int from crm.mail_messages m where m.folder_id = f.id) where f.id = any($1::uuid[])",
+    [folderIds],
+  );
 }
 
 async function folderPlaces(actor: UserActor, sourceId: string): Promise<Map<string, string>> {
@@ -552,19 +594,24 @@ async function syncFolder(
       report.stored += stored.stored;
       report.removed += removals.deleted.length;
       report.moved += removals.moved.length;
+      report.changed += stored.changed;
       const next = page.deltaLink ?? page.nextLink;
       const state = live || page.deltaLink ? "live" : "backfill";
+      const walkEnds = Boolean(page.deltaLink) || !page.nextLink;
       await db.query(
         `update crm.mail_folders set
            sync_link = $2,
            sync_state = $3,
-           synced_count = (select count(*) from crm.mail_messages where folder_id = $1),
+           synced_count = case
+             when $5::boolean then (select count(*)::int from crm.mail_messages where folder_id = $1)
+             else synced_count + $6::int
+           end,
            last_synced_at = case when $4 then now() else last_synced_at end,
            last_error = null,
            failures = 0,
            retry_at = null
          where id = $1`,
-        [folder.id, next, state, Boolean(page.deltaLink)],
+        [folder.id, next, state, Boolean(page.deltaLink), stored.exact || (walkEnds && stored.changed > 0), stored.added],
       );
       return options.guard && state === "backfill" ? storageFull(db) : false;
     });
@@ -765,7 +812,7 @@ async function runFolder(actor: UserActor, source: Source, folder: FolderRow, to
 
 async function refreshFoldersSafely(actor: UserActor, source: Source, token: string, fetchImpl: typeof fetch, deadline: number, report: MailSyncReport) {
   try {
-    await refreshFolders(actor, source, token, fetchImpl, deadline);
+    if (await refreshFolders(actor, source, token, fetchImpl, deadline)) report.changed += 1;
     return true;
   } catch (error) {
     if (error instanceof GraphOutOfTime || !source.folders_synced_at || (await stopsSource(actor, source, error))) throw error;
@@ -1002,6 +1049,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
     stored: 0,
     removed: 0,
     moved: 0,
+    changed: 0,
     backfilling: 0,
     paused: false,
     errors: [],
@@ -1034,11 +1082,15 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
     return false;
   });
   let seenVersion = options.announce && due.length > 0 ? await readMailVersion(actor) : null;
+  let announcedWork = 0;
   const announce = async () => {
     if (seenVersion === null) return;
     const version = await readMailVersion(actor);
     if (version === seenVersion) return;
     seenVersion = version;
+    const work = report.changed + report.filed + report.routed;
+    if (work === announcedWork) return;
+    announcedWork = work;
     await signalSynced(actor.userId, "mail");
   };
   for (const [index, source] of due.entries()) {

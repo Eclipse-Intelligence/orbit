@@ -626,7 +626,7 @@ const WORKSPACE_SYNCED_KINDS: readonly string[] = ["campaigns"];
 
 export async function watchSyncSignals(
   source: LiveTransportKind | LiveTransport,
-  scope: { userId: string; workspaceId: string | null },
+  scope: { userId: string; workspaceId: string | null; origin?: string | null },
   onSignal: (kind: SyncedKind) => void,
   onJoined: (joined: boolean) => void,
 ) {
@@ -638,7 +638,8 @@ export async function watchSyncSignals(
   let closed = false;
   const listen = (kinds: readonly string[]) => (event: string, payload: unknown) => {
     if (closed || event !== "synced" || !payload || typeof payload !== "object") return;
-    const kind = (payload as SyncedMessage).kind;
+    const { kind, origin } = payload as SyncedMessage;
+    if (scope.origin && origin === scope.origin) return;
     if (kinds.includes(kind)) onSignal(kind);
   };
   const channel = openShared(transport, personTopic(scope.userId), {

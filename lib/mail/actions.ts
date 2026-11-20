@@ -17,7 +17,7 @@ import {
 } from "@/lib/mail/microsoft";
 import { sourceReconnect } from "@/lib/mail/accounts";
 import { announceSharedThreads, shareVisibleRole } from "@/lib/mail/share-live";
-import { mailSourceToken, recordMailEchoes } from "@/lib/mail/sync";
+import { mailSourceToken, recordMailEchoes, recountFolders } from "@/lib/mail/sync";
 import { parseThreadKey } from "@/lib/mail/threads";
 import type { MailView } from "@/lib/mail/view";
 import type { MailRole } from "@/lib/mail/types";
@@ -187,6 +187,7 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
     return !draft && folderRole !== null && shareVisibleRole(folderRole);
   };
   const touched = new Set<string>();
+  const recount = new Set<string>();
   for (const item of moved) {
     const local = folders.rows.find((folder) => folder.provider_folder_id === item.folder)?.id ?? fallback;
     if (local) {
@@ -195,13 +196,16 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
       await db.query("delete from crm.mail_messages where id = $1", [item.id]);
     }
     const row = current.get(item.id);
+    if (row?.folder_id) recount.add(row.folder_id);
+    if (local) recount.add(local);
     if (row?.thread_key && shown(row.folder_id, row.is_draft) !== shown(local, row.is_draft)) touched.add(row.thread_key);
   }
+  await recountFolders(db, [...recount]);
   return [...touched];
 }
 
-function announceMailChange(actor: UserActor) {
-  chatBackground(() => signalSynced(actor.userId, "mail"));
+function announceMailChange(actor: UserActor, origin?: string | null) {
+  chatBackground(() => signalSynced(actor.userId, "mail", origin));
 }
 
 function announceMoves(actor: UserActor, sourceId: string, threadKeys: string[]) {
@@ -234,7 +238,7 @@ export async function applyMailAction(
   actor: UserActor,
   input: { thread: string; action: MailAction; view?: MailView | null; until?: string | null },
   fetchImpl: typeof fetch = fetch,
-  options: { deadline?: number } = {},
+  options: { deadline?: number; origin?: string | null } = {},
 ): Promise<MailActionResult> {
   const limit: GraphLimit = { deadline: options.deadline ?? Date.now() + ACTION_BUDGET_MS };
   if (!MAIL_ACTIONS.includes(input.action)) throw new CrmError("validation_error", "Choose a mail action.", 400);
@@ -299,7 +303,7 @@ export async function applyMailAction(
       }
       return [];
     });
-    announceMailChange(actor);
+    announceMailChange(actor, options.origin);
     announceMoves(actor, sourceId, touched);
   }
   if (failures.length === 0) return { changed: done.length, failed: 0, problem: null };
