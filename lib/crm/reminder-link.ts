@@ -1,3 +1,5 @@
+import { orbitLink, orbitPath } from "@/lib/chat/task-text";
+
 export const MAX_REMINDER_LINK = 500;
 export const REMINDER_LINK_LABEL = "Open message";
 
@@ -8,5 +10,6 @@ export function isReminderLink(value: unknown): value is string {
 }
 
 export function reminderLinkMarkdown(link: string) {
-  return `[${REMINDER_LINK_LABEL}](${link.replace(/\(/g, "%28").replace(/\)/g, "%29")})`;
+  const path = link.replace(/[()[\]<>"]/g, (char) => encodeURIComponent(char).replace(/[()]/g, (paren) => (paren === "(" ? "%28" : "%29")));
+  return orbitPath(path) ? orbitLink(REMINDER_LINK_LABEL, path) : null;
 }

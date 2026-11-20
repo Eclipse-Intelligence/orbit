@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
+import { descriptionParts } from "@/lib/task-doc-picks";
 import { CrmError } from "@/lib/crm/errors";
 import { addPadTask, REMINDER_NOT_REMOVED } from "@/lib/crm/pad-task";
 import { createReminder, deleteReminder, getReminder } from "@/lib/crm/reminders";
@@ -64,7 +65,12 @@ describe("Turn into task", () => {
 
     const awkward = await createReminder(mark, { title: "Awkward link" }, { link: "/chat/x?a=(b)" });
     await addPadTask(mark, { title: "Awkward link", dueAt: null, remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: awkward.reminder.id });
-    assert.equal(await description("Awkward link"), "[Open message](/chat/x?a=%28b%29)");
+    const awkwardText = await description("Awkward link");
+    assert.equal(awkwardText, "[Open message](/chat/x?a=%28b%29)");
+    const parts = descriptionParts(awkwardText!, []);
+    assert.deepEqual(parts.filter((part) => part.kind === "link").map((part) => ("href" in part ? [part.label, part.href] : null)), [["Open message", "/chat/x?a=%28b%29"]]);
+    const plainLink = descriptionParts(`[Open message](${link})`, []);
+    assert.equal(plainLink.some((part) => part.kind === "link" && "href" in part && part.href === link), true);
 
     const theirs = await createReminder(sam, { title: "Sam's link" }, { link: "/chat/secret?message=1" });
     await addPadTask(mark, { title: "Not Sam's", dueAt: null, remindMinutes: null, clickupListId: null, key: randomUUID(), fromReminderId: theirs.reminder.id });

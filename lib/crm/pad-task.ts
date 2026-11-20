@@ -54,6 +54,7 @@ export async function addPadTask(user: UserActor, input: PadTaskInput, options: 
   const timed = Boolean(due && due.includes("T"));
   const reminderId = typeof input.fromReminderId === "string" && input.fromReminderId ? input.fromReminderId : null;
   const link = reminderId ? await linkOf(user, reminderId) : null;
+  const description = link ? reminderLinkMarkdown(link) : null;
   const created = await createTaskWithClickUp(
     user,
     {
@@ -67,7 +68,7 @@ export async function addPadTask(user: UserActor, input: PadTaskInput, options: 
       ...(typeof input.description === "string" && input.description.trim() ? { description: input.description } : {}),
       ...(Array.isArray(input.docIds) && input.docIds.length > 0 ? { docIds: input.docIds } : {}),
       priority: "normal",
-      ...(link ? { description: reminderLinkMarkdown(link) } : {}),
+      ...(description ? { description } : {}),
       ...(input.repeat && typeof input.repeat === "object" ? { repeat: input.repeat } : {}),
     },
     input.clickupListId || null,
