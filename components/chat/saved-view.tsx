@@ -53,7 +53,7 @@ function Row({ item }: { item: ChatSavedItem }) {
           <>
             {message.body && <MessageBody body={message.body} format={message.format} viewerId={viewer.id} names={memberNames} everyone={message.everyone} />}
             <MessageAttachments message={message} />
-            <MessageLinks message={message} viewerId={viewer.id} />
+            <MessageLinks message={message} viewerId={viewer.id} canRemove={!conversation.archived} />
           </>
         )}
         <div className="-ml-2 flex flex-wrap items-center gap-1 pt-1">

@@ -152,7 +152,7 @@ describe("saved messages", () => {
         ["In the thread", "First", "Second"],
       );
       assert.equal(page.items[0].message.parentId, root.id);
-      assert.deepEqual(page.items[0].conversation, { id: room, kind: "room", name: "sales" });
+      assert.deepEqual(page.items[0].conversation, { id: room, kind: "room", name: "sales", archived: false });
       assert.equal(page.items[0].subject, null);
       assert.equal(page.next, null);
       assert.match(page.items[0].savedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -244,7 +244,7 @@ describe("saved messages", () => {
       await setMessageSaved(mark, message.id, true);
       const [item] = (await listSaved(mark)).items;
       assert.deepEqual(item.subject, { kind: "task", id: task.id });
-      assert.deepEqual(item.conversation, { id: conversationId, kind: "task", name: "Send Halden pricing" });
+      assert.deepEqual(item.conversation, { id: conversationId, kind: "task", name: "Send Halden pricing", archived: false });
       for (const outsider of [priya, ada, olly]) await refused(setMessageSaved(outsider, message.id, true), /Message not found\./);
       assert.deepEqual(await listed(priya), []);
       await sql("delete from crm.task_participants where task_id = $1", [task.id]);

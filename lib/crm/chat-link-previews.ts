@@ -258,24 +258,39 @@ type SourceRow = { conversation_id: string; parent_id: string | null; body: stri
 
 export type PreviewChange = { messageId: string; conversationId: string; parentId: string | null };
 
+const REFRESH_ATTEMPTS = 3;
+
+function readPreviewSource(messageId: string) {
+  return query<SourceRow>("select * from private.chat_preview_source($1)", [messageId]).then((result) => result.rows[0]);
+}
+
 export async function refreshLinkPreviews(messageId: string, transport: PreviewTransport = {}): Promise<PreviewChange | null> {
-  const source = (await query<SourceRow>("select * from private.chat_preview_source($1)", [messageId])).rows[0];
-  if (!source?.eligible) return null;
-  const format = cleanFormat(source.format);
-  const wanted = previewUrls(source.body, format, siteOrigin());
-  const missing = wanted.filter((url) => !source.known.includes(url));
-  const kept = wanted.filter((url) => source.known.includes(url));
-  const inOrder = source.known.length === kept.length && source.known.every((url, index) => url === kept[index]);
-  if (missing.length === 0 && inOrder) return null;
-  const found = (await Promise.all(missing.map((url) => fetchLinkPreview(url, transport)))).filter((item): item is FoundPreview => item !== null);
-  const result = await query<{ changed: boolean }>("select private.chat_store_link_previews($1, $2, $3, $4::text[], $5::jsonb) as changed", [
-    messageId,
-    source.body,
-    source.format,
-    wanted,
-    JSON.stringify(found),
-  ]);
-  return result.rows[0]?.changed ? { messageId, conversationId: source.conversation_id, parentId: source.parent_id } : null;
+  const fetched = new Map<string, FoundPreview | null>();
+  let change: PreviewChange | null = null;
+  for (let attempt = 0; attempt < REFRESH_ATTEMPTS; attempt += 1) {
+    const source = await readPreviewSource(messageId);
+    if (!source?.eligible) return change;
+    const wanted = previewUrls(source.body, cleanFormat(source.format), siteOrigin());
+    const missing = wanted.filter((url) => !source.known.includes(url));
+    const kept = wanted.filter((url) => source.known.includes(url));
+    const inOrder = source.known.length === kept.length && source.known.every((url, index) => url === kept[index]);
+    if (missing.length === 0 && inOrder) return change;
+    const unseen = missing.filter((url) => !fetched.has(url));
+    const pages = await Promise.all(unseen.map((url) => fetchLinkPreview(url, transport)));
+    unseen.forEach((url, index) => fetched.set(url, pages[index]));
+    const found = missing.map((url) => fetched.get(url)).filter((item): item is FoundPreview => Boolean(item));
+    const stored = await query<{ changed: boolean }>("select private.chat_store_link_previews($1, $2, $3, $4::text[], $5::jsonb) as changed", [
+      messageId,
+      source.body,
+      source.format,
+      wanted,
+      JSON.stringify(found),
+    ]);
+    if (stored.rows[0]?.changed) change = { messageId, conversationId: source.conversation_id, parentId: source.parent_id };
+    const now = await readPreviewSource(messageId);
+    if (!now || (now.body === source.body && now.format === source.format)) return change;
+  }
+  return change;
 }
 
 export function cleanPreviewId(id: unknown) {

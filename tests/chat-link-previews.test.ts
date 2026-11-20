@@ -346,18 +346,41 @@ describe("link previews", () => {
       assert.deepEqual(previewEvents(mark.userId).map((event) => event.previews), [[]]);
     });
 
-    it("drops a fetch that finished after the message changed", async () => {
+    async function postEditedDuringFetch(edited: string) {
       const slow = web(pages());
       const original = slow.transport.fetchImpl!;
       const clientKey = key();
+      let edits = 0;
       slow.transport.fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
-        if (String(input) === SHOP) await sql("update crm.chat_messages set body = 'Changed my mind' where client_key = $1", [clientKey]);
+        if (String(input) === SHOP && edits === 0) {
+          edits += 1;
+          await sql("update crm.chat_messages set body = $2 where client_key = $1", [clientKey, edited]);
+        }
         return original(input, init);
       }) as typeof fetch;
       const posted = await postMessage(mark, { conversationId: room, body: SHOP, clientKey }, { linkPreviews: slow.transport });
       await chatWorkSettled();
-      assert.deepEqual(await rows(posted.message.id), []);
+      return { slow, id: posted.message.id };
+    }
+
+    it("keeps the preview when the text is edited while it loads, without fetching the page twice", async () => {
+      const { slow, id } = await postEditedDuringFetch(`${SHOP} with a note`);
+      assert.deepEqual((await rows(id)).map((row) => row.url), [SHOP]);
+      assert.deepEqual((await previewsOf(sam, id)).map((preview) => preview.title), ["Widgets"]);
+      assert.equal(slow.seen.filter((url) => url === SHOP).length, 1);
+      assert.equal(previewEvents(sam.userId).length, 1);
+    });
+
+    it("shows no preview when the edit made while it loads removed the link", async () => {
+      const { id } = await postEditedDuringFetch("Changed my mind");
+      assert.deepEqual(await rows(id), []);
+      assert.deepEqual(await previewsOf(sam, id), []);
       assert.deepEqual(previewEvents(sam.userId), []);
+    });
+
+    it("fetches the new link when the edit made while it loads swapped it", async () => {
+      const { id } = await postEditedDuringFetch(NEWS);
+      assert.deepEqual((await rows(id)).map((row) => row.url), [NEWS]);
     });
 
     it("lets only the author remove a preview, and keeps it removed through edits", async () => {
@@ -393,7 +416,10 @@ describe("link previews", () => {
       const site = web(pages());
       const message = await post(mark, SHOP, site.transport, archived);
       const [stored] = await rows(message.id);
+      await setMessageSaved(mark, message.id, true);
+      assert.equal((await listSaved(mark)).items.find((item) => item.message.id === message.id)!.conversation.archived, false);
       await setRoomArchived(mark, archived, true);
+      assert.equal((await listSaved(mark)).items.find((item) => item.message.id === message.id)!.conversation.archived, true);
       await refused(removeLinkPreview(mark, stored.id), /archived/i);
       assert.equal((await rows(message.id))[0].hidden, false);
       await sql("update crm.chat_conversations set archived_at = null where id = $1", [archived]);

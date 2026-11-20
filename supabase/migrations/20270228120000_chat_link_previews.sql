@@ -167,3 +167,5 @@ create trigger chat_messages_link_previews_forget
   for each row
   when (new.deleted_at is not null and old.deleted_at is null)
   execute function private.chat_link_previews_forget();
+
+reset lock_timeout;

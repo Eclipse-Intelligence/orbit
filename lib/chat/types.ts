@@ -178,7 +178,7 @@ export type ChatSearchResult = { messages: ChatMessage[] };
 
 export type ChatSavedItem = {
   message: ChatMessage;
-  conversation: { id: string; kind: ChatKind; name: string };
+  conversation: { id: string; kind: ChatKind; name: string; archived: boolean };
   subject: ChatSubject | null;
   savedAt: string;
 };
