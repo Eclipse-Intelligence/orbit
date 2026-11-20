@@ -570,6 +570,15 @@ export function reloadCards(current: ChatThreadCard[], fresh: ChatThreadCard[], 
   return [...fresh, ...current.filter((card) => !updated.has(card.root.id))];
 }
 
+export function reloadNext(loadedAtStart: number, loadedNow: number, limit: number, current: string | null, fresh: string | null) {
+  return loadedAtStart <= limit && loadedNow === loadedAtStart ? fresh : current;
+}
+
+export function dropThread(current: ChatThreadCard[], rootId: string) {
+  const kept = current.filter((card) => card.root.id !== rootId);
+  return kept.length === current.length ? current : kept;
+}
+
 export function dropCards(current: ChatThreadCard[], conversationId: string) {
   const kept = current.filter((card) => card.conversation.id !== conversationId);
   return kept.length === current.length ? current : kept;

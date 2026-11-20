@@ -9,6 +9,8 @@ import {
   appendCards,
   chatReducer,
   dropCards,
+  dropThread,
+  reloadNext,
   reloadCards,
   reloadLimit,
   loadsLatestFirst,
@@ -431,6 +433,19 @@ describe("chat review fixes", () => {
     );
     const unchanged = [a, b];
     assert.equal(dropCards(unchanged, other), unchanged);
+    const older = Array.from({ length: 60 }, (_, index) => card(`aaaaaaaa-aaaa-4aaa-8aaa-0000000001${String(index).padStart(2, "0")}`, 0));
+    const emptied = dropThread(older, older[55].root.id);
+    assert.equal(emptied.length, 59);
+    assert.ok(!emptied.some((item) => item.root.id === older[55].root.id));
+    assert.deepEqual(
+      reloadCards(emptied, older.slice(0, 50), 50).map((item) => item.root.id),
+      emptied.map((item) => item.root.id),
+    );
+    assert.equal(dropThread(older, "missing"), older);
+    assert.equal(reloadNext(20, 20, 20, "old", "fresh"), "fresh");
+    assert.equal(reloadNext(20, 40, 20, "newer", "fresh"), "newer");
+    assert.equal(reloadNext(60, 60, 50, "kept", "fresh"), "kept");
+    assert.equal(reloadNext(0, 0, 20, null, null), null);
   });
 
   it("ignores an edit that arrives after the message was deleted", () => {
