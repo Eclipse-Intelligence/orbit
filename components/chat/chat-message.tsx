@@ -4,6 +4,7 @@ import { memo, useId, useRef, useState, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import Button from "@/components/_ui/button";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import Tag from "@/components/_ui/tag";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import { MessageAttachments, UploadQueue } from "@/components/chat/attachments";
@@ -13,6 +14,7 @@ import { ComposerBox, focusComposer } from "@/components/chat/composer";
 import EmojiPopover from "@/components/chat/emoji-popover";
 import { HookAvatar, HookCardBody } from "@/components/chat/hook-message";
 import MessageBody from "@/components/chat/message-body";
+import { askLabel, CREATE_TASK_LABEL, useOrbitActions } from "@/components/chat/orbit-actions";
 import Reactions from "@/components/chat/reactions";
 import { SEND_FAILED } from "@/components/chat/use-chat-actions";
 import { useShortcutHint } from "@/components/shortcuts/shortcuts-provider";
@@ -25,6 +27,9 @@ import { cn } from "@/lib/utils";
 import AlertIcon from "@/public/assets/images/companies/sidebar/alert-triangle.svg";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import CopyIcon from "@/public/assets/images/assistant/copy.svg";
+import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
+import MoreIcon from "@/public/assets/images/_common/more.svg";
+import TaskIcon from "@/public/assets/images/companies/sidebar/target-05.svg";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
 import SmilePlusIcon from "@/public/assets/images/chat/smile-plus.svg";
 import EditIcon from "@/public/assets/images/workflows/edit.svg";
@@ -141,7 +146,10 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   const pressed = useRef(false);
   const [confirming, setConfirming] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [more, setMore] = useState(false);
   const [copied, setCopied] = useState(false);
+  const afterMenu = useRef<(() => void) | null>(null);
+  const orbit = useOrbitActions(message);
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const local = isLocal(message);
   const own = message.author.id === viewer.id;
@@ -193,6 +201,20 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
   function act(run: () => void) {
     setMenu(false);
     run();
+  }
+
+  function runAfterClose(event: Event) {
+    const run = afterMenu.current;
+    if (!run) return false;
+    afterMenu.current = null;
+    event.preventDefault();
+    run();
+    return true;
+  }
+
+  function actAfterClose(run: () => void) {
+    afterMenu.current = run;
+    setMenu(false);
   }
 
   const row = useRef<HTMLDivElement>(null);
@@ -315,7 +337,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
         <div
           className={cn(
             "bg-popover border-line-strong shadow-overlay absolute -top-3.5 right-4 hidden items-center gap-0.5 rounded-[10px] border p-0.5 group-focus-within:flex group-hover:flex [@media(pointer:coarse)]:!hidden",
-            picking && "flex",
+            (picking || more) && "flex",
           )}
         >
           {quick.slice(0, 3).map((emoji) => (
@@ -349,6 +371,33 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
             <ToolButton label="Delete" onClick={() => setConfirming(true)}>
               <TrashIcon aria-hidden className="size-3.5" />
             </ToolButton>
+          )}
+          {(orbit.canCreateTask || orbit.canAsk) && (
+            <DropdownMenu modal={false} open={more} onOpenChange={setMore}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="More actions" title="More actions">
+                  <MoreIcon aria-hidden className="size-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[220px]" onCloseAutoFocus={runAfterClose}>
+                {orbit.canCreateTask && (
+                  <DropdownMenuItem onSelect={() => {
+                      afterMenu.current = orbit.createTask;
+                    }}>
+                    <TaskIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
+                    {CREATE_TASK_LABEL}
+                  </DropdownMenuItem>
+                )}
+                {orbit.canAsk && (
+                  <DropdownMenuItem onSelect={() => {
+                      afterMenu.current = orbit.ask;
+                    }}>
+                    <SparkleIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
+                    {askLabel(message)}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       )}
@@ -385,7 +434,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
       <Sheet open={menu} onOpenChange={setMenu}>
         <SheetContent
           side="bottom"
-          className="gap-1 px-2 pt-2"
+          className="gap-1 overflow-y-auto px-2 pt-2 [&>*]:shrink-0"
           onCloseAutoFocus={(event) => {
             if (pickRequested.current) {
               pickRequested.current = false;
@@ -393,6 +442,7 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
               setPicking(true);
               return;
             }
+            if (runAfterClose(event)) return;
             if (!editRequested.current) return;
             editRequested.current = false;
             event.preventDefault();
@@ -445,6 +495,16 @@ function ChatMessageRow({ message, continuation, inThread, pane, fullStamp, high
           {canMarkUnread && (
             <SheetAction onClick={() => act(() => void markUnread(message.conversationId, message.id))} icon={<UnreadIcon aria-hidden className="size-4" />}>
               Mark unread
+            </SheetAction>
+          )}
+          {orbit.canCreateTask && (
+            <SheetAction onClick={() => actAfterClose(orbit.createTask)} icon={<TaskIcon aria-hidden className="size-4" />}>
+              {CREATE_TASK_LABEL}
+            </SheetAction>
+          )}
+          {orbit.canAsk && (
+            <SheetAction onClick={() => actAfterClose(orbit.ask)} icon={<SparkleIcon aria-hidden className="size-4" />}>
+              {askLabel(message)}
             </SheetAction>
           )}
           {canEdit && (

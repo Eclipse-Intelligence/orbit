@@ -22,6 +22,7 @@ import { memberIds, messageBody, useChatActions } from "@/components/chat/use-ch
 import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit";
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
 import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
+import { CHAT_LINK_LABEL } from "@/lib/chat/task-text";
 import { chatReducer, EMPTY_CHAT, loadsLatestFirst, localMessage, needsCatchUp, newestServerId, type ChatState } from "@/lib/chat/timeline";
 import type { ChatAttachment, ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
@@ -191,15 +192,17 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
 
   const conversation = useCallback((id: string) => latest.current.sidebar?.conversations.find((item) => item.id === id) ?? latest.current.state.rooms[id]?.conversation ?? null, []);
 
+  const messageLink = useCallback((message: ChatMessage) => ({ href: messageHref(message.conversationId, message), label: CHAT_LINK_LABEL }), []);
+
   const copyLink = useCallback(async (message: ChatMessage) => {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}${messageHref(message.conversationId, message)}`);
+      await navigator.clipboard.writeText(`${window.location.origin}${messageLink(message).href}`);
       return true;
     } catch {
       setNotice("Couldn't copy the link. Try again.");
       return false;
     }
-  }, []);
+  }, [messageLink]);
 
   const { loadRoom, loadMessages, loadThread, deliver, markAllRead } = actions;
   const markUnreadNow = actions.markUnread;
@@ -465,8 +468,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const memberNames = useMemo(() => new Map((members ?? []).map((member) => [member.id.toLowerCase(), member.name])), [members]);
   const emoji = useEmojiPrefs(me.id);
   const context = useMemo<ChatContextValue>(
-    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames, emoji }),
-    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, send, memberNames, emoji],
+    () => ({ ...actions, markRead, markUnread, viewer: me, now, multi, workspaces, location, failed, editing, setEditing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji }),
+    [actions, markRead, markUnread, me, now, multi, workspaces, location, failed, editing, go, back, openThread, closeThread, conversation, copyLink, messageLink, send, memberNames, emoji],
   );
 
   const entry: ChatConversation | null = roomId ? (sidebar?.conversations.find((item) => item.id === roomId) ?? room?.conversation ?? null) : null;

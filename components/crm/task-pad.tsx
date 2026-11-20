@@ -494,6 +494,8 @@ export default function TaskPad({
   initialContact = null,
   initialCompany = null,
   thread = null,
+  description = null,
+  caretAtEnd = false,
   autoFocus = false,
   members = [],
   viewerId = null,
@@ -509,6 +511,8 @@ export default function TaskPad({
   initialContact?: PadRecord | null;
   initialCompany?: PadRecord | null;
   thread?: PadThread | null;
+  description?: string | null;
+  caretAtEnd?: boolean;
   autoFocus?: boolean;
   members?: AssignableMember[];
   viewerId?: string | null;
@@ -569,6 +573,11 @@ export default function TaskPad({
     const timer = window.setTimeout(() => setMidnight(Date.now()), wait);
     return () => window.clearTimeout(timer);
   }, [midnight]);
+  useEffect(() => {
+    const field = input.current;
+    if (!caretAtEnd || !field) return;
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [caretAtEnd]);
   const parsed = useMemo(() => parseTaskText(text, notBefore(midnight)), [text, midnight]);
   const aiFits = ai !== null && ai.text === text && parsed.unsure;
   const assignable = Boolean(viewerId) && members.length > 1;
@@ -907,6 +916,7 @@ export default function TaskPad({
       clickupListId: finalList,
       ownerId: assignable ? owner : null,
       mailThreadKey: pinned?.key ?? null,
+      ...(description ? { description } : {}),
       ...(docs.length > 0 ? { docIds: docs.map((doc) => doc.id) } : {}),
       ...(fromReminderId ? { fromReminderId } : {}),
     };

@@ -1,3 +1,5 @@
+import { listThread } from "@/lib/crm/chat";
+import { CrmError } from "@/lib/crm/errors";
 import { taskDueDay } from "@/lib/crm/task-time";
 import { parseDocsRoute } from "@/lib/docs/routes";
 import { withActor } from "@/lib/crm/context";
@@ -12,7 +14,7 @@ import type { Db } from "@/lib/db/pool";
 
 export const PAGE_SELECTION_KINDS = ["companies", "contacts"] as const;
 export type PageSelectionKind = (typeof PAGE_SELECTION_KINDS)[number];
-export const PAGE_FOCUS_KINDS = ["calendar_event", "capture", "task"] as const;
+export const PAGE_FOCUS_KINDS = ["calendar_event", "capture", "task", "chat_thread"] as const;
 export type PageFocusKind = (typeof PAGE_FOCUS_KINDS)[number];
 
 export type PageInput = {
@@ -533,6 +535,30 @@ async function focusedTask(actor: UserActor, id: string | null): Promise<Lines> 
   return found && !found.task.archivedAt ? taskDetailLines(found, "Task they have open") : [];
 }
 
+const CHAT_MISSING = "isn't in their Chat, or they can't see it";
+
+function chatThreadId(input: PageInput | null) {
+  if (input?.focus?.kind !== "chat_thread" || segments(input.path)[0] !== "chat" || !isUuid(input.focus.id)) return null;
+  return input.focus.id.toLowerCase();
+}
+
+async function focusedChatThread(actor: UserActor, id: string | null): Promise<Lines> {
+  if (!id) return [];
+  const lead = "Chat thread they asked about";
+  try {
+    const { conversation, root } = await listThread(actor, id, { limit: 1 });
+    if (conversation.kind !== "room" && conversation.kind !== "dm") return [`The ${lead.toLowerCase()} ${CHAT_MISSING}.`];
+    const where = conversation.kind === "dm" ? `their direct messages with ${quoted(conversation.name, "a teammate")}` : `the room ${quoted(`#${conversation.name}`, "a room")}`;
+    const replies = root.replyCount === 0 ? "no replies, so the thread is that one message" : root.replyCount === 1 ? "1 reply" : `${root.replyCount} replies`;
+    return [
+      `${lead}: started by ${quoted(root.author.name, "someone")} in ${where} [conversation id ${conversation.id}], ${replies} [thread id ${root.id}]. Read it with team_chat (in the chat area, so load that with find_tools first) and that threadId.`,
+    ];
+  } catch (error) {
+    if (error instanceof CrmError && error.code === "not_found") return [`The ${lead.toLowerCase()} ${CHAT_MISSING}.`];
+    throw error;
+  }
+}
+
 export const TAGGED_TASKS_SHOWN = 5;
 
 export function taggedTaskIds(message: string) {
@@ -561,6 +587,7 @@ export async function pageContext(actor: UserActor, input: PageInput | null, opt
   const lines = input ? await withActor(actor, (db) => pageLines(db, actor, input)) : [];
   const focus = focusedTaskId(input);
   if (focus && !tagged.includes(focus)) lines.push(...(await focusedTask(actor, focus)));
+  lines.push(...(await focusedChatThread(actor, chatThreadId(input))));
   lines.push(...(await taggedTasks(actor, tagged)));
   if (lines.length === 0) return "";
   return `<${PAGE_CONTEXT_TAG}>\n${lines.join("\n")}\n</${PAGE_CONTEXT_TAG}>`;

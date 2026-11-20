@@ -6,15 +6,27 @@ import { FileDrop } from "@/components/chat/attachments";
 import { roomLabel, useChat } from "@/components/chat/chat-context";
 import ChatMessageRow from "@/components/chat/chat-message";
 import Composer from "@/components/chat/composer";
+import { useOrbitActions } from "@/components/chat/orbit-actions";
 import MessageList from "@/components/chat/message-list";
 import { PhoneBack, useVisible } from "@/components/chat/room-view";
 import { isLocal, lastOwnMessage, newestServerId, type ThreadState } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage } from "@/lib/chat/types";
+import SparkleIcon from "@/public/assets/images/assistant/sparkle.svg";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 function firstUnreadReply(messages: ChatMessage[], lastReadAt: string | null, viewerId: string) {
   if (!lastReadAt) return null;
   return messages.find((message) => !isLocal(message) && message.author.id !== viewerId && message.createdAt > lastReadAt)?.id ?? null;
+}
+
+function AskAboutThread({ root }: { root: ChatMessage }) {
+  const { canAsk, ask } = useOrbitActions(root);
+  if (!canAsk) return <span aria-hidden className="size-11 shrink-0 md:hidden" />;
+  return (
+    <Button variant="ghost" size="icon-sm" aria-label="Ask Orbit about this thread" title="Ask Orbit about this thread" onClick={ask} className="hit max-md:size-11">
+      <SparkleIcon aria-hidden className="size-3.5" />
+    </Button>
+  );
 }
 
 export default function ThreadPanel({
@@ -89,10 +101,12 @@ export default function ThreadPanel({
           </h3>
           {place && <span className="caption-style text-subtle truncate max-md:hidden">{place}</span>}
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="Close thread" title="Close (Esc)" onClick={onClose} className="hit ml-auto max-md:hidden">
-          <XIcon aria-hidden className="size-4" />
-        </Button>
-        <span aria-hidden className="size-11 shrink-0 md:hidden" />
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 max-md:ml-0">
+          {root ? <AskAboutThread root={root} /> : <span aria-hidden className="size-11 shrink-0 md:hidden" />}
+          <Button variant="ghost" size="icon-sm" aria-label="Close thread" title="Close (Esc)" onClick={onClose} className="hit max-md:hidden">
+            <XIcon aria-hidden className="size-4" />
+          </Button>
+        </div>
       </header>
       {timeline?.status === "error" ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

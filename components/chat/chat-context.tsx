@@ -31,6 +31,7 @@ export type ChatContextValue = ChatTimelineActions & {
   closeThread: () => void;
   conversation: (id: string) => ChatConversation | null;
   copyLink: (message: ChatMessage) => Promise<boolean>;
+  messageLink: (message: ChatMessage) => { href: string; label: string };
   send: (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; attachments?: ChatAttachment[]; discardOnFailure?: boolean }) => Promise<string | null>;
   memberNames: Map<string, string>;
   emoji: EmojiPrefs;

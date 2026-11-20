@@ -20,6 +20,7 @@ export type PadTaskInput = {
   ownerId?: string | null;
   durationMinutes?: number | null;
   mailThreadKey?: string | null;
+  description?: string | null;
   docIds?: string[];
   repeat?: RepeatInput;
   key?: string;
@@ -51,6 +52,7 @@ export async function addPadTask(user: UserActor, input: PadTaskInput, options: 
       ...padLinks(input),
       ownerId: typeof input.ownerId === "string" && isUuid(input.ownerId) ? input.ownerId : user.userId,
       ...(typeof input.mailThreadKey === "string" && input.mailThreadKey ? { mailThreadKey: input.mailThreadKey } : {}),
+      ...(typeof input.description === "string" && input.description.trim() ? { description: input.description } : {}),
       ...(Array.isArray(input.docIds) && input.docIds.length > 0 ? { docIds: input.docIds } : {}),
       priority: "normal",
       ...(input.repeat && typeof input.repeat === "object" ? { repeat: input.repeat } : {}),

@@ -24,6 +24,7 @@ import { durationLabel, isTaskOverdue } from "@/lib/crm/task-time";
 import { taskDueLabel, taskDueState } from "@/lib/crm/task-views";
 import type { Task } from "@/lib/crm/types";
 import { KEYBOARD_ROW_CLASS } from "@/lib/shortcuts";
+import { descriptionPreview } from "@/lib/task-doc-picks";
 import { cn } from "@/lib/utils";
 import { usePageFocus } from "@/stores/page-context-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
@@ -218,7 +219,7 @@ function ActionTask({
     if (wasExpanded.current && !expanded) flushDetails.current();
     wasExpanded.current = expanded;
   }, [expanded]);
-  const preview = (task.description ?? "").trim().split("\n")[0]?.trim();
+  const preview = descriptionPreview(task.description);
   const repeats = Boolean(task.repeat?.current && !task.repeat.ended && !completed);
   const expansion = useExpansion(expanded);
   usePageFocus("task", task.id, expanded);
