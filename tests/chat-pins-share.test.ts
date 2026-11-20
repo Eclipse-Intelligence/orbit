@@ -665,6 +665,40 @@ describe("pins and shared messages", () => {
       assert.equal(cachedQuote(id)?.excerpt, "New text");
     });
 
+    it("keeps a delete, a removal and an edit that land while a quote is still being fetched, first load included", async () => {
+      const held = () => {
+        let release: (quotes: ChatQuote[]) => void = () => undefined;
+        const promise = new Promise<ChatQuote[]>((resolve) => {
+          release = resolve;
+        });
+        return { promise, release };
+      };
+      const fresh = (id: string, excerpt: string, conversationId = "room-q") => ({ ...quote, id, conversationId, excerpt });
+      const deleted = "00000000-0000-4000-8000-0000000000f1";
+      const edited = "00000000-0000-4000-8000-0000000000f2";
+      const removed = "00000000-0000-4000-8000-0000000000f3";
+      const gates = { [deleted]: held(), [edited]: held(), [removed]: held() };
+      const calls: Record<string, number> = {};
+      const load = async ([id]: string[]) => {
+        calls[id] = (calls[id] ?? 0) + 1;
+        if (calls[id] > 1) return id === deleted ? [] : id === removed ? [] : [fresh(id, "New text")];
+        return gates[id as keyof typeof gates].promise;
+      };
+      const loading = [deleted, edited, removed].map((id) => loadQuotes([id], { load }));
+      applyQuoteEvent({ type: "delete", conversationId: "room-q", messageId: deleted, parentId: null, root: null });
+      applyQuoteEvent({ type: "edit", conversationId: "room-q", message: { id: edited } as never });
+      applyQuoteEvent({ type: "removed", conversationId: "room-q" });
+      gates[deleted].release([fresh(deleted, "Old text")]);
+      gates[edited].release([fresh(edited, "Old text")]);
+      gates[removed].release([fresh(removed, "Old text")]);
+      await Promise.all(loading);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(cachedQuote(deleted), null);
+      assert.equal(cachedQuote(removed), null);
+      assert.equal(cachedQuote(edited)?.excerpt, "New text");
+      assert.deepEqual(calls, { [deleted]: 2, [edited]: 2, [removed]: 2 });
+    });
+
     it("asks once for the ids several messages want in the same moment", async () => {
       const real = globalThis.fetch;
       const asked: string[] = [];

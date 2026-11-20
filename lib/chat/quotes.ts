@@ -46,22 +46,29 @@ export function cachedQuote(id: string): ChatQuote | null | undefined {
   return entry ? entry.quote : undefined;
 }
 
+function supersede(id: string) {
+  if (inflight.has(id)) generations.set(id, generation(id) + 1);
+}
+
 export function applyQuoteEvent(event: ChatLiveEvent, now = Date.now()) {
   if (event.type === "delete") {
+    supersede(event.messageId);
     if (!entries.has(event.messageId)) return;
     entries.set(event.messageId, { at: now, quote: null });
     changed();
     return;
   }
   if (event.type === "edit") {
-    const entry = entries.get(event.message.id);
+    const id = event.message.id;
+    const entry = entries.get(id);
+    supersede(id);
     if (!entry?.quote) return;
-    generations.set(event.message.id, generation(event.message.id) + 1);
-    entries.set(event.message.id, { at: 0, quote: entry.quote });
-    void loadQuotes([event.message.id]);
+    entries.set(id, { at: 0, quote: entry.quote });
+    void loadQuotes([id]);
     return;
   }
   if (event.type === "removed") {
+    for (const id of inflight.keys()) supersede(id);
     let touched = false;
     for (const [id, entry] of entries) {
       if (entry.quote?.conversationId !== event.conversationId) continue;
