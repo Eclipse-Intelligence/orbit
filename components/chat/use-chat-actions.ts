@@ -17,7 +17,7 @@ const REACT_FAILED = "Couldn't react. Try again.";
 export type ChatTimelineActions = {
   loadRoom: (conversationId: string) => void;
   loadMessages: (conversationId: string, mode: "latest" | "older" | "newer", around?: string | null) => void;
-  loadThread: (rootId: string, mode: "latest" | "older" | "newer") => void;
+  loadThread: (rootId: string, mode: "latest" | "older" | "newer", around?: string | null) => void;
   deliver: (message: ChatMessage) => Promise<string | null>;
   retry: (message: ChatMessage) => void;
   edit: (message: ChatMessage, text: string, mentions: Mention[], removeAttachmentIds?: string[]) => Promise<boolean>;
@@ -104,17 +104,18 @@ export function useChatActions(
   );
 
   const loadThread = useCallback(
-    (rootId: string, mode: "latest" | "older" | "newer") =>
-      once(`thread:${rootId}:${mode}`, async () => {
+    (rootId: string, mode: "latest" | "older" | "newer", around?: string | null) =>
+      once(`thread:${rootId}:${mode}:${mode === "latest" ? (around ?? "") : ""}`, async () => {
         const thread = latest.current.threads[rootId];
         const messages = thread?.timeline.messages ?? [];
         const before = mode === "older" ? oldestServerId(messages) : null;
         const after = mode === "newer" ? newerCursor(thread?.timeline) : null;
         if (mode === "older" && !before) return;
         const effective = mode === "newer" && (!after || !thread?.root) ? "latest" : mode;
+        if (mode === "newer" && effective === "latest" && [...inflight.current].some((key) => key.startsWith(`thread:${rootId}:latest:`))) return;
         if (effective === "latest") dispatch({ type: "thread-loading", rootId });
         try {
-          const loaded = await chatApi.thread(rootId, effective === "latest" ? {} : { before, after });
+          const loaded = await chatApi.thread(rootId, effective === "latest" ? { around } : { before, after });
           dispatch({ type: "thread", thread: loaded, mode: effective === "latest" ? "replace" : effective });
         } catch (error) {
           dispatch({ type: "thread-error", rootId, error: (error as Error).message });

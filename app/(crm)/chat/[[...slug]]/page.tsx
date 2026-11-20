@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import ChatScreen, { type ChatInitial } from "@/components/chat/chat-screen";
 import { getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
-import { chatSegments, isChatId } from "@/lib/chat/routes";
+import { chatSegments, isChatId, type ChatView } from "@/lib/chat/routes";
+import { readSearchQuery } from "@/lib/chat/search";
 import { getRoom, listConversations, listMessages, listThread, listThreads } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 
@@ -35,12 +36,15 @@ export default async function ChatPage({
   const user = await getUserActor();
   if (!user) redirect("/login");
   const [{ slug = [] }, search] = await Promise.all([params, searchParams]);
-  const view = chatSegments(slug);
-  if (!view) notFound();
+  const segments = chatSegments(slug);
+  if (!segments) notFound();
+  const view: ChatView = segments.kind === "search" ? { kind: "search", query: readSearchQuery(new URLSearchParams(Object.entries(search).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])))) } : segments;
   const threadParam = single(search.thread);
   const messageParam = single(search.message);
-  const thread = view.kind !== "home" && isChatId(threadParam) ? threadParam.toLowerCase() : null;
-  const message = view.kind === "room" && isChatId(messageParam) ? messageParam.toLowerCase() : null;
+  const thread = view.kind !== "home" && view.kind !== "search" && isChatId(threadParam) ? threadParam.toLowerCase() : null;
+  const wanted = isChatId(messageParam) ? messageParam.toLowerCase() : null;
+  const message = view.kind === "room" && !thread ? wanted : null;
+  const threadFocus = thread ? wanted : null;
   const roomId = view.kind === "room" ? view.id : null;
 
   const [sidebar, workspaces, room, page, threadData, threads] = await Promise.all([
@@ -48,12 +52,12 @@ export default async function ChatPage({
     getWorkspaceChoices(),
     roomId ? getRoom(user, roomId).catch(failure("Couldn't load the conversation. Try again.")) : null,
     roomId ? listMessages(user, roomId, { around: message ?? "unread" }).catch(failure("Couldn't load messages. Try again.")) : null,
-    thread ? listThread(user, thread).catch(failure("Couldn't load the thread. Try again.")) : null,
+    thread ? listThread(user, thread, { around: threadFocus }).catch(failure("Couldn't load the thread. Try again.")) : null,
     view.kind === "threads" ? listThreads(user).catch(failure("Couldn't load threads. Try again.")) : null,
   ]);
 
   const initial: ChatInitial = {
-    location: { view, thread, message },
+    location: { view, thread, message: message ?? threadFocus },
     sidebar: "error" in sidebar ? null : sidebar,
     room,
     page,

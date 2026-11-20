@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Command,
@@ -21,6 +21,9 @@ import DocsPaletteGroups, { type PaletteRecord } from "@/components/docs/docs-pa
 import { useDocsNavigate } from "@/components/docs/use-docs";
 import { isDocsPath, pageHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
+import { useCompaniesStore } from "@/stores/companies-store";
+import { chatJumps, jumpLabel } from "@/lib/chat/jump";
+import { roomHref } from "@/lib/chat/routes";
 
 type Results = {
   query: string;
@@ -86,6 +89,8 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
   }, [open, available]);
 
   const trimmed = query.trim();
+  const chatSidebar = useCompaniesStore((store) => store.chat);
+  const jumps = useMemo(() => (listMode ? [] : chatJumps(chatSidebar, query, multi)), [listMode, chatSidebar, query, multi]);
   const searching = Boolean(open && trimmed && remote?.query !== trimmed);
   const results = remote?.query === trimmed ? remote : null;
 
@@ -145,7 +150,7 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
     !searching &&
     !listMode &&
     recordCount === 0 &&
-    pageCommands.length + createCommands.length + goCommands.length + settingsCommands.length + generalCommands.length === 0;
+    jumps.length + pageCommands.length + createCommands.length + goCommands.length + settingsCommands.length + generalCommands.length === 0;
 
   return (
     <CommandDialog
@@ -214,6 +219,21 @@ export default function CommandMenu({ multi }: { multi: boolean }) {
                 <CommandItem key={def.id} value={def.id} onSelect={() => go(() => run(def.id))}>
                   <span className="truncate">{labels[def.id] ?? def.label}</span>
                   <Keys def={def} mac={mac} />
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+          {jumps.length > 0 && (
+            <CommandGroup heading="Chat">
+              {jumps.map((jump) => (
+                <CommandItem key={jump.id} value={`chat-${jump.id}`} onSelect={() => go(() => router.push(roomHref(jump.id)))}>
+                  <span className="truncate">{jumpLabel(jump)}{multi && jump.workspaceName ? ` · ${jump.workspaceName}` : ""}</span>
+                  {jump.archived && <span className="caption-style text-subtle shrink-0">Archived</span>}
+                  {jump.unread > 0 && (
+                    <span className="caption-style text-subtle ml-auto shrink-0 tabular-nums">
+                      {jump.unread >= 100 ? "99+" : jump.unread} unread
+                    </span>
+                  )}
                 </CommandItem>
               ))}
             </CommandGroup>

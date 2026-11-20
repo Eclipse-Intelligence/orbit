@@ -275,7 +275,7 @@ describe("saved messages", () => {
       const reply = (await postMessage(mark, { conversationId: room, parentId: root.id, body: "Reply" })).message;
       const inThread = await remindAboutMessage(sam, reply.id, "none");
       assert.equal(inThread.reminder.title, "Chat message from Mark");
-      assert.equal(inThread.reminder.link, `/chat/${room}?thread=${root.id}`);
+      assert.equal(inThread.reminder.link, `/chat/${room}?thread=${root.id}&message=${reply.id}`);
       const companyId = (await createCompany(mark, { name: "Brightwell", domain: "brightwell.test" })).body.company.id;
       const task = (await createTask(mark, { title: "Chase Brightwell", companyId, ownerId: mark.userId })).body.task;
       const { conversationId } = await openDiscussion(mark, { kind: "task", id: task.id });

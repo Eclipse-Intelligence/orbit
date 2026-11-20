@@ -318,7 +318,7 @@ describe("chat topics, system lines and archive", () => {
       assert.equal((await searchMessages(priya, roomId, "doc")).messages.length, 1);
       const sidebar = await listConversations(priya);
       assert.equal(sidebar.conversations.some((conversation) => conversation.id === roomId), false);
-      assert.deepEqual(sidebar.archived.filter((room) => room.id === roomId), [{ id: roomId, name: "q3-launch" }]);
+      assert.deepEqual(sidebar.archived.filter((room) => room.id === roomId), [{ id: roomId, name: "q3-launch", workspaceName: null }]);
       assert.equal((await listConversations(olly)).archived.some((room) => room.id === roomId), false);
       assert.equal((await listThreads(sam)).threads.some((thread) => thread.root.id === rootId), false);
       assert.deepEqual(await findMyRooms(priya, { id: roomId }), []);

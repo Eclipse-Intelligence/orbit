@@ -16,6 +16,8 @@ import { useEmojiPrefs } from "@/components/chat/reactions";
 import RoomSettings from "@/components/chat/room-settings";
 import RoomView from "@/components/chat/room-view";
 import SavedView from "@/components/chat/saved-view";
+import type { SearchBox } from "@/components/chat/search-field";
+import SearchView from "@/components/chat/search-view";
 import ThreadPanel from "@/components/chat/thread-panel";
 import ThreadsView from "@/components/chat/threads-view";
 import UnreadsView from "@/components/chat/unreads-view";
@@ -25,8 +27,9 @@ import { PHONE_LAYER, useKeyboardFit } from "@/components/chat/use-keyboard-fit"
 import { clearDrafts, newClientKey } from "@/lib/chat/client";
 import { chatHistoryState, chatLocationHref, messageHref, parseChatLocation, sameView, type ChatLocation, type ChatView } from "@/lib/chat/routes";
 import { CHAT_LINK_LABEL } from "@/lib/chat/task-text";
+import { EMPTY_SEARCH, searchReady } from "@/lib/chat/search";
 import { chatReducer, EMPTY_CHAT, loadsLatestFirst, localMessage, needsCatchUp, newestServerId, type ChatState } from "@/lib/chat/timeline";
-import type { ChatAttachment, ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
+import type { ChatAttachment, ChatConversation, ChatMessage, ChatPage, ChatRoom, ChatSearchQuery, ChatSidebar, ChatThread, ChatThreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
@@ -48,6 +51,9 @@ const TICK_MS = 60_000;
 const FOCUS_GAP_MS = 5_000;
 const NOTICE_MS = 6_000;
 const NEW_PARAM = "new";
+const SEARCH_DEBOUNCE_MS = 300;
+const PHONE_QUERY = "(max-width: 767px)";
+const HOME: ChatLocation = { view: { kind: "home" }, thread: null, message: null };
 
 function ok<T extends object>(value: Loaded<T>): value is T {
   return value !== null && !("error" in value);
@@ -117,6 +123,9 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const [slide, setSlide] = useState<"room" | "thread" | null>(null);
   const [bottomSignal, setBottomSignal] = useState(0);
   const [threadBottomSignal, setThreadBottomSignal] = useState(0);
+  const [draft, setDraft] = useState<{ text: string; href: string } | null>(null);
+  const searchTimer = useRef(0);
+  const openedThread = useRef<string | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const pane = useRef<HTMLDivElement>(null);
   const threadPane = useRef<HTMLDivElement>(null);
@@ -131,6 +140,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   const [held, setHeld] = useState<{ conversationId: string; messageId: string } | null>(null);
   if (held && held.conversationId !== roomId) setHeld(null);
   const threadId = location.thread;
+  const roomMessage = threadId ? null : location.message;
+  const threadMessage = threadId ? location.message : null;
   const detail = view.kind !== "home";
 
   useKeyboardFit(pane, detail && !threadId);
@@ -172,6 +183,53 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
     if (state?.chatPushed === true) window.history.back();
     else go(parentOf(current), { replace: true });
   }, [go]);
+
+  const searchView = location.view.kind === "search" ? location.view : null;
+  const currentHref = chatLocationHref(location);
+  const typed = draft && draft.href === currentHref ? draft.text : null;
+  const searchText = typed ?? searchView?.query.q ?? "";
+
+  const applySearch = useCallback(
+    (text: string) => {
+      window.clearTimeout(searchTimer.current);
+      const open = latest.current.location.view;
+      if (!text.trim()) {
+        if (open.kind === "search") go(HOME, { replace: true });
+        return;
+      }
+      if (!searchReady(text)) return;
+      const base = open.kind === "search" ? open.query : EMPTY_SEARCH;
+      go({ view: { kind: "search", query: { ...base, q: text } }, thread: null, message: null }, { replace: open.kind === "search" });
+    },
+    [go],
+  );
+
+  const changeFilters = useCallback(
+    (query: ChatSearchQuery) => go({ view: { kind: "search", query }, thread: null, message: null }, { replace: true }),
+    [go],
+  );
+
+  const searchBox = useMemo<SearchBox>(
+    () => ({
+      value: searchText,
+      onChange: (text) => {
+        window.clearTimeout(searchTimer.current);
+        setDraft({ text, href: chatLocationHref(latest.current.location) });
+        const phoneList = latest.current.location.view.kind !== "search" && window.matchMedia(PHONE_QUERY).matches;
+        if (!phoneList) searchTimer.current = window.setTimeout(() => applySearch(text), SEARCH_DEBOUNCE_MS);
+      },
+      onSubmit: () => applySearch(searchText),
+      onEscape: () => {
+        window.clearTimeout(searchTimer.current);
+        setDraft(null);
+        if (latest.current.location.view.kind === "search") go(HOME, { replace: true });
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      },
+    }),
+    [searchText, applySearch, go],
+  );
+
+  useEffect(() => () => window.clearTimeout(searchTimer.current), []);
 
   const closeThread = useCallback(() => {
     if (!latest.current.location.thread) return;
@@ -276,24 +334,31 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
       return;
     }
     const timeline = latest.current.state.timelines[roomId];
-    const message = location.message;
+    const message = roomMessage;
     if (!timeline || timeline.status === "error") loadMessages(roomId, "latest", message ?? "unread");
     else if (message && !timeline.messages.some((item) => item.id === message)) loadMessages(roomId, "latest", message);
     else if (timeline.status === "ready" && !timeline.hasNewer) loadMessages(roomId, "newer");
     loadRoom(roomId);
-  }, [roomId, location.message, loadMessages, loadRoom]);
+  }, [roomId, roomMessage, loadMessages, loadRoom]);
 
   useEffect(() => {
-    if (!threadId) return;
+    if (!threadId) {
+      openedThread.current = null;
+      return;
+    }
     const key = `thread:${threadId}`;
     if (fresh.current.has(key)) {
       fresh.current.delete(key);
       return;
     }
     const thread = latest.current.state.threads[threadId];
-    if (!thread?.root || thread.timeline.status !== "ready") loadThread(threadId, "latest");
-    else loadThread(threadId, "newer");
-  }, [threadId, loadThread]);
+    const opened = openedThread.current !== threadId;
+    openedThread.current = threadId;
+    const missing = threadMessage !== null && !thread?.timeline.messages.some((item) => item.id === threadMessage);
+    if (!thread?.root || thread.timeline.status !== "ready") loadThread(threadId, "latest", threadMessage);
+    else if (missing) loadThread(threadId, "latest", threadMessage);
+    else if (opened) loadThread(threadId, "newer");
+  }, [threadId, threadMessage, loadThread]);
 
   const roomTimeline = roomId ? state.timelines[roomId] : undefined;
   const roomCatchUp = needsCatchUp(roomTimeline);
@@ -440,6 +505,18 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
   useShortcut("chat-next", () => step(1));
   useShortcut("chat-new-message", () => setNewMessage(true));
   useShortcut("chat-new-room", () => setNewRoom(true));
+  useShortcut("chat-search", () => {
+    const focusField = () => {
+      const input = [...document.querySelectorAll<HTMLInputElement>("[data-chat-search-input]")].find((item) => item.getClientRects().length > 0);
+      if (!input) return false;
+      input.focus();
+      input.select();
+      return true;
+    };
+    if (focusField()) return;
+    if (latest.current.location.view.kind !== "search") go({ view: { kind: "search", query: EMPTY_SEARCH }, thread: null, message: null });
+    window.setTimeout(focusField, 80);
+  });
   useShortcut("chat-room-settings", () => setSettings({ open: true, adding: false }), roomForSettings?.conversation.kind === "room");
   useShortcut("chat-close-thread", () => {
     if (!latest.current.location.thread) return false;
@@ -501,6 +578,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
             view={view}
             onNewRoom={() => setNewRoom(true)}
             onNewMessage={() => setNewMessage(true)}
+            search={searchBox}
             className={cn(detail ? "max-md:hidden" : "max-md:flex-1")}
           />
           {!detail && (
@@ -534,6 +612,8 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                 <UnreadsView />
               ) : view.kind === "saved" ? (
                 <SavedView />
+              ) : view.kind === "search" ? (
+                <SearchView query={view.query} box={searchBox} hintId="chat-search-hint" onQuery={changeFilters} />
               ) : view.kind === "room" ? (
                 <RoomView
                   key={view.id}
@@ -542,7 +622,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                   room={room}
                   roomError={state.roomErrors[view.id] ?? null}
                   timeline={state.timelines[view.id] ?? null}
-                  focusId={location.message}
+                  focusId={roomMessage}
                   bottomSignal={bottomSignal}
                   held={held?.conversationId === view.id ? held.messageId : null}
                   onSettings={() => setSettings({ open: true, adding: false })}
@@ -561,7 +641,7 @@ export default function ChatScreen({ viewer, workspaces, initial, now: initialNo
                 slide === "thread" && "max-md:motion-safe:animate-enter-from-right",
               )}
             >
-              <ThreadPanel key={threadId} rootId={threadId} thread={thread} conversation={roomId ? entry : null} bottomSignal={threadBottomSignal} onClose={closeThread} />
+              <ThreadPanel key={threadId} rootId={threadId} focusId={location.message} thread={thread} conversation={roomId ? entry : null} bottomSignal={threadBottomSignal} onClose={closeThread} />
             </div>
           )}
         </div>
