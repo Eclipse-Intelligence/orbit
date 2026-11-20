@@ -12,7 +12,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createTemplate, updateTemplate } from "@/lib/proposals/catalogue";
 import { countersignDocument, createDocument, documentFile, getDocument, sendDocument } from "@/lib/proposals/documents";
 import { isDarkLogo } from "@/lib/proposals/logo-shade";
-import { businessLines, senderCompany, type Content } from "@/lib/proposals/model";
+import { bandAccent, businessLines, missingMessage, senderCompany, type Content } from "@/lib/proposals/model";
 import { renderPdf } from "@/lib/proposals/pdf";
 import { decodePng, encodePng, logoForDarkBand, logoIsDark } from "@/lib/proposals/png";
 import { clientSign, openDocument } from "@/lib/proposals/public";
@@ -24,6 +24,16 @@ const WORKSPACE_NAME = "Zeta Holdings Workspace";
 function solidPng(width: number, height: number, rgba: [number, number, number, number]) {
   const pixels = new Uint8Array(width * height * 4);
   for (let index = 0; index < pixels.length; index += 4) pixels.set(rgba, index);
+  return encodePng({ width, height, rgba: pixels });
+}
+
+function textLogo(ink: [number, number, number, number], paper: [number, number, number, number] = [0, 0, 0, 0]) {
+  const width = 8;
+  const height = 4;
+  const pixels = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) pixels.set(y === 1 || y === 2 ? ink : paper, (y * width + x) * 4);
+  }
   return encodePng({ width, height, rgba: pixels });
 }
 
@@ -74,14 +84,27 @@ describe("business details", () => {
       { name: "  Ridgeon   Consultancy ", address: "  1 High Street \r\n\r\n  Leeds   LS1 1AA ", phone: "+44 113 496 0000", email: "hello@ridgeon.test", website: "ridgeon.test" },
       WEB,
     );
-    assert.deepEqual(saved, { name: "Ridgeon Consultancy", address: "1 High Street\nLeeds LS1 1AA", phone: "+44 113 496 0000", email: "hello@ridgeon.test", website: "https://ridgeon.test" });
+    assert.deepEqual(saved, {
+      name: "Ridgeon Consultancy",
+      address: "1 High Street\nLeeds LS1 1AA",
+      phone: "+44 113 496 0000",
+      email: "hello@ridgeon.test",
+      website: "https://ridgeon.test",
+    });
     assert.deepEqual(await getBusinessDetails(member), saved);
     await assert.rejects(() => saveBusinessDetails(member, { name: "Hijack" }, WEB), forbidden);
-    const rows = await queryAsUser<{ business_name: string }>(member.userId, "update crm.workspace_brands set business_name = 'Hijack' where workspace_id = $1 returning business_name", [owner.workspaceId]);
+    const rows = await queryAsUser<{ business_name: string }>(
+      member.userId,
+      "update crm.workspace_brands set business_name = 'Hijack' where workspace_id = $1 returning business_name",
+      [owner.workspaceId],
+    );
     assert.equal(rows.length, 0);
     const byAdmin = await saveBusinessDetails(admin, { ...saved, phone: "0113 496 0001" }, WEB);
     assert.equal(byAdmin.phone, "0113 496 0001");
-    const audit = await getAdminPool().query<{ event_type: string }>("select event_type from crm.audit_events where workspace_id = $1 and event_type = 'workspace_brand.business_updated'", [owner.workspaceId]);
+    const audit = await getAdminPool().query<{ event_type: string }>(
+      "select event_type from crm.audit_events where workspace_id = $1 and event_type = 'workspace_brand.business_updated'",
+      [owner.workspaceId],
+    );
     assert.equal(audit.rows.length, 2);
   });
 
@@ -130,8 +153,29 @@ describe("business details", () => {
     assert.equal(senderCompany(draft), "Mark Ridgeon");
     assert.ok(!JSON.stringify(draft).includes(WORKSPACE_NAME));
     assert.match(draft.consent, /with Mark Ridgeon,/);
+    assert.deepEqual((await getDocument(owner, plain)).missing, ["workspace.name"]);
+    await assert.rejects(() => sendDocument(owner, plain, { email: false }), /Add a business name in Settings › Brand before sending/);
 
-    await saveBusinessDetails(owner, { name: "Ridgeon Consultancy", address: "1 High Street\nLeeds", phone: "0113 496 0000", email: "hello@ridgeon.test", website: "ridgeon.test" }, WEB);
+    const custom = await createTemplate(owner, { starter: "mutual-nda" });
+    await updateTemplate(owner, custom.id, {
+      status: "active",
+      blocks: [
+        { id: "b1", type: "cover", title: "Confidentiality", subtitle: "From {{sender.name}} to {{company.name}}.", image: "" },
+        { id: "b2", type: "section", heading: "Terms", body: "We keep what you share private." },
+      ],
+    });
+    const unnamed = await createDocument(owner, { templateId: custom.id, companyId, contactId });
+    const unnamedToken = (await sendDocument(owner, unnamed, { email: false })).url.split("/p/")[1];
+    const unnamedContent = (await openDocument(unnamedToken, { track: false }))!.content;
+    assert.equal(senderCompany(unnamedContent), "Mark Ridgeon");
+    assert.match(unnamedContent.consent, /with Mark Ridgeon,/);
+    assert.ok(!JSON.stringify(unnamedContent).includes(WORKSPACE_NAME));
+
+    await saveBusinessDetails(
+      owner,
+      { name: "Ridgeon Consultancy", address: "1 High Street\nLeeds", phone: "0113 496 0000", email: "hello@ridgeon.test", website: "ridgeon.test" },
+      WEB,
+    );
     const id = await createDocument(owner, { templateId: template.id, companyId, contactId });
     const agent = await createAgent(owner.workspaceId, ["crm:read"]);
     assert.equal((await getDocument(agent.actor, id)).preview.business?.name, "Ridgeon Consultancy");
@@ -140,7 +184,13 @@ describe("business details", () => {
     const content = view.content;
     assert.equal(content.sender.name, "Mark Ridgeon");
     assert.equal(content.sender.company, "Ridgeon Consultancy");
-    assert.deepEqual(content.business, { name: "Ridgeon Consultancy", address: "1 High Street\nLeeds", phone: "0113 496 0000", email: "hello@ridgeon.test", website: "https://ridgeon.test" });
+    assert.deepEqual(content.business, {
+      name: "Ridgeon Consultancy",
+      address: "1 High Street\nLeeds",
+      phone: "0113 496 0000",
+      email: "hello@ridgeon.test",
+      website: "https://ridgeon.test",
+    });
     assert.match(content.consent, /with Ridgeon Consultancy,/);
     assert.ok(!JSON.stringify(content).includes(WORKSPACE_NAME));
     assert.match(JSON.stringify(content.blocks), /Between Ridgeon Consultancy and Isothermal Services/);
@@ -164,27 +214,56 @@ describe("business details", () => {
     assert.equal(signatures.rows.find((row) => row.role === "sender")?.company, "Ridgeon Consultancy");
     const executed = await documentFile(owner, id, "executed");
     assert.equal(executed.data.subarray(0, 5).toString(), "%PDF-");
+
+    const old = await createDocument(owner, { templateId: template.id, companyId, contactId });
+    const oldToken = (await sendDocument(owner, old, { email: false })).url.split("/p/")[1];
+    await getAdminPool().query(`update crm.document_versions set content = jsonb_set(content - 'business', '{sender,company}', '"Eclipse"') where document_id = $1`, [old]);
+    const oldView = (await openDocument(oldToken, { track: false }))!;
+    assert.equal(oldView.content.business, undefined);
+    assert.equal(senderCompany(oldView.content), "Eclipse");
+    await clientSign(oldToken, { name: "Ashley Stone", signatureText: "Ashley Stone", agree: true, hash: oldView.hash });
+    await countersignDocument(owner, old, { signatureText: "Mark Ridgeon" });
+    const oldSignatures = await getAdminPool().query<{ role: string; company: string | null }>("select role, company from crm.document_signatures where document_id = $1", [old]);
+    assert.equal(oldSignatures.rows.find((row) => row.role === "sender")?.company, "Eclipse");
   });
 
-  it("reads proposals sent before business details without printing the stored workspace name", async () => {
+  it("shows a sent version with the party it was sent with, and new versions with the business name or the sender", async () => {
     const stored = {
-      sender: { name: "Mark Ridgeon", email: "mark@business.test", title: null, company: WORKSPACE_NAME },
+      sender: { name: "Mark Ridgeon", email: "mark@business.test", title: null, company: "Eclipse" },
     } as Pick<Content, "sender" | "business">;
-    assert.equal(senderCompany(stored), "Mark Ridgeon");
+    assert.equal(senderCompany(stored), "Eclipse");
     assert.equal(senderCompany({ ...stored, business: { name: "  ", address: "", phone: "", email: "", website: "" } }), "Mark Ridgeon");
+    assert.equal(senderCompany({ ...stored, business: { name: "Ridgeon Consultancy", address: "", phone: "", email: "", website: "" } }), "Ridgeon Consultancy");
     assert.deepEqual(businessLines(undefined), []);
+    assert.equal(missingMessage(["workspace.name"]), "Add a business name in Settings › Brand before sending.");
+    assert.equal(missingMessage(["contact.jobTitle", "workspace.name"]), "Fill in {{contact.jobTitle}} and add a business name in Settings › Brand before sending.");
+    assert.equal(missingMessage(["contact.jobTitle"]), "Fill in {{contact.jobTitle}} before sending.");
+  });
+
+  it("keeps the band accent visible on a dark band", () => {
+    assert.equal(bandAccent("#4124fb"), "#4124fb");
+    assert.equal(bandAccent("#0a0a0a"), "#ffffff");
+    assert.equal(bandAccent("#101820"), "#ffffff");
+    assert.equal(bandAccent("nonsense"), "#ffffff");
   });
 
   it("whitens a dark logo for the band and leaves a light one alone", async () => {
-    const black = solidPng(8, 4, [10, 10, 10, 255]);
-    const white = solidPng(8, 4, [250, 250, 250, 255]);
+    const black = textLogo([10, 10, 10, 255]);
+    const white = textLogo([250, 250, 250, 255]);
     const transparent = solidPng(4, 4, [0, 0, 0, 0]);
+    const navyTile = textLogo([255, 255, 255, 255], [16, 24, 64, 255]);
+    const blackTile = solidPng(8, 4, [10, 10, 10, 255]);
     assert.equal(logoIsDark(dataUri(black)), true);
+    assert.equal(logoIsDark(dataUri(navyTile)), false);
+    assert.equal(logoIsDark(dataUri(blackTile)), false);
+    assert.ok(logoForDarkBand(dataUri(navyTile))!.equals(navyTile));
+    assert.ok(logoForDarkBand(dataUri(blackTile))!.equals(blackTile));
     assert.equal(logoIsDark(dataUri(white)), false);
     assert.equal(logoIsDark(dataUri(transparent)), false);
     assert.equal(logoIsDark(null), false);
     const whitened = decodePng(logoForDarkBand(dataUri(black))!)!;
-    assert.deepEqual([...whitened.rgba.subarray(0, 4)], [255, 255, 255, 255]);
+    assert.deepEqual([...whitened.rgba.subarray(0, 4)], [255, 255, 255, 0]);
+    assert.deepEqual([...whitened.rgba.subarray(36, 40)], [255, 255, 255, 255]);
     assert.ok(logoForDarkBand(dataUri(white))!.equals(white));
     const palette = Buffer.concat([
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -207,7 +286,7 @@ describe("business details", () => {
       currency: "GBP",
       validUntil: "2026-12-20",
       accent: "#4124fb",
-      logo: dataUri(solidPng(40, 10, [0, 0, 0, 255])),
+      logo: dataUri(textLogo([0, 0, 0, 255])),
       client: { name: "Ashley Stone", email: "ashley@isothermal.test", title: null, company: "Isothermal Services" },
       sender: { name: "Mark Ridgeon", email: "mark@business.test", title: null, company: "Ridgeon Consultancy" },
       business: { name: "Ridgeon Consultancy", address: "1 High Street\nLeeds", phone: "0113 496 0000", email: "hello@ridgeon.test", website: "https://ridgeon.test" },
@@ -221,12 +300,12 @@ describe("business details", () => {
     assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
     assert.equal((await PDFDocument.load(pdf)).getAuthor(), "Ridgeon Consultancy");
     const old = await renderPdf({
-      content: { ...content, business: undefined, sender: { ...content.sender, company: WORKSPACE_NAME }, logo: null },
+      content: { ...content, business: undefined, sender: { ...content.sender, company: "Eclipse" }, logo: null },
       contentHash: "0".repeat(64),
       documentId: "00000000-0000-0000-0000-000000000000",
       versionNumber: 1,
     });
-    assert.equal((await PDFDocument.load(old)).getAuthor(), "Mark Ridgeon");
+    assert.equal((await PDFDocument.load(old)).getAuthor(), "Eclipse");
   });
 });
 

@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import Button from "@/components/_ui/button";
 import ProposalSite, { SIGN_TAB, visibleTabs } from "@/components/proposals/proposal-site";
 import { useReadingTime } from "@/components/proposals/use-reading-time";
-import { accentText, longDate, senderCompany } from "@/lib/proposals/model";
+import { accentText, bandAccent, longDate, senderCompany } from "@/lib/proposals/model";
 import type { PublicDocument, PublicState } from "@/lib/proposals/public";
 import { cn } from "@/lib/utils";
 import SignaturePad, { type SignatureMode } from "@/components/proposals/signature-pad";
@@ -146,8 +146,8 @@ export default function ProposalPage({ token, initial, preview, logoDark }: { to
                       variant="primary"
                       size="sm"
                       style={{
-                        backgroundColor: content.accent,
-                        color: accentText(content.accent),
+                        backgroundColor: bandAccent(content.accent),
+                        color: accentText(bandAccent(content.accent)),
                       }}
                       onClick={() => select(SIGN_TAB)}
                     >

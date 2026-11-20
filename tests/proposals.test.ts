@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { saveBusinessDetails } from "@/lib/crm/business-details";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { createOpportunity, listOpportunities, listPipeline } from "@/lib/crm/opportunities";
@@ -50,6 +51,7 @@ describe("proposals", () => {
     process.env.SITE_URL = "https://orbit.test";
     await resetDatabase();
     owner = await createUser("mark@props.test", "Mark Ridgeon");
+    await saveBusinessDetails(owner, { name: "Eclipse" }, { operation: "proposal_test", source: "web" });
     pulseId = (await createCompany(owner, { name: "Pulse", domain: "pulse.test" })).body.company.id;
     andrewId = (await createContact(owner, { firstName: "Andrew", lastName: "Sanaghan", email: "andrew@pulse.test", jobTitle: "MD", companyId: pulseId })).body.contact.id;
     const other = (await createCompany(owner, { name: "Other", domain: "other.test" })).body.company.id;

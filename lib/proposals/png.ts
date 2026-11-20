@@ -159,7 +159,7 @@ export function logoIsDark(dataUri: string | null | undefined) {
   if (!dataUri) return false;
   const file = pngOf(dataUri);
   const bitmap = file ? decodePng(file) : null;
-  return bitmap ? isDarkLogo(bitmap.rgba) : true;
+  return bitmap ? isDarkLogo(bitmap.rgba) : false;
 }
 
 export function logoForDarkBand(dataUri: string | null | undefined) {

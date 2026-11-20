@@ -16,6 +16,7 @@ import { getTemplate, parseBlocks, readBlocks, readSettings } from "@/lib/propos
 import {
   consentText,
   CURRENCIES,
+  missingMessage,
   senderCompany,
   fieldValues,
   renderBlocks,
@@ -262,7 +263,7 @@ async function partiesFor(db: Db, actor: Actor, row: { company_id: string; conta
   const owner = await db.query<{ full_name: string | null; email: string | null }>("select full_name, email from crm.profiles where id = $1", [row.owner_id]);
   const sender = { name: owner.rows[0]?.full_name || owner.rows[0]?.email || "Sender", email: owner.rows[0]?.email ?? "" };
   const business = await readBusinessDetailsInDb(db, actor.workspaceId);
-  return { company, contact, sender, business, ourCompany: business.name || sender.name };
+  return { company, contact, sender, business, ourCompany: business.name.trim() || sender.name };
 }
 
 async function templateLogo(db: Db, templateId: string, fallback: string | null) {
@@ -304,7 +305,7 @@ async function buildContent(db: Db, actor: Actor, row: DocumentRow, issuedAt: st
       email: parties.contact.email,
     },
     sender: parties.sender,
-    workspace: { name: parties.ourCompany },
+    workspace: { name: parties.business.name.trim() },
     proposal: { title: row.title, currency: row.currency, validUntil: row.valid_until, items },
   });
   const rendered = renderBlocks(readBlocks(row.blocks), values);
@@ -648,7 +649,7 @@ export async function sendDocument(
     if (row.valid_until && row.valid_until < todayKey()) throw invalid("The valid-until date has passed. Choose a later date.", "validUntil");
     const issuedAt = new Date().toISOString();
     const built = await buildContent(db, actor, row, issuedAt);
-    if (built.missing.length) throw invalid(`Fill in ${built.missing.map((item) => `{{${item}}}`).join(", ")} before sending.`, "blocks");
+    if (built.missing.length) throw invalid(missingMessage(built.missing), "blocks");
     if (built.placeholders.length) throw invalid(`Replace ${built.placeholders.join(", ")} with your own wording before sending.`, "blocks");
     if (!built.contactEmail) throw invalid(`${row.contact_name ?? "The contact"} has no email address.`, "contactId");
     if (row.kind === "proposal" && built.content.items.length === 0) throw invalid("Add at least one product before sending.", "items");

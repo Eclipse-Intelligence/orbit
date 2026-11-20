@@ -115,14 +115,14 @@ function samplePreview(
   business: BusinessDetails,
   now: number,
 ): Content {
-  const ourCompany = business.name || viewer.name;
+  const ourCompany = business.name.trim() || viewer.name;
   const validUntil = new Date(now + template.validDays * 86_400_000).toISOString().slice(0, 10);
   const items = template.kind === "proposal" ? SAMPLE_ITEMS : [];
   const values = fieldValues({
     company: { name: "Acme Ltd", domain: "acme.com", website: "https://acme.com" },
     contact: { name: "Jane Doe", firstName: "Jane", lastName: "Doe", jobTitle: "Operations Director", email: "jane@acme.com" },
     sender: { name: viewer.name, email: viewer.email },
-    workspace: { name: ourCompany },
+    workspace: { name: business.name.trim() },
     proposal: { title: template.kind === "nda" ? "NDA with Acme Ltd" : "Proposal for Acme Ltd", currency: "GBP", validUntil, items },
   });
   return {

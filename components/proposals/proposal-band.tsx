@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { ProposalLogo } from "@/components/proposals/proposal-document";
 import { isDarkLogo } from "@/lib/proposals/logo-shade";
-import { businessLines, longDate, senderCompany, type Block, type Content } from "@/lib/proposals/model";
+import { bandAccent, businessLines, longDate, senderCompany, type Block, type Content } from "@/lib/proposals/model";
 import { cn } from "@/lib/utils";
 
 export const BAND_BASE = "#0e0e12";
@@ -11,16 +11,6 @@ export const BAND_BASE = "#0e0e12";
 function channels(hex: string) {
   const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
   return match ? match.slice(1).map((part) => parseInt(part, 16)) : null;
-}
-
-export function bandAccent(hex: string) {
-  const rgb = channels(hex);
-  if (!rgb) return "#ffffff";
-  const [r, g, b] = rgb.map((value) => {
-    const unit = value / 255;
-    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.05 ? "#ffffff" : hex;
 }
 
 function bandBackground(accent: string) {
@@ -46,7 +36,7 @@ export function useLogoDark(src: string | null | undefined, initial = true) {
       try {
         setDark(isDarkLogo(context.getImageData(0, 0, canvas.width, canvas.height).data));
       } catch {
-        setDark(true);
+        setDark(false);
       }
     };
     image.src = src;

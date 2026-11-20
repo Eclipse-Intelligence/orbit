@@ -24,7 +24,7 @@ import {
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Product } from "@/lib/proposals/catalogue";
 import type { DocumentDetail } from "@/lib/proposals/documents";
-import { BILLING_LABELS, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, senderCompany, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
+import { BILLING_LABELS, BUSINESS_NAME_FIELD, formatMoney, KIND_LABELS, longDate, readingLabel, readingTotals, senderCompany, totalsOf, type Block, type Currency, type Item } from "@/lib/proposals/model";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 import HoldButton from "@/components/_ui/hold-button";
@@ -352,9 +352,19 @@ export default function ProposalDetail({ viewer, initial, knowledge = [] }: { vi
                   />
                 )}
 
-                {doc.missing.length > 0 && (
+                {doc.missing.some((item) => item !== BUSINESS_NAME_FIELD) && (
                   <p role="status" className="caption-style text-[var(--tag-amber-text)]">
-                    Missing: {doc.missing.map((item) => `{{${item}}}`).join(", ")}. Add them to the company or contact, or edit the text.
+                    Missing:{" "}
+                    {doc.missing
+                      .filter((item) => item !== BUSINESS_NAME_FIELD)
+                      .map((item) => `{{${item}}}`)
+                      .join(", ")}
+                    . Add them to the company or contact, or edit the text.
+                  </p>
+                )}
+                {doc.missing.includes(BUSINESS_NAME_FIELD) && (
+                  <p role="status" className="caption-style text-[var(--tag-amber-text)]">
+                    Add a business name in Settings › Brand to fill in {"{{workspace.name}}"}.
                   </p>
                 )}
                 {doc.placeholders.length > 0 && (

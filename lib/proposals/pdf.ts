@@ -3,6 +3,7 @@ import path from "node:path";
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, rgb, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import {
+  bandAccent,
   BILLING_LABELS,
   BILLINGS,
   formatMoney,
@@ -381,7 +382,7 @@ export async function renderPdf(input: {
     italic: await pdf.embedFont(files.italic, { subset: true }),
   };
   if (glyphs.size === 0) glyphs = new Set(fonts.regular.getCharacterSet());
-  const accent = hexColour(input.content.accent);
+  const accent = hexColour(bandAccent(input.content.accent));
   const writer = new Writer(pdf, fonts, `${input.content.title} · ${senderCompany(input.content)} · Reference ${input.documentId.slice(0, 8)} v${input.versionNumber}`);
   await band(pdf, writer, fonts, input.content, accent);
   for (const block of input.content.blocks) {

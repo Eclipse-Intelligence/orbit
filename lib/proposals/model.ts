@@ -506,7 +506,32 @@ export function readingLabel(seconds: number) {
 }
 
 export function senderCompany(content: Pick<Content, "sender" | "business">) {
-  return content.business?.name.trim() || content.sender.name;
+  return content.business ? content.business.name.trim() || content.sender.name : content.sender.company;
+}
+
+export const BUSINESS_NAME_FIELD = "workspace.name";
+
+export function missingMessage(missing: string[]) {
+  const fields = missing.filter((item) => item !== BUSINESS_NAME_FIELD).map((item) => `{{${item}}}`);
+  const business = missing.includes(BUSINESS_NAME_FIELD);
+  if (fields.length && business) return `Fill in ${fields.join(", ")} and add a business name in Settings › Brand before sending.`;
+  if (business) return "Add a business name in Settings › Brand before sending.";
+  return fields.length ? `Fill in ${fields.join(", ")} before sending.` : "";
+}
+
+function hexChannels(hex: string) {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  return match ? match.slice(1).map((part) => parseInt(part, 16)) : null;
+}
+
+export function bandAccent(hex: string) {
+  const rgb = hexChannels(hex);
+  if (!rgb) return "#ffffff";
+  const [r, g, b] = rgb.map((value) => {
+    const unit = value / 255;
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.05 ? "#ffffff" : hex.toLowerCase();
 }
 
 export type BusinessLine = { key: keyof BusinessDetails; text: string; href: string | null };

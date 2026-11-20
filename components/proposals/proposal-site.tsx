@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import ProposalBand, { BAND_BASE, bandAccent } from "@/components/proposals/proposal-band";
+import ProposalBand from "@/components/proposals/proposal-band";
 import ProposalDocument, { Signatures, type SiteExtras } from "@/components/proposals/proposal-document";
-import { shows, tabsOf, type Content } from "@/lib/proposals/model";
+import { bandAccent, shows, tabsOf, type Content } from "@/lib/proposals/model";
 import { cn } from "@/lib/utils";
 
 type SignatureView = Parameters<typeof Signatures>[0]["signatures"][number];
@@ -179,8 +179,7 @@ export default function ProposalSite({
       {showBar && (
         <div
           ref={bar}
-          className={cn("night border-t border-white/[0.07] shadow-[0_1px_0_rgb(0_0_0/0.08)]", page ? "sticky top-0 z-20" : "rounded-b-2xl")}
-          style={{ backgroundColor: BAND_BASE }}
+          className={cn("night border-t border-white/[0.07] bg-[#0e0e12] shadow-[0_1px_0_rgb(0_0_0/0.08)]", page ? "sticky top-0 z-20" : "rounded-b-2xl")}
         >
           <div className={cn("mx-auto flex max-w-[56em] items-center gap-3", page ? "px-5 sm:px-8" : "px-5 sm:px-7")}>
             {tabs ? (
