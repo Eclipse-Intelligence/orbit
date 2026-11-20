@@ -95,7 +95,7 @@ export default function CampaignsScreen({
       ) : (
         <KeyboardList sequence className="flex min-h-0 flex-1 flex-col">
         <ul className="min-h-0 flex-1 overflow-auto pb-20">
-          <li className={cn("caption-style text-subtle hidden px-4 py-2", GRID_CLASS)}>
+          <li className={cn("caption-style text-subtle border-border hidden border-b px-4 py-2", GRID_CLASS)}>
             <span>Name</span>
             <span className="text-right">Prospects</span>
             <span className="text-right">Replied</span>
@@ -113,7 +113,7 @@ export default function CampaignsScreen({
                 data-row-href={href}
                 className={cn(
                   KEYBOARD_ROW_CLASS,
-                  "relative flex min-h-12 items-center gap-3 px-4 py-2 transition-colors duration-150 hover:bg-white/3",
+                  "border-border relative flex min-h-12 items-center gap-3 border-b px-4 py-2 transition-colors duration-150 hover:bg-white/3",
                   GRID_CLASS,
                 )}
               >

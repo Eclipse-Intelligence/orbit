@@ -72,12 +72,12 @@ export default function MyEmailsSettings({ emails }: { emails: MyEmails }) {
       description="Mail from these is treated as yours and never filed as a contact."
     >
       <ul className="flex flex-col">
-        <li className="flex items-center justify-between gap-3 py-2">
+        <li className="border-border flex items-center justify-between gap-3 border-b py-2">
           <span className="min-w-0 truncate text-[14px] leading-5">{emails.loginEmail}</span>
           <span className="caption-style text-subtle shrink-0">Sign-in address</span>
         </li>
         {drafts.map((email) => (
-          <li key={email} className="flex items-center justify-between gap-3 py-2">
+          <li key={email} className="border-border flex items-center justify-between gap-3 border-b py-2">
             <span className="min-w-0 truncate text-[14px] leading-5">{email}</span>
             <Button
               variant="ghost"

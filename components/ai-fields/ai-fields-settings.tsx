@@ -71,7 +71,7 @@ function FieldRow({
   }
 
   return (
-    <li className="flex flex-col gap-2.5 py-3 first:pt-0">
+    <li className="border-border flex flex-col gap-2.5 border-t py-3 first:border-t-0 first:pt-0">
       <div className="flex items-start justify-between gap-3">
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="text-foreground text-[13.5px] leading-5">

@@ -335,7 +335,7 @@ export default function WorkflowEditor({
 
   const sidePanel = (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div role="tablist" aria-label="Panel" className="flex shrink-0 gap-1 p-2">
+      <div role="tablist" aria-label="Panel" className="border-border flex shrink-0 gap-1 border-b p-2">
         {(["node", "runs"] as const).map((tab) => (
           <Button
             key={tab}
@@ -475,13 +475,13 @@ export default function WorkflowEditor({
         }
       />
       {error && (
-        <p role="alert" className="caption-style text-danger px-4 py-2">
+        <p role="alert" className="caption-style text-danger border-border border-b px-4 py-2">
           {error}
         </p>
       )}
       <div className="flex min-h-0 flex-1">
         {editable && (
-          <aside aria-label="Add steps" className="hidden w-56 shrink-0 overflow-auto p-3 lg:block">
+          <aside aria-label="Add steps" className="border-border hidden w-56 shrink-0 overflow-auto border-r p-3 lg:block">
             <Palette onAdd={(type) => addNode(type)} />
           </aside>
         )}
@@ -506,7 +506,7 @@ export default function WorkflowEditor({
             </div>
           )}
         </div>
-        <aside aria-label="Details" className={cn("hidden w-[360px] shrink-0 flex-col md:flex")}>
+        <aside aria-label="Details" className={cn("border-border hidden w-[360px] shrink-0 flex-col border-l md:flex")}>
           {sidePanel}
         </aside>
       </div>

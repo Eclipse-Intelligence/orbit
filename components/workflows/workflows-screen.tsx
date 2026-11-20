@@ -99,7 +99,7 @@ export default function WorkflowsScreen({
             ) : (
               <ul className="border-border flex flex-col rounded-xl border">
                 {mine.map((item) => (
-                  <li key={item.id}>
+                  <li key={item.id} className="border-border border-b last:border-b-0">
                     <a href={`/workflows/${item.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-white/3">
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
                         <span className="truncate text-[14px] leading-5">{item.name}</span>

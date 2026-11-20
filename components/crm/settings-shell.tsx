@@ -54,7 +54,7 @@ export default function SettingsShell({
       <SettingsHashRedirect />
       <SectionHeader title="Settings" viewer={viewer} />
       <div className="flex min-h-0 flex-1">
-        <nav aria-label="Settings sections" className="hidden w-[15em] shrink-0 overflow-y-auto lg:block">
+        <nav aria-label="Settings sections" className="border-border hidden w-[15em] shrink-0 overflow-y-auto border-r lg:block">
           <div className="flex flex-col gap-5 p-3">
             {groups.map((group) => (
               <div key={group.kind} className="flex flex-col gap-1">
@@ -89,7 +89,7 @@ export default function SettingsShell({
               {groups.map((group) => (
                 <div key={group.kind} className="flex flex-col">
                   <GroupHeading group={group} workspace={workspace} phone />
-                  <ul className="flex flex-col">
+                  <ul className="divide-border flex flex-col divide-y">
                     {group.items.map((item) => (
                       <li key={item.href}>
                         <Link

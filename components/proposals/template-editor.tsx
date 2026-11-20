@@ -209,7 +209,7 @@ export default function TemplateEditor({ viewer, template, knowledge = [] }: { v
         ))}
       </div>
       <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
-        <div className={cn("min-h-0 overflow-y-auto px-4 py-5 pb-24", view === "preview" && "hidden lg:block")}>
+        <div className={cn("border-border min-h-0 overflow-y-auto border-r px-4 py-5 pb-24", view === "preview" && "hidden lg:block")}>
           <div className="flex flex-col gap-5">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="template-name" className="caption-style text-subtle">

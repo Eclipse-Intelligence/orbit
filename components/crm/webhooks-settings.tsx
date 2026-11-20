@@ -88,7 +88,7 @@ export default function WebhooksSettings({
           {endpoints.map((endpoint) => (
             <li
               key={endpoint.id}
-              className="flex items-center justify-between gap-3 py-2"
+              className="border-border flex items-center justify-between gap-3 border-b py-2 last:border-b-0"
             >
               <span className="flex min-w-0 flex-col gap-1">
                 <span className="block truncate text-[14px] leading-5">
@@ -182,7 +182,7 @@ export default function WebhooksSettings({
             {deliveries.map((delivery) => (
               <li
                 key={delivery.id}
-                className="flex flex-col gap-1 py-2 first:pt-0 last:pb-0"
+                className="border-border flex flex-col gap-1 border-b py-2 first:pt-0 last:border-b-0 last:pb-0"
               >
                 <span className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-mono text-[12px] leading-5">

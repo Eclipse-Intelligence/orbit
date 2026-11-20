@@ -154,7 +154,7 @@ export default function ProposalsScreen({
                   {shown.map((item) => {
                     const tag = statusTag(item.status);
                     return (
-                      <li key={item.id}>
+                      <li key={item.id} className="border-border border-b last:border-b-0">
                         <Link href={item.href} className="flex items-center gap-3 px-4 py-3 hover:bg-white/3">
                           <span className="flex min-w-0 flex-1 flex-col gap-1">
                             <span className="truncate text-[14px] leading-5">{item.title}</span>
@@ -181,7 +181,7 @@ export default function ProposalsScreen({
               ) : (
                 <ul className="border-border flex flex-col rounded-xl border">
                   {templates.map((item) => (
-                    <li key={item.id}>
+                    <li key={item.id} className="border-border border-b last:border-b-0">
                       <Link href={`/proposals/templates/${item.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-white/3">
                         <span className="flex min-w-0 flex-1 flex-col gap-1">
                           <span className="truncate text-[14px] leading-5">{item.name}</span>
@@ -200,7 +200,7 @@ export default function ProposalsScreen({
 
           {tab === "products" && (
             <div className="flex flex-col gap-3">
-              <ul aria-label="Products" className="bg-card border-line-strong flex flex-col overflow-hidden rounded-2xl border">
+              <ul aria-label="Products" className="bg-card border-line-strong divide-border flex flex-col divide-y overflow-hidden rounded-2xl border">
                 <li>
                   <ProductEditor onDone={() => router.refresh()} />
                 </li>

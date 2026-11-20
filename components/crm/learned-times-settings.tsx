@@ -75,7 +75,7 @@ export default function LearnedTimesSettings({ kinds }: { kinds: LearnedKindView
         </HoldButton>
       }
     >
-      <ul className="flex flex-col" aria-label="Learned times">
+      <ul className="divide-border flex flex-col divide-y" aria-label="Learned times">
         {kinds.map((view) => {
           const Icon = ICONS[view.kind];
           return (

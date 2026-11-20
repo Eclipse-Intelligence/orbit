@@ -149,7 +149,7 @@ function MailboxRow({
   const main = mailbox.kind === "main";
   const tone = !mailbox.connected ? "off" : mailbox.needsReconnect || mailbox.problem ? "error" : "on";
   return (
-    <li aria-label={mailbox.email} className="flex flex-col gap-2 pt-3 first:pt-0">
+    <li aria-label={mailbox.email} className="border-border flex flex-col gap-2 border-t pt-3 first:border-t-0 first:pt-0">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <span className="flex min-w-0 flex-1 basis-[14em] flex-col gap-1">
           <span className="text-[14px] leading-5 [overflow-wrap:anywhere]" title={mailbox.email}>
@@ -240,7 +240,7 @@ export function MicrosoftSettings({
         </Actions>
       )}
       {main?.connected && configured && calendar?.scopeMissing && (
-        <div className="flex flex-col gap-2 pt-3">
+        <div className="border-border flex flex-col gap-2 border-t pt-3">
           <Status tone="error">{`Reconnect ${main.email} to include your calendar.`}</Status>
           <Actions>
             <Button variant="primary" size="sm" href={main.reconnectHref} aria-label={`Reconnect ${main.email}`}>
@@ -308,7 +308,7 @@ export function TeamsCallsSettings({
         </Status>
       )}
       {live && configured && transcripts && (
-        <div className="flex flex-col gap-1.5 pt-3">
+        <div className="border-border flex flex-col gap-1.5 border-t pt-3">
           <h4 className="text-[14px] leading-5">Teams transcripts</h4>
           <Status tone={transcripts.lastError ? "error" : "on"}>
             {`${syncedLine(transcripts.lastSyncedAt)}${transcripts.pending ? ` · ${transcripts.pending} waiting for the call log` : ""}`}

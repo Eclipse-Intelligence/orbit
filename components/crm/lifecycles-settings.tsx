@@ -70,7 +70,7 @@ export default function LifecyclesSettings({ lifecycles }: { lifecycles: Lifecyc
         {lifecycles.map((item) => (
           <li
             key={item.value}
-            className="flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 py-2 first:pt-0 last:pb-0"
+            className="border-border flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b py-2 first:pt-0 last:border-b-0 last:pb-0"
           >
             {renaming === item.value ? (
               <form className="flex min-w-0 flex-1 flex-col gap-1.5" onSubmit={rename}>

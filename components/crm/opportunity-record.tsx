@@ -120,7 +120,7 @@ export default function OpportunityRecord({
       <RecordLayout
         activityCount={context.timeline.length}
         summary={
-          <div className="flex flex-col gap-4 p-5">
+          <div className="flex flex-col gap-4 p-5 shadow-[inset_0_-1px_0_var(--border)]">
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <Tag tone={status.tone}>{status.label}</Tag>
