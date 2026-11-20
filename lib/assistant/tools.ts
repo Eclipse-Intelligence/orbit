@@ -105,7 +105,7 @@ import { clockLabel, durationLabel, localInstant, taskDueDay } from "@/lib/crm/t
 import { pushScheduled, scheduleTasks } from "@/lib/crm/plan-schedule";
 import { getPreferredTimes } from "@/lib/crm/schedule-preferences";
 import { planDayLabel } from "@/lib/crm/plan-tasks";
-import { chatConversation, chatPersonId, listChat, postChat, readChat } from "@/lib/chat/tools";
+import { chatConversation, chatPersonId, listChat, postChat, readChat, searchChatMessages } from "@/lib/chat/tools";
 import { CHAT_PAGE_MAX, CHAT_PAGE_SIZE } from "@/lib/chat/types";
 import { getConversation as getChatConversation, listChatPeople, listThread as listChatThread } from "@/lib/crm/chat";
 import { getGranolaStatus } from "@/lib/crm/granola";
@@ -546,7 +546,7 @@ function postsToChat(args: Args) {
   return args.action === "post";
 }
 
-const CHAT_ACTION_ERROR = "action must be read or post.";
+const CHAT_ACTION_ERROR = "action must be read, search or post.";
 
 function chatTargetName(name: Names, key: string, fallback: string) {
   const found = name(key);
@@ -1795,7 +1795,7 @@ export const TOOL_DOMAINS = {
     tools: ["reader_list", "reader_read", "recall_search", "recall_read"],
   },
   chat: {
-    summary: "team Chat: reading and posting in rooms, direct messages and threads",
+    summary: "team Chat: reading, searching and posting in rooms, direct messages and threads",
     tools: ["team_chat"],
   },
   web: {
@@ -3173,17 +3173,23 @@ const TOOL_LIST: AssistantTool[] = [
     write: true,
     reads: (args) => !postsToChat(args),
     description:
-      "The user's Chat with teammates: rooms, direct messages and threads. action read with no ids lists their rooms and direct messages with unread and mention counts, and the teammates they can message. action read with conversationId reads a room or direct message (newest first; before pages back), with threadId one thread, and with person their direct messages with that teammate. A room can have a topic; an archived room isn't listed, reads with archived true and refuses posts. A message with event true is a system line: its author did what its text says, such as \"set the topic: …\" or \"archived this room\". Reading needs no approval and marks nothing read. A message with files lists them in attachments (name, type, size); files can't be opened or attached here. action post posts text as the user where conversationId, threadId (a reply) or person (a direct message) says, and only that needs the user's approval: proposing it shows them a card, and it only runs if they confirm. Teammates see a post at once, and posting marks that conversation read up to the post. Tag a teammate with @[Name](member:id). Only post what the user asked for. Any other action is refused.",
+      "The user's Chat with teammates: rooms, direct messages and threads. action read with no ids lists their rooms and direct messages with unread and mention counts, and the teammates they can message. action read with conversationId reads a room or direct message (newest first; before pages back), with threadId one thread, and with person their direct messages with that teammate. A room can have a topic; an archived room isn't listed, reads with archived true and refuses posts. A message with event true is a system line: its author did what its text says, such as \"set the topic: …\" or \"archived this room\". Reading needs no approval and marks nothing read. A message with files lists them in attachments (name, type, size); files can't be opened or attached here. action search finds messages, thread replies and file names across every room and direct message they are in, newest first: query (at least 3 characters, matched anywhere in the text or a file name) plus optional conversationId, from (a teammate's id or email, or their own), hasFile, sentAfter and sentBefore (a date such as 2026-11-05 covers its whole day, so sentAfter 2026-11-05 starts on the 6th and sentBefore 2026-11-05 ends on the 4th, or a date and time); each result has the full text, threadId for a reply, conversation, author, attachments (names) and time, and next pages on as cursor. Archived rooms and task, doc and shared email discussions aren't searched. Searching needs no approval. action post posts text as the user where conversationId, threadId (a reply) or person (a direct message) says, and only that needs the user's approval: proposing it shows them a card, and it only runs if they confirm. Teammates see a post at once, and posting marks that conversation read up to the post. Tag a teammate with @[Name](member:id). Only post what the user asked for. Any other action is refused.",
     parameters: {
       type: "object",
       properties: {
-        action: { type: "string", enum: ["read", "post"], description: "read to list or read conversations, post to send a message." },
-        conversationId: idParam("A room or direct message id from a read with no ids."),
+        action: { type: "string", enum: ["read", "search", "post"], description: "read to list or read conversations, search to find messages, post to send a message." },
+        query: { type: "string", description: "For search: the text to find, at least 3 characters." },
+        from: { type: "string", description: "For search: only messages by this teammate (id or email, or the user's own)." },
+        hasFile: { type: "boolean", description: "For search: only messages with files." },
+        sentAfter: { type: "string", description: "For search: only messages sent after this date (YYYY-MM-DD, the whole day) or date and time." },
+        sentBefore: { type: "string", description: "For search: only messages sent before this date (YYYY-MM-DD, from its start) or date and time." },
+        cursor: { type: "string", description: "For search: the next value from the previous page." },
+        conversationId: idParam("A room or direct message id from a read with no ids. For search, only that conversation."),
         threadId: idParam("The id of a thread's first message, to read the thread or reply in it."),
         person: { type: "string", description: "A teammate's id (from a read with no ids, or list_team_members) or email address, for a direct message." },
         before: idParam("For read: a message id; returns the messages before it."),
         fromUnread: { type: "boolean", description: "For read with conversationId: start at the first unread message instead of the newest." },
-        limit: { type: "integer", description: "For read: messages to return, up to 100. Defaults to 50.", minimum: 1, maximum: 100 },
+        limit: { type: "integer", description: "For read: messages to return, up to 100. Defaults to 50. For search: results, up to 50, default 30.", minimum: 1, maximum: 100 },
         text: { type: "string", description: "For post: the message, in light Markdown, up to 10,000 characters." },
       },
       required: ["action"],
@@ -3208,7 +3214,19 @@ const TOOL_LIST: AssistantTool[] = [
       const conversationId = optionalStr(args.conversationId) ?? null;
       const threadId = optionalStr(args.threadId) ?? null;
       const person = optionalStr(args.person) ?? null;
-      if (args.action !== "read" && args.action !== "post") return { error: CHAT_ACTION_ERROR, field: "action" };
+      if (args.action !== "read" && args.action !== "search" && args.action !== "post") return { error: CHAT_ACTION_ERROR, field: "action" };
+      if (args.action === "search") {
+        return searchChatMessages(actor, {
+          query: optionalStr(args.query) ?? null,
+          conversationId,
+          from: optionalStr(args.from) ?? null,
+          hasFile: args.hasFile === true,
+          after: optionalStr(args.sentAfter) ?? null,
+          before: optionalStr(args.sentBefore) ?? null,
+          cursor: optionalStr(args.cursor) ?? null,
+          limit: typeof args.limit === "number" ? args.limit : undefined,
+        });
+      }
       if (postsToChat(args)) return postChat(actor, { conversationId, threadId, person, text: args.text });
       if (!conversationId && !threadId && !person) return listChat(actor, { people: true });
       const limit = int(args.limit, CHAT_PAGE_SIZE, 1, CHAT_PAGE_MAX);

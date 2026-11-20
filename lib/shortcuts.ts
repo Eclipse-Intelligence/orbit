@@ -201,6 +201,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: "chat-new-message", label: "New message", group: "Create", sequence: ["c", "h"], href: "/chat?new=message", palette: true, keywords: "chat direct message dm teammate" },
   { id: "chat-new-room", label: "New room", group: "Chat", palette: true, keywords: "chat create channel" },
   { id: "chat-room-settings", label: "Room settings", group: "Chat", palette: true, keywords: "chat members name workspace leave" },
+  { id: "chat-search", label: "Search Chat", group: "Chat", combos: [{ key: "f", mod: true, shift: true }], whileTyping: true, palette: true, keywords: "chat find messages files rooms direct" },
+  { id: "chat-find", label: "Find in this conversation", group: "Chat", combos: [{ key: "f", mod: true }], whileTyping: true, palette: true, keywords: "chat search room messages" },
   { id: "chat-edit-last", label: "Edit your last message", group: "Chat", combos: [{ key: "ArrowUp" }], whileTyping: true },
   { id: "chat-reply", label: "Reply in thread", group: "Chat", combos: [{ key: "r" }] },
   { id: "chat-close-thread", label: "Close the thread", group: "Chat", combos: [{ key: "Escape" }] },

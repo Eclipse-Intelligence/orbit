@@ -1,10 +1,22 @@
-import { CHAT_CLIENT_KEY_MAX, type ChatConversation, type ChatMessage, type ChatReaction } from "@/lib/chat/types";
+import { CHAT_CLIENT_KEY_MAX, type ChatConversation, type ChatMessage, type ChatReaction, type ChatSearchHit } from "@/lib/chat/types";
 import { chatEmoji, emojiByCode } from "@/lib/chat/emoji";
 import { checkChatPost, getConversation, listChatPeople, listConversations, listMessages, listThread, messageKind, openDm, ownPostWithKey, postMessage, reactToMessage } from "@/lib/crm/chat";
+import { searchChat } from "@/lib/crm/chat-search";
 import { CrmError } from "@/lib/crm/errors";
 import type { UserActor } from "@/lib/crm/types";
 
 export type ChatTargetInput = { conversationId?: string | null; person?: string | null; threadId?: string | null };
+
+export type ChatSearchToolInput = {
+  query?: string | null;
+  conversationId?: string | null;
+  from?: string | null;
+  hasFile?: boolean;
+  after?: string | null;
+  before?: string | null;
+  cursor?: string | null;
+  limit?: number;
+};
 
 export type ChatReadInput = { conversationId?: string | null; threadId?: string | null; before?: string | null; after?: string | null; fromUnread?: boolean; limit?: number };
 
@@ -110,6 +122,35 @@ export async function readChat(actor: UserActor, input: ChatReadInput) {
     hasNewer: page.hasNewer,
     firstUnreadId: page.firstUnreadId,
   };
+}
+
+export function chatHit(hit: ChatSearchHit) {
+  return {
+    id: hit.id,
+    threadId: hit.parentId,
+    conversation: { id: hit.conversationId, kind: hit.conversation.kind, name: hit.conversation.kind === "room" ? `#${hit.conversation.name}` : hit.conversation.name },
+    author: { id: hit.author.id, name: hit.author.name },
+    text: hit.text ?? hit.excerpt,
+    ...(hit.files.length > 0 ? { attachments: hit.files.map((file) => ({ name: file.name })) } : {}),
+    at: hit.createdAt,
+  };
+}
+
+async function searchPersonId(actor: UserActor, person: string) {
+  const wanted = person.trim().toLowerCase();
+  if (wanted === actor.userId || wanted === actor.email.toLowerCase()) return actor.userId;
+  return chatPersonId(actor, person);
+}
+
+export async function searchChatMessages(actor: UserActor, input: ChatSearchToolInput) {
+  if (given(input.conversationId)) chatOnly(await getConversation(actor, input.conversationId));
+  const from = given(input.from) ? await searchPersonId(actor, input.from) : null;
+  const found = await searchChat(
+    actor,
+    { text: input.query, in: given(input.conversationId) ? input.conversationId : null, from, hasFile: input.hasFile === true, after: input.after, before: input.before, cursor: input.cursor, limit: input.limit },
+    { agent: true },
+  );
+  return { results: found.hits.map(chatHit), next: found.next };
 }
 
 export function chatTargetCount(input: ChatTargetInput) {

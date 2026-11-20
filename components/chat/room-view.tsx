@@ -7,9 +7,11 @@ import { setRoomArchivedAction } from "@/app/(crm)/chat/actions";
 import { AvatarStack, ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { refreshChatSidebar, setChatViewing, useChatEvents } from "@/components/chat/chat-live";
 import { FileDrop } from "@/components/chat/attachments";
+import FindBar from "@/components/chat/find-bar";
 import Composer from "@/components/chat/composer";
 import MessageList from "@/components/chat/message-list";
 import { NotifyButton } from "@/components/chat/notify-menu";
+import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { useTyping } from "@/components/chat/use-typing";
 import { isLocal, lastOwnMessage, newestServerId, typingLine, type Timeline } from "@/lib/chat/timeline";
 import type { ChatConversation, ChatMessage, ChatRoom } from "@/lib/chat/types";
@@ -17,6 +19,7 @@ import { ROOM_MENTION_MAX_MEMBERS } from "@/lib/mentions";
 import ArchiveIcon from "@/public/assets/images/chat/archive.svg";
 import ChevronLeftIcon from "@/public/assets/images/_common/chevron-left.svg";
 import PlusIcon from "@/public/assets/images/_common/plus.svg";
+import SearchIcon from "@/public/assets/images/_common/search.svg";
 import SlidersIcon from "@/public/assets/images/chat/sliders.svg";
 
 const HEADER_AVATARS = 4;
@@ -141,6 +144,18 @@ export default function RoomView({
   const messages = useMemo(() => timeline?.messages ?? [], [timeline]);
   const [divider, setDivider] = useState<{ ready: boolean; id: string | null }>({ ready: false, id: null });
   const addFiles = useRef<((files: File[]) => void) | null>(null);
+  const [finding, setFinding] = useState(false);
+  const [findSignal, setFindSignal] = useState(0);
+  const { go } = chat;
+  const findInRoom = useCallback(() => {
+    setFinding(true);
+    setFindSignal((value) => value + 1);
+  }, []);
+  useShortcut("chat-find", findInRoom);
+  const jumpTo = useCallback(
+    (message: ChatMessage) => go({ view: { kind: "room", id: conversationId }, thread: null, message: message.parentId ?? message.id }, { replace: true }),
+    [go, conversationId],
+  );
   const uploadTo = useCallback(() => Promise.resolve({ id: conversationId, error: null }), [conversationId]);
   if (ready && !divider.ready) setDivider({ ready: true, id: firstUnread(messages, timeline?.lastReadAt ?? null, viewer.id) ?? timeline?.firstUnreadId ?? null });
   const [heldShown, setHeldShown] = useState<string | null>(null);
@@ -236,6 +251,11 @@ export default function RoomView({
               </span>
             </span>
           )}
+          {info && (
+            <Button variant="ghost" size="icon" aria-label="Find in this conversation" title="Find in this conversation" aria-keyshortcuts="Control+F Meta+F" onClick={findInRoom} className="hit max-md:hidden">
+              <SearchIcon aria-hidden className="size-3.5" />
+            </Button>
+          )}
           {conversation && <NotifyButton conversation={conversation} />}
           {!dm && info && (
             <Button variant="ghost" size="icon" aria-label="Room settings" title="Room settings" onClick={onSettings} className="hit max-md:size-11">
@@ -245,6 +265,7 @@ export default function RoomView({
           {(dm || !info) && !conversation && <span aria-hidden className="size-11 md:hidden" />}
         </span>
       </header>
+      {finding && <FindBar conversationId={conversationId} focusSignal={findSignal} onJump={jumpTo} onClose={() => setFinding(false)} />}
       {roomError && !info ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <p role="alert" className="text-danger">

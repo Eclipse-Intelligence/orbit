@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import ChatScreen, { type ChatInitial } from "@/components/chat/chat-screen";
 import { getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
-import { chatSegments, isChatId } from "@/lib/chat/routes";
+import { chatSegments, isChatId, type ChatView } from "@/lib/chat/routes";
+import { readSearchQuery } from "@/lib/chat/search";
 import { getRoom, listConversations, listMessages, listThread, listThreads } from "@/lib/crm/chat";
 import { CrmError } from "@/lib/crm/errors";
 
@@ -35,11 +36,12 @@ export default async function ChatPage({
   const user = await getUserActor();
   if (!user) redirect("/login");
   const [{ slug = [] }, search] = await Promise.all([params, searchParams]);
-  const view = chatSegments(slug);
-  if (!view) notFound();
+  const segments = chatSegments(slug);
+  if (!segments) notFound();
+  const view: ChatView = segments.kind === "search" ? { kind: "search", query: readSearchQuery(new URLSearchParams(Object.entries(search).flatMap(([key, value]) => (typeof value === "string" ? [[key, value]] : [])))) } : segments;
   const threadParam = single(search.thread);
   const messageParam = single(search.message);
-  const thread = view.kind !== "home" && isChatId(threadParam) ? threadParam.toLowerCase() : null;
+  const thread = view.kind !== "home" && view.kind !== "search" && isChatId(threadParam) ? threadParam.toLowerCase() : null;
   const message = view.kind === "room" && isChatId(messageParam) ? messageParam.toLowerCase() : null;
   const roomId = view.kind === "room" ? view.id : null;
 

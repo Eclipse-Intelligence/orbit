@@ -166,6 +166,35 @@ export type ChatSavedState = { messageId: string; saved: boolean };
 export const CHAT_REMIND_WHEN = ["hour", "tomorrow", "none"] as const;
 
 export type ChatRemindWhen = (typeof CHAT_REMIND_WHEN)[number];
+export const CHAT_SEARCH_MIN = 3;
+export const CHAT_SEARCH_PAGE = 30;
+export const CHAT_SEARCH_MAX = 50;
+export const CHAT_SEARCH_TEXT_MAX = 200;
+
+export type ChatSearchQuery = {
+  q: string;
+  in: string | null;
+  from: string | null;
+  file: boolean;
+  after: string | null;
+  before: string | null;
+};
+
+export type ChatSearchHit = {
+  id: string;
+  conversationId: string;
+  parentId: string | null;
+  createdAt: string;
+  author: { id: string | null; name: string };
+  excerpt: string;
+  text?: string;
+  files: { id: string; name: string }[];
+  conversation: { kind: ChatKind; name: string; workspaceName: string | null; archived: boolean };
+  subject: { kind: ChatSubjectKind; id: string; title: string | null } | null;
+  href: string;
+};
+
+export type ChatSearch = { hits: ChatSearchHit[]; next: string | null };
 
 export type ChatPost = { message: ChatMessage; root: ChatRoot | null; duplicate: boolean };
 

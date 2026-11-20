@@ -334,7 +334,7 @@ describe("Chat over MCP and in the assistant", () => {
       assert.equal(read.messages.length, 3);
       assert.match(read.messages[0].text, /<<untrusted-abcdef012345>>/);
       for (const action of [undefined, "Post", " post", "send", null, ["post"]]) {
-        assert.deepEqual(await runTool(mark, "team_chat", { action, conversationId: room, text: "Not posted" }), { error: "action must be read or post.", field: "action" }, String(action));
+        assert.deepEqual(await runTool(mark, "team_chat", { action, conversationId: room, text: "Not posted" }), { error: "action must be read, search or post.", field: "action" }, String(action));
       }
       assert.equal((await listMessages(mark, room, { limit: 100 })).messages.length, before);
       assert.match(read.messages[0].author.name, /^<<untrusted-abcdef012345>>/);

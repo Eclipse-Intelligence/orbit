@@ -1,11 +1,12 @@
 "use client";
 
-import { useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type Ref } from "react";
 import Button from "@/components/_ui/button";
 import CountBadge from "@/components/_ui/count-badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { ChatAvatar, roomLabel, useChat } from "@/components/chat/chat-context";
 import { conversationLevel, NotifyItems } from "@/components/chat/notify-menu";
+import SearchField, { SearchHint, type SearchBox } from "@/components/chat/search-field";
 import { chatLocationHref, type ChatView } from "@/lib/chat/routes";
 import type { ChatConversation, ChatSidebar } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
@@ -264,6 +265,8 @@ export default function ChatList({
   view,
   onNewRoom,
   onNewMessage,
+  search,
+  searchRef,
   className,
 }: {
   sidebar: ChatSidebar | null;
@@ -271,6 +274,8 @@ export default function ChatList({
   view: ChatView;
   onNewRoom: () => void;
   onNewMessage: () => void;
+  search: SearchBox;
+  searchRef: Ref<HTMLInputElement>;
   className?: string;
 }) {
   const { starred, rooms, dms } = orderedConversations(sidebar);
@@ -280,6 +285,10 @@ export default function ChatList({
 
   return (
     <nav aria-label="Conversations" className={cn("flex min-h-0 flex-col overflow-y-auto overscroll-contain px-2 py-2.5 md:w-[272px] md:shrink-0", className)}>
+      <div className="pb-2">
+        <SearchField box={search} inputRef={searchRef} hintId="chat-search-hint" />
+        <SearchHint id="chat-search-hint" value={search.value} />
+      </div>
       <ul className="flex flex-col gap-0.5">
         <Item view={{ kind: "threads" }} active={view.kind === "threads"} unread={threads.unread > 0}>
           <ThreadsIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
