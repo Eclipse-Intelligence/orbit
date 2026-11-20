@@ -6,9 +6,9 @@ import { CrmError } from "@/lib/crm/errors";
 import { closeFollowUp } from "@/lib/crm/follow-ups";
 import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
-import { applyMailAction, everyEmailChanged } from "@/lib/mail/actions";
 import { createAndFileUnknown, fileUnknownTo, ignoreUnknownMail, moveUnknownMail, neverAskUnknownMail, showUnknownMail } from "@/lib/mail/filing";
 import { removeSenderRule } from "@/lib/mail/capture-filter";
+import { queueMailAction } from "@/lib/mail/pending";
 import { updatePrepared } from "@/lib/mail/prepare";
 import { dismissReply, finishReminder } from "@/lib/mail/waiting";
 import { decideApproval } from "@/lib/workflows/store";
@@ -38,7 +38,7 @@ export type CaptureAction =
   | { kind: "person-create"; email: string }
   | { kind: "person-hide"; email: string };
 
-export type CaptureOutcome = { ok: true; contactId?: string; contactName?: string | null; importId?: string; relink?: boolean };
+export type CaptureOutcome = { ok: true; contactId?: string; contactName?: string | null; importId?: string; relink?: boolean; queued?: boolean };
 
 function text(value: unknown, max = 500) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
@@ -120,7 +120,7 @@ async function approvalActor(actor: UserActor, runId: string) {
   return (await workspaceActors(actor)).find((item) => item.workspaceId === run.workspace_id) ?? actor;
 }
 
-export async function runCaptureAction(actor: UserActor, action: CaptureAction, options: { fetchImpl?: typeof fetch } = {}): Promise<CaptureOutcome> {
+export async function runCaptureAction(actor: UserActor, action: CaptureAction, options: { fetchImpl?: typeof fetch; origin?: string | null } = {}): Promise<CaptureOutcome> {
   switch (action.kind) {
     case "approve":
       await decideApproval(await approvalActor(actor, action.runId), action.runId, { approved: true }, options);
@@ -138,11 +138,11 @@ export async function runCaptureAction(actor: UserActor, action: CaptureAction, 
       await finishReminder(actor, action.id);
       return { ok: true };
     case "reply-done":
-      await everyEmailChanged(applyMailAction(actor, { thread: action.thread, action: "archive", view: { role: "inbox" } }, options.fetchImpl));
-      return { ok: true };
+      await queueMailAction(actor, { thread: action.thread, action: "archive", view: { role: "inbox" } }, options.origin);
+      return { ok: true, queued: true };
     case "reply-snooze":
-      await everyEmailChanged(applyMailAction(actor, { thread: action.thread, action: "snooze", view: { role: "inbox" }, until: action.until }, options.fetchImpl));
-      return { ok: true };
+      await queueMailAction(actor, { thread: action.thread, action: "snooze", view: { role: "inbox" }, until: action.until }, options.origin);
+      return { ok: true, queued: true };
     case "reply-dismiss":
       await dismissReply(actor, action.thread, action.at);
       return { ok: true };

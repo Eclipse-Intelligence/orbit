@@ -22,6 +22,7 @@ type SwipeActions = {
   leftLabel: string;
   restore: boolean;
   rightLabel: string | null;
+  onLeftStart?: (key: string) => void;
   onLeft: (key: string) => void;
   onRight: (key: string) => void;
 };
@@ -112,6 +113,7 @@ function Row({
           return;
         }
         if (commit === "left") {
+          swipe.onLeftStart?.(thread.key);
           const rowWidth = row.current?.offsetWidth ?? width;
           setOffset(-rowWidth);
           later(() => {

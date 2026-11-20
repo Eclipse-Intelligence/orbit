@@ -8,6 +8,8 @@ import { runCaptureAction } from "@/lib/crm/capture-actions";
 import { ACTION_BUDGET_MS, applyMailAction, moveMessages } from "@/lib/mail/actions";
 import { processDueMail, REMINDER_ATTEMPTS } from "@/lib/mail/due";
 import { MOVE_CONFIRM_MS, MOVE_UNCONFIRMED, retryWaitMs } from "@/lib/mail/microsoft";
+import { runPendingMailActions } from "@/lib/mail/pending";
+import { takeMailRefusals } from "@/lib/mail/refusals";
 import { syncMail } from "@/lib/mail/sync";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -268,18 +270,18 @@ describe("mail action failures", () => {
 
   it("never lets Capture or a returning snooze treat a partly failed change as done", async () => {
     const failing = (id: string) => outlook((url, method) => (method === "POST" && url.endsWith(`/${id}/move`) ? serverError(500) : undefined));
-    await assert.rejects(
-      () => runCaptureAction(owner, { kind: "reply-done", thread: thread("conv-capture-archive") }, { fetchImpl: failing("capture-archive-2").fetchImpl }),
-      /Couldn't change 1 email in this conversation\. Try again later\./,
-    );
+    const queued = await runCaptureAction(owner, { kind: "reply-done", thread: thread("conv-capture-archive") });
+    assert.equal(queued.queued, true);
+    await runPendingMailActions(owner, { fetchImpl: failing("capture-archive-2").fetchImpl });
     assert.deepEqual([await roleOf("capture-archive-1"), await roleOf("capture-archive-2")], ["archive", "inbox"]);
+    const refusals = await takeMailRefusals(owner);
+    assert.match(refusals[0]?.problem ?? "", /Couldn't change 1 email in this conversation\. Try again later\./);
 
     const until = new Date(Date.now() + 3_600_000).toISOString();
-    await assert.rejects(
-      () => runCaptureAction(owner, { kind: "reply-snooze", thread: thread("conv-capture-snooze"), until }, { fetchImpl: failing("capture-snooze-2").fetchImpl }),
-      /Couldn't change 1 email in this conversation\./,
-    );
+    await runCaptureAction(owner, { kind: "reply-snooze", thread: thread("conv-capture-snooze"), until });
+    await runPendingMailActions(owner, { fetchImpl: failing("capture-snooze-2").fetchImpl });
     assert.deepEqual([await roleOf("capture-snooze-1"), await roleOf("capture-snooze-2")], ["snoozed", "inbox"]);
+    assert.match((await takeMailRefusals(owner))[0]?.problem ?? "", /Couldn't change 1 email in this conversation\./);
 
     await applyMailAction(owner, { thread: thread("conv-snoozed"), action: "snooze", view: { role: "inbox" }, until }, outlook().fetchImpl);
     await makeDue("conv-snoozed");

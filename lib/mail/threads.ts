@@ -15,6 +15,8 @@ import { firstName } from "@/lib/mail/format";
 import { replyAfterSql } from "@/lib/mail/follow-up-rules";
 import { threadDeferral } from "@/lib/mail/deferrals";
 import type { CachedSummary, MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
+import { hiddenByPending } from "@/lib/mail/pending-sql";
+import { takeMailRefusals } from "@/lib/mail/refusals";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { threadFilingInDb } from "@/lib/mail/routing";
 
@@ -73,7 +75,7 @@ export async function listThreads(
   const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), 100);
   return withActor(actor, async (db) => {
     const values: unknown[] = [actor.userId];
-    const where = ["m.user_id = $1"];
+    const where = ["m.user_id = $1", hiddenByPending("m", "f")];
     let split: MailSplit | null = null;
     let splitting = false;
     let inbox = false;
@@ -487,7 +489,7 @@ async function splitCounts(db: Db, actor: UserActor, unreadOnly = false) {
        select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.focused, m.is_read,
          coalesce(m.received_at, m.sent_at, m.created_at) as at
        from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where ${inbox}
+       where ${inbox} and ${hiddenByPending("m", "f")}
          ${
            unreadOnly
              ? `and (m.source_id, m.thread_key) in (
@@ -525,6 +527,11 @@ export async function mailVersion(actor: UserActor) {
 }
 
 export async function mailNav(actor: UserActor): Promise<MailNav> {
+  const nav = await readNav(actor);
+  return { ...nav, refusals: await takeMailRefusals(actor).catch(() => []) };
+}
+
+async function readNav(actor: UserActor): Promise<MailNav> {
   return withActor(actor, async (db) => {
     const version = await readVersion(db, actor);
     const accounts = await db.query<{ id: string; email: string; connected: boolean; main: boolean; last_error: string | null }>(
@@ -539,7 +546,7 @@ export async function mailNav(actor: UserActor): Promise<MailNav> {
     );
     const folders = await db.query<{ id: string; source_id: string; name: string; role: MailRole; unread: number }>(
       `select f.id, f.source_id, f.name, f.role,
-         (select count(distinct m.thread_key)::int from crm.mail_messages m where m.folder_id = f.id and not m.is_read) as unread
+         (select count(distinct m.thread_key)::int from crm.mail_messages m where m.folder_id = f.id and not m.is_read and ${hiddenByPending("m", "f")}) as unread
        from crm.mail_folders f
        where f.user_id = $1 and f.sync_state <> 'skipped'
        order by f.name`,

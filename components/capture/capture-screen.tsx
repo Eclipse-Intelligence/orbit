@@ -17,7 +17,7 @@ import {
 } from "@/components/capture/capture-items";
 import Dismissed from "@/components/capture/dismissed";
 import NotShown from "@/components/capture/not-shown";
-import { OFFLINE, postCapture } from "@/components/capture/capture-post";
+import { OFFLINE, postCaptureKeeping } from "@/components/capture/capture-post";
 import { CaptureListContext, COLLAPSE_MS } from "@/components/capture/capture-row";
 import CaptureSeen from "@/components/crm/capture-seen";
 import SectionHeader from "@/components/crm/section-header";
@@ -36,7 +36,7 @@ import { contactHref } from "@/lib/crm/hrefs";
 import type { SkippedEmail } from "@/lib/mail/capture-filter";
 import type { SenderRule } from "@/lib/mail/relevance";
 import type { UnknownEmail } from "@/lib/mail/filing";
-import type { WorkspaceChoiceRef } from "@/lib/mail/view";
+import { refusalMessage, type MailRefusalItem, type WorkspaceChoiceRef } from "@/lib/mail/view";
 import type { WaitingNudge, WaitingReminder, WaitingReply } from "@/lib/mail/waiting";
 import { SETTINGS_PATHS } from "@/lib/settings-nav";
 import { cn } from "@/lib/utils";
@@ -138,6 +138,7 @@ export default function CaptureScreen({
   dismissedTotal,
   sorting,
   rules,
+  refusals,
   failed,
   workspaces,
   workspaceId,
@@ -152,6 +153,7 @@ export default function CaptureScreen({
   dismissedTotal: number;
   sorting: number;
   rules: SenderRule[];
+  refusals: MailRefusalItem[];
   failed: CaptureSectionId[];
   workspaces: WorkspaceChoiceRef[];
   workspaceId: string;
@@ -292,6 +294,10 @@ export default function CaptureScreen({
     };
   }, [setCaptureLive]);
 
+  useEffect(() => {
+    for (const refusal of refusals) showToast({ message: refusalMessage(refusal), tone: "alert" });
+  }, [refusals, showToast]);
+
   function hide(id: string) {
     setHidden((current) => new Set(current).add(id));
   }
@@ -353,7 +359,7 @@ export default function CaptureScreen({
   function commit(item: Pending, keepalive: boolean) {
     dismissToast(item.toast);
     const filing = FILED.has(item.action.kind) && mounted.current ? showToast({ message: "Filing…", duration: FILING_MS }) : null;
-    postCapture(item.action, workspaceId, keepalive)
+    postCaptureKeeping(item.action, workspaceId, keepalive)
       .then((outcome) => {
         if (filing !== null) dismissToast(filing);
         filed(outcome, item.action);

@@ -234,13 +234,7 @@ async function failureMessage(actor: UserActor, sourceId: string, error: unknown
 
 export type MailActionResult = { changed: number; failed: number; problem: string | null };
 
-export async function applyMailAction(
-  actor: UserActor,
-  input: { thread: string; action: MailAction; view?: MailView | null; until?: string | null },
-  fetchImpl: typeof fetch = fetch,
-  options: { deadline?: number; origin?: string | null } = {},
-): Promise<MailActionResult> {
-  const limit: GraphLimit = { deadline: options.deadline ?? Date.now() + ACTION_BUDGET_MS };
+export function readMailActionInput(input: { thread: string; action: MailAction; view?: MailView | null; until?: string | null }) {
   if (!MAIL_ACTIONS.includes(input.action)) throw new CrmError("validation_error", "Choose a mail action.", 400);
   const until = input.action === "snooze" ? new Date(input.until ?? "") : null;
   if (until && (Number.isNaN(until.getTime()) || until.getTime() < Date.now() + SNOOZE_MIN_MS || until.getTime() > Date.now() + SNOOZE_MAX_MS)) {
@@ -248,6 +242,17 @@ export async function applyMailAction(
   }
   const view = input.view && "folderId" in input.view && !isUuid(input.view.folderId) ? null : (input.view ?? null);
   const { sourceId, key } = parseThreadKey(input.thread);
+  return { until, view, sourceId, key };
+}
+
+export async function applyMailAction(
+  actor: UserActor,
+  input: { thread: string; action: MailAction; view?: MailView | null; until?: string | null },
+  fetchImpl: typeof fetch = fetch,
+  options: { deadline?: number; origin?: string | null } = {},
+): Promise<MailActionResult> {
+  const limit: GraphLimit = { deadline: options.deadline ?? Date.now() + ACTION_BUDGET_MS };
+  const { until, view, sourceId, key } = readMailActionInput(input);
   const rows = await withActor(actor, async (db) => {
     const result = await db.query<Row>(
       `select m.id, m.provider_message_id, m.folder_id, f.role, m.is_read, m.is_flagged, m.subject,
@@ -309,7 +314,10 @@ export async function applyMailAction(
   if (failures.length === 0) return { changed: done.length, failed: 0, problem: null };
   logFailures(input.action, sourceId, failures);
   if (done.length === 0) {
-    throw (await sourceReconnect(actor, sourceId, failures[0])) ?? new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502);
+    throw (
+      (await sourceReconnect(actor, sourceId, failures[0])) ??
+      Object.assign(new CrmError("mail_action_failed", await failureMessage(actor, sourceId, failures[0]), 502), { cause: failures[0] })
+    );
   }
   return { changed: done.length, failed: failures.length, problem: await failureMessage(actor, sourceId, failures[0]) };
 }
