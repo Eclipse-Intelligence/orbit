@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { pasteAttaches } from "@/lib/chat/files";
 import { dayLabel, shortWhen } from "@/lib/chat/format";
+import { canSaveMessage } from "@/lib/chat/saved";
 import { chatHistoryState, chatLocationHref, chatSegments, messageHref, parseChatLocation } from "@/lib/chat/routes";
 import {
   appendCards,
@@ -516,5 +517,15 @@ describe("chat notify and unread state", () => {
     assert.ok(esc.indexOf("chat-close-thread") >= 0 && esc.indexOf("chat-close-thread") < esc.indexOf("chat-mark-read"));
     const shifted = matchingShortcuts({ key: "Escape", metaKey: false, ctrlKey: false, altKey: false, shiftKey: true }, true).map((shortcut) => shortcut.id);
     assert.deepEqual(shifted, ["chat-mark-all-read"]);
+  });
+});
+
+describe("saved messages", () => {
+  it("only a sent, undeleted, non-event message can be saved or marked saved", () => {
+    assert.equal(canSaveMessage(message({ at: "2026-11-11T09:00:00.000Z" })), true);
+    assert.equal(canSaveMessage(message({ at: "2026-11-11T09:00:00.000Z", deletedAt: "2026-11-11T09:05:00.000Z" })), false);
+    assert.equal(canSaveMessage(message({ at: "2026-11-11T09:00:00.000Z", kind: "event" })), false);
+    const local = localMessage({ clientKey: "key-3", conversationId: ROOM, parentId: null, author: { id: ME, name: "Mark" }, body: "Hi", mentions: [], at: "2026-11-11T09:06:00.000Z" });
+    assert.equal(canSaveMessage(local), false);
   });
 });
