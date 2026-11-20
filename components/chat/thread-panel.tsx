@@ -101,7 +101,7 @@ export default function ThreadPanel({
           </h3>
           {place && <span className="caption-style text-subtle truncate max-md:hidden">{place}</span>}
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-0.5 max-md:ml-0">
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 pointer-coarse:gap-6 max-md:ml-0">
           {root ? <AskAboutThread root={root} /> : <span aria-hidden className="size-11 shrink-0 md:hidden" />}
           <Button variant="ghost" size="icon-sm" aria-label="Close thread" title="Close (Esc)" onClick={onClose} className="hit max-md:hidden">
             <XIcon aria-hidden className="size-4" />

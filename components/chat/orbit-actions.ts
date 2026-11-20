@@ -5,7 +5,7 @@ import { useChat } from "@/components/chat/chat-context";
 import { addTask } from "@/components/crm/add-task-event";
 import { useComposer } from "@/components/mail/compose-dock";
 import { isLocal } from "@/lib/chat/timeline";
-import { orbitLink, taskTitleFromMessage } from "@/lib/chat/task-text";
+import { taskTitleFromMessage } from "@/lib/chat/task-text";
 import type { ChatMessage } from "@/lib/chat/types";
 import { focusChatThreadForAsk } from "@/stores/page-context-store";
 
@@ -22,7 +22,7 @@ export function useOrbitActions(message: ChatMessage) {
 
   function createTask() {
     const link = messageLink(message);
-    const opened = addTask({ title: taskTitleFromMessage(message), description: orbitLink(link.label, link.href) });
+    const opened = addTask({ title: taskTitleFromMessage(message), link });
     if (!opened) composer.showToast({ message: "Couldn't open Add task. Try again.", tone: "alert" });
   }
 

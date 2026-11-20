@@ -220,7 +220,7 @@ export function QuickTaskForm({ prefill, thread, seed, setup, viewerId, onDone }
         initialCompany={prefill.company}
         thread={thread ?? null}
         start={seed ? { title: seed.title, due: null, durationMinutes: null, repeat: null } : null}
-        description={seed?.description ?? null}
+        link={seed?.link ?? null}
         caretAtEnd={Boolean(seed)}
         members={setup?.members ?? []}
         viewerId={viewerId}
