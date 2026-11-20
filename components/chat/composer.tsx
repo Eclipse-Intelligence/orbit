@@ -217,6 +217,17 @@ export function ComposerBox({
   }, [code, library, emojiPrefs.tone]);
   const codeOpen = codeOptions.length > 0;
 
+  useEffect(() => {
+    const phone = window.matchMedia("(max-width: 767px)");
+    const check = () => {
+      const area = inputRef.current;
+      if (!phone.matches || !area || document.activeElement !== area) return;
+      if (area.selectionStart !== area.selectionEnd) setPhoneTools(true);
+    };
+    document.addEventListener("selectionchange", check);
+    return () => document.removeEventListener("selectionchange", check);
+  }, [inputRef]);
+
   function track(text: string, caret: number) {
     const found = shortcodeAt(text, caret);
     if (found && dismissed.current === found.start) return setCode(null);
@@ -343,7 +354,6 @@ export function ComposerBox({
       onSelect={(event) => {
         if (!(event.target instanceof HTMLTextAreaElement)) return;
         setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
-        if (event.target.selectionStart !== event.target.selectionEnd && window.matchMedia("(max-width: 767px)").matches) setPhoneTools(true);
         if (event.target.selectionStart === event.target.selectionEnd) track(event.target.value, event.target.selectionStart);
         else setCode(null);
       }}
