@@ -343,6 +343,7 @@ export function ComposerBox({
       onSelect={(event) => {
         if (!(event.target instanceof HTMLTextAreaElement)) return;
         setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
+        if (event.target.selectionStart !== event.target.selectionEnd && window.matchMedia("(max-width: 767px)").matches) setPhoneTools(true);
         if (event.target.selectionStart === event.target.selectionEnd) track(event.target.value, event.target.selectionStart);
         else setCode(null);
       }}
