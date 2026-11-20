@@ -389,6 +389,22 @@ export function ComposerBox({
         }}
       >
         {shown && <Toolbar onRun={run} active={active} className="border-line-subtle overflow-x-auto overscroll-contain border-b px-1.5 py-1 max-md:hidden" />}
+        {phoneTools && (
+          <div className="border-line-subtle flex items-center gap-1 border-b px-2 py-1.5 md:hidden">
+            <Button
+              variant="primary"
+              size="none"
+              aria-label="Hide formatting"
+              title="Hide formatting"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setPhoneTools(false)}
+              className="hit size-[34px] shrink-0 rounded-full"
+            >
+              <CloseIcon aria-hidden className="size-4" />
+            </Button>
+            <Toolbar onRun={run} active={active} phone className="min-w-0 flex-1 overflow-x-auto overscroll-contain" />
+          </div>
+        )}
         <div className="flex items-end gap-2">
           {collapsed && phoneLead && <div className="shrink-0 p-[3px] pr-0 md:hidden">{phoneLead}</div>}
           <div className={cn("min-w-0 flex-1 px-3.5 pt-2.5 pb-1", collapsed && "max-md:py-[9px] max-md:pl-4", collapsed && phoneLead && "max-md:pl-1")}>
@@ -426,23 +442,7 @@ export function ComposerBox({
         </div>
         {queue}
         <div className={cn("flex items-center gap-0.5 px-1.5 pt-0.5 pb-1.5 max-md:gap-1 max-md:px-2 max-md:pb-2", collapsed && "max-md:hidden")}>
-          {phoneTools && (
-            <div className="flex min-w-0 flex-1 items-center gap-1 md:hidden">
-              <Button
-                variant="primary"
-                size="none"
-                aria-label="Hide formatting"
-                title="Hide formatting"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setPhoneTools(false)}
-                className="hit size-[38px] shrink-0 rounded-full"
-              >
-                <CloseIcon aria-hidden className="size-4" />
-              </Button>
-              <Toolbar onRun={run} active={active} phone className="min-w-0 flex-1 overflow-x-auto overscroll-contain" />
-            </div>
-          )}
-          <div className={cn("flex min-w-0 flex-1 items-center gap-0.5 max-md:gap-1", phoneTools && "max-md:hidden")}>
+          <div className={cn("flex min-w-0 flex-1 items-center gap-0.5 max-md:gap-1")}>
             {phoneLead ? (
               <>
                 <span className="contents md:hidden">{phoneLead}</span>
@@ -464,7 +464,7 @@ export function ComposerBox({
               <FormatToggle shown={shown} onToggle={() => setShown(!shown)} />
             </span>
             <span className="contents md:hidden">
-              <FormatToggle shown={false} onToggle={() => setPhoneTools(true)} phone />
+              <FormatToggle shown={phoneTools} onToggle={() => setPhoneTools(!phoneTools)} phone />
             </span>
             <span className="flex-1" />
           </div>
