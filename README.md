@@ -99,6 +99,12 @@ Chat is one place for talking to teammates, the same in every workspace. Rooms a
 
 React to any message, in rooms, direct messages, threads and task, doc and shared email discussions: the three emoji you used most recently sit on the hover toolbar, **Add reaction** opens the picker (search, recent, skin tone), and on a phone a long press shows quick reactions. Pills under the message show who reacted on hover; tap one to add or remove yours. A message can have up to 20 different emoji. Reactions alert no one. In the composer, the Emoji button inserts at the caret and `:` followed by two letters suggests emoji by shortcode.
 
+### Saved messages
+
+**Save** on a message's hover toolbar (or in the long-press menu on a phone) puts it in **Saved**, below All unreads in the Chat list, newest saved first. It works on every message, in rooms, direct messages, threads and task, doc and shared email discussions. **Open** goes to the message (a thread reply opens its thread, a discussion message opens the task, doc or shared email) and **Remove** takes it out of Saved. Saved is private to you: nobody else can see what you saved. A message you can no longer see (you left the room, or the task was reassigned) drops out of Saved and comes back if you get access again, and a deleted message drops out for good.
+
+**Remind me about this** (the bell on the toolbar, or the long-press menu) makes a reminder, In 1 hour, Tomorrow or No date. It is titled "Chat message from <first name>" and links to the message, and never carries the message's text, because reminder titles go to push notifications and Outlook. The reminders card shows the link as **Open message**.
+
 ### Incoming webhooks
 
 A room can take posts from other tools, for example Google Analytics alerts into #alerts through Zapier or Make. Anyone in the room can set one up in Room settings › Incoming webhooks: press **Add incoming webhook**, name it, and copy the URL and the secret (shown once). Pause stops posts without losing the URL, Rotate secret replaces the secret at once, and Hold to delete deletes the hook (its messages stay). Anyone in the room can delete a hook message from its menu.

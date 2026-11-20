@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import Link from "next/link";
 import Button from "@/components/_ui/button";
 import { DueDatePicker } from "@/components/_ui/date-picker";
 import HoldButton from "@/components/_ui/hold-button";
@@ -12,7 +13,7 @@ import { RepeatIcon, RepeatPicker } from "@/components/crm/task-repeat";
 import type { Reminder, ReminderInput } from "@/lib/crm/reminders";
 import { localInstant } from "@/lib/crm/task-time";
 import { TIME_OPTIONS } from "@/lib/date-input";
-import { draftOfRepeat, dueChange, REMINDER_NOT_REMOVED, repeatWords } from "@/lib/reminders-card";
+import { draftOfRepeat, dueChange, REMINDER_LINK_LABEL, REMINDER_NOT_REMOVED, repeatWords } from "@/lib/reminders-card";
 import { padDueHasTime } from "@/lib/task-pad";
 import { repeatInputOf } from "@/lib/task-repeat";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ export default function ReminderDetails({
   error,
   onSave,
   onDelete,
+  onFollow,
   onTurnIntoTask,
   stuck = false,
   onRetryRemove,
@@ -38,6 +40,7 @@ export default function ReminderDetails({
   error: string | null;
   onSave: (id: string, change: ReminderInput) => void;
   onDelete: () => void;
+  onFollow: () => void;
   onTurnIntoTask: () => void;
   stuck?: boolean;
   onRetryRemove?: () => void;
@@ -100,6 +103,15 @@ export default function ReminderDetails({
           }
         }}
       />
+      {reminder.link && (
+        <Link
+          href={reminder.link}
+          onClick={onFollow}
+          className="ui-style text-soft hover:text-foreground focus-visible:ring-ring/60 hit self-start rounded-sm underline decoration-white/35 underline-offset-[3px] outline-none focus-visible:ring-2"
+        >
+          {REMINDER_LINK_LABEL}
+        </Link>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <div className="flex min-w-0 flex-col gap-1.5">
           <label htmlFor={`${id}-date`} className="caption-style text-subtle">

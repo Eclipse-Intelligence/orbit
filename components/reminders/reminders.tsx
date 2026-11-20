@@ -434,13 +434,17 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
     storePosition(next);
   }
 
+  function followLink() {
+    if (!wide) close();
+  }
+
   const groups = reminders ? groupReminders(reminders, held, today) : null;
   const large = !wide;
   const listed = groups ? groups.today.length + groups.upcoming.length + groups.noDate.length : 0;
 
   function rows(group: GroupId, items: ReminderRow[]) {
     return items.map((row) => (
-      <ReminderRowView key={row.key} row={row} today={today} group={group} large={large} swipe={!wide} onTick={tick} onOpen={openDetail} />
+      <ReminderRowView key={row.key} row={row} today={today} group={group} large={large} swipe={!wide} onTick={tick} onOpen={openDetail} onFollow={followLink} />
     ));
   }
 
@@ -506,6 +510,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
       stuck={stuck === detail.id}
       onSave={save}
       onDelete={() => void remove()}
+      onFollow={followLink}
       onTurnIntoTask={turnIntoTask}
       onRetryRemove={() => void retryRemove(detail.id)}
     />

@@ -45,6 +45,7 @@ function reminder(fields: Partial<Reminder> & { title: string }): Reminder {
     completedAt: null,
     repeatOf: null,
     movedTo: null,
+    link: null,
     createdAt: `2026-11-01T09:00:${String(next % 60).padStart(2, "0")}.000Z`,
     updatedAt: "2026-11-01T09:00:00.000Z",
     ...fields,

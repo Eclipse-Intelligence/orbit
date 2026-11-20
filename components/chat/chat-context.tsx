@@ -5,6 +5,7 @@ import { ParticipantAvatar, type AvatarSize } from "@/components/docs/presence";
 import type { ChatLocation } from "@/lib/chat/routes";
 import type { EmojiPrefs } from "@/components/chat/reactions";
 import type { ChatTimelineActions } from "@/components/chat/use-chat-actions";
+import type { ChatSavedActions } from "@/components/chat/use-saved";
 import type { ChatAttachment, ChatConversation, ChatMessage, ChatPerson } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 import { personParticipant } from "@/lib/docs/participants";
@@ -35,6 +36,7 @@ export type ChatContextValue = ChatTimelineActions & {
   send: (input: { conversationId: string; parentId: string | null; text: string; mentions: Mention[]; attachments?: ChatAttachment[]; discardOnFailure?: boolean }) => Promise<string | null>;
   memberNames: Map<string, string>;
   emoji: EmojiPrefs;
+  saved: ChatSavedActions;
   discussion?: boolean;
 };
 

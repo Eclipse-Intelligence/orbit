@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatPage, ChatPerson, ChatRoom, ChatSidebar, ChatThread, ChatThreads, ChatUnreads } from "@/lib/chat/types";
+import type { ChatAttachment, ChatPage, ChatPerson, ChatRoom, ChatSaved, ChatSavedIds, ChatSidebar, ChatThread, ChatThreads, ChatUnreads } from "@/lib/chat/types";
 import type { Mention } from "@/lib/mentions";
 
 const TIMEOUT_MS = 15_000;
@@ -38,6 +38,8 @@ export const chatApi = {
     request<ChatThread>(`/api/chat/threads/${rootId}${query(options)}`, "Couldn't load the thread. Try again."),
   unreads: () => request<ChatUnreads>("/api/chat/unreads", "Couldn't load unread messages. Try again."),
   threads: (cursor?: string | null) => request<ChatThreads>(`/api/chat/threads${query({ cursor })}`, "Couldn't load threads. Try again."),
+  saved: (cursor?: string | null) => request<ChatSaved>(`/api/chat/saved${query({ cursor })}`, "Couldn't load saved messages. Try again."),
+  savedIds: () => request<ChatSavedIds>("/api/chat/saved/ids", "Couldn't load saved messages. Try again."),
   people: (workspaceId?: string | null) =>
     request<{ people: (ChatPerson & { email: string | null })[] }>(`/api/chat/people${query({ workspace: workspaceId })}`, "Couldn't load people. Try again."),
   markRead: (id: string, upTo: string | null) => markUpTo<{ lastReadAt: string }>(`/api/chat/${id}/read`, "Couldn't mark it read. Try again.", upTo),

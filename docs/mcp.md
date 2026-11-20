@@ -268,7 +268,7 @@ For a person who has connected Reader in Settings › Connections. They use only
 
 ### Reminders (personal tokens only)
 
-The person's own reminders: small to-dos that aren't tasks, with an optional day, time, Block time and repeat. They are private to the person (owners and admins included) and the same in every workspace, so a workspace agent token never gets these tools, and `lib/crm/reminders.ts` refuses any agent with `forbidden` "Reminders belong to a person. Use a personal token." whatever its scopes. Reminders aren't audited and start no workflow or webhook. The rules and the reminder's fields are the same as REST (see Reminders in `docs/api.md`); another person's reminder is `not_found`.
+The person's own reminders: small to-dos that aren't tasks, with an optional day, time, Block time and repeat. They are private to the person (owners and admins included) and the same in every workspace, so a workspace agent token never gets these tools, and `lib/crm/reminders.ts` refuses any agent with `forbidden` "Reminders belong to a person. Use a personal token." whatever its scopes. Reminders aren't audited and start no workflow or webhook. The rules and the reminder's fields are the same as REST (see Reminders in `docs/api.md`); another person's reminder is `not_found`. A reminder made by Chat's Remind me about this comes back with a read-only `link` to the message and a title that never carries its text; these tools can't set or change it, and Saved messages aren't reachable from MCP.
 
 | Tool | What it does | Main parameters | Scope | Changes | Tokens |
 | --- | --- | --- | --- | --- | --- |

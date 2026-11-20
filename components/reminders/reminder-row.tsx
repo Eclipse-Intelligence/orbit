@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { swipeCommit, watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import type { Reminder } from "@/lib/crm/reminders";
-import { dayLabel, repeatWords, type ReminderRow } from "@/lib/reminders-card";
+import { dayLabel, REMINDER_LINK_LABEL, repeatWords, type ReminderRow } from "@/lib/reminders-card";
 import { cn } from "@/lib/utils";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 
@@ -63,6 +64,7 @@ export default function ReminderRowView({
   swipe,
   onTick,
   onOpen,
+  onFollow,
 }: {
   row: ReminderRow;
   today: string;
@@ -71,6 +73,7 @@ export default function ReminderRowView({
   swipe: boolean;
   onTick: (row: ReminderRow) => void;
   onOpen: (reminder: Reminder) => void;
+  onFollow: () => void;
 }) {
   const { reminder, ticked } = row;
   const done = ticked || Boolean(reminder.completedAt);
@@ -162,6 +165,15 @@ export default function ReminderRowView({
             <span className="pointer-events-none relative">
               <Meta row={row} today={today} group={group} />
             </span>
+            {reminder.link && (
+              <Link
+                href={reminder.link}
+                onClick={onFollow}
+                className="caption-style text-soft hover:text-foreground focus-visible:ring-ring/60 hit relative z-[1] self-start rounded-sm underline decoration-white/35 underline-offset-[3px] outline-none focus-visible:ring-2"
+              >
+                {REMINDER_LINK_LABEL}
+              </Link>
+            )}
           </div>
         </div>
       </div>

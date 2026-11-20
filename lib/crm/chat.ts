@@ -59,7 +59,7 @@ import { sharedThreadHref } from "@/lib/mail/share-types";
 
 type Stamp = Date | string;
 
-type MessageRow = {
+export type MessageRow = {
   id: string;
   conversation_id: string;
   parent_id: string | null;
@@ -120,15 +120,15 @@ const THREADS_PAGE_MAX = 50;
 const SEARCH_LIMIT = 30;
 const UNREADS_PER_CONVERSATION = 20;
 const MENTION_MAX = 50;
-const FORMER = "Former teammate";
+export const FORMER = "Former teammate";
 const NUL = /\u0000/g;
 const CONTROLS = /[\u0000\u00AD\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/g;
 const FILLERS = /[\u115F\u1160\u3164\uFFA0\u2800]/g;
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 
-function iso(value: Stamp): string;
-function iso(value: Stamp | null): string | null;
-function iso(value: Stamp | null) {
+export function iso(value: Stamp): string;
+export function iso(value: Stamp | null): string | null;
+export function iso(value: Stamp | null) {
   return value === null ? null : new Date(value).toISOString();
 }
 
@@ -136,7 +136,7 @@ function millis(value: Stamp) {
   return new Date(value).getTime();
 }
 
-function messageColumns(alias = "m") {
+export function messageColumns(alias = "m") {
   return `${alias}.id, ${alias}.conversation_id, ${alias}.parent_id, ${alias}.kind, ${alias}.author_user_id, ${alias}.author_name, ${alias}.via_workflow_id, ${alias}.via_workflow_name, ${alias}.client_key, ${alias}.body, ${alias}.format,
     ${alias}.mentions::text[] as mentions, ${alias}.reply_count, ${alias}.last_reply_at, ${alias}.edited_at, ${alias}.deleted_at, ${alias}.created_at, ${alias}.hook,
     case when ${alias}.reply_count > 0 then coalesce((
@@ -185,7 +185,7 @@ function reactionsFor(reactions: ChatReaction[], viewerId: string): ChatReaction
   return reactions.map((reaction) => ({ ...reaction, mine: reaction.people.some((person) => person.id === viewerId) }));
 }
 
-function toMessage(row: MessageRow, viewerId: string): ChatMessage {
+export function toMessage(row: MessageRow, viewerId: string): ChatMessage {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -250,7 +250,7 @@ function toConversation(row: ConversationRow): ChatConversation {
   };
 }
 
-const MEMBER_NAME = (member: string, profile: string) => `coalesce(nullif(btrim(${member}.name), ''), nullif(btrim(${profile}.full_name), ''), ${profile}.email)`;
+export const MEMBER_NAME = (member: string, profile: string) => `coalesce(nullif(btrim(${member}.name), ''), nullif(btrim(${profile}.full_name), ''), ${profile}.email)`;
 
 const CONVERSATIONS_SQL = `
   select c.id, c.kind, c.name, c.workspace_id, w.name as workspace_name, c.topic, c.archived_at, c.created_at, c.created_by, me.last_read_at,
@@ -313,7 +313,7 @@ function writable(conversation: ConversationRow) {
   return conversation;
 }
 
-function checkId(id: unknown, noun: string): string {
+export function checkId(id: unknown, noun: string): string {
   if (typeof id !== "string" || !isUuid(id)) throw notFound(noun);
   return id.toLowerCase();
 }
@@ -912,7 +912,7 @@ export async function listThread(actor: UserActor, rootId: string, options: { be
 
 type ThreadsCursor = { u: 0 | 1; t: string; id: string };
 
-const CURSOR_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2}){0,2}$/;
+export const CURSOR_TIME = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2}){0,2}$/;
 
 function readThreadsCursor(value: string | null | undefined): ThreadsCursor | null {
   if (!value) return null;

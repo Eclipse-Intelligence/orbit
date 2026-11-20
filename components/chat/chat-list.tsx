@@ -15,6 +15,7 @@ import PlusIcon from "@/public/assets/images/_common/plus.svg";
 import BellOffIcon from "@/public/assets/images/chat/bell-off.svg";
 import ThreadsIcon from "@/public/assets/images/chat/threads.svg";
 import UnreadsIcon from "@/public/assets/images/chat/unreads.svg";
+import BookmarkIcon from "@/public/assets/images/chat/bookmark.svg";
 
 const LONG_PRESS_MS = 450;
 const MOVE_SLOP = 10;
@@ -31,7 +32,7 @@ export function orderedConversations(sidebar: ChatSidebar | null) {
 
 export function listViews(sidebar: ChatSidebar | null): ChatView[] {
   const { starred, rooms, dms } = orderedConversations(sidebar);
-  return [{ kind: "threads" }, { kind: "unreads" }, ...[...starred, ...rooms, ...dms].map((conversation) => ({ kind: "room" as const, id: conversation.id }))];
+  return [{ kind: "threads" }, { kind: "unreads" }, { kind: "saved" }, ...[...starred, ...rooms, ...dms].map((conversation) => ({ kind: "room" as const, id: conversation.id }))];
 }
 
 function Badge({ count, accent, label, className }: { count: number; accent: boolean; label: string; className?: string }) {
@@ -289,6 +290,10 @@ export default function ChatList({
           <UnreadsIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate">All unreads</span>
           <Badge count={unreadConversations} accent={false} label={unreadConversations === 1 ? "unread conversation" : "unread conversations"} />
+        </Item>
+        <Item view={{ kind: "saved" }} active={view.kind === "saved"} unread={false}>
+          <BookmarkIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">Saved</span>
         </Item>
       </ul>
       {error && !sidebar && (

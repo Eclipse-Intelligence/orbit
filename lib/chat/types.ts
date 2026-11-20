@@ -150,6 +150,23 @@ export type ChatUnreads = { groups: ChatUnreadGroup[] };
 
 export type ChatSearchResult = { messages: ChatMessage[] };
 
+export type ChatSavedItem = {
+  message: ChatMessage;
+  conversation: { id: string; kind: ChatKind; name: string };
+  subject: ChatSubject | null;
+  savedAt: string;
+};
+
+export type ChatSaved = { items: ChatSavedItem[]; next: string | null };
+
+export type ChatSavedIds = { ids: string[] };
+
+export type ChatSavedState = { messageId: string; saved: boolean };
+
+export const CHAT_REMIND_WHEN = ["hour", "tomorrow", "none"] as const;
+
+export type ChatRemindWhen = (typeof CHAT_REMIND_WHEN)[number];
+
 export type ChatPost = { message: ChatMessage; root: ChatRoot | null; duplicate: boolean };
 
 export type ChatReacted = { conversationId: string; messageId: string; parentId: string | null; emoji: string; present: boolean; changed: boolean; reactions: ChatReaction[]; at: string };

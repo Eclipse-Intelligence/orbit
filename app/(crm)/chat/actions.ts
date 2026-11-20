@@ -2,7 +2,7 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import type { ChatFormat } from "@/lib/chat/markdown";
-import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatNotifyInput, ChatPost, ChatReacted, ChatResult, ChatUpload } from "@/lib/chat/types";
+import type { ChatConversation, ChatHook, ChatHookSecret, ChatMessage, ChatNeedsShare, ChatNotifyInput, ChatPost, ChatReacted, ChatRemindWhen, ChatResult, ChatSavedState, ChatUpload } from "@/lib/chat/types";
 import {
   addRoomMembers,
   createRoom,
@@ -20,8 +20,11 @@ import {
   updateRoom,
 } from "@/lib/crm/chat";
 import { discardChatUploads, prepareChatUpload } from "@/lib/crm/chat-attachments";
+import { remindAboutMessage, setMessageSaved } from "@/lib/crm/chat-saved";
 import { createHook, deleteHook, listHooks, rotateHookSecret, setHookPaused } from "@/lib/crm/chat-hooks";
 import { CrmError } from "@/lib/crm/errors";
+import { isUuid } from "@/lib/crm/mutate";
+import type { Reminder } from "@/lib/crm/reminders";
 import type { UserActor } from "@/lib/crm/types";
 
 function needsShare(error: CrmError): { needsShare?: ChatNeedsShare } {
@@ -115,6 +118,14 @@ export async function deleteMessageAction(id: string): Promise<ChatResult<{ dele
 
 export async function reactAction(messageId: string, emoji: string, want?: boolean): Promise<ChatResult<ChatReacted>> {
   return run("Couldn't react. Try again.", (actor) => reactToMessage(actor, messageId, emoji, { want: typeof want === "boolean" ? want : null }));
+}
+
+export async function saveMessageAction(messageId: string, saved: boolean): Promise<ChatResult<ChatSavedState>> {
+  return run("Couldn't save the message. Try again.", (actor) => setMessageSaved(actor, messageId, saved === true));
+}
+
+export async function remindAboutMessageAction(messageId: string, when: ChatRemindWhen, key: string | null = null): Promise<ChatResult<{ reminder: Reminder }>> {
+  return run("Couldn't set the reminder. Try again.", (actor) => remindAboutMessage(actor, messageId, when, { idempotencyKey: typeof key === "string" && isUuid(key) ? key : null }));
 }
 
 export async function listHooksAction(roomId: string): Promise<ChatResult<{ hooks: ChatHook[] }>> {
