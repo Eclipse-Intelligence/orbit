@@ -10,7 +10,7 @@ import Composer from "@/components/chat/composer";
 import { PhoneBack } from "@/components/chat/room-view";
 import { chatApi } from "@/lib/chat/client";
 import { shortWhen } from "@/lib/chat/format";
-import { appendCards, applyReactions, refreshCards } from "@/lib/chat/timeline";
+import { appendCards, applyPreviews, applyReactions, refreshCards } from "@/lib/chat/timeline";
 import { isDirect, type ChatMessage, type ChatThreadCard, type ChatThreads } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
@@ -128,6 +128,11 @@ export default function ThreadsView({ initial }: { initial: ChatThreads | { erro
   useChatEvents((event) => {
     if (event.type === "reaction") {
       const apply = (messages: ChatMessage[]) => applyReactions(messages, event.messageId, event.reactions, event.at);
+      setCards((current) => current?.map((card) => ({ ...card, root: apply([card.root])[0], latest: apply(card.latest) })) ?? current);
+      return;
+    }
+    if (event.type === "previews") {
+      const apply = (messages: ChatMessage[]) => applyPreviews(messages, event.messageId, event.previews);
       setCards((current) => current?.map((card) => ({ ...card, root: apply([card.root])[0], latest: apply(card.latest) })) ?? current);
       return;
     }

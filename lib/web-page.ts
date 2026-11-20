@@ -298,7 +298,7 @@ export async function readWebPage(
   return fromHtml(rendered.html.slice(0, BYTES_MAX), landed, rendered.html.length > BYTES_MAX, "browser", limit);
 }
 
-export type Download = { url: string; contentType: string; bytes: Uint8Array; truncated: boolean };
+export type Download = { url: string; contentType: string; charset: string | null; bytes: Uint8Array; truncated: boolean };
 
 export async function downloadPublic(
   raw: string,
@@ -328,7 +328,14 @@ export async function downloadPublic(
     }
     if (!response.ok) throw new WebPageError(statusProblem(current.hostname, response.status));
     const { bytes, truncated } = await readBytes(response, options.maxBytes);
-    return { url: current.href, contentType: (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase(), bytes, truncated };
+    const declared = response.headers.get("content-type") ?? "";
+    return {
+      url: current.href,
+      contentType: declared.split(";")[0].trim().toLowerCase(),
+      charset: /;\s*charset\s*=\s*["']?([\w.:-]+)/i.exec(declared)?.[1] ?? null,
+      bytes,
+      truncated,
+    };
   }
   throw new WebPageError("That address redirected too many times.");
 }

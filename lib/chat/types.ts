@@ -43,6 +43,10 @@ export const CHAT_FILE_MAX_BYTES = 25 * 1024 * 1024;
 
 export type ChatAttachment = { id: string; name: string; contentType: string; size: number; width: number | null; height: number | null };
 
+export type ChatLinkPreview = { id: string; url: string; title: string | null; description: string | null; site: string | null; image: boolean };
+
+export const LINK_PREVIEWS_MAX = 2;
+
 export type ChatUpload = { id: string; name: string; contentType: string; size: number; uploadUrl: string };
 
 export type ChatHookCard = { title: string | null; url: string | null; block: boolean };
@@ -120,6 +124,7 @@ export type ChatMessage = {
   createdAt: string;
   hook: ChatHookCard | null;
   attachments: ChatAttachment[];
+  previews: ChatLinkPreview[];
   reactions: ChatReaction[];
   reactionsAt?: string;
 };
@@ -230,7 +235,8 @@ export type ChatLiveEvent =
   | { type: "thread-read"; conversationId: string; messageId: string; lastReadAt: string }
   | { type: "conversation"; conversationId: string }
   | { type: "removed"; conversationId: string }
-  | { type: "reaction"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string };
+  | { type: "reaction"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string }
+  | { type: "previews"; conversationId: string; messageId: string; parentId: string | null; previews: ChatLinkPreview[] };
 
 export type ChatTyping = { conversationId: string; user: ChatPerson; typing: boolean };
 

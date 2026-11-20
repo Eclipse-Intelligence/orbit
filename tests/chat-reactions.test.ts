@@ -119,6 +119,7 @@ describe("reactions in the timeline", () => {
     hook: null,
     reactions: [],
     attachments: [],
+    previews: [],
   } satisfies ChatMessage;
 
   it("toggles on and off locally and ignores an older live event", () => {

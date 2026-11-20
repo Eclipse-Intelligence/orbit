@@ -1,4 +1,4 @@
-import type { ChatAttachment, ChatConversation, ChatMessage, ChatNotifyInput, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
+import type { ChatAttachment, ChatConversation, ChatLinkPreview, ChatMessage, ChatNotifyInput, ChatPage, ChatPerson, ChatReaction, ChatRoom, ChatRoot, ChatSidebar, ChatThread, ChatThreadCard } from "@/lib/chat/types";
 import { EMPTY_HOOK_CARD, isDirect } from "@/lib/chat/types";
 
 export const LOCAL_PREFIX = "local:";
@@ -55,6 +55,7 @@ export type ChatAction =
   | { type: "thread-read"; rootId: string; lastReadAt: string }
   | { type: "forget"; conversationId: string }
   | { type: "reactions"; conversationId: string; messageId: string; parentId: string | null; reactions: ChatReaction[]; at: string }
+  | { type: "previews"; conversationId: string; messageId: string; parentId: string | null; previews: ChatLinkPreview[] }
   | { type: "my-reaction"; conversationId: string; messageId: string; parentId: string | null; emoji: string; viewer: ChatPerson; mine: boolean };
 
 export const EMPTY_CHAT: ChatState = { rooms: {}, roomErrors: {}, timelines: {}, threads: {}, failed: {} };
@@ -100,6 +101,7 @@ export function localMessage(input: {
     createdAt: input.at,
     hook: null,
     attachments: input.attachments ?? [],
+    previews: [],
     reactions: [],
   };
 }
@@ -151,7 +153,7 @@ export function replaceMessage(list: ChatMessage[], message: ChatMessage) {
 }
 
 export function blankDeleted(message: ChatMessage): ChatMessage {
-  return { ...message, body: "", mentions: [], everyone: false, attachments: [], reactions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
+  return { ...message, body: "", mentions: [], everyone: false, attachments: [], previews: [], reactions: [], hook: message.hook ? { ...EMPTY_HOOK_CARD } : null, deletedAt: message.deletedAt ?? new Date().toISOString() };
 }
 
 export function removeRoot(list: ChatMessage[], id: string) {
@@ -179,6 +181,10 @@ export function applyReactions(list: ChatMessage[], messageId: string, reactions
     if (at && message.reactionsAt && message.reactionsAt > at) return message;
     return { ...message, reactions, reactionsAt: at ?? message.reactionsAt };
   });
+}
+
+export function applyPreviews(list: ChatMessage[], messageId: string, previews: ChatLinkPreview[]) {
+  return mapReactions(list, messageId, (message) => ({ ...message, previews }));
 }
 
 export function withMyReaction(reactions: ChatReaction[], emoji: string, viewer: ChatPerson, mine: boolean): ChatReaction[] {
@@ -460,6 +466,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       );
     case "reactions":
       return updateReactions(state, action, (messages) => applyReactions(messages, action.messageId, action.reactions, action.at));
+    case "previews":
+      return updateReactions(state, action, (messages) => applyPreviews(messages, action.messageId, action.previews));
     case "my-reaction":
       return updateReactions(state, action, (messages) => setMyReaction(messages, action.messageId, action.emoji, action.viewer, action.mine));
     case "forget": {
