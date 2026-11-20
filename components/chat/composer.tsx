@@ -365,9 +365,9 @@ export function ComposerBox({
         data-chat-composer={composer ? "" : undefined}
         data-chat-queued={queued ? "" : undefined}
         className={cn(
-          "border-line-strong bg-secondary focus-within:border-ring flex flex-col rounded-lg border",
+          "border-line-strong bg-secondary flex flex-col rounded-lg border",
           oneRow && "max-md:rounded-[22px]",
-          over && "border-danger focus-within:border-danger",
+          over && "border-danger",
         )}
         onClick={(event) => {
           if (event.target === event.currentTarget) inputRef.current?.focus();
