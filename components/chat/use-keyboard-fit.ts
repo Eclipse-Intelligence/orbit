@@ -10,6 +10,8 @@ export function useKeyboardFit(ref: RefObject<HTMLElement | null>, enabled: bool
     const node = ref.current;
     if (!enabled || !viewport || !node) return;
     const phone = window.matchMedia(PHONE);
+    const portrait = window.matchMedia("(orientation: portrait)");
+    let tallest = Math.max(window.innerHeight, viewport.height);
     const clear = () => {
       node.style.height = "";
       node.style.top = "";
@@ -20,12 +22,18 @@ export function useKeyboardFit(ref: RefObject<HTMLElement | null>, enabled: bool
         clear();
         return;
       }
+      tallest = Math.max(tallest, window.innerHeight, viewport.height);
       node.style.height = `${viewport.height}px`;
       node.style.top = `${viewport.offsetTop}px`;
-      if (window.innerHeight - viewport.height > 80) node.dataset.keyboard = "";
+      if (tallest - viewport.height > 80) node.dataset.keyboard = "";
       else delete node.dataset.keyboard;
     };
+    const turn = () => {
+      tallest = Math.max(window.innerHeight, viewport.height);
+      fit();
+    };
     fit();
+    portrait.addEventListener("change", turn);
     viewport.addEventListener("resize", fit);
     viewport.addEventListener("scroll", fit);
     phone.addEventListener("change", fit);
@@ -33,6 +41,7 @@ export function useKeyboardFit(ref: RefObject<HTMLElement | null>, enabled: bool
       viewport.removeEventListener("resize", fit);
       viewport.removeEventListener("scroll", fit);
       phone.removeEventListener("change", fit);
+      portrait.removeEventListener("change", turn);
       clear();
     };
   }, [ref, enabled]);
