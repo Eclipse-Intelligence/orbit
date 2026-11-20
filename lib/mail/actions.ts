@@ -200,8 +200,8 @@ async function recordMoves(db: Db, sourceId: string, moved: { id: string; folder
   return [...touched];
 }
 
-function announceMailChange(actor: UserActor) {
-  chatBackground(() => signalSynced(actor.userId, "mail"));
+function announceMailChange(actor: UserActor, origin?: string | null) {
+  chatBackground(() => signalSynced(actor.userId, "mail", origin));
 }
 
 function announceMoves(actor: UserActor, sourceId: string, threadKeys: string[]) {
@@ -234,7 +234,7 @@ export async function applyMailAction(
   actor: UserActor,
   input: { thread: string; action: MailAction; view?: MailView | null; until?: string | null },
   fetchImpl: typeof fetch = fetch,
-  options: { deadline?: number } = {},
+  options: { deadline?: number; origin?: string | null } = {},
 ): Promise<MailActionResult> {
   const limit: GraphLimit = { deadline: options.deadline ?? Date.now() + ACTION_BUDGET_MS };
   if (!MAIL_ACTIONS.includes(input.action)) throw new CrmError("validation_error", "Choose a mail action.", 400);
@@ -299,7 +299,7 @@ export async function applyMailAction(
       }
       return [];
     });
-    announceMailChange(actor);
+    announceMailChange(actor, options.origin);
     announceMoves(actor, sourceId, touched);
   }
   if (failures.length === 0) return { changed: done.length, failed: 0, problem: null };

@@ -25,7 +25,7 @@ export type TitleMessage = { t: string };
 export type WritingMessage = { pageId: string; user: LiveUser; writing: boolean; revision?: number };
 export type AlertMessage = { source: string };
 export type SyncedKind = "mail" | "calendar" | "campaigns";
-export type SyncedMessage = { kind: SyncedKind };
+export type SyncedMessage = { kind: SyncedKind; origin?: string };
 
 export const LIVE_MESSAGE_MAX = 180_000;
 

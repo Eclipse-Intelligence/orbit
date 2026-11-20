@@ -12,6 +12,7 @@ import type {
   UnsubscribeResult,
 } from "@/lib/mail/view";
 import { SYNC_RETRYING } from "@/lib/mail/view";
+import { SYNC_ORIGIN_HEADER, syncOrigin } from "@/lib/sync-origin";
 
 export type ThreadPage = { threads: ThreadSummary[]; next: ThreadCursor | null };
 export type ListQuery = { view: string; account: string | null; query: string };
@@ -306,7 +307,7 @@ export function partlyUpdated(failed: number, problem: string | null) {
 export function postAction(thread: string, action: string, view: string, until?: string) {
   return getJson<MailActionReply>("/api/mail/actions", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", [SYNC_ORIGIN_HEADER]: syncOrigin() },
     body: JSON.stringify({ thread, action, view, until }),
   });
 }

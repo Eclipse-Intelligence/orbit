@@ -1107,7 +1107,11 @@ export default function MailScreen({
   useEffect(() => () => window.clearTimeout(sharedSettle.current), []);
 
   const signalsLive = useSyncSignalsLive();
-  useSyncSignal("mail", () => refreshRef.current(false));
+  useSyncSignal(
+    "mail",
+    () => refreshRef.current(false),
+    () => removing.current.size > 0,
+  );
 
   useEffect(() => {
     let last = Date.now();
