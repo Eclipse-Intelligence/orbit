@@ -1160,6 +1160,26 @@ describe("email jobs on Orbit Agent", () => {
     assert.equal(services.repliesTo(email.messageId).length, 0);
   });
 
+  it("waits for the answer to be saved and never replies that it got none", async () => {
+    const email = await deliver(services, inbox, { subject: "Slow save", text: "Write it up." });
+    const row = await mailRow(email.messageId);
+    const job = await nextCompanionJob(mac, 5_000);
+    assert.ok(job);
+    let during: { status: string; replies: number; repliedAt: Date | null } | undefined;
+    await finishCompanionJob(mac, job.id, async (actor, conversationId) => {
+      await advanceAgentMail(owner, row.id, { fetchImpl: services.fetchImpl });
+      const mid = await mailRow(email.messageId);
+      during = { status: mid.status, replies: services.repliesTo(email.messageId).length, repliedAt: mid.replied_at };
+      return applyCompanionResult(actor, conversationId, answer("Here is the write-up."));
+    });
+    assert.deepEqual(during, { status: "working", replies: 0, repliedAt: null });
+    await continueAfterCompanion(mac.actor, job.id, { fetchImpl: services.fetchImpl });
+    const sent = services.repliesTo(email.messageId);
+    assert.equal(sent.length, 1);
+    assert.match(String(sent[0].body?.text), /^Here is the write-up\./);
+    assert.equal((await mailRow(email.messageId)).status, "replied");
+  });
+
   it("retries a reply MachineMail couldn't send, and gives up on a refusal", async () => {
     const retry = await deliver(services, inbox, { subject: "Retry", text: "Hello." });
     services.replyFailures.push(503);

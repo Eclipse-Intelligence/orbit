@@ -14,6 +14,7 @@ const QUEUE_EXPIRY = "20 minutes";
 export const EMAIL_QUEUE_EXPIRY = "24 hours";
 const RUNNING_LIMIT = "20 minutes";
 const SILENT_LIMIT = "3 minutes";
+const APPLY_LIMIT = "5 minutes";
 const WIND_DOWN = "45 seconds";
 const KEEP_FINISHED = "1 day";
 export function failureReply(message: string) {
@@ -49,32 +50,42 @@ async function closeJobs(db: Db, actor: UserActor, conversationIds: string[], me
   }
 }
 
-async function expireStale(db: Db, actor: UserActor) {
-  const expired = await db.query<{ conversation_id: string }>(
+type Expired = { conversationId: string; workspaceId: string };
+
+async function expireStale(db: Db, actor: UserActor): Promise<Expired[]> {
+  const expired = await db.query<{ conversation_id: string; workspace_id: string }>(
     `update crm.ai_companion_jobs set status = 'cancelled', finished_at = now()
      where user_id = $1 and status = 'queued'
        and created_at < now() - (case when agent_mail_id is null then interval '${QUEUE_EXPIRY}' else interval '${EMAIL_QUEUE_EXPIRY}' end)
-     returning conversation_id`,
+     returning conversation_id, workspace_id`,
     [actor.userId],
   );
   await closeJobs(db, actor, expired.rows.map((row) => row.conversation_id), EXPIRED_MESSAGE);
-  answerLater(actor, expired.rows.map((row) => row.conversation_id));
-  const lost = await db.query<{ conversation_id: string }>(
+  const lost = await db.query<{ conversation_id: string; workspace_id: string }>(
     `update crm.ai_companion_jobs j set status = 'cancelled', finished_at = now()
      where j.user_id = $1 and j.status = 'running'
-       and (j.claimed_at < now() - interval '${RUNNING_LIMIT}' or j.updated_at < now() - interval '${SILENT_LIMIT}')
-     returning j.conversation_id`,
+       and case
+         when j.finished_at is null then (j.claimed_at < now() - interval '${RUNNING_LIMIT}' or j.updated_at < now() - interval '${SILENT_LIMIT}')
+         else j.finished_at < now() - interval '${APPLY_LIMIT}'
+       end
+     returning j.conversation_id, j.workspace_id`,
     [actor.userId],
   );
   await closeJobs(db, actor, lost.rows.map((row) => row.conversation_id), LOST_MESSAGE);
-  answerLater(actor, lost.rows.map((row) => row.conversation_id));
+  return [...expired.rows, ...lost.rows].map((row) => ({ conversationId: row.conversation_id, workspaceId: row.workspace_id }));
 }
 
-function answerLater(actor: UserActor, conversationIds: string[]) {
-  if (conversationIds.length === 0) return;
+function answerLater(actor: UserActor, expired: Expired[]) {
+  if (expired.length === 0) return;
   void import("@/lib/assistant/chat")
-    .then(({ continueSteersLater }) => {
-      for (const conversationId of new Set(conversationIds)) continueSteersLater(actor, conversationId);
+    .then(async ({ continueSteersLater }) => {
+      const seen = new Set<string>();
+      for (const { conversationId, workspaceId } of expired) {
+        if (seen.has(conversationId)) continue;
+        seen.add(conversationId);
+        const owner = workspaceId === actor.workspaceId ? actor : await actorFor(actor.userId, workspaceId).catch(() => null);
+        if (owner) continueSteersLater(owner, conversationId);
+      }
     })
     .catch(() => undefined);
 }
@@ -90,7 +101,7 @@ async function pruneFinished(actor: UserActor) {
 }
 
 export async function expireStaleJobs(actor: UserActor) {
-  await withActor(actor, (db) => expireStale(db, actor));
+  answerLater(actor, await withActor(actor, (db) => expireStale(db, actor)));
 }
 
 export type JobSwitches = { multiWorkspace?: boolean; eclipse?: boolean; linear?: boolean };
@@ -104,20 +115,22 @@ export async function enqueueCompanionJob(
   options: { agentMailId?: string | null; switches?: JobSwitches } = {},
 ) {
   await pruneFinished(actor);
-  return withActor(actor, async (db) => {
-    await expireStale(db, actor);
+  const { id, expired } = await withActor(actor, async (db) => {
     await db.query(
       `update crm.ai_companion_jobs set status = 'cancelled', finished_at = now()
-       where conversation_id = $1 and status in ('queued', 'running')`,
+       where conversation_id = $1 and status in ('queued', 'running') and finished_at is null`,
       [conversationId],
     );
+    const expired = await expireStale(db, actor);
     const result = await db.query<{ id: string }>(
       `insert into crm.ai_companion_jobs (workspace_id, user_id, conversation_id, request, agent_mail_id)
        values ($1, $2, $3, $4::jsonb || jsonb_build_object('switches', $6::jsonb), $5) returning id`,
       [actor.workspaceId, actor.userId, conversationId, JSON.stringify(request), options.agentMailId ?? null, JSON.stringify(options.switches ?? NO_SWITCHES)],
     );
-    return result.rows[0].id;
+    return { id: result.rows[0].id, expired };
   });
+  answerLater(actor, expired);
+  return id;
 }
 
 export async function readCompanionJob(actor: UserActor, jobId: string): Promise<JobState> {
@@ -132,22 +145,24 @@ export async function readCompanionJob(actor: UserActor, jobId: string): Promise
 }
 
 export async function companionBusy(actor: UserActor, exceptJobId: string) {
-  return withActor(actor, async (db) => {
-    await expireStale(db, actor);
+  const { busy, expired } = await withActor(actor, async (db) => {
+    const expired = await expireStale(db, actor);
     const result = await db.query<{ busy: boolean }>(
       `select exists (
          select 1 from crm.ai_companion_jobs j
          join crm.ai_companions c on c.id = j.companion_id and c.revoked_at is null
          where j.user_id = $1 and j.id <> $2
            and (
-             (j.status = 'running' and j.updated_at > now() - interval '${SILENT_LIMIT}')
+             (j.status = 'running' and j.finished_at is null and j.updated_at > now() - interval '${SILENT_LIMIT}')
              or (j.status = 'cancelled' and j.finished_at > now() - interval '${WIND_DOWN}' and c.last_seen_at > now() - interval '${SILENT_LIMIT}')
            )
        ) as busy`,
       [actor.userId, exceptJobId],
     );
-    return result.rows[0]?.busy === true;
+    return { busy: result.rows[0]?.busy === true, expired };
   });
+  answerLater(actor, expired);
+  return busy;
 }
 
 export async function companionWorking(actor: UserActor) {
@@ -156,7 +171,7 @@ export async function companionWorking(actor: UserActor) {
       `select exists (
          select 1 from crm.ai_companion_jobs j
          join crm.ai_companions c on c.id = j.companion_id and c.revoked_at is null
-         where j.user_id = $1 and j.status = 'running' and j.updated_at > now() - interval '${SILENT_LIMIT}'
+         where j.user_id = $1 and j.status = 'running' and j.finished_at is null and j.updated_at > now() - interval '${SILENT_LIMIT}'
        ) as working`,
       [actor.userId],
     );
@@ -167,15 +182,15 @@ export async function companionWorking(actor: UserActor) {
 export async function cancelCompanionJob(actor: UserActor, jobId: string) {
   await withActor(actor, (db) =>
     db.query(
-      "update crm.ai_companion_jobs set status = 'cancelled', finished_at = now() where id = $1 and status in ('queued', 'running')",
+      "update crm.ai_companion_jobs set status = 'cancelled', finished_at = now() where id = $1 and status in ('queued', 'running') and finished_at is null",
       [jobId],
     ),
   );
 }
 
 async function claim(auth: AuthenticatedCompanion): Promise<CompanionJob | null> {
-  return withActor(auth.actor, async (db) => {
-    await expireStale(db, auth.actor);
+  const { job, expired } = await withActor(auth.actor, async (db) => {
+    const expired = await expireStale(db, auth.actor);
     const result = await db.query<{ id: string; request: CompanionRequest }>(
       `update crm.ai_companion_jobs set status = 'running', companion_id = $2, claimed_at = now()
        where id = (
@@ -186,8 +201,10 @@ async function claim(auth: AuthenticatedCompanion): Promise<CompanionJob | null>
        returning id, request - 'switches' as request`,
       [auth.actor.userId, auth.companionId],
     );
-    return result.rows[0] ?? null;
+    return { job: result.rows[0] ?? null, expired };
   });
+  answerLater(auth.actor, expired);
+  return job;
 }
 
 export async function companionForJob(auth: AuthenticatedCompanion, jobId: string): Promise<AuthenticatedCompanion> {
@@ -234,17 +251,17 @@ export async function nextCompanionJob(auth: AuthenticatedCompanion, waitMs: num
   }
 }
 
-async function runningJob(auth: AuthenticatedCompanion, jobId: string) {
+async function runningJob(auth: AuthenticatedCompanion, jobId: string, options: { applying?: boolean } = {}) {
   if (!isUuid(jobId)) throw notFound("request");
   const job = await withActor(auth.actor, async (db) => {
-    const result = await db.query<{ status: JobStatus; companion_id: string | null; conversation_id: string; switches: JobSwitches | null; email: boolean }>(
-      "select status, companion_id, conversation_id, request -> 'switches' as switches, agent_mail_id is not null as email from crm.ai_companion_jobs where id = $1 and user_id = $2",
+    const result = await db.query<{ status: JobStatus; applying: boolean; companion_id: string | null; conversation_id: string; switches: JobSwitches | null; email: boolean }>(
+      "select status, finished_at is not null as applying, companion_id, conversation_id, request -> 'switches' as switches, agent_mail_id is not null as email from crm.ai_companion_jobs where id = $1 and user_id = $2",
       [jobId, auth.actor.userId],
     );
     return result.rows[0];
   });
   if (!job || job.companion_id !== auth.companionId) throw notFound("request");
-  if (job.status !== "running") throw new CrmError("conflict", "That request was cancelled.", 409);
+  if (job.status !== "running" || (job.applying && !options.applying)) throw new CrmError("conflict", "That request was cancelled.", 409);
   return job;
 }
 
@@ -408,9 +425,9 @@ export async function saveCompanionDraft(auth: AuthenticatedCompanion, jobId: st
 }
 
 export async function checkCompanionJob(auth: AuthenticatedCompanion, jobId: string) {
-  await runningJob(auth, jobId);
+  await runningJob(auth, jobId, { applying: true });
   await withActor(auth.actor, (db) =>
-    db.query("update crm.ai_companion_jobs set updated_at = now() where id = $1 and status = 'running'", [jobId]),
+    db.query("update crm.ai_companion_jobs set updated_at = now() where id = $1 and status = 'running' and finished_at is null", [jobId]),
   );
 }
 
@@ -422,7 +439,7 @@ export async function finishCompanionJob(
   await runningJob(auth, jobId);
   const claimed = await withActor(auth.actor, (db) =>
     db.query<{ conversation_id: string; switches: JobSwitches | null }>(
-      "update crm.ai_companion_jobs set status = 'done', finished_at = now(), results = '{}'::jsonb where id = $1 and companion_id = $2 and status = 'running' returning conversation_id, request -> 'switches' as switches",
+      "update crm.ai_companion_jobs set finished_at = now(), results = '{}'::jsonb where id = $1 and companion_id = $2 and status = 'running' and finished_at is null returning conversation_id, request -> 'switches' as switches",
       [jobId, auth.companionId],
     ),
   );
@@ -431,13 +448,19 @@ export async function finishCompanionJob(
   try {
     const messageIds = await apply(auth.actor, conversationId, claimed.rows[0]?.switches ?? undefined);
     await withActor(auth.actor, (db) =>
-      db.query("update crm.ai_companion_jobs set result = $2::jsonb where id = $1", [jobId, JSON.stringify({ messageIds })]),
+      db.query(
+        "update crm.ai_companion_jobs set status = 'done', result = $2::jsonb, finished_at = now() where id = $1 and status = 'running' and finished_at is not null",
+        [jobId, JSON.stringify({ messageIds })],
+      ),
     );
     return conversationId;
   } catch (error) {
     await withActor(auth.actor, async (db) => {
-      await db.query("update crm.ai_companion_jobs set status = 'failed', error = $2 where id = $1", [jobId, "Couldn't save the answer."]);
-      await closeJobs(db, auth.actor, [conversationId], failureReply("Couldn't save the answer."));
+      const failed = await db.query(
+        "update crm.ai_companion_jobs set status = 'failed', error = $2, finished_at = now() where id = $1 and status = 'running' returning id",
+        [jobId, "Couldn't save the answer."],
+      );
+      if ((failed.rowCount ?? 0) > 0) await closeJobs(db, auth.actor, [conversationId], failureReply("Couldn't save the answer."));
     });
     throw error;
   }
@@ -448,7 +471,7 @@ export async function failCompanionJob(auth: AuthenticatedCompanion, jobId: stri
   const message = typeof error === "string" && error.trim() ? error.trim().slice(0, 1_000) : "Orbit Agent couldn't answer.";
   return withActor(auth.actor, async (db) => {
     const failed = await db.query<{ conversation_id: string }>(
-      "update crm.ai_companion_jobs set status = 'failed', error = $2, finished_at = now(), results = '{}'::jsonb where id = $1 and status = 'running' returning conversation_id",
+      "update crm.ai_companion_jobs set status = 'failed', error = $2, finished_at = now(), results = '{}'::jsonb where id = $1 and status = 'running' and finished_at is null returning conversation_id",
       [jobId, message],
     );
     await closeJobs(db, auth.actor, failed.rows.map((row) => row.conversation_id), failureReply(message));

@@ -84,7 +84,8 @@ async function pair(url: string, code: string, name: string) {
   return result.token;
 }
 
-let current: { api: Api; jobId: string } | null = null;
+let current: { api: Api; jobId: string; cancel: AbortController } | null = null;
+let stopping = false;
 
 async function handle(api: Api, job: CompanionJob, cwd: string) {
   const started = Date.now();
@@ -131,7 +132,7 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
     }
   };
   let webSteps: Promise<unknown> = Promise.resolve();
-  current = { api, jobId: job.id };
+  current = { api, jobId: job.id, cancel };
   log(`Answering on ${job.request.model}…`);
   try {
     const result = await runTurn(job.request, {
@@ -171,6 +172,7 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
     await api.complete(job.id, result);
     log(`Done in ${Math.round((Date.now() - started) / 1000)}s.`);
   } catch (error) {
+    if (stopping) return;
     if (cancel.signal.aborted || (error instanceof ApiError && error.status === 409)) {
       log("That question was cancelled in Orbit.");
       return;
@@ -186,19 +188,35 @@ async function handle(api: Api, job: CompanionJob, cwd: string) {
   }
 }
 
+const STOPPED_ON_MAC = "Orbit Agent was stopped on the Mac before it finished.";
+
 async function shutdown() {
+  if (stopping) return;
+  stopping = true;
   log("Stopped.");
   const working = current;
-  if (working) await working.api.fail(working.jobId, "Orbit Agent was stopped on the Mac before it finished.", 5_000).catch(() => undefined);
+  if (working) {
+    working.cancel.abort();
+    await working.api.fail(working.jobId, STOPPED_ON_MAC, 5_000).catch(() => undefined);
+  }
   process.exit(0);
+}
+
+async function hold(): Promise<never> {
+  return new Promise<never>(() => undefined);
 }
 
 async function serve(api: Api, cwd: string) {
   let backoff = 1_000;
   for (;;) {
+    if (stopping) await hold();
     try {
       const { job, retryAfterMs } = await api.next();
       backoff = 1_000;
+      if (stopping) {
+        if (job) await api.fail(job.id, STOPPED_ON_MAC, 5_000).catch(() => undefined);
+        await hold();
+      }
       if (job) await handle(api, job, cwd);
       else if (retryAfterMs && retryAfterMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(retryAfterMs, 60_000)));
     } catch (error) {
