@@ -94,7 +94,7 @@ function Placeholder({ text, jot = false }: { text: string; jot?: boolean }) {
         <div className="cm-content cm-lineWrapping">
           <div className="cm-line note-blank">
             <span aria-hidden className="inline-block h-[1em] w-0 align-text-top" />
-            <span className="cm-placeholder">{text}</span>
+            <span className="cm-placeholder inline-block align-top">{text}</span>
             <br />
           </div>
         </div>
