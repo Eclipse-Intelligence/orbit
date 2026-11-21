@@ -332,8 +332,7 @@ export default function NoteView({
   const historyOpen = railChosen && rail === "history";
   const versions = useVersions(pageId, historyOpen ? (page?.revision ?? 0) : -1);
   const detailsPressed = railChosen ? rail === "details" : wide;
-  const dayShown = dailyDate ?? (page?.kind === "daily" ? page.dailyDate : summary?.kind === "daily" ? summary.dailyDate : null);
-  const daily = Boolean(dayShown) || (page?.kind ?? summary?.kind) === "daily";
+  const daily = Boolean(dailyDate) || (page?.kind ?? summary?.kind) === "daily";
   const discussable = Boolean(page && viewer && !daily && summary?.shared);
   const discussion = useDiscussion("doc", pageId, { id: viewer?.id ?? "", name: viewer?.name ?? "" }, { enabled: discussable });
   const discussionAsked = useSearchParams().get(DISCUSSION_PARAM) === "1";
@@ -401,7 +400,7 @@ export default function NoteView({
     setRestoreError(null);
   }
 
-  const streaming = daily && !selected && Boolean(dayShown);
+  const streaming = Boolean(dailyDate) && !selected;
 
   useEffect(() => {
     if (!streaming) scroller.current?.scrollTo({ top: 0 });
@@ -460,8 +459,8 @@ export default function NoteView({
   }
 
   const context = contextFor(page ?? summary ?? { kind: "note", folderId: null, dailyDate: null }, list, nav?.folders ?? []);
-  const title = daily ? shortDay(dayShown ?? "") : (page?.title ?? summary?.title ?? "") || "Untitled";
-  const date = dayShown;
+  const title = daily ? shortDay((dailyDate ?? (page ?? summary)?.dailyDate) ?? "") : (page?.title ?? summary?.title ?? "") || "Untitled";
+  const date = dailyDate ?? (page ?? summary)?.dailyDate ?? null;
   const today = useToday();
 
   const railContent = historyOpen ? (
@@ -630,16 +629,15 @@ export default function NoteView({
           ref={scroller}
           className={cn("relative min-h-0 min-w-0 flex-1 overflow-y-auto px-5 md:px-12", streaming ? "[overflow-anchor:none]" : "pt-5 pb-40 md:pt-7")}
         >
-          {streaming && date ? (
+          {streaming && dailyDate ? (
             <DailyStream
-              date={date}
-              liveReady={Boolean(page && page.dailyDate === date)}
+              date={dailyDate}
+              liveId={page && page.dailyDate === dailyDate ? page.id : null}
               onDate={(next) => navigate(dailyHref(next), { replace: true })}
-              renderHeading={(day) => <DailyHeading date={day} />}
+              renderHeading={(day, id) => <DailyHeading key={day} date={day} id={id} />}
               renderLive={() =>
                 page && (
                   <>
-                    <DailyHeading date={date} id={page.id} />
                     <ConflictNotice id={page.id} />
                     <div>{editor(page)}</div>
                     <JotLine page={page} />
