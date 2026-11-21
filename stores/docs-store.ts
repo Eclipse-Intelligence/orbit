@@ -304,7 +304,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         if (current !== session) return page;
         if (page) {
           if (idle(id)) acked.delete(id);
-          set((state) => ({ pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
+          set((state) => ((state.pages[id]?.revision ?? 0) > page.revision ? state : { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
         }
         return page;
       })

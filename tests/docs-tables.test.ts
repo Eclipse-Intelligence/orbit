@@ -118,6 +118,7 @@ describe("Docs tables", () => {
     assert.equal(lines.length, 5);
     assert.ok(lines[2].table);
     assert.equal(lines[2].table?.rows.length, 2);
+    assert.deepEqual(lines.map((line) => line.line), [1, 2, 3, 7, 8]);
     assert.equal(lines[4].segments.map((segment) => ("text" in segment ? segment.text : "")).join(""), "After");
   });
 

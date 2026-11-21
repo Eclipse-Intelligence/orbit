@@ -19,6 +19,7 @@ const SCROLLING_EDGE = 0.75;
 const FREEZE_MS = 1500;
 const MEASURE_MS = 300;
 const FRESH_MS = 1000;
+const REFRESH_MS = 5000;
 
 type Range = { start: string; end: string };
 type Anchor = { day: string; index: number; offset: number };
@@ -48,7 +49,7 @@ function liveEditor(section: HTMLElement) {
 }
 
 function staticLines(section: HTMLElement) {
-  return Array.from(section.querySelector(".note-editor-daily")?.querySelectorAll(".cm-line") ?? []);
+  return Array.from(section.querySelector(".note-editor-daily")?.querySelectorAll<HTMLElement>("[data-line]") ?? []);
 }
 
 function readAnchor(view: HTMLElement, parent: HTMLElement): Anchor | null {
@@ -65,7 +66,7 @@ function readAnchor(view: HTMLElement, parent: HTMLElement): Anchor | null {
   const lines = staticLines(section);
   const index = lines.findIndex((item) => item.getBoundingClientRect().bottom > top + 1);
   if (index < 0) return { day, index: -1, offset: section.getBoundingClientRect().top - top };
-  return { day, index, offset: lines[index].getBoundingClientRect().top - top };
+  return { day, index: Number(lines[index].dataset.line) - 1, offset: lines[index].getBoundingClientRect().top - top };
 }
 
 function applyAnchor(view: HTMLElement, parent: HTMLElement, held: Anchor) {
@@ -77,7 +78,8 @@ function applyAnchor(view: HTMLElement, parent: HTMLElement, held: Anchor) {
     const editor = liveEditor(section);
     if (editor) at = editor.documentTop + editor.lineBlockAt(editor.state.doc.line(Math.min(held.index + 1, editor.state.doc.lines)).from).top - top;
     else {
-      const line = staticLines(section)[held.index];
+      const lines = staticLines(section).filter((item) => Number(item.dataset.line) <= held.index + 1);
+      const line = lines[lines.length - 1];
       if (line) at = line.getBoundingClientRect().top - top;
     }
   }
@@ -155,7 +157,8 @@ export default function DailyStream({
   const pages = useDocsStore((state) => state.pages);
   const loadPage = useDocsStore((state) => state.loadPage);
   const refreshPage = useDocsStore((state) => state.refreshPage);
-  const refresh = useRef<(days: string[]) => void>(() => {});
+  const refresh = useRef<(days: string[], now?: boolean) => void>(() => {});
+  const refreshedAt = useRef(new Map<string, number>());
 
   useLayoutEffect(() => {
     latest.current = { date, days, onDate };
@@ -198,8 +201,11 @@ export default function DailyStream({
   }, [listed, summaries]);
 
   useLayoutEffect(() => {
-    refresh.current = (shown) => {
+    refresh.current = (all, now = false) => {
+      const stamp = Date.now();
+      const shown = all.filter((day) => now || stamp - (refreshedAt.current.get(day) ?? 0) >= REFRESH_MS);
       if (shown.length === 0) return;
+      for (const day of shown) refreshedAt.current.set(day, stamp);
       loadRange(shown[0], shown[shown.length - 1], () => true);
       for (const day of shown) {
         const id = idByDate.get(day);
@@ -336,7 +342,7 @@ export default function DailyStream({
       wanted.current = day;
       pinned.current = day;
       activatedAt.current = Date.now();
-      refresh.current([day]);
+      refresh.current([day], true);
       lead(day);
     };
     const lost = (event: FocusEvent) => {
@@ -385,7 +391,7 @@ export default function DailyStream({
     }
     anchor.current = { day: date, index: -1, offset: 0 };
     freeze.current();
-    refresh.current([date]);
+    refresh.current([date], true);
     const before = view.scrollTop;
     scrollToDay(view, parent, date);
     if (view.scrollTop !== before) written.current = view.scrollTop;
@@ -393,6 +399,7 @@ export default function DailyStream({
 
   useEffect(() => {
     if (!liveId) return;
+    freeze.current();
     const timer = window.setTimeout(() => {
       if (frozen.current) thaw.current();
     }, MEASURE_MS);
