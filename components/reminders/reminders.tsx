@@ -46,6 +46,8 @@ const WIDE = "(min-width: 64rem)";
 const CARD_WIDTH = 340;
 const POSITION_KEY = "orbit-reminders-card";
 const TOAST_MS = 5_000;
+const CARD_MAX_HEIGHT = 640;
+const CARD_MAX_SHARE = 0.6;
 
 type Toast = { id: number; kind: "done"; reminderId: string } | { id: number; kind: "note"; message: string };
 type GroupId = "today" | "upcoming" | "noDate" | "done";
@@ -530,7 +532,7 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
           aria-label={detail ? "Reminder" : "Reminders"}
           data-reminders-card=""
           onKeyDown={onCardKey}
-          style={{ left: shown.x, top: shown.y, maxHeight: viewport.height - shown.y - CARD_MARGIN }}
+          style={{ left: shown.x, top: shown.y, maxHeight: Math.min(viewport.height - shown.y - CARD_MARGIN, CARD_MAX_HEIGHT, Math.round(viewport.height * CARD_MAX_SHARE)) }}
           className="bg-popover shadow-overlay animate-in fade-in-0 zoom-in-[0.98] ease-power3-out fixed z-40 flex w-[340px] flex-col overflow-hidden rounded-[14px] ring-1 ring-white/6 duration-150"
         >
           <header
