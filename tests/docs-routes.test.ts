@@ -206,4 +206,16 @@ describe("Docs route handlers", () => {
     const nav = (await call(mark, docsReads.nav)).body as unknown as DocsNav;
     assert.deepEqual([nav.dailyCount, nav.todayNote?.entries, nav.todayNote?.preview], [2, 1, "Gym"]);
   });
+
+  it("lists daily notes for a from and to range, however old", async () => {
+    const old = (await call(mark, docsWrites.openDaily, { method: "POST", params: { date: "2019-03-04" } })).body as unknown as Page;
+    await call(mark, docsWrites.save, { method: "PUT", params: { id: old.id }, body: { body: "09:00 Old note", baseRevision: old.revision } });
+    const inRange = async (from: string, to: string) =>
+      ((await call(mark, docsReads.daily, { path: `/daily?from=${from}&to=${to}` })).body as unknown as { date: string }[]).map((day) => day.date);
+    assert.deepEqual(await inRange("2019-03-01", "2019-03-10"), ["2019-03-04"]);
+    assert.deepEqual(await inRange("2019-03-05", "2019-03-10"), []);
+    assert.deepEqual(await inRange("2026-10-20", "2026-10-20"), ["2026-10-20"]);
+    assert.equal((await call(mark, docsReads.daily, { path: "/daily?from=nope&to=2026-10-20" })).status, 400);
+    assert.equal((await call(mark, docsReads.daily, { path: "/daily?from=2026-10-20&to=2026-02-31" })).status, 400);
+  });
 });

@@ -102,7 +102,7 @@ export default function DailyStream({
   const wanted = useRef<string | null>(null);
   const activateDay = useRef<(day: string) => void>(() => {});
 
-  const [listed, setListed] = useState<DailySummary[] | null>(null);
+  const [listed, setListed] = useState<{ ids: Map<string, string>; covered: Set<string> }>(() => ({ ids: new Map(), covered: new Set() }));
   const summaries = useDocsStore((state) => state.summaries);
   const pages = useDocsStore((state) => state.pages);
   const loadPage = useDocsStore((state) => state.loadPage);
@@ -113,20 +113,31 @@ export default function DailyStream({
 
   useEffect(() => {
     let live = true;
+    const { start, end } = range;
     void docsData()
-      .listDailyNotes()
-      .then((list) => {
-        if (live) setListed(list);
+      .listDailyNotes({ from: start, to: end })
+      .then((list: DailySummary[]) => {
+        if (!live) return;
+        setListed((current) => {
+          const ids = new Map(current.ids);
+          const covered = new Set(current.covered);
+          for (let day = start; day <= end; day = shiftDate(day, 1)) {
+            covered.add(day);
+            ids.delete(day);
+          }
+          for (const item of list) ids.set(item.date, item.pageId);
+          return { ids, covered };
+        });
       })
       .catch(() => {});
     return () => {
       live = false;
     };
-  }, [date]);
+  }, [range]);
 
   const idByDate = useMemo(() => {
     const ids = new Map<string, string>();
-    for (const day of listed ?? []) ids.set(day.date, day.pageId);
+    for (const [day, id] of listed.ids) ids.set(day, id);
     for (const summary of Object.values(summaries)) if (summary.kind === "daily" && summary.dailyDate) ids.set(summary.dailyDate, summary.id);
     return ids;
   }, [listed, summaries]);
@@ -140,7 +151,7 @@ export default function DailyStream({
 
   function bodyOf(day: string) {
     const id = idByDate.get(day);
-    if (!id) return listed ? "" : null;
+    if (!id) return listed.covered.has(day) ? "" : null;
     return noteBody(id) ?? pages[id]?.body ?? null;
   }
 
