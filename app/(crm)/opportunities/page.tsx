@@ -44,7 +44,7 @@ export default async function OpportunitiesPage({
       page={page}
       query={filters.query ?? ""}
       stages={pipeline.stages}
-      view={params.get("view") === "board" ? "board" : "list"}
+      view={params.get("view") === "list" ? "list" : "board"}
     />
   );
 }
