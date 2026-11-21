@@ -214,7 +214,7 @@ function PageTasks({ pageId }: { pageId: string }) {
   );
 }
 
-export default function NoteRail({ page }: { page: Page }) {
+export default function NoteRail({ page, steady = false }: { page: Page; steady?: boolean }) {
   const now = useDocsNow();
   const titles = useDocsStore((state) => state.titles);
   const summaries = useDocsStore((state) => state.summaries);
@@ -261,7 +261,7 @@ export default function NoteRail({ page }: { page: Page }) {
     };
   }, [mentionKey, mentions]);
 
-  const links = backlinks?.id === page.id ? backlinks.value : null;
+  const links = backlinks?.id === page.id ? backlinks.value : steady ? (backlinks?.value ?? null) : null;
   const recordList = mentions.length && records?.key === mentionKey ? records.value : mentions.map((mention) => ({ ...mention, detail: null }));
 
   return (

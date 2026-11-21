@@ -232,6 +232,15 @@ export function FolderShare({ folder, compact = true }: { folder: Folder; compac
   );
 }
 
+export function OnlyYou() {
+  return (
+    <span className="caption-style text-subtle flex shrink-0 items-center gap-1 px-1.5">
+      <LockIcon aria-hidden className="size-3" />
+      Only you
+    </span>
+  );
+}
+
 export function PageShare({ summary, compact = false }: { summary: PageSummary; compact?: boolean }) {
   const nav = useDocsNav();
   const share = useDocsStore((state) => state.share);
@@ -251,14 +260,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
     setPending(false);
   }
 
-  if (summary.kind === "daily") {
-    return (
-      <span className="caption-style text-subtle flex shrink-0 items-center gap-1 px-1.5">
-        <LockIcon aria-hidden className="size-3" />
-        Only you
-      </span>
-    );
-  }
+  if (summary.kind === "daily") return <OnlyYou />;
 
   return (
     <Popover>
