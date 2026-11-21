@@ -15,7 +15,7 @@ import MoreMenu from "@/components/docs/more-menu";
 import NoteEditor, { focusNoteText, noteTitle, scheduleNoteSave, setNoteTitle } from "@/components/docs/note-editor";
 import NoteRail from "@/components/docs/note-rail";
 import { ParticipantAvatar, PresenceStack } from "@/components/docs/presence";
-import { PageShare } from "@/components/docs/share-control";
+import { OnlyYou, PageShare } from "@/components/docs/share-control";
 import { TITLE_FORBIDDEN, TITLE_RULE, useTitleRename } from "@/components/docs/title-rename";
 import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia, useToday } from "@/components/docs/use-docs";
 import type { Meeting, Page, PageFilter, PageSummary, Participant, Presence } from "@/lib/docs/client-types";
@@ -34,6 +34,7 @@ import DocIcon from "@/public/assets/images/docs/doc.svg";
 import ExpandIcon from "@/public/assets/images/docs/expand.svg";
 import HashIcon from "@/public/assets/images/docs/hash.svg";
 import HistoryIcon from "@/public/assets/images/docs/history.svg";
+import MoreIcon from "@/public/assets/images/_common/more.svg";
 import SunIcon from "@/public/assets/images/docs/sun.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 
@@ -286,6 +287,14 @@ function DailyHeading({ date, id }: { date: string; id?: string }) {
   );
 }
 
+function MoreHold({ phone }: { phone: boolean }) {
+  return (
+    <Button variant={phone ? "secondary" : "ghost"} size="icon" aria-label="More" title="More" aria-disabled>
+      <MoreIcon aria-hidden className="size-3.5" />
+    </Button>
+  );
+}
+
 export default function NoteView({
   page,
   summary,
@@ -401,6 +410,9 @@ export default function NoteView({
   }
 
   const streaming = Boolean(dailyDate) && !selected;
+  const [heldPage, setHeldPage] = useState<Page | null>(null);
+  if (page && page.kind === "daily" && page !== heldPage) setHeldPage(page);
+  const shownPage = page ?? (streaming ? heldPage : null);
 
   useEffect(() => {
     if (!streaming) scroller.current?.scrollTo({ top: 0 });
@@ -458,7 +470,7 @@ export default function NoteView({
     else exitVersion();
   }
 
-  const context = contextFor(page ?? summary ?? { kind: "note", folderId: null, dailyDate: null }, list, nav?.folders ?? []);
+  const context = contextFor(daily ? { kind: "daily", folderId: null, dailyDate: null } : (page ?? summary ?? { kind: "note", folderId: null, dailyDate: null }), list, nav?.folders ?? []);
   const title = daily ? shortDay((dailyDate ?? (page ?? summary)?.dailyDate) ?? "") : (page?.title ?? summary?.title ?? "") || "Untitled";
   const date = dailyDate ?? (page ?? summary)?.dailyDate ?? null;
   const today = useToday();
@@ -473,8 +485,8 @@ export default function NoteView({
         if (phone && value) setRail(null);
       }}
     />
-  ) : page ? (
-    <NoteRail page={page} />
+  ) : shownPage ? (
+    <NoteRail page={shownPage} steady={streaming} />
   ) : null;
 
   const railVisible = !focus && !phone && !discussionOpen && (railChosen ? Boolean(rail) : true);
@@ -526,12 +538,14 @@ export default function NoteView({
         )}
         <span className="flex-1" />
         {!focus && <PresenceStack participants={stack} max={3} />}
-        {!focus && summary && <PageShare summary={summary} compact />}
+        {!focus && (daily ? <OnlyYou /> : summary && <PageShare summary={summary} compact />)}
         {!focus && discussable && <DiscussionButton discussion={discussion} pressed={discussionOpen} compact onClick={toggleDiscussion} />}
         {focus ? (
           <Button variant="secondary" size="icon" aria-label="Leave focus mode" onClick={() => setFocus(false)}>
             <CollapseIcon aria-hidden className="size-3.5" />
           </Button>
+        ) : !page && streaming ? (
+          <MoreHold phone />
         ) : (
           page && (
             <MoreMenu
@@ -598,6 +612,7 @@ export default function NoteView({
           <ToolButton label={focus ? "Leave focus mode" : "Focus mode"} pressed={focus} onClick={() => setFocus(!focus)} shortcut={focus ? "Esc" : "⌘⇧↵"}>
             {focus ? <CollapseIcon aria-hidden className="size-3.5" /> : <ExpandIcon aria-hidden className="size-3.5" />}
           </ToolButton>
+          {!page && streaming && !focus && <MoreHold phone={false} />}
           {page && !focus && (
             <MoreMenu
               page={page}
