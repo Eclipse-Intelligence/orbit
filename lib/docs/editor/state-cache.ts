@@ -19,6 +19,10 @@ export function createStateCache<T>(limit: number) {
     peek(id: string): T | null {
       return entries.get(id)?.value ?? null;
     },
+    peekAt(id: string, epoch: number): T | null {
+      const entry = entries.get(id);
+      return entry && entry.epoch === epoch ? entry.value : null;
+    },
     has(id: string) {
       return entries.has(id);
     },

@@ -123,9 +123,14 @@ export function setNoteTitle(id: string, title: string) {
   titles.set(id, title);
 }
 
-export function noteBody(id: string) {
+function noteBody(id: string) {
   if (liveView && liveId === id) return liveView.state.doc.toString();
   return states.peek(id)?.state.doc.toString() ?? null;
+}
+
+export function shownBody(id: string) {
+  if (liveView && liveId === id) return liveView.state.doc.toString();
+  return states.peekAt(id, currentEpoch(id))?.state.doc.toString() ?? null;
 }
 
 export function editorView() {
