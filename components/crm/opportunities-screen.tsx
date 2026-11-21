@@ -426,7 +426,7 @@ export default function OpportunitiesScreen({
             <Button
               variant={view === "list" ? "secondary" : "ghost"}
               size="sm"
-              href={board ? `${basePath}?view=list` : basePath}
+              href={`${basePath}?view=list`}
               data-shortcut={view === "list" ? undefined : "toggle-view"}
               title="List (V)"
             >
@@ -435,7 +435,7 @@ export default function OpportunitiesScreen({
             <Button
               variant={view === "board" ? "secondary" : "ghost"}
               size="sm"
-              href={board ? basePath : `${basePath}?view=board`}
+              href={basePath}
               data-shortcut={view === "board" ? undefined : "toggle-view"}
               title="Board (V)"
             >
