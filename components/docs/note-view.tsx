@@ -681,7 +681,7 @@ export default function NoteView({
             </div>
           )}
         </div>
-        {railVisible && railContent && (
+        {railVisible && (railContent || streaming) && (
           <aside
             aria-label={historyOpen ? "Version history" : "Backlinks and details"}
             className={cn(
