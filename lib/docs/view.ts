@@ -455,8 +455,8 @@ export async function docsMentions(actor: UserActor, record: { kind: string; id:
   });
 }
 
-export async function docsDailyList(actor: UserActor): Promise<DailySummary[]> {
-  const days = await listDailyNotes(actor, { limit: 400 });
+export async function docsDailyList(actor: UserActor, range: { from?: string; to?: string } = {}): Promise<DailySummary[]> {
+  const days = await listDailyNotes(actor, { ...range, limit: 400 });
   return days.map((day) => ({ date: day.date, pageId: day.id, entries: day.entryCount, preview: day.excerpt }));
 }
 

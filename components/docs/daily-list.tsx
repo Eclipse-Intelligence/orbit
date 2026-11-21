@@ -79,7 +79,7 @@ export default function DailyList({ selected, chosen, initial }: { selected: str
           <Button variant="ghost" size="icon-sm" aria-label="Previous month" onClick={() => setMonth(addMonths(month, -1))}>
             <ChevronLeftIcon aria-hidden className="size-3" />
           </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Next month" disabled={month >= today.slice(0, 7)} onClick={() => setMonth(addMonths(month, 1))}>
+          <Button variant="ghost" size="icon-sm" aria-label="Next month" onClick={() => setMonth(addMonths(month, 1))}>
             <ChevronRightIcon aria-hidden className="size-3" />
           </Button>
         </div>
@@ -94,14 +94,9 @@ export default function DailyList({ selected, chosen, initial }: { selected: str
             const href = dailyHref(day);
             const current = chosen && day === selected;
             const ringed = !chosen && day === today;
-            const future = day > today;
             const has = withEntries.has(day);
             const label = `${longDay(day)}${has ? ", has entries" : ""}${day === today ? ", today" : ""}`;
-            return future ? (
-              <span key={day} title={label} className="text-faint mx-auto flex size-8 items-center justify-center rounded-full text-[12.5px] tabular-nums">
-                {Number(day.slice(8))}
-              </span>
-            ) : (
+            return (
               <Link
                 key={day}
                 href={href}

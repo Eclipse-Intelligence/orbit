@@ -6,7 +6,7 @@ import { tableViews, type TableView } from "@/lib/docs/editor/tables";
 
 export type { StaticSegment } from "@/lib/docs/editor/segments";
 
-export type StaticLine = { className: string; segments: StaticSegment[]; table?: TableView };
+export type StaticLine = { className: string; segments: StaticSegment[]; line: number; table?: TableView };
 
 export function staticLines(body: string, options: { daily?: boolean; maxLines?: number; resolve?: (target: string) => boolean } = {}): StaticLine[] {
   const all = body.split("\n");
@@ -38,12 +38,12 @@ export function staticLines(body: string, options: { daily?: boolean; maxLines?:
   for (let number = 1; number <= doc.lines; number += 1) {
     const table = tables.get(number);
     if (table) {
-      result.push({ className: "note-table-block", segments: [], table });
+      result.push({ className: "note-table-block", segments: [], line: number, table });
       number = doc.lineAt(table.to).number;
       continue;
     }
     const line = doc.line(number);
-    result.push({ className: ["cm-line", ...(lineClasses.get(line.from) ?? [])].join(" "), segments: segmentsBetween(text, inline, line.from, line.to) });
+    result.push({ className: ["cm-line", ...(lineClasses.get(line.from) ?? [])].join(" "), segments: segmentsBetween(text, inline, line.from, line.to), line: number });
   }
   return result;
 }

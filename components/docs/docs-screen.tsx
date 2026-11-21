@@ -574,6 +574,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
             empty={!shownId && !dailyDate}
             firstRun={list.kind === "all" && ids.length === 0 && (listLoaded || fallbackIds !== null)}
             hiddenOnPhone={level !== "note"}
+            dailyDate={dailyDate}
           />
         )}
       </div>

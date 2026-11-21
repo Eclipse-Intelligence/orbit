@@ -74,9 +74,9 @@ function Cell({ cell }: { cell: TableCell }) {
   );
 }
 
-function StaticTable({ table }: { table: TableView }) {
+function StaticTable({ table, line }: { table: TableView; line: number }) {
   return (
-    <div className="note-table-widget">
+    <div className="note-table-widget" data-line={line}>
       <div className="note-table-scroll">
         <table className="note-table">
           <thead>
@@ -115,9 +115,9 @@ export default function StaticNote({ body, daily = false }: { body: string; dail
         <div className="cm-content cm-lineWrapping">
           {lines.map((line, index) =>
             line.table ? (
-              <StaticTable key={index} table={line.table} />
+              <StaticTable key={index} table={line.table} line={line.line} />
             ) : (
-              <div key={index} className={line.className}>
+              <div key={index} className={line.className} data-line={line.line}>
                 {line.segments.length ? line.segments.map((segment, part) => <Segment key={part} segment={segment} />) : <br />}
               </div>
             ),

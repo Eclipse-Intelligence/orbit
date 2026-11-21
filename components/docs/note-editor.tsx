@@ -128,6 +128,11 @@ function noteBody(id: string) {
   return states.peek(id)?.state.doc.toString() ?? null;
 }
 
+export function shownBody(id: string) {
+  if (liveView && liveId === id) return liveView.state.doc.toString();
+  return states.peekAt(id, currentEpoch(id))?.state.doc.toString() ?? null;
+}
+
 export function editorView() {
   return liveView;
 }
@@ -137,6 +142,13 @@ export function focusNoteText(at: "start" | "end" = "start") {
   if (!view) return;
   view.focus();
   view.dispatch({ selection: EditorSelection.cursor(at === "start" ? 0 : view.state.doc.length), scrollIntoView: true });
+}
+
+export function focusNoteEnd() {
+  const view = liveView;
+  if (!view) return;
+  view.focus();
+  view.dispatch({ selection: EditorSelection.cursor(view.state.doc.length) });
 }
 
 export function scheduleNoteSave(id: string, fallback: { title: string; body: string }) {

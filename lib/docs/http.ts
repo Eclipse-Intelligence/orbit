@@ -159,7 +159,10 @@ export const docsReads = {
   noteTitles: ({ actor }: DocsCall) => docsNoteTitles(actor),
   mentioning: ({ actor, request }: DocsCall) => docsMentions(actor, { kind: search(request).get("kind") ?? "", id: search(request).get("id") ?? "" }),
   records: ({ actor, request }: DocsCall) => docsRecordDetails(actor, refsFrom(search(request).get("refs"))),
-  daily: ({ actor }: DocsCall) => docsDailyList(actor),
+  daily: ({ actor, request }: DocsCall) => {
+    const params = search(request);
+    return docsDailyList(actor, { from: params.get("from") ?? undefined, to: params.get("to") ?? undefined });
+  },
   meetings: ({ actor, request }: DocsCall) => docsMeetings(actor, dateParam(search(request).get("date"))),
   activity: ({ actor }: DocsCall) => docsActivity(actor),
   async live({ actor, params }: DocsCall) {

@@ -269,7 +269,7 @@ export function createLiveDocs(options: Options = {}): DocsData & { refreshActiv
     versionBody: (pageId, versionId) => getJson<VersionBody>(`/api/docs/pages/${encodeURIComponent(pageId)}/versions/${encodeURIComponent(versionId)}`),
     restoreVersion: async (pageId, versionId) => unwrap(await restoreVersionAction(pageId, versionId)),
     dailyNote: (date) => postJson<Page>(`/api/docs/daily/${encodeURIComponent(date)}`, "POST", {}),
-    listDailyNotes: () => getJson<DailySummary[]>("/api/docs/daily"),
+    listDailyNotes: (range) => getJson<DailySummary[]>(range ? `/api/docs/daily?from=${range.from}&to=${range.to}` : "/api/docs/daily"),
     meetingsOn: (date) => getJson<Meeting[]>(`/api/docs/meetings${query({ date })}`).catch(() => []),
     backlinks: (pageId) => getJson<Backlinks>(`/api/docs/pages/${encodeURIComponent(pageId)}/backlinks`),
     pageTasks: (pageId) => getJson<PageTask[]>(`/api/docs/pages/${encodeURIComponent(pageId)}/tasks`),

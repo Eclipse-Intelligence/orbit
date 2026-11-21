@@ -66,6 +66,7 @@ type DocsState = {
   seed: (initial: { list: PageFilter; summaries: PageSummary[]; page: Page | null }) => void;
   loadList: (list: PageFilter, force?: boolean) => Promise<string[]>;
   loadPage: (id: string, force?: boolean) => Promise<Page | null>;
+  refreshPage: (id: string) => Promise<void>;
   prefetch: (ids: string[]) => void;
   refreshNav: () => Promise<void>;
   refreshAfterAgent: () => void;
@@ -303,7 +304,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         if (current !== session) return page;
         if (page) {
           if (idle(id)) acked.delete(id);
-          set((state) => ({ pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
+          set((state) => ((state.pages[id]?.revision ?? 0) > page.revision ? state : { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
         }
         return page;
       })
@@ -312,6 +313,14 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       });
     pageRequests.set(id, request);
     return request;
+  },
+
+  async refreshPage(id) {
+    const current = session;
+    const fresh = await docsData().getPage(id);
+    if (current !== session || !fresh || !idle(id)) return;
+    const held = get().pages[id];
+    if (!held || fresh.revision > held.revision) get().replaceBody(fresh);
   },
 
   prefetch(ids) {

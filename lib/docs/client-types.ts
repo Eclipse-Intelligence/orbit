@@ -230,7 +230,7 @@ export interface DocsData {
   versionBody(pageId: string, versionId: string): Promise<VersionBody>;
   restoreVersion(pageId: string, versionId: string): Promise<Page>;
   dailyNote(date: string): Promise<Page>;
-  listDailyNotes(): Promise<DailySummary[]>;
+  listDailyNotes(range?: { from: string; to: string }): Promise<DailySummary[]>;
   meetingsOn(date: string): Promise<Meeting[]>;
   backlinks(pageId: string): Promise<Backlinks>;
   pageTasks(pageId: string): Promise<PageTask[]>;
