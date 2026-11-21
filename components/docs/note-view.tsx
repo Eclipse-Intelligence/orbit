@@ -8,6 +8,7 @@ import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetTitle } f
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { useDiscussion } from "@/components/chat/use-discussion";
 import { DiscussionButton, DocDiscussionPanel, PhoneDiscussionSheet } from "@/components/docs/doc-discussion";
+import DailyStream from "@/components/docs/daily-stream";
 import { HistoryRail, VersionBanner, VersionPreview, useVersions, type Selected } from "@/components/docs/history";
 import JotLine from "@/components/docs/jot-line";
 import MoreMenu from "@/components/docs/more-menu";
@@ -244,8 +245,7 @@ function NoteMeta({ page, summary }: { page: Page; summary: PageSummary }) {
   );
 }
 
-function DailyHeading({ page }: { page: Page }) {
-  const date = page.dailyDate ?? "";
+function DailyHeading({ date, id }: { date: string; id?: string }) {
   const [meetings, setMeetings] = useState<{ date: string; list: Meeting[] } | null>(null);
   useEffect(() => {
     let live = true;
@@ -280,7 +280,7 @@ function DailyHeading({ page }: { page: Page }) {
             ))}
           </>
         )}
-        <SaveState id={page.id} />
+        {id && <SaveState id={id} />}
       </div>
     </>
   );
@@ -296,6 +296,7 @@ export default function NoteView({
   empty,
   firstRun = false,
   hiddenOnPhone,
+  dailyDate = null,
 }: {
   page: Page | null;
   summary: PageSummary | null;
@@ -306,6 +307,7 @@ export default function NoteView({
   empty: boolean;
   firstRun?: boolean;
   hiddenOnPhone: boolean;
+  dailyDate?: string | null;
 }) {
   const nav = useDocsNav();
   const viewer = useDocsStore((state) => state.viewer) ?? nav?.viewer ?? null;
@@ -330,7 +332,8 @@ export default function NoteView({
   const historyOpen = railChosen && rail === "history";
   const versions = useVersions(pageId, historyOpen ? (page?.revision ?? 0) : -1);
   const detailsPressed = railChosen ? rail === "details" : wide;
-  const daily = (page?.kind ?? summary?.kind) === "daily";
+  const dayShown = dailyDate ?? (page?.kind === "daily" ? page.dailyDate : summary?.kind === "daily" ? summary.dailyDate : null);
+  const daily = Boolean(dayShown) || (page?.kind ?? summary?.kind) === "daily";
   const discussable = Boolean(page && viewer && !daily && summary?.shared);
   const discussion = useDiscussion("doc", pageId, { id: viewer?.id ?? "", name: viewer?.name ?? "" }, { enabled: discussable });
   const discussionAsked = useSearchParams().get(DISCUSSION_PARAM) === "1";
@@ -398,9 +401,11 @@ export default function NoteView({
     setRestoreError(null);
   }
 
+  const streaming = daily && !selected && Boolean(dayShown);
+
   useEffect(() => {
-    scroller.current?.scrollTo({ top: 0 });
-  }, [pageId]);
+    if (!streaming) scroller.current?.scrollTo({ top: 0 });
+  }, [pageId, streaming]);
 
   const live = useMemo(() => (presence.id === pageId ? presence.list : []), [presence, pageId]);
   const stack = useMemo(() => {
@@ -455,8 +460,8 @@ export default function NoteView({
   }
 
   const context = contextFor(page ?? summary ?? { kind: "note", folderId: null, dailyDate: null }, list, nav?.folders ?? []);
-  const title = daily ? shortDay((page ?? summary)?.dailyDate ?? "") : (page?.title ?? summary?.title ?? "") || "Untitled";
-  const date = (page ?? summary)?.dailyDate ?? null;
+  const title = daily ? shortDay(dayShown ?? "") : (page?.title ?? summary?.title ?? "") || "Untitled";
+  const date = dayShown;
   const today = useToday();
 
   const railContent = historyOpen ? (
@@ -474,6 +479,27 @@ export default function NoteView({
   ) : null;
 
   const railVisible = !focus && !phone && !discussionOpen && (railChosen ? Boolean(rail) : true);
+
+  const editor = (current: Page) => (
+    <NoteEditor
+      page={current}
+      presence={live}
+      list={list}
+      placeholder={daily ? "Write anything" : "Start writing"}
+      onEscape={() => {
+        if (!focus) return false;
+        setFocus(false);
+        return true;
+      }}
+      onTitleFocus={() => {
+        const field = titleRef.current;
+        if (!field) return false;
+        field.focus();
+        field.setSelectionRange(field.value.length, field.value.length);
+        return true;
+      }}
+    />
+  );
 
   if (empty) {
     return (
@@ -553,7 +579,7 @@ export default function NoteView({
               <Button variant="secondary" size="sm" className="h-[30px] px-3" disabled={date === today} title="Today (G then D)" onClick={() => navigate(dailyHref(today))}>
                 Today
               </Button>
-              <Button variant="ghost" size="icon" aria-label="Next day" title="Next day" disabled={date >= today} onClick={() => navigate(dailyHref(shiftDate(date, 1)))}>
+              <Button variant="ghost" size="icon" aria-label="Next day" title="Next day" onClick={() => navigate(dailyHref(shiftDate(date, 1)))}>
                 <ChevronRightIcon aria-hidden className="size-3.5" />
               </Button>
             </span>
@@ -600,59 +626,62 @@ export default function NoteView({
       )}
 
       <div ref={bodyRef} className="relative flex min-h-0 flex-1">
-        <div ref={scroller} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto px-5 pt-5 pb-40 md:px-12 md:pt-7">
-          <div className={cn("note-surface mx-auto w-full", daily ? "max-w-[calc(38em+4.75rem)]" : "note-measure")}>
-            {page ? (
-              <>
-                {daily ? (
-                  <DailyHeading page={page} />
-                ) : (
+        <div
+          ref={scroller}
+          className={cn("relative min-h-0 min-w-0 flex-1 overflow-y-auto px-5 md:px-12", streaming ? "[overflow-anchor:none]" : "pt-5 pb-40 md:pt-7")}
+        >
+          {streaming && date ? (
+            <DailyStream
+              date={date}
+              liveReady={Boolean(page && page.dailyDate === date)}
+              onDate={(next) => navigate(dailyHref(next), { replace: true })}
+              renderHeading={(day) => <DailyHeading date={day} />}
+              renderLive={() =>
+                page && (
                   <>
-                    <TitleField key={`${page.id}:${epoch}`} page={page} inputRef={titleRef} replaced={epoch > 0} />
-                    {summary && <NoteMeta page={page} summary={summary} />}
+                    <DailyHeading date={date} id={page.id} />
+                    <ConflictNotice id={page.id} />
+                    <div>{editor(page)}</div>
+                    <JotLine page={page} />
                   </>
-                )}
-                {!selected && <ConflictNotice id={page.id} />}
-                {selected && <VersionPreview page={page} selected={selected} showChanges={showChanges} />}
-                <div className={cn(selected && "hidden")}>
-                  <NoteEditor
-                    page={page}
-                    presence={live}
-                    list={list}
-                    placeholder={daily ? "Write anything" : "Start writing"}
-                    onEscape={() => {
-                      if (!focus) return false;
-                      setFocus(false);
-                      return true;
-                    }}
-                    onTitleFocus={() => {
-                      const field = titleRef.current;
-                      if (!field) return false;
-                      field.focus();
-                      field.setSelectionRange(field.value.length, field.value.length);
-                      return true;
-                    }}
-                  />
+                )
+              }
+            />
+          ) : (
+            <div className={cn("note-surface mx-auto w-full", daily ? "max-w-[calc(38em+4.75rem)]" : "note-measure")}>
+              {page ? (
+                <>
+                  {daily ? (
+                    <DailyHeading date={page.dailyDate ?? ""} id={page.id} />
+                  ) : (
+                    <>
+                      <TitleField key={`${page.id}:${epoch}`} page={page} inputRef={titleRef} replaced={epoch > 0} />
+                      {summary && <NoteMeta page={page} summary={summary} />}
+                    </>
+                  )}
+                  {!selected && <ConflictNotice id={page.id} />}
+                  {selected && <VersionPreview page={page} selected={selected} showChanges={showChanges} />}
+                  <div className={cn(selected && "hidden")}>{editor(page)}</div>
+                  {daily && !selected && <JotLine page={page} />}
+                </>
+              ) : missing ? (
+                <div role="alert" className="flex flex-col items-start gap-3 pt-1">
+                  <h1 className="note-title">This note isn&apos;t available</h1>
+                  <p className="text-subtle">It may be archived, or private to someone else.</p>
+                  <Button variant="secondary" size="sm" href={backHref} onClick={(event) => within(event, backHref)}>
+                    Back to {backLabel}
+                  </Button>
                 </div>
-                {daily && !selected && <JotLine page={page} />}
-              </>
-            ) : missing ? (
-              <div role="alert" className="flex flex-col items-start gap-3 pt-1">
-                <h1 className="note-title">This note isn&apos;t available</h1>
-                <p className="text-subtle">It may be archived, or private to someone else.</p>
-                <Button variant="secondary" size="sm" href={backHref} onClick={(event) => within(event, backHref)}>
-                  Back to {backLabel}
-                </Button>
-              </div>
-            ) : (
-              <div role="status" aria-label="Loading the note" className="flex flex-col gap-4 pt-1">
-                <span className="h-8 w-2/3 rounded-lg bg-white/[0.04]" />
-                <span className="h-4 w-1/3 rounded bg-white/[0.03]" />
-                <span className="mt-4 h-4 w-full rounded bg-white/[0.03]" />
-                <span className="h-4 w-5/6 rounded bg-white/[0.03]" />
-              </div>
-            )}
-          </div>
+              ) : (
+                <div role="status" aria-label="Loading the note" className="flex flex-col gap-4 pt-1">
+                  <span className="h-8 w-2/3 rounded-lg bg-white/[0.04]" />
+                  <span className="h-4 w-1/3 rounded bg-white/[0.03]" />
+                  <span className="mt-4 h-4 w-full rounded bg-white/[0.03]" />
+                  <span className="h-4 w-5/6 rounded bg-white/[0.03]" />
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {railVisible && railContent && (
           <aside
