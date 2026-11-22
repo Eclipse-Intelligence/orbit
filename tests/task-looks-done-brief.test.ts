@@ -146,9 +146,9 @@ describe("looks done in the brief, assistant, API and MCP", () => {
         sections[1],
         [
           "### Looks done",
-          `- [Call Jane about pricing and the pilot](/tasks?task=${ids.call}) · Call with Jane Doe, ${activityWhen(hoursAgo(2))}`,
-          `- [Send Tom the proposal (final)](/tasks?task=${ids.email}) · you emailed Tom Reed, ${activityWhen(hoursAgo(3))}`,
-          `- [Agent's call with Jane](/tasks?task=${ids.agent}) · Meeting with Jane Doe, ${activityWhen(hoursAgo(4))}`,
+          `- [Call Jane about pricing and the pilot](/tasks?task=${ids.call}) · Call with Jane, ${activityWhen(hoursAgo(2))}`,
+          `- [Send Tom the proposal (final)](/tasks?task=${ids.email}) · you emailed Tom, ${activityWhen(hoursAgo(3))}`,
+          `- [Agent's call with Jane](/tasks?task=${ids.agent}) · Meeting with Jane, ${activityWhen(hoursAgo(4))}`,
         ].join("\n"),
       );
       assert.ok(suggestsClosing(body));
@@ -158,7 +158,7 @@ describe("looks done in the brief, assistant, API and MCP", () => {
       const result = await runUnit(sam, "brief", { deadline: Date.now() + 120_000, fetchImpl: refusing, trigger: "manual" });
       assert.equal(result.brief, true, JSON.stringify(result));
       const body = (await latestBrief(sam))?.body ?? "";
-      assert.match(body, new RegExp(`\\[Sam's task tagging Mark\\]\\(/tasks\\?task=${ids.tagged}\\) · Meeting with Jane Doe, `));
+      assert.match(body, new RegExp(`\\[Sam's task tagging Mark\\]\\(/tasks\\?task=${ids.tagged}\\) · Meeting with Jane, `));
       assert.match(body, new RegExp(`\\[Sam's call with Jane\\]\\(/tasks\\?task=${ids.colleague}\\)`));
       assert.doesNotMatch(body, /Call Jane about pricing|Send Tom|Agent's call/);
       const markBody = (await latestBrief(mark))?.body ?? "";
@@ -173,6 +173,21 @@ describe("looks done in the brief, assistant, API and MCP", () => {
       assert.match(body, /Call Jane about pricing/);
       await admin().query("update crm.task_done_offers set state = 'offered' where task_id = $1", [ids.email]);
       await runUnit(mark, "brief", { deadline: Date.now() + 120_000, fetchImpl: refusing, trigger: "manual", rebuildBrief: true });
+    });
+  });
+
+  describe("the brief's names", () => {
+    it("falls back to the full name, then the email, when the contact has no first name", async () => {
+      const rebuild = async () => {
+        await runUnit(mark, "brief", { deadline: Date.now() + 120_000, fetchImpl: async () => { throw new Error("model"); }, trigger: "manual", rebuildBrief: true });
+        return (await latestBrief(mark))?.body ?? "";
+      };
+      await admin().query("update crm.contacts set first_name = '' where id = $1", [tomId]);
+      assert.match(await rebuild(), /you emailed Reed, /);
+      await admin().query("update crm.contacts set last_name = '' where id = $1", [tomId]);
+      assert.match(await rebuild(), /you emailed tom@northwind-lookdonebrief\.test, /);
+      await admin().query("update crm.contacts set first_name = 'Tom', last_name = 'Reed' where id = $1", [tomId]);
+      assert.match(await rebuild(), /you emailed Tom, /);
     });
   });
 

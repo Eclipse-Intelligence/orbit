@@ -501,7 +501,7 @@ type LooksDoneTask = { id: string; title: string; kind: "email" | "call" | "meet
 async function looksDoneTasksInDb(db: Db, actor: UserActor) {
   const result = await db.query<LooksDoneTask>(
     `select t.id, t.title, o.kind, a.occurred_at,
-       coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), nullif(trim(co.name), '')) as who,
+       coalesce(nullif(trim(c.first_name), ''), nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), nullif(trim(c.email), ''), nullif(trim(co.name), '')) as who,
        count(*) over ()::int as total
      from crm.tasks t
      join crm.task_done_offers o on o.task_id = t.id and o.state = 'offered'
