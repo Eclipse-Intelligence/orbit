@@ -19,7 +19,9 @@ import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction } from "@/app/(crm)/records";
-import { markTaskSpamAction } from "@/app/(crm)/task-act";
+import { dismissTaskDoneOfferAction, markTaskSpamAction } from "@/app/(crm)/task-act";
+import type { LooksDoneHandlers } from "@/components/crm/task-looks-done";
+import type { TaskClosedAfter, TaskDoneOffer } from "@/lib/crm/task-done";
 import { useTaskDone } from "@/components/crm/use-task-done";
 import { claimUndoKey, undoLinkChange } from "@/lib/task-link-undo";
 import { taskWindowAction, type TaskWindow } from "@/app/(crm)/tasks/actions";
@@ -115,6 +117,8 @@ export default function ActionsScreen({
   tagged = {},
   taggedCount = 0,
   discussions = {},
+  looksDone = {},
+  closedAfter = {},
   openTask = null,
   switchTo = null,
   total = 0,
@@ -131,6 +135,8 @@ export default function ActionsScreen({
   tagged?: Record<string, string[]>;
   taggedCount?: number;
   discussions?: Record<string, number>;
+  looksDone?: Record<string, TaskDoneOffer>;
+  closedAfter?: Record<string, TaskClosedAfter>;
   openTask?: Task | null;
   switchTo?: string | null;
   total?: number;
@@ -158,6 +164,8 @@ export default function ActionsScreen({
   const allCompanies = unique(current ? current.companies : companies);
   const allTagged = current ? { ...tagged, ...current.tagged } : tagged;
   const allDiscussions = current ? { ...discussions, ...current.discussions } : discussions;
+  const allLooksDone = current ? { ...looksDone, ...current.looksDone } : looksDone;
+  const allClosedAfter = current ? { ...closedAfter, ...current.closedAfter } : closedAfter;
   const pages = current?.pages ?? 1;
   const latestTotal = current?.total ?? total;
   const shown = view === "none" ? allCompanies.length : allTasks.length;
@@ -223,6 +231,7 @@ export default function ActionsScreen({
   const desktop = useDesktop();
   const [assigningIds, setAssigningIds] = useState<Set<string>>(() => new Set());
   const [spammed, setSpammed] = useState<Set<string>>(() => new Set());
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const search = useSearchParams();
   const panelId = search.get(TASK_PARAM);
   const listed = panelId ? (allTasks.find((task) => task.id === panelId) ?? (openTask?.id === panelId ? openTask : null)) : null;
@@ -389,6 +398,39 @@ export default function ActionsScreen({
     router.refresh();
   }
 
+  function offerOf(id: string) {
+    const offer = allLooksDone[id];
+    return offer && !dismissed.has(offer.id) ? offer : null;
+  }
+
+  function closeOffer(task: Task, offer: TaskDoneOffer, place: "row" | "panel") {
+    if (concluding.saving === task.id || done.has(task.id) || outcome?.task.id === task.id) return;
+    if (place === "panel") {
+      setExpandedId((current) => (current === task.id ? null : current));
+      concluding.start(task, finePointer(), "panel", offer);
+      return;
+    }
+    concluding.start(task, false, "row", offer);
+    setExpandedId(task.id);
+  }
+
+  async function dismissOffer(task: Task, offer: TaskDoneOffer) {
+    if (dismissed.has(offer.id) || task.completedAt) return;
+    setMessage(null);
+    setDismissed((current) => new Set(current).add(offer.id));
+    const result = await dismissTaskDoneOfferAction(offer.id).catch(() => ({ error: "Couldn't save. Try again." }));
+    if (result.error) {
+      setDismissed((current) => {
+        const next = new Set(current);
+        next.delete(offer.id);
+        return next;
+      });
+      setMessage(result.error);
+      return;
+    }
+    router.refresh();
+  }
+
   async function assign(id: string, ownerId: string) {
     if (assigningIds.has(id)) return;
     setMessage(null);
@@ -449,10 +491,17 @@ export default function ActionsScreen({
     setExpandedId(next);
   }
 
-  const latest = useRef({ toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, spam, concluding });
+  const latest = useRef({ toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, spam, concluding, closeOffer, dismissOffer });
   useEffect(() => {
-    latest.current = { toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, spam, concluding };
+    latest.current = { toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, spam, concluding, closeOffer, dismissOffer };
   });
+  const looksDoneHandlers = useMemo<LooksDoneHandlers>(
+    () => ({
+      close: (task, offer, place) => latest.current.closeOffer(task, offer, place),
+      dismiss: (task, offer) => void latest.current.dismissOffer(task, offer),
+    }),
+    [],
+  );
   const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
   const onComplete = useCallback((task: Task, via?: "swipe") => latest.current.complete(task, via), []);
   const outcomeHandlers = useMemo<OutcomeHandlers>(
@@ -664,6 +713,9 @@ export default function ActionsScreen({
                 keyboard
                 outcome={outcome?.place === "row" && outcome.task.id === entry.task.id ? { focus: outcome.focus, saving: concluding.saving === entry.task.id, outcomeId: outcome.outcomeId } : null}
                 outcomeHandlers={outcomeHandlers}
+                looksDone={offerOf(entry.task.id)}
+                closedAfter={allClosedAfter[entry.task.id] ?? null}
+                looksDoneHandlers={looksDoneHandlers}
               />
             ),
           )}
@@ -688,6 +740,9 @@ export default function ActionsScreen({
         onSpam={onSpam}
         outcome={outcome?.place === "panel" && outcome.task.id === (panelTask ?? kept)?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id, outcomeId: outcome.outcomeId } : null}
         outcomeHandlers={outcomeHandlers}
+        looksDone={panelTask ? offerOf(panelTask.id) : null}
+        closedAfter={panelTask ? (allClosedAfter[panelTask.id] ?? null) : null}
+        looksDoneHandlers={looksDoneHandlers}
       />
     </section>
   );

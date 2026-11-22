@@ -14,6 +14,8 @@ import { TaskPrepare } from "@/components/crm/task-prepare";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import { othersSeeTask } from "@/components/crm/task-docs";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
+import { ClosedAfter, LooksDoneLine, type LooksDoneHandlers } from "@/components/crm/task-looks-done";
+import type { TaskClosedAfter, TaskDoneOffer } from "@/lib/crm/task-done";
 import TaskTitle from "@/components/crm/task-title";
 import { RepeatIcon, RepeatMark } from "@/components/crm/task-repeat";
 import type { Viewer } from "@/components/crm/viewer";
@@ -164,6 +166,9 @@ function ActionTask({
   here,
   outcome = null,
   outcomeHandlers,
+  looksDone = null,
+  closedAfter = null,
+  looksDoneHandlers,
 }: {
   task: Task;
   completed: boolean;
@@ -190,6 +195,9 @@ function ActionTask({
   here?: TitleHere;
   outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
+  looksDone?: TaskDoneOffer | null;
+  closedAfter?: TaskClosedAfter | null;
+  looksDoneHandlers?: LooksDoneHandlers;
 }) {
   const complete = canComplete && onComplete ? () => onComplete(task) : undefined;
   const swipeDone = canComplete && onComplete ? () => onComplete(task, "swipe") : undefined;
@@ -430,6 +438,16 @@ function ActionTask({
             </div>
           )}
         </div>
+        {looksDone && !completed && !concluding && (
+          <div className="px-3 pb-2.5 @xl:pl-[46px]">
+            <LooksDoneLine task={task} offer={looksDone} handlers={looksDoneHandlers} canChange={canChange} />
+          </div>
+        )}
+        {closedAfter && completed && (
+          <div className="px-3 pb-2.5 @xl:pl-[46px]">
+            <ClosedAfter reason={closedAfter} />
+          </div>
+        )}
         <div
           className={cn("ease-power3-out grid transition-[grid-template-rows] duration-300", expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}
           onTransitionEnd={(event) => {

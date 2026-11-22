@@ -2,6 +2,7 @@ import { after } from "next/server";
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
+import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import type { Actor } from "@/lib/crm/types";
 import { dayKeyAt } from "@/lib/crm/working-days";
 import type { Db } from "@/lib/db/pool";
@@ -22,7 +23,12 @@ export type TaskDoneOffer = {
   createdAt: string;
   activityTitle: string | null;
   activityAt: string;
+  href: string | null;
 };
+
+export type TaskClosedAfter = { kind: TaskDoneKind; at: string; href: string | null };
+
+export type TaskDoneNotes = { offers: Record<string, TaskDoneOffer>; closedAfter: Record<string, TaskClosedAfter> };
 
 const BACKGROUND_BUDGET_MS = 25_000;
 const STEP_MIN_MS = 10_000;
@@ -227,36 +233,71 @@ type OfferRow = {
   created_at: Date;
   title: string | null;
   occurred_at: Date;
+  contact_id: string | null;
+  company_id: string | null;
 };
 
-export async function taskDoneOffers(actor: Actor, taskIds: string[]): Promise<TaskDoneOffer[]> {
-  const wanted = [...new Set(taskIds.filter(isUuid))];
-  if (wanted.length === 0) return [];
-  return withActor(actor, async (db) => {
-    const result = await db.query<OfferRow>(
-      `select o.id, o.task_id, o.activity_id, o.kind, o.note, o.next_title, o.next_due::text as next_due, o.created_at,
-         a.title, a.occurred_at
+function activityHref(activityId: string, row: { contact_id: string | null; company_id: string | null }) {
+  if (row.contact_id) return `${contactHref(row.contact_id)}#activity-${activityId}`;
+  if (row.company_id) return `${companyHref(row.company_id)}#activity-${activityId}`;
+  return null;
+}
+
+const OFFER_SQL = `select o.id, o.task_id, o.activity_id, o.kind, o.note, o.next_title, o.next_due::text as next_due, o.created_at,
+         a.title, a.occurred_at, a.contact_id, a.company_id
        from crm.task_done_offers o
        join crm.tasks t on t.id = o.task_id
        join crm.activities a on a.id = o.activity_id
        where o.task_id = any($1::uuid[]) and o.state = 'offered'
          and t.workspace_id = $2 and t.completed_at is null and t.archived_at is null
          and a.archived_at is null and a.workspace_id = t.workspace_id
-       order by o.created_at desc`,
-      [wanted, actor.workspaceId],
-    );
-    return result.rows.map((row) => ({
-      id: row.id,
-      taskId: row.task_id,
-      activityId: row.activity_id,
-      kind: row.kind,
-      note: row.note,
-      nextTitle: row.next_title,
-      nextDue: row.next_due,
-      createdAt: row.created_at.toISOString(),
-      activityTitle: row.title,
-      activityAt: row.occurred_at.toISOString(),
-    }));
+       order by o.created_at desc`;
+
+const CLOSED_SQL = `select t.id as task_id, o.activity_id, o.kind, a.occurred_at, a.contact_id, a.company_id
+       from crm.tasks t
+       join crm.task_outcomes x on x.task_id = t.id and x.completed_at = t.completed_at
+       join crm.task_done_offers o on o.task_id = t.id and o.activity_id = x.activity_id and o.state = 'closed'
+       join crm.activities a on a.id = o.activity_id and a.workspace_id = t.workspace_id
+       where t.id = any($1::uuid[]) and t.workspace_id = $2 and t.completed_at is not null`;
+
+function offerOf(row: OfferRow): TaskDoneOffer {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    activityId: row.activity_id,
+    kind: row.kind,
+    note: row.note,
+    nextTitle: row.next_title,
+    nextDue: row.next_due,
+    createdAt: row.created_at.toISOString(),
+    activityTitle: row.title,
+    activityAt: row.occurred_at.toISOString(),
+    href: activityHref(row.activity_id, row),
+  };
+}
+
+export async function taskDoneNotes(actor: Actor, taskIds: string[]): Promise<TaskDoneNotes> {
+  const wanted = [...new Set(taskIds.filter(isUuid))];
+  const notes: TaskDoneNotes = { offers: {}, closedAfter: {} };
+  if (wanted.length === 0) return notes;
+  const found = await withActor(actor, async (db) => {
+    const offers = await db.query<OfferRow>(OFFER_SQL, [wanted, actor.workspaceId]);
+    const closed = await db.query<{ task_id: string; activity_id: string; kind: TaskDoneKind; occurred_at: Date; contact_id: string | null; company_id: string | null }>(CLOSED_SQL, [wanted, actor.workspaceId]);
+    return { offers: offers.rows, closed: closed.rows };
+  });
+  for (const row of found.offers) if (!notes.offers[row.task_id]) notes.offers[row.task_id] = offerOf(row);
+  for (const row of found.closed) {
+    notes.closedAfter[row.task_id] = { kind: row.kind, at: row.occurred_at.toISOString(), href: activityHref(row.activity_id, row) };
+  }
+  return notes;
+}
+
+export async function taskDoneOffers(actor: Actor, taskIds: string[]): Promise<TaskDoneOffer[]> {
+  const wanted = [...new Set(taskIds.filter(isUuid))];
+  if (wanted.length === 0) return [];
+  return withActor(actor, async (db) => {
+    const result = await db.query<OfferRow>(OFFER_SQL, [wanted, actor.workspaceId]);
+    return result.rows.map(offerOf);
   });
 }
 

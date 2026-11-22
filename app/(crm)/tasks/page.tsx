@@ -8,6 +8,7 @@ import { listMembers } from "@/lib/crm/companies";
 import { countTaskViews, getDueActions } from "@/lib/crm/relationships";
 import { DEFAULT_TASK_VIEW, TASKS_PATH, taskViewFromParam } from "@/lib/crm/task-views";
 import { isUuid } from "@/lib/crm/mutate";
+import { taskDoneNotes } from "@/lib/crm/task-done";
 import { getTask, listTaskParticipants } from "@/lib/crm/tasks";
 import { actorForTask } from "@/lib/crm/workspaces";
 
@@ -47,10 +48,11 @@ export default async function TasksPage({
   }
   const switchTo = elsewhere ? `/open?workspace=${elsewhere.workspaceId}&to=${encodeURIComponent(`${TASKS_PATH}?${original.toString()}`)}` : null;
   const ids = [...due.tasks.map((task) => task.id), ...(openTask ? [openTask.id] : [])];
-  const [tagged, taggedCount, discussions] = await Promise.all([
+  const [tagged, taggedCount, discussions, doneNotes] = await Promise.all([
     team ? listTaskParticipants(user, ids) : Promise.resolve({}),
     !team ? Promise.resolve(0) : scope.tagged ? Promise.resolve(counts.all) : countTaskViews(user, { tagged: true }).then((views) => views.all),
     discussionCounts(user, "task", ids),
+    taskDoneNotes(user, ids),
   ]);
 
   return (
@@ -73,6 +75,8 @@ export default async function TasksPage({
       tagged={tagged}
       taggedCount={taggedCount}
       discussions={discussions}
+      looksDone={doneNotes.offers}
+      closedAfter={doneNotes.closedAfter}
       openTask={elsewhere ? null : openTask}
       switchTo={switchTo}
       total={due.total}

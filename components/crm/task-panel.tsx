@@ -16,6 +16,8 @@ import TaskSpamMenu from "@/components/crm/task-spam";
 import { canMarkSpam } from "@/lib/crm/suggested-task";
 import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
+import { ClosedAfter, LooksDoneCard, type LooksDoneHandlers } from "@/components/crm/task-looks-done";
+import type { TaskClosedAfter, TaskDoneOffer } from "@/lib/crm/task-done";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
 import type { Viewer } from "@/components/crm/viewer";
 import { isRepeating, RepeatEarlier, runsSeries, SkipButton } from "@/components/crm/task-repeat";
@@ -39,6 +41,9 @@ type PanelProps = {
   onClose: () => void;
   outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
+  looksDone?: TaskDoneOffer | null;
+  closedAfter?: TaskClosedAfter | null;
+  looksDoneHandlers?: LooksDoneHandlers;
   recordNotes?: boolean;
   returnTo?: HTMLElement | null;
 };
@@ -106,7 +111,7 @@ function focusedElement() {
   return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, completed = false, onComplete, onReopen, onSpam, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, completed = false, onComplete, onReopen, onSpam, onClose, instant, modal, outcome = null, outcomeHandlers, looksDone = null, closedAfter = null, looksDoneHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -302,6 +307,8 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                       </Button>
                     </div>
                   )}
+                  {done && closedAfter && <ClosedAfter reason={closedAfter} />}
+                  {looksDone && !done && !outcome && <LooksDoneCard task={task} offer={looksDone} handlers={looksDoneHandlers} canChange={canChange} />}
                   {outcome && outcomeHandlers ? (
                     <TaskOutcomeForm
                       key={outcome.outcomeId}

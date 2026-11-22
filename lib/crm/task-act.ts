@@ -38,12 +38,14 @@ export type TaskOutcome = {
   note: string;
   kind: OutcomeKind | null;
   next: { title: string; dueAt: string | null } | null;
+  activityId?: string | null;
 };
 
 export type LinkChange = { companyId?: string | null; contactId?: string | null; opportunityId?: string | null; mailThreadKey?: null };
 
 const OUTCOME_KINDS: OutcomeKind[] = ["call", "email", "meeting"];
 const PEOPLE_SHOWN = 8;
+const LINKED_NOTE_LIMIT = 4000;
 const EMAIL_WINDOW_MONTHS = 12;
 const EMAIL_SCAN_LIMIT = 2000;
 const EMAIL_DEADLINE_MS = 800;
@@ -322,7 +324,10 @@ function cleanOutcome(input: TaskOutcome) {
   const kind = OUTCOME_KINDS.includes(input.kind as OutcomeKind) ? (input.kind as OutcomeKind) : null;
   const title = typeof input.next?.title === "string" ? input.next.title.trim() : "";
   const dueAt = typeof input.next?.dueAt === "string" && input.next.dueAt.trim() ? input.next.dueAt.trim() : null;
-  return { outcomeId: input.outcomeId.toLowerCase(), note, kind, next: title ? { title, dueAt } : null };
+  const linked = input.activityId === undefined || input.activityId === null ? null : input.activityId;
+  if (linked !== null && (typeof linked !== "string" || !isUuid(linked))) throw new CrmError("invalid_input", "Couldn't save. Try again.", 400);
+  if (linked !== null && note.length > LINKED_NOTE_LIMIT) throw new CrmError("invalid_input", tooLong("the note", LINKED_NOTE_LIMIT), 400, { field: "note" });
+  return { outcomeId: input.outcomeId.toLowerCase(), note, kind, next: title ? { title, dueAt } : null, activityId: linked ? linked.toLowerCase() : null };
 }
 
 async function nextOwner(db: Db, workspaceId: string, ownerId: string | null, actor: UserActor) {
@@ -333,6 +338,14 @@ async function nextOwner(db: Db, workspaceId: string, ownerId: string | null, ac
 
 export type SavedOutcome = { task: Task; activityId: string | null; next: Task | null; replayed: boolean };
 
+const OFFER_KIND_NAMES: Record<string, string> = { call: "the call", email: "the email", meeting: "the meeting" };
+
+async function offerChanged(db: Db, taskId: string, activityId: string) {
+  const found = await db.query<{ kind: string }>("select kind from crm.task_done_offers where task_id = $1 and activity_id = $2", [taskId, activityId]);
+  const what = OFFER_KIND_NAMES[found.rows[0]?.kind ?? ""] ?? "the activity";
+  return new CrmError("conflict", `Couldn't link it to ${what}. Save again to log your note instead.`, 409, { field: "offer" });
+}
+
 function alreadySaved() {
   return new CrmError("conflict", "What happened on this task is already saved.", 409);
 }
@@ -341,7 +354,7 @@ export async function completeTaskWithOutcome(actor: UserActor, taskId: string, 
   assertScope(actor.scopes, "tasks:write");
   if (!isUuid(taskId)) throw notFound("task");
   const outcome = cleanOutcome(input);
-  if (outcome.note) assertScope(actor.scopes, "activities:write");
+  if (outcome.note && !outcome.activityId) assertScope(actor.scopes, "activities:write");
   return withActor(actor, async (db) => {
     const task = await lockedTask(db, actor, taskId);
     const earlier = await db.query<{ task_id: string; activity_id: string | null; next_task_id: string | null }>(
@@ -353,8 +366,19 @@ export async function completeTaskWithOutcome(actor: UserActor, taskId: string, 
       const next = earlier.rows[0].next_task_id ? await readTaskInDb(db, actor, earlier.rows[0].next_task_id) : null;
       return { task, activityId: earlier.rows[0].activity_id, next, replayed: true };
     }
+    if (outcome.activityId) {
+      const closed = await db.query(
+        `update crm.task_done_offers o set state = 'closed', decided_at = now(), decided_by = $3
+         from crm.activities a
+         where o.task_id = $1 and o.activity_id = $2 and o.state = 'offered'
+           and a.id = o.activity_id and a.workspace_id = $4 and a.archived_at is null
+         returning o.id`,
+        [task.id, outcome.activityId, actor.userId, actor.workspaceId],
+      );
+      if ((closed.rowCount ?? 0) === 0) throw await offerChanged(db, task.id, outcome.activityId);
+    }
     const links = await currentLinksInDb(db, actor.workspaceId, { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId });
-    if (outcome.note && !links.companyId && !links.contactId && !links.opportunityId) {
+    if (outcome.note && !outcome.activityId && !links.companyId && !links.contactId && !links.opportunityId) {
       throw new CrmError("invalid_input", "Link a person or company first.", 400, { field: "contactId" });
     }
     const done = task.completedAt
@@ -365,8 +389,8 @@ export async function completeTaskWithOutcome(actor: UserActor, taskId: string, 
       [task.id],
     );
     if ((saved.rowCount ?? 0) > 0) throw alreadySaved();
-    let activityId: string | null = null;
-    if (outcome.note) {
+    let activityId: string | null = outcome.activityId;
+    if (outcome.note && !outcome.activityId) {
       const title = headline(outcome.note).slice(0, 200);
       const activity = await createActivityInDb(
         db,
@@ -392,9 +416,9 @@ export async function completeTaskWithOutcome(actor: UserActor, taskId: string, 
     }
     try {
       await db.query(
-        `insert into crm.task_outcomes (id, task_id, completed_at, activity_id, next_task_id, created_by)
-         select $1, t.id, t.completed_at, $3, $4, $5 from crm.tasks t where t.id = $2`,
-        [outcome.outcomeId, task.id, activityId, next?.id ?? null, actor.userId],
+        `insert into crm.task_outcomes (id, task_id, completed_at, activity_id, next_task_id, created_by, note)
+         select $1, t.id, t.completed_at, $3, $4, $5, $6 from crm.tasks t where t.id = $2`,
+        [outcome.outcomeId, task.id, activityId, next?.id ?? null, actor.userId, outcome.activityId && outcome.note ? outcome.note : null],
       );
     } catch (error) {
       if (isPgError(error) && error.code === "23505") throw alreadySaved();
