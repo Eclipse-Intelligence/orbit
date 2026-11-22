@@ -338,8 +338,12 @@ async function nextOwner(db: Db, workspaceId: string, ownerId: string | null, ac
 
 export type SavedOutcome = { task: Task; activityId: string | null; next: Task | null; replayed: boolean };
 
-function offerChanged() {
-  return new CrmError("conflict", "That offer has changed. Save again to close the task without it.", 409, { field: "offer" });
+const OFFER_KIND_NAMES: Record<string, string> = { call: "the call", email: "the email", meeting: "the meeting" };
+
+async function offerChanged(db: Db, taskId: string, activityId: string) {
+  const found = await db.query<{ kind: string }>("select kind from crm.task_done_offers where task_id = $1 and activity_id = $2", [taskId, activityId]);
+  const what = OFFER_KIND_NAMES[found.rows[0]?.kind ?? ""] ?? "the activity";
+  return new CrmError("conflict", `Couldn't link it to ${what}. Save again to log your note instead.`, 409, { field: "offer" });
 }
 
 function alreadySaved() {
@@ -371,7 +375,7 @@ export async function completeTaskWithOutcome(actor: UserActor, taskId: string, 
          returning o.id`,
         [task.id, outcome.activityId, actor.userId, actor.workspaceId],
       );
-      if ((closed.rowCount ?? 0) === 0) throw offerChanged();
+      if ((closed.rowCount ?? 0) === 0) throw await offerChanged(db, task.id, outcome.activityId);
     }
     const links = await currentLinksInDb(db, actor.workspaceId, { companyId: task.companyId, contactId: task.contactId, opportunityId: task.opportunityId });
     if (outcome.note && !outcome.activityId && !links.companyId && !links.contactId && !links.opportunityId) {

@@ -798,6 +798,28 @@ describe("looks done offers", () => {
       assert.equal(notes.offers[taskId].href, `/contacts/${jane}#activity-${activityId}`);
     });
 
+    it("closes an offer on a task that was already completed, and shows no reason after a plain Done once reopened", async () => {
+      const { taskId, activityId } = await offered();
+      await completeTask(mark, taskId);
+      const saved = await completeTaskWithOutcome(mark, taskId, closing(activityId));
+      assert.equal(saved.replayed, false);
+      assert.equal((await offersFor(taskId))[0].state, "closed");
+      assert.equal((await taskDoneNotes(mark, [taskId])).closedAfter[taskId]?.kind, "call");
+      await reopenTask(mark, taskId);
+      await completeTaskWithOutcome(mark, taskId, { outcomeId: randomUUID(), note: "", kind: null, next: null });
+      assert.deepEqual((await taskDoneNotes(mark, [taskId])).closedAfter, {});
+    });
+
+    it("names the kind in the message when the offer is gone", async () => {
+      const { taskId, activityId } = await offered();
+      const [offer] = await openOffers(taskId);
+      await dismissTaskDoneOffer(mark, offer.id);
+      await assert.rejects(
+        completeTaskWithOutcome(mark, taskId, closing(activityId)),
+        (error: unknown) => error instanceof CrmError && error.message === "Couldn't link it to the call. Save again to log your note instead.",
+      );
+    });
+
     it("shows no reason for a task done the usual way", async () => {
       const { jane } = await scene();
       const taskId = await task(mark, "Call Jane", { contactId: jane });

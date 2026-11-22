@@ -164,8 +164,8 @@ export default function ActionsScreen({
   const allCompanies = unique(current ? current.companies : companies);
   const allTagged = current ? { ...tagged, ...current.tagged } : tagged;
   const allDiscussions = current ? { ...discussions, ...current.discussions } : discussions;
-  const allLooksDone = current ? current.looksDone : looksDone;
-  const allClosedAfter = current ? current.closedAfter : closedAfter;
+  const allLooksDone = current ? { ...looksDone, ...current.looksDone } : looksDone;
+  const allClosedAfter = current ? { ...closedAfter, ...current.closedAfter } : closedAfter;
   const pages = current?.pages ?? 1;
   const latestTotal = current?.total ?? total;
   const shown = view === "none" ? allCompanies.length : allTasks.length;

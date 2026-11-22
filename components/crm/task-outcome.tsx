@@ -141,11 +141,17 @@ export function useTaskOutcome({
   function skip(task: Task, quiet = false) {
     if (saving === task.id || outcome?.task.id !== task.id) return;
     if (drafts.get(task.id)?.activityId) {
-      void save(task, quiet);
+      void saveLinked(task, quiet);
       return;
     }
     release(task.id);
     close(task, outcome.place, quiet);
+  }
+
+  function saveLinked(task: Task, quiet: boolean) {
+    return save(task, quiet).then((problem) => {
+      if (problem && !quiet) composer.showToast({ message: problem, tone: "alert" });
+    });
   }
 
   function save(task: Task, quiet = false): Promise<string | null> {
@@ -185,7 +191,8 @@ export function useTaskOutcome({
 
   function leave(task: Task, quiet = false) {
     if (saving === task.id || outcome?.task.id !== task.id) return;
-    if (typedOutcome(drafts.get(task.id))) void save(task, quiet);
+    if (drafts.get(task.id)?.activityId) void saveLinked(task, quiet);
+    else if (typedOutcome(drafts.get(task.id))) void save(task, quiet);
     else skip(task, quiet);
   }
 
@@ -338,7 +345,7 @@ export default function TaskOutcomeForm({
             </Button>
           ))}
         </div>
-        {!draft.activityId && (
+        {!drafts.get(task.id)?.activityId && (
           <span className="caption-style text-subtle flex items-center gap-1">
             <UserIcon aria-hidden className="size-3" />
             Shows on {timelineOwner(task)}
