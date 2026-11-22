@@ -7,6 +7,7 @@ import { companyNameFromDomain, internalAddresses } from "@/lib/crm/conversation
 import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalDomain, canonicalEmail } from "@/lib/crm/normalize";
+import { ownDomainsInDb } from "@/lib/crm/own-domains";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { workspaceActors, type WorkspaceRef } from "@/lib/crm/workspaces";
@@ -131,7 +132,9 @@ export async function teamDomainsInDb(db: Db, actor: UserActor, workspaceIds: st
      where x.email like '%@%'`,
     [actor.userId, actor.email, workspaceIds],
   );
-  return new Set(result.rows.map((row) => row.domain).filter((domain) => domain && !isFreeMailDomain(domain)));
+  const domains = new Set(result.rows.map((row) => row.domain).filter((domain) => domain && !isFreeMailDomain(domain)));
+  for (const domain of await ownDomainsInDb(db, actor.workspaceId, actor.userId)) domains.add(domain);
+  return domains;
 }
 
 export async function setDomainRule(actor: UserActor, domainValue: string, workspaceIds: unknown): Promise<DomainRule> {
@@ -164,8 +167,15 @@ const OWN = `own as (
   union select lower($2::text)
 )`;
 
+const OWN_DOMAINS = `own_domains as (
+  select d.domain from crm.workspace_brands b
+  cross join lateral unnest(b.own_domains) as d(domain)
+  where b.workspace_id in (select m.workspace_id from crm.workspace_members m where m.user_id = $1)
+)`;
+
 export function routedSql(filter: string) {
   return `with ${OWN},
+  ${OWN_DOMAINS},
   recent as (
     select m.id, m.source_id, m.thread_key as tk, m.internet_message_id, m.subject, m.snippet, m.body_text,
       m.from_email, m.to_recipients, m.cc_recipients, m.has_attachments, s.email as account, f.role as folder_role,
@@ -191,6 +201,7 @@ export function routedSql(filter: string) {
     left join crm.mail_thread_routes rt on rt.user_id = $1 and rt.source_id = p.source_id and rt.thread_key = p.tk
     left join crm.mail_domain_rules rl on rl.user_id = $1 and rl.domain = split_part(p.address, '@', 2)
     where p.address like '_%@_%' and p.address not in (select email from own)
+      and split_part(p.address, '@', 2) not in (select domain from own_domains)
   ),
   matched as (
     select t.*, c.workspace_id, c.id as contact_id, c.normalized_email as contact_email, c.company_id
@@ -285,7 +296,7 @@ export async function ensureContactInDb(
     [actor.workspaceId, email],
   );
   if (existing.rows[0]) return { contactId: existing.rows[0].id, created: false };
-  const internal = await internalAddresses(db, actor.workspaceId, [actor.email]);
+  const internal = await internalAddresses(db, actor.workspaceId, [actor.email], actor.userId);
   if (internal.isInternal(email)) {
     throw new CrmError("invalid_input", "That address belongs to you or your workspace, so it can't become a contact.", 400, { field: "email" });
   }

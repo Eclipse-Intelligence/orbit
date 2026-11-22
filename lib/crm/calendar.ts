@@ -581,7 +581,7 @@ export async function linkEvents(db: Db, actor: UserActor, only?: string[]) {
   const own = await ownAddresses(db, actor);
   const workspaceIds = [...new Set(events.rows.map((row) => row.workspace_id))];
   const internals = new Map<string, Awaited<ReturnType<typeof internalAddresses>>>();
-  for (const workspaceId of workspaceIds) internals.set(workspaceId, await internalAddresses(db, workspaceId, own));
+  for (const workspaceId of workspaceIds) internals.set(workspaceId, await internalAddresses(db, workspaceId, own, actor.userId));
   const perEvent = events.rows.map((row) => {
     const internal = internals.get(row.workspace_id)!;
     const emails = new Set<string>();
@@ -1233,7 +1233,7 @@ export async function listPeopleMet(actor: UserActor, now = Date.now()): Promise
       [actor.userId],
     );
     if (events.rows.length === 0) return [];
-    const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
+    const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor), actor.userId);
     const people = new Map<string, MetPerson>();
     const meetings = new Set<string>();
     for (const row of events.rows) {

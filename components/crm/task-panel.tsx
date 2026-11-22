@@ -12,6 +12,8 @@ import { activateRow } from "@/components/shortcuts/keyboard-list";
 import { TaskAct } from "@/components/crm/task-actions";
 import TaskAskButton from "@/components/crm/task-ask";
 import { TaskPrepare } from "@/components/crm/task-prepare";
+import TaskSpamMenu from "@/components/crm/task-spam";
+import { canMarkSpam } from "@/lib/crm/suggested-task";
 import { TaskWorkspace } from "@/components/crm/task-workspace";
 import TaskOutcomeForm, { type OutcomeHandlers } from "@/components/crm/task-outcome";
 import TaskFields, { canChangeTaskAs, changersLine, firstName, formatTaskWhen, TaskSection, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
@@ -33,6 +35,7 @@ type PanelProps = {
   completed?: boolean;
   onComplete: (task: Task) => void;
   onReopen?: (task: Task) => void;
+  onSpam?: (task: Task) => void;
   onClose: () => void;
   outcome?: { focus: boolean; saving: boolean; outcomeId: string } | null;
   outcomeHandlers?: OutcomeHandlers;
@@ -103,7 +106,7 @@ function focusedElement() {
   return active instanceof HTMLElement && active !== document.body ? active : null;
 }
 
-function TaskPanelBody({ task, viewer, members, tagged, completed = false, onComplete, onReopen, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
+function TaskPanelBody({ task, viewer, members, tagged, completed = false, onComplete, onReopen, onSpam, onClose, instant, modal, outcome = null, outcomeHandlers, recordNotes = true, returnTo = null }: PanelProps & { instant: boolean; modal: boolean }) {
   const router = useRouter();
   const discussion = useDiscussion(
     "task",
@@ -315,6 +318,11 @@ function TaskPanelBody({ task, viewer, members, tagged, completed = false, onCom
                     <>
                       <TaskAct task={task} canChange={canChange} />
                       <TaskPrepare task={task}>{(prepare) => (prepare ? <div className="flex">{prepare}</div> : null)}</TaskPrepare>
+                      {onSpam && canChange && canMarkSpam(task) && (
+                        <div className="flex">
+                          <TaskSpamMenu task={task} onSpam={onSpam} />
+                        </div>
+                      )}
                     </>
                   )}
                   <TaskFields

@@ -43,7 +43,7 @@ export type Candidate = {
 };
 
 export type Verdict =
-  | { state: "shown"; engine: RelevanceEngine | null }
+  | { state: "shown"; engine: RelevanceEngine | null; category?: StoredCategory | null }
   | { state: "skipped"; category: SkippedCategory; engine: RelevanceEngine; reason: string | null }
   | { state: "pending" };
 
@@ -84,8 +84,8 @@ function splitKey(key: string) {
 }
 
 export function verdictFor(row: Pick<StoredRow, "category" | "confidence" | "reason">, engine: RelevanceEngine): Verdict {
-  if (!row.category || row.category === "business") return { state: "shown", engine };
-  if (row.category !== "muted" && !CERTAIN_ENGINES.has(engine) && (row.confidence === null || row.confidence < CONFIDENT)) return { state: "shown", engine };
+  if (!row.category || row.category === "business") return { state: "shown", engine, category: row.category };
+  if (row.category !== "muted" && !CERTAIN_ENGINES.has(engine) && (row.confidence === null || row.confidence < CONFIDENT)) return { state: "shown", engine, category: row.category };
   return { state: "skipped", category: row.category, engine, reason: row.reason };
 }
 

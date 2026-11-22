@@ -7,6 +7,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { addWorkingDays, dayKeyAt, nonWorkingReason, shiftDay, wallClockAt } from "@/lib/crm/working-days";
 import type { Db } from "@/lib/db/pool";
+import { hiddenSubscriptionSql } from "@/lib/mail/subscriptions";
 import { filingDomain, parseRouteKey, routedParams, routedSql } from "@/lib/mail/routing";
 import { UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
 import { automatedLooking, crmSender, crmValues, ownAddressesSql, replyableSplit, sameThread, splitJoin } from "@/lib/mail/split";
@@ -243,11 +244,7 @@ function repliesSql() {
           and dr.kind = 'follow_up' and dr.deferral and dr.state <> 'cancelled'
           and n.at <= dr.created_at + make_interval(mins => ${DEFERRAL_GRACE_MINUTES})
       )
-      and not exists (
-        select 1 from crm.mail_subscriptions ms
-        where ms.user_id = $1 and (ms.sender = n.from_email or ms.sender = '@' || split_part(n.from_email, '@', 2))
-          and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
-      )
+      and not ${hiddenSubscriptionSql("$1", "n.from_email")}
       and not exists (
         select 1 from crm.mail_prepared p
         where p.user_id = $1 and p.source_id = n.source_id and p.thread_key = n.tk and p.kind = 'pitch' and p.state = 'ready'

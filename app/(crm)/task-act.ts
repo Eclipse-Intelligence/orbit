@@ -8,6 +8,7 @@ import { actionError } from "@/lib/companies";
 import { pushClickUpTask } from "@/lib/crm/clickup";
 import { getInviteSetup, type InviteSetup } from "@/lib/crm/invites";
 import { isUuid } from "@/lib/crm/mutate";
+import { markTaskSpam } from "@/lib/mail/filing";
 import { completeTaskWithOutcome, relinkTaskUndoable, taskContext, undoTaskLinkChange, type LinkChange, type TaskContext, type TaskOutcome } from "@/lib/crm/task-act";
 import { setTaskPrepareSettings, type TaskPrepareSettings } from "@/lib/crm/task-prepare";
 import { TASKS_PATH } from "@/lib/crm/task-views";
@@ -122,6 +123,21 @@ export async function setTaskPrepareAction(input: { prepareEachMorning: boolean 
   if (!user) return { error: SIGN_IN };
   try {
     return { settings: await setTaskPrepareSettings(user, { prepareEachMorning: input?.prepareEachMorning }) };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function markTaskSpamAction(id: string): Promise<{ ok?: boolean; error?: string }> {
+  const user = await taskUser(id);
+  if (!user) return { error: SIGN_IN };
+  if (typeof user === "string") return { error: user };
+  if (typeof id !== "string" || !isUuid(id)) return { error: "Couldn't mark it as spam. Try again." };
+  try {
+    await markTaskSpam(user, id);
+    refresh();
+    revalidatePath("/capture");
+    return { ok: true };
   } catch (error) {
     return actionError(error);
   }

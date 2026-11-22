@@ -21,6 +21,20 @@ export function formerNamesFrom(value: unknown): string[] | null {
   return names;
 }
 
+export const OWN_DOMAIN_LIMITS = { count: 20, length: 100 } as const;
+
+export function ownDomainParts(value: unknown): string[] | null {
+  const parts = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[\s,;]+/) : null;
+  if (!parts) return null;
+  const domains: string[] = [];
+  for (const part of parts) {
+    if (typeof part !== "string") return null;
+    const domain = part.trim().toLowerCase().replace(/\s+/g, "").replace(/^.*@/, "");
+    if (domain && !domains.includes(domain)) domains.push(domain);
+  }
+  return domains;
+}
+
 export type BrandProfileInput = {
   website: string;
   whatYouSell: string;
@@ -38,6 +52,7 @@ export type BrandProfile = BrandProfileInput &
     workspaceId: string;
     workspaceName: string;
     formerNames: string[];
+    ownDomains: string[];
     playbookUpdatedAt: string | null;
     updatedAt: string | null;
     unread?: boolean;

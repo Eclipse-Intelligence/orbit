@@ -8,11 +8,11 @@ import { Input } from "@/components/_ui/input";
 import { Textarea } from "@/components/_ui/textarea";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { draftBrandAction, saveBrandProfileAction } from "@/app/(crm)/settings/brand/actions";
-import { BRAND_LIMITS, FORMER_NAME_LIMITS, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
+import { BRAND_LIMITS, FORMER_NAME_LIMITS, OWN_DOMAIN_LIMITS, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
 import { reloadIfStaleDeploy } from "@/lib/stale-deploy";
 import { cn } from "@/lib/utils";
 
-type FormValues = BrandProfileInput & { formerNames: string };
+type FormValues = BrandProfileInput & { formerNames: string; ownDomains: string };
 type Key = keyof FormValues;
 type DraftKey = Exclude<keyof BrandProfileInput, "website">;
 type Drafted = Partial<Record<DraftKey, string>>;
@@ -20,7 +20,7 @@ type Drafted = Partial<Record<DraftKey, string>>;
 const LABELS: Record<DraftKey, string> = { whatYouSell: "What you sell", whoItsFor: "Ideal customer", tone: "Tone" };
 
 function profileOf(brand: BrandProfile): FormValues {
-  return { website: brand.website, whatYouSell: brand.whatYouSell, whoItsFor: brand.whoItsFor, tone: brand.tone, formerNames: brand.formerNames.join(", ") };
+  return { website: brand.website, whatYouSell: brand.whatYouSell, whoItsFor: brand.whoItsFor, tone: brand.tone, formerNames: brand.formerNames.join(", "), ownDomains: brand.ownDomains.join(", ") };
 }
 
 function same(left: FormValues, right: FormValues) {
@@ -231,6 +231,24 @@ export default function BrandSettings({ brand, canEdit, learned, multi }: { bran
               aria-invalid={errors.formerNames ? true : undefined}
               aria-describedby={errors.formerNames ? "brand-former-error" : "brand-former-hint"}
               onChange={(event) => update("formerNames", event.target.value)}
+            />
+          </Field>
+          <Field
+            label="Your domains"
+            htmlFor="brand-domains"
+            error={errors.ownDomains}
+            hint="Separated by commas. Mail from these domains is never filed as a prospect."
+          >
+            <Input
+              id="brand-domains"
+              spellCheck={false}
+              autoCapitalize="none"
+              maxLength={OWN_DOMAIN_LIMITS.count * (OWN_DOMAIN_LIMITS.length + 2)}
+              value={values.ownDomains}
+              readOnly={!canEdit || pending === "draft"}
+              aria-invalid={errors.ownDomains ? true : undefined}
+              aria-describedby={errors.ownDomains ? "brand-domains-error" : "brand-domains-hint"}
+              onChange={(event) => update("ownDomains", event.target.value)}
             />
           </Field>
           {error && (

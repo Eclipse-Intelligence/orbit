@@ -153,7 +153,7 @@ Settings has one page per area. If you are in more than one workspace, the pages
 | You | Memory | `/settings/memory` | What Orbit has learned about you, from every workspace (more than one workspace only) |
 | You | API tokens | `/settings/api-tokens` | Personal tokens (MCP) and the iPhone Shortcut |
 | Workspace | About you | `/settings/about-you` | Your role and About you for this workspace (more than one workspace only) |
-| Workspace | Brand | `/settings/brand` | The brand profile and playbook |
+| Workspace | Brand | `/settings/brand` | The brand profile, Your domains and playbook |
 | Workspace | Knowledge | `/settings/knowledge` | Documents, links and client proof |
 | Workspace | Team | `/settings/team` | Who is in the workspace, their roles, invites (below) |
 | Workspace | Pipeline | `/settings/pipeline` | Opportunity stages (each board has its own stages, set on the board) |

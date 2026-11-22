@@ -30,6 +30,7 @@ import { firstNamesToIgnore, matchPhonesInDb, phoneNumbersIn } from "@/lib/crm/c
 import { readStored } from "@/lib/crm/inbox";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
+import { ownDomainsInDb } from "@/lib/crm/own-domains";
 import { assertScope, scopesForRole } from "@/lib/crm/scopes";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import type {
@@ -527,7 +528,7 @@ export async function recordImportFailure(
   });
 }
 
-export async function internalAddresses(db: Db, workspaceId: string, extra: (string | null | undefined)[]) {
+export async function internalAddresses(db: Db, workspaceId: string, extra: (string | null | undefined)[], userId?: string | null) {
   const result = await db.query<{ email: string | null; other_emails: string[] | null }>(
     `select p.email, p.other_emails from crm.workspace_members m
      join crm.profiles p on p.id = m.user_id
@@ -535,7 +536,7 @@ export async function internalAddresses(db: Db, workspaceId: string, extra: (str
     [workspaceId],
   );
   const emails = new Set<string>();
-  const domains = new Set<string>();
+  const domains = await ownDomainsInDb(db, workspaceId, userId);
   const known = result.rows.flatMap((row) => [row.email, ...(row.other_emails ?? [])]);
   for (const value of [...known, ...extra]) {
     const email = value ? canonicalEmail(value) : null;
@@ -600,7 +601,7 @@ function outsideAttendees(people: Participant[], isInternal: (email: string) => 
 
 async function withNewPeople(db: Db, actor: UserActor, imports: ConversationImport[]): Promise<UnfiledImport[]> {
   if (imports.length === 0) return [];
-  const internal = await internalAddresses(db, actor.workspaceId, [actor.email]);
+  const internal = await internalAddresses(db, actor.workspaceId, [actor.email], actor.userId);
   const candidates = imports.map((item) => outsideAttendees(item.participants, internal.isInternal));
   const emails = [...new Set(candidates.flat().map((person) => person.email))];
   const existing =
@@ -841,7 +842,7 @@ export async function createContactFromAttendeeInDb(
   if (!wanted) {
     throw new CrmError("invalid_input", "Enter a valid email address.", 400, { field: "email" });
   }
-  const internal = await internalAddresses(db, actor.workspaceId, [actor.email, ...extraInternal]);
+  const internal = await internalAddresses(db, actor.workspaceId, [actor.email, ...extraInternal], actor.userId);
   if (internal.isInternal(wanted)) {
     throw new CrmError(
       "invalid_input",
