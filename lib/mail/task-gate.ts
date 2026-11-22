@@ -19,7 +19,7 @@ type MessageRow = {
   unsubscribed: boolean;
 };
 
-export type TaskGateOptions = { fetchImpl?: typeof fetch; deadline?: number; timeoutMs?: number };
+export type TaskGateOptions = { fetchImpl?: typeof fetch; deadline?: number; timeoutMs?: number; colleague?: boolean };
 
 export async function mirroredMessageId(actor: UserActor, connectionId: string, providerMessageId: string) {
   return withActor(actor, async (db) => {
@@ -67,7 +67,7 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
       workspaceId: actor.workspaceId,
       at: new Date(row.at).toISOString(),
     };
-    const judge = async () => (await withActor(actor, (db) => judgeInDb(db, actor, [item])))[0];
+    const judge = async () => (await withActor(actor, (db) => judgeInDb(db, actor, [item], Date.now(), { ignoreHistory: options.colleague })))[0];
     const first = await judge();
     const decided = worthIt(first);
     if (decided !== null) return decided;
@@ -79,10 +79,10 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
       const expired = new Promise<void>((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now()))));
       await Promise.race([running, expired]);
       clearTimeout(timer);
-      return worthIt(await judge()) ?? true;
+      return worthIt(await judge()) ?? !options.colleague;
     }
-    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl, headers: true });
-    return worthIt(await judge()) ?? true;
+    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl, headers: true, ignoreHistory: options.colleague });
+    return worthIt(await judge()) ?? !options.colleague;
   } catch (error) {
     console.error("Couldn't judge an email before suggesting a task", error instanceof Error ? error.message : error);
     return true;

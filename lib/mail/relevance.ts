@@ -126,7 +126,7 @@ async function contactFacts(db: Db, actor: UserActor, items: Candidate[]): Promi
   return facts;
 }
 
-export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, items: T[], now = Date.now()): Promise<Judged<T>[]> {
+export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, items: T[], now = Date.now(), options: { ignoreHistory?: boolean } = {}): Promise<Judged<T>[]> {
   if (items.length === 0) return [];
   const workspaceIds = [...new Set(items.map((item) => item.workspaceId))];
   const senders = [...new Set(items.flatMap((item) => [item.email, ruleTarget(item.email)]))];
@@ -162,6 +162,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
       thread.sender === email &&
       (thread.message_id ? thread.message_id === item.messageId : new Date(thread.decided_at).getTime() >= new Date(item.at).getTime()) &&
       !(thread.engine === "history") &&
+      !(options.ignoreHistory && thread.engine === "cached") &&
       !(thread.engine === "listed" && !(listUsable && listed.hide))
         ? thread
         : undefined;
@@ -170,7 +171,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
     const judged = (verdict: Verdict, copy: Decision | null = null, retry = false): Judged<T> => ({ item, verdict, retry, copy: current ? null : copy, hint, stored });
     if (exact?.rule) return judged(verdictFor(exact, exact.engine));
     if (domainRule?.rule) return judged(verdictFor(domainRule, domainRule.engine));
-    if (facts.wroteSender.has(email) || facts.met.has(email)) {
+    if (!options.ignoreHistory && (facts.wroteSender.has(email) || facts.met.has(email))) {
       return judged({ state: "shown", engine: "history" }, thread?.engine === "history" && thread.workspace_id === item.workspaceId ? null : { category: "business", engine: "history", confidence: null, reason: null });
     }
     if (listUsable && listed.hide) {
@@ -180,7 +181,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
       if (current.category === null) return judged({ state: "shown", engine: "failed" }, null, now - new Date(current.decided_at).getTime() > RETRY_MS && configured);
       return judged(verdictFor(current, current.engine));
     }
-    if (exact && exact.category === "business" && now - new Date(exact.decided_at).getTime() < CACHE_MS) {
+    if (!options.ignoreHistory && exact && exact.category === "business" && now - new Date(exact.decided_at).getTime() < CACHE_MS) {
       return judged(verdictFor(exact, "cached"), { category: exact.category, engine: "cached", confidence: exact.confidence, reason: exact.reason });
     }
     if (!configured) return judged({ state: "shown", engine: null });
@@ -529,7 +530,7 @@ const ANSWER = z.object({
   reason: z.string().max(300),
 });
 
-export type DecideOptions = { fetchImpl?: typeof fetch; deadline: number };
+export type DecideOptions = { fetchImpl?: typeof fetch; deadline: number; ignoreHistory?: boolean };
 
 type DecisionState = ReturnType<typeof decisionState>;
 
@@ -581,7 +582,7 @@ async function decideWithHaiku(state: DecisionState, options: DecideOptions): Pr
 }
 
 export async function decideRelevance(state: DecisionState, options: DecideOptions): Promise<Decision> {
-  if (state.history.userHasWrittenToSender) return { category: "business", engine: "history", confidence: null, reason: null };
+  if (!options.ignoreHistory && state.history.userHasWrittenToSender) return { category: "business", engine: "history", confidence: null, reason: null };
   if (jevConfigured() && options.deadline - Date.now() > 1_000) {
     try {
       return await decideWithJev(state, options);
