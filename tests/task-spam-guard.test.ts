@@ -343,18 +343,34 @@ describe("tasks suggested from mail are gated on relevance", () => {
     }
   });
 
-  it("gives no task for mail from a colleague on one of your domains", async () => {
-    await saveBrandProfile(second, { ...PROFILE, ownDomains: "ridgeon-own.test, guard.test" }, WEB);
-    await getAdminPool().query("update crm.profiles set other_emails = array['sam.alt@ridgeon-own.test'] where id = $1", [sam.userId]);
-    const direct = await deliver(owner, box, "sam@guard.test", "Quick question");
-    const alias = await deliver(owner, box, "sam.alt@ridgeon-own.test", "From my other address");
-    const outsider = await deliver(owner, box, "forms@ridgeon-own.test", "Colleague check");
-    await fileMailOnTimeline(owner, {});
-    const count = async (key: string) => (await getAdminPool().query("select 1 from crm.tasks where mail_thread_key = $1", [key])).rowCount;
-    assert.equal(await count(direct), 0);
-    assert.equal(await count(alias), 0);
-    assert.equal(await count(outsider), 1);
-    await saveBrandProfile(second, { ...PROFILE, ownDomains: "ridgeon-own.test" }, WEB);
+  it("gives one thread-linked task to business mail from a colleague, and none to spam", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const admin = getAdminPool();
+      await getAdminPool().query("update crm.profiles set other_emails = array['sam.alt@personal-guard.test', 'sam.spam@personal-guard.test'] where id = $1", [sam.userId]);
+      const kimId = (await admin.query<{ id: string }>("select private.create_local_user('kim.free@gmail.com', 'password-123', 'Kim Free') as id")).rows[0].id;
+      await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [second.workspaceId, kimId]);
+      const business = await deliver(owner, box, "sam@guard.test", "Can you look at the proposal");
+      const alias = await deliver(owner, box, "sam.alt@personal-guard.test", "From my other address");
+      const free = await deliver(owner, box, "kim.free@gmail.com", "Quick question on the pitch");
+      const junk = await deliver(owner, box, "sam.spam@personal-guard.test", "Win a prize now");
+      const stranger = await deliver(owner, box, "someone@outsider-guard.test", "Hello from outside");
+      const model = classifierGateway((address) => (address.startsWith("sam.spam@") ? "spam" : "business"));
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      const tasks = async (key: string) => (await admin.query<{ company_id: string | null; contact_id: string | null }>("select company_id, contact_id from crm.tasks where mail_thread_key = $1", [key])).rows;
+      for (const key of [business, alias, free]) {
+        const rows = await tasks(key);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].company_id, null);
+        assert.equal(rows[0].contact_id, null);
+      }
+      assert.equal((await tasks(junk)).length, 0);
+      assert.equal((await tasks(stranger)).length, 0);
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal((await tasks(business)).length, 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
   });
   it("lets a real enquiry from a company through after spam from the same company in one inbox batch", async () => {
     process.env.LLM_API_KEY = "test-key";
