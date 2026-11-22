@@ -209,6 +209,12 @@ async function seedWorkspace(world: World, key: WorkspaceKey, seed: WorkspaceSee
       if (activity.key) ids.set(`insight:${activity.key}`, insight.rows[0].id);
     }
   }
+  for (const task of seed.tasks ?? []) {
+    if (!task.looksDone) continue;
+    const taskId = ids.get(`task:${task.title}`)!;
+    await admin.query("update crm.tasks set created_at = now() - interval '60 days' where id = $1", [taskId]);
+    await admin.query("select private.offer_task_done($1, $2, $3, null, null)", [taskId, world.id(`activity:${task.looksDone.activity}`), task.looksDone.note]);
+  }
   if ((seed.emails ?? []).length > 0 || (seed.events ?? []).length > 0) {
     const box = await mailbox(actor, myAddress);
     const me = { name: actor.fullName, email: myAddress };

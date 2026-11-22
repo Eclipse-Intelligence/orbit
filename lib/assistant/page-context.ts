@@ -345,6 +345,14 @@ export function taskDetailLines(found: TaskDetail, lead: string): Lines {
   if (found.mail?.thread) lines.push(`The task came from the user's ${threadLine(found.mail.thread)}`);
   const preparation = preparationLine(found.preparation, taskKind(task.title) === "meeting");
   if (preparation) lines.push(preparation);
+  if (found.looksDone && !task.completedAt && !task.archivedAt) {
+    const offer = found.looksDone;
+    const when = londonWhen(offer.when);
+    const note = text(offer.note);
+    lines.push(
+      `Looks done: Orbit thinks ${offer.kind === "email" ? "an email" : offer.kind === "call" ? "a call" : "a meeting"}${when ? ` on ${when}` : ""} may have done this task [activity id ${offer.activityId}]${note ? `, note ${note}` : ""}. It never closes a task itself. To close it when the user asks, propose update_task with completed true and activityId.`,
+    );
+  }
   return lines;
 }
 

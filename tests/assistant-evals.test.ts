@@ -597,6 +597,44 @@ describe("assistant evaluation harness, end to end with a scripted model", () =>
     assert.deepEqual(failed(one), ["proposes exactly create_task, create_task", "creates the Fernhill task for today"]);
   });
 
+  it("turns Close those under a morning brief into one update_task per task with an open offer", async () => {
+    let seen = "";
+    let listed = "";
+    const closing = (world: World) => [
+      { name: "update_task", args: { taskId: world.id("task:Send Odile the review outline"), completed: true, activityId: world.id("activity:fernhill-email") } },
+      { name: "update_task", args: { taskId: world.id("task:Hold a discovery call with Ansel"), completed: true, activityId: world.id("activity:copperleaf-call") } },
+    ];
+    const result = await runOnce(
+      byId("close-those-from-brief"),
+      settings(
+        scripted([
+          ({ body }) => {
+            seen = JSON.stringify(body.messages);
+            return { calls: [{ name: "list_tasks", args: { mine: true } }] };
+          },
+          ({ body, world }) => {
+            listed = JSON.stringify(body.messages);
+            assert.match(listed, new RegExp(world.id("activity:fernhill-email")));
+            return { calls: closing(world) };
+          },
+        ]),
+      ),
+    );
+    assert.deepEqual(failed(result), []);
+    assert.match(seen, /Each line under Looks done is an open task/);
+    assert.match(seen, /call update_task once for each of those tasks that still has an open looksDone, all in one round/);
+    assert.match(listed, /looksDone/);
+    assert.deepEqual(result.cards.map((item) => item.name), ["update_task", "update_task"]);
+
+    const one = await runOnce(byId("close-those-from-brief"), settings(scripted([({ world }) => ({ calls: closing(world).slice(0, 1) })])));
+    assert.deepEqual(failed(one), ["proposes exactly update_task, update_task", "closes the Ansel task after the call"]);
+    const everything = await runOnce(
+      byId("close-those-from-brief"),
+      settings(scripted([({ world }) => ({ calls: [...closing(world), { name: "update_task", args: { taskId: world.id("task:Chase Ansel if he's gone quiet"), completed: true } }] })])),
+    );
+    assert.deepEqual(failed(everything).includes("leaves the task with no offer alone"), true);
+  });
+
   it("shows the open task and passes a call outcome proposed as three cards in one turn", async () => {
     const outcome = (next: Record<string, unknown>, complete = true): Step => ({ world }) => ({
       content: "I'll log the call, close the task and set the next one.",

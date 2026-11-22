@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { after } from "next/server";
 import { z } from "zod";
 import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
-import type { Actor } from "@/lib/crm/types";
+import { completeTaskWithOutcome, type SavedOutcome } from "@/lib/crm/task-act";
+import type { Actor, UserActor } from "@/lib/crm/types";
 import { dayKeyAt } from "@/lib/crm/working-days";
 import type { Db } from "@/lib/db/pool";
 import { query } from "@/lib/db/pool";
@@ -25,6 +27,8 @@ export type TaskDoneOffer = {
   activityAt: string;
   href: string | null;
 };
+
+export type LooksDone = { activityId: string; kind: TaskDoneKind; when: string; note: string | null };
 
 export type TaskClosedAfter = { kind: TaskDoneKind; at: string; href: string | null };
 
@@ -319,4 +323,45 @@ export async function dismissTaskDoneOffer(actor: Actor, offerId: string) {
     }
     return { id: offerId, changed: true };
   });
+}
+
+export async function looksDoneInDb(db: Db, workspaceId: string, taskIds: string[]): Promise<Record<string, LooksDone>> {
+  const wanted = [...new Set(taskIds.filter(isUuid))];
+  const found: Record<string, LooksDone> = {};
+  if (wanted.length === 0) return found;
+  const result = await db.query<OfferRow>(OFFER_SQL, [wanted, workspaceId]);
+  for (const row of result.rows) {
+    if (!found[row.task_id]) found[row.task_id] = { activityId: row.activity_id, kind: row.kind, when: row.occurred_at.toISOString(), note: row.note };
+  }
+  return found;
+}
+
+export async function withLooksDone<T extends { id: string }>(actor: Actor, tasks: T[]): Promise<(T & { looksDone: LooksDone | null })[]> {
+  if (tasks.length === 0) return [];
+  const offers = await withActor(actor, (db) => looksDoneInDb(db, actor.workspaceId, tasks.map((task) => task.id)));
+  return tasks.map((task) => ({ ...task, looksDone: offers[task.id] ?? null }));
+}
+
+function outcomeIdFor(actor: UserActor, taskId: string, activityId: string, key: string) {
+  const hex = createHash("sha256").update(`looks-done|${actor.userId}|${taskId}|${activityId}|${key}`).digest("hex");
+  const variant = ((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
+}
+
+export async function closeTaskFromOffer(actor: Actor, taskId: string, input: { activityId: string; idempotencyKey?: string | null }): Promise<SavedOutcome> {
+  if (actor.type !== "user") throw new CrmError("forbidden", "Only a person can close a task from Looks done.", 403);
+  if (!isUuid(taskId)) throw new CrmError("not_found", "Task not found.", 404);
+  if (typeof input.activityId !== "string" || !isUuid(input.activityId)) throw new CrmError("invalid_input", "activityId must be an activity id from looksDone.", 400, { field: "activityId" });
+  const activityId = input.activityId.toLowerCase();
+  const offer = (await taskDoneOffers(actor, [taskId])).find((item) => item.activityId === activityId);
+  const key = input.idempotencyKey?.trim();
+  const outcomeId = key ? outcomeIdFor(actor, taskId, activityId, key) : crypto.randomUUID();
+  const gone = () => new CrmError("conflict", "That task has no open Looks done offer for that activity.", 409, { field: "activityId" });
+  if (!offer && !key) throw gone();
+  try {
+    return await completeTaskWithOutcome(actor, taskId, { outcomeId, note: offer?.note ?? "", kind: null, next: null, activityId });
+  } catch (error) {
+    if (!offer && error instanceof CrmError && error.details?.field === "offer") throw gone();
+    throw error;
+  }
 }

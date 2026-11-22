@@ -23,3 +23,10 @@ export function looksDoneOpenLabel(kind: Kind) {
 export function closedAfterText(reason: { kind: Kind; at: string }, now = new Date()) {
   return `Closed after ${CLOSED_AFTER[reason.kind]} on ${activityWhen(reason.at, now)}`;
 }
+
+export function looksDoneBriefWhat(offer: { kind: Kind; activityAt: string; who: string | null }, now = new Date()) {
+  const when = activityWhen(offer.activityAt, now);
+  if (offer.kind === "email") return `you emailed ${offer.who ?? "them"}, ${when}`;
+  const name = offer.kind === "call" ? "call" : "meeting";
+  return `${offer.who ? `${name} with ${offer.who}` : `${name}`}, ${when}`.replace(/^./, (letter) => letter.toUpperCase());
+}

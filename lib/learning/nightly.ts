@@ -10,7 +10,8 @@ import { completeJson, MODEL_WINDOW_CHARS, windowShare } from "@/lib/llm";
 import { businessNamesInDb, insertMemory, lessTrusted, mayApplyEverywhere, reviseMemory, searchTerms, visibleMemorySql, type Memory, type MemoryScope, type NoteOrigin } from "@/lib/learning/memories";
 import { mapNote, NOTE_SELECT } from "@/lib/learning/market";
 import { stalledDealsInDb, type StalledDeal } from "@/lib/crm/pipeline-history";
-import { DUE_HEADING, markdownText, QUIET_HEADING, SUGGESTED_TASK } from "@/lib/learning/brief-format";
+import { DUE_HEADING, LOOKS_DONE_HEADING, markdownText, QUIET_HEADING, SUGGESTED_TASK } from "@/lib/learning/brief-format";
+import { looksDoneBriefWhat } from "@/lib/crm/task-done-text";
 import { dayWindow } from "@/lib/time";
 import { noSensitivePeopleSql, notSensitiveThreadSql, sensitiveAddress } from "@/lib/mail/relevance";
 import { researchMail } from "@/lib/mail/subscriptions";
@@ -495,6 +496,37 @@ async function dueTasksInDb(db: Db, actor: UserActor, now: Date) {
   return { tasks: result.rows, total: result.rows[0]?.total ?? 0, start: window.start };
 }
 
+type LooksDoneTask = { id: string; title: string; kind: "email" | "call" | "meeting"; occurred_at: Date; who: string | null; total: number };
+
+async function looksDoneTasksInDb(db: Db, actor: UserActor) {
+  const result = await db.query<LooksDoneTask>(
+    `select t.id, t.title, o.kind, a.occurred_at,
+       coalesce(nullif(trim(c.first_name), ''), nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), nullif(trim(c.email), ''), nullif(trim(co.name), '')) as who,
+       count(*) over ()::int as total
+     from crm.tasks t
+     join crm.task_done_offers o on o.task_id = t.id and o.state = 'offered'
+     join crm.activities a on a.id = o.activity_id and a.workspace_id = t.workspace_id and a.archived_at is null
+     left join crm.contacts c on c.id = a.contact_id
+     left join crm.companies co on co.id = a.company_id
+     where t.workspace_id = $1 and t.archived_at is null and t.completed_at is null
+       and (t.owner_id = $2 or (t.owner_id is null and t.created_by_user_id = $2))
+     order by a.occurred_at desc, t.id
+     limit $3`,
+    [actor.workspaceId, actor.userId, BRIEF_TASK_LIMIT],
+  );
+  return { tasks: result.rows, total: result.rows[0]?.total ?? 0 };
+}
+
+function looksDoneSection(found: Awaited<ReturnType<typeof looksDoneTasksInDb>>, now: Date) {
+  if (!found.tasks.length) return "";
+  const lines = found.tasks.map((task) => {
+    const what = looksDoneBriefWhat({ kind: task.kind, activityAt: task.occurred_at.toISOString(), who: task.who ? markdownText(task.who) : null }, now);
+    return `- [${markdownText(task.title) || "Task"}](/tasks?task=${task.id}) · ${what}`;
+  });
+  const more = found.total - found.tasks.length;
+  return [`### ${LOOKS_DONE_HEADING}`, ...lines, ...(more > 0 ? [`- And ${more} more on [Tasks](/tasks).`] : [])].join("\n");
+}
+
 function wholeLines(text: string, max: number) {
   if (text.length <= max) return text;
   const cut = text.slice(0, max);
@@ -539,7 +571,8 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     );
     const stalled = await stalledDealsInDb(db, actor, { days: BRIEF_STALLED_DAYS, forMember: actor.userId, limit: BRIEF_STALLED_LIMIT, now });
     const due = await dueTasksInDb(db, actor, now);
-    return { notes: notes.rows.map(mapNote), learned: learned.rows, stalled, due };
+    const looksDone = await looksDoneTasksInDb(db, actor);
+    return { notes: notes.rows.map(mapNote), learned: learned.rows, stalled, due, looksDone };
   });
   const hours = Math.min(72, Math.max(1, Math.ceil((now.getTime() - since.getTime()) / 3_600_000)));
   const workspaceIds = await workspaceActors(actor)
@@ -550,15 +583,15 @@ async function writeBrief(actor: UserActor, since: Date, options: Options & { da
     return [];
   });
   const needsWriting = gathered.notes.length > 0 || gathered.learned.length > 0 || gathered.stalled.length > 0 || research.length > 0;
-  if (!needsWriting && !gathered.due.tasks.length) return { skipped: "Nothing new for a brief." };
+  if (!needsWriting && !gathered.due.tasks.length && !gathered.looksDone.tasks.length) return { skipped: "Nothing new for a brief." };
   const written = needsWriting
     ? await writtenBrief(actor, { ...gathered, research }, options).catch((error) => {
-        if (!gathered.due.tasks.length && !gathered.stalled.length) throw error;
+        if (!gathered.due.tasks.length && !gathered.stalled.length && !gathered.looksDone.tasks.length) throw error;
         console.error("Writing the brief failed", error instanceof Error ? error.message : error);
         return { brief: "", suggestions: new Map<string, string>() };
       })
     : { brief: "", suggestions: new Map<string, string>() };
-  const body = wholeLines([dueSection(gathered.due), quietSection(gathered.stalled, written.suggestions), written.brief].filter(Boolean).join("\n\n"), BRIEF_MAX_CHARS);
+  const body = wholeLines([dueSection(gathered.due), looksDoneSection(gathered.looksDone, now), quietSection(gathered.stalled, written.suggestions), written.brief].filter(Boolean).join("\n\n"), BRIEF_MAX_CHARS);
   if (!body) return { skipped: "The brief came back empty." };
   await withActor(actor, (db) =>
     db.query(

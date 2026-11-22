@@ -12,8 +12,14 @@ export function opensBriefOnExpand(state: { pending: boolean; busy: boolean; wor
   return state.pending && !state.busy && !state.working && state.messages === 0;
 }
 
-export function offersCreateThose(state: { messages: { role: string; suggestsTasks?: boolean; waiting?: boolean }[]; busy: boolean; working: boolean }) {
+export function offersCreateThose(state: { messages: { role: string; suggestsTasks?: boolean; suggestsClosing?: boolean; waiting?: boolean }[]; busy: boolean; working: boolean }) {
   if (state.busy || state.working) return false;
   const shown = state.messages.filter((message) => !message.waiting);
   return shown.length > 0 && shown.every((message) => message.role !== "user") && shown.some((message) => message.suggestsTasks === true);
+}
+
+export function offersCloseThose(state: { messages: { role: string; suggestsTasks?: boolean; suggestsClosing?: boolean; waiting?: boolean }[]; busy: boolean; working: boolean }) {
+  if (state.busy || state.working) return false;
+  const shown = state.messages.filter((message) => !message.waiting);
+  return shown.length > 0 && shown.every((message) => message.role !== "user") && shown.some((message) => message.suggestsClosing === true);
 }
