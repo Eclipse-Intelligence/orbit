@@ -56,6 +56,13 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
     if (!row) return true;
     if (row.unsubscribed) return false;
     if (!row.thread_key || !row.from_email) return true;
+    if (options.colleague) {
+      const judged = await withActor(actor, async (db) => {
+        const result = await db.query<{ worth: boolean }>("select worth from crm.mail_task_judgements where user_id = $1 and message_id = $2", [actor.userId, row.id]);
+        return result.rows[0]?.worth ?? null;
+      });
+      if (judged !== null) return judged;
+    }
     const item: Candidate = {
       key: `${row.source_id}|${row.thread_key}`,
       messageId: row.id,
@@ -92,7 +99,17 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
     });
     if (options.colleague) {
       const decision = decisions.get(item.key);
-      return decision ? decision.engine === "failed" || !decision.category || decision.category === "business" : false;
+      if (!decision) return false;
+      if (decision.engine === "failed") return true;
+      const worth = !decision.category || decision.category === "business";
+      await withActor(actor, (db) =>
+        db.query(
+          `insert into crm.mail_task_judgements (user_id, message_id, worth) values ($1, $2, $3)
+           on conflict (user_id, message_id) do update set worth = excluded.worth, decided_at = now()`,
+          [actor.userId, row.id, worth],
+        ),
+      );
+      return worth;
     }
     return worthIt(await judge()) ?? true;
   } catch (error) {

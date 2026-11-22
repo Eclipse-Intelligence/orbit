@@ -167,49 +167,46 @@ export async function matchActivityToTasks(activityId: string, options: MatchOpt
   let offered = 0;
   for (const assignee of assignees) {
     if (options.deadline - Date.now() < MODEL_MIN_MS) return { offered, outOfTime: true, asked: finished };
-    const mine = rows.filter((row) => row.assignee_id === assignee);
-    const candidates = mine.filter((row) => row.candidate);
-    const request = {
-      today,
-      activity: {
-        kind: activity.kind,
-        title: activity.title,
-        when: activity.occurred_at.toISOString(),
-        with: activity.contact_name ?? null,
-        company: activity.company_name ?? null,
-        text,
-      },
-      tasks: candidates.map((row) => ({ id: row.task_id, title: row.title, notes: row.notes, due: dueText(row.due_at) })),
-      "Open tasks on the same records": mine.slice(0, OPEN_TASKS_SHOWN).map((row) => (row.due_at ? `${row.title} (due ${dueText(row.due_at)})` : row.title)),
-    };
-    let data: z.infer<typeof answerSchema>;
     try {
-      data = (
-        await completeJson({
-          system: SYSTEM,
-          user: JSON.stringify(request),
-          schema: answerSchema,
-          deadline: options.deadline,
-          fetchImpl: options.fetchImpl,
-        })
-      ).data;
+      const mine = rows.filter((row) => row.assignee_id === assignee);
+      const candidates = mine.filter((row) => row.candidate);
+      const request = {
+        today,
+        activity: {
+          kind: activity.kind,
+          title: activity.title,
+          when: activity.occurred_at.toISOString(),
+          with: activity.contact_name ?? null,
+          company: activity.company_name ?? null,
+          text,
+        },
+        tasks: candidates.map((row) => ({ id: row.task_id, title: row.title, notes: row.notes, due: dueText(row.due_at) })),
+        "Open tasks on the same records": mine.slice(0, OPEN_TASKS_SHOWN).map((row) => (row.due_at ? `${row.title} (due ${dueText(row.due_at)})` : row.title)),
+      };
+      const { data } = await completeJson({
+        system: SYSTEM,
+        user: JSON.stringify(request),
+        schema: answerSchema,
+        deadline: options.deadline,
+        fetchImpl: options.fetchImpl,
+      });
+      const allowed = new Set(candidates.map((row) => row.task_id));
+      const decided = new Set<string>();
+      for (const answer of data.tasks) {
+        if (!answer.satisfied || !allowed.has(answer.id) || decided.has(answer.id)) continue;
+        decided.add(answer.id);
+        const nextTitle = answer.nextTask?.trim() || null;
+        const stored = await query<{ offer: boolean }>("select private.offer_task_done($1, $2, $3, $4, $5) as offer", [
+          answer.id,
+          activityId,
+          answer.note?.trim() || null,
+          nextTitle,
+          nextTitle ? dueDay(answer.dueOn, today) : null,
+        ]);
+        if (stored.rows[0]?.offer) offered += 1;
+      }
     } catch (error) {
       throw new TaskDoneRunError(error, finished);
-    }
-    const allowed = new Set(candidates.map((row) => row.task_id));
-    const decided = new Set<string>();
-    for (const answer of data.tasks) {
-      if (!answer.satisfied || !allowed.has(answer.id) || decided.has(answer.id)) continue;
-      decided.add(answer.id);
-      const nextTitle = answer.nextTask?.trim() || null;
-      const stored = await query<{ offer: boolean }>("select private.offer_task_done($1, $2, $3, $4, $5) as offer", [
-        answer.id,
-        activityId,
-        answer.note?.trim() || null,
-        nextTitle,
-        nextTitle ? dueDay(answer.dueOn, today) : null,
-      ]);
-      if (stored.rows[0]?.offer) offered += 1;
     }
     finished.push(assignee);
   }

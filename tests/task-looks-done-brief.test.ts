@@ -378,7 +378,7 @@ describe("looks done in the brief, assistant, API and MCP", () => {
     });
 
     it("closes over REST with a personal token, idempotent by Idempotency-Key", async () => {
-      const task = await mine(mark, "Send Tom the pilot terms", { contactId: tomId });
+      const task = await mine(mark, "Send Jane the pilot terms", { contactId: janeId });
       await offer(task, activities.meeting, "Sent them.");
       const before = await activityCount();
       const call = () =>

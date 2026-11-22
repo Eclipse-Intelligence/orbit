@@ -380,6 +380,53 @@ describe("looks done offers", () => {
       assert.equal(open[0].kind, "meeting");
     });
 
+    it("brings back the older offer a moved activity had replaced", async () => {
+      const { company, jane, tom } = await scene();
+      const janes = await task(mark, "Call Jane", { contactId: jane });
+      const older = await log("call", { contactId: jane, companyId: company }, { occurredAt: new Date(Date.now() - 7_200_000).toISOString() });
+      await drain();
+      const newer = await log("call", { contactId: jane, companyId: company }, { occurredAt: new Date(Date.now() - 3_600_000).toISOString() });
+      await drain();
+      assert.deepEqual((await offersFor(janes)).map((row) => [row.activity_id, row.state]), [[older, "dismissed"], [newer, "offered"]]);
+      await updateActivity(mark, newer, { contactId: tom }, { operation: "relink", source: "web" });
+      await drain();
+      assert.deepEqual((await offersFor(janes)).map((row) => [row.activity_id, row.state]), [[older, "offered"]]);
+    });
+
+    it("does not bring back the older offer when its activity was archived", async () => {
+      const { company, jane, tom } = await scene();
+      const janes = await task(mark, "Call Jane", { contactId: jane });
+      const older = await log("call", { contactId: jane, companyId: company }, { occurredAt: new Date(Date.now() - 7_200_000).toISOString() });
+      await drain();
+      const newer = await log("call", { contactId: jane, companyId: company }, { occurredAt: new Date(Date.now() - 3_600_000).toISOString() });
+      await drain();
+      await archiveActivity(mark, older, { operation: "archive", source: "web" });
+      await updateActivity(mark, newer, { contactId: tom }, { operation: "relink", source: "web" });
+      await drain();
+      assert.equal((await openOffers(janes)).length, 0);
+    });
+
+    it("stores no offer for a task that is no longer linked to the activity", async () => {
+      const { company, jane, tom } = await scene();
+      const toms = await task(mark, "Call Tom", { contactId: tom });
+      const activity = await log("call", { contactId: jane, companyId: company });
+      await admin().query("delete from crm.task_done_queue");
+      const stored = await query<{ offer: boolean }>("select private.offer_task_done($1, $2, null, null, null) as offer", [toms, activity]);
+      assert.equal(stored.rows[0].offer, false);
+      assert.equal((await offersFor(toms)).length, 0);
+    });
+
+    it("keeps a 3 argument retry for code deployed before the migration", async () => {
+      const { jane } = await scene();
+      await log("call", { contactId: jane });
+      const claimed = (await query<{ id: string; claim_token: string }>("select * from private.claim_task_done_queue(1)")).rows[0];
+      await query("select private.retry_task_done_queue($1, $2, 60)", [claimed.id, claimed.claim_token]);
+      const row = (await admin().query<{ claimed_at: Date | null; asked: string[]; wait: number }>("select claimed_at, asked, extract(epoch from next_attempt_at - now())::int as wait from crm.task_done_queue where id = $1", [claimed.id])).rows[0];
+      assert.equal(row.claimed_at, null);
+      assert.deepEqual(row.asked, []);
+      assert.ok(row.wait > 0);
+    });
+
     it("queues a call again when its summary is ready", async () => {
       const { jane } = await scene();
       const activity = await log("call", { contactId: jane });
@@ -719,6 +766,30 @@ describe("looks done offers", () => {
       assert.notEqual(rest.requests[0].tasks[0].id, first);
       assert.equal(done.offered, 1);
       assert.equal((await queued()).length, 0);
+    });
+
+    it("keeps the assignees it already asked when storing an offer fails", async () => {
+      const { company, jane } = await scene();
+      await task(mark, "Call Jane", { contactId: jane, companyId: company });
+      await task(sam, "Sam calls Jane", { contactId: jane, companyId: company });
+      const activity = await log("call", { contactId: jane });
+      await admin().query(`create or replace function public.fail_second_offer() returns trigger language plpgsql as $$
+        begin
+          if (select count(*) from crm.task_done_offers where state = 'offered' and activity_id = new.activity_id) >= 1 then
+            raise exception 'second offer fails';
+          end if;
+          return new;
+        end; $$`);
+      await admin().query("create trigger fail_second_offer before insert on crm.task_done_offers for each row execute function public.fail_second_offer()");
+      try {
+        const failed = await drain();
+        assert.equal(failed.retried, 1);
+      } finally {
+        await admin().query("drop trigger fail_second_offer on crm.task_done_offers");
+        await admin().query("drop function public.fail_second_offer()");
+      }
+      const row = (await admin().query<{ asked: string[] }>("select asked from crm.task_done_queue where activity_id = $1", [activity])).rows[0];
+      assert.equal(row.asked.length, 1);
     });
 
     it("skips the model when nothing on the records is open", async () => {

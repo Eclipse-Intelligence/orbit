@@ -249,6 +249,7 @@ async function ownDomainAndColleagueThreads(db: Db, actor: UserActor, workspaceI
          where r.user_id = $1 and r.source_id = m.source_id and r.thread_key = m.thread_key and r.message_id = m.id
            and r.category is not null and r.category <> 'business'
        )
+       and not exists (select 1 from crm.mail_task_judgements j where j.user_id = $1 and j.message_id = m.id and not j.worth)
      order by m.source_id, m.thread_key, coalesce(m.sent_at, m.received_at, m.created_at) desc
      ) newest
      order by newest.at desc

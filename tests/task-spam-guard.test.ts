@@ -476,6 +476,26 @@ describe("tasks suggested from mail are gated on relevance", () => {
     }
   });
 
+  it("asks the classifier nothing more about a colleague thread it already judged personal", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.once@personal-guard.test') where id = $1", [sam.userId]);
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const model = classifierGateway(() => "personal");
+      const key = await deliver(owner, box, "sam.once@personal-guard.test", "Lunch Thursday?");
+      const timesAsked = () => model.asked.filter((address) => address === "sam.once@personal-guard.test").length;
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal(timesAsked(), 1);
+      assert.equal((await admin.query("select 1 from crm.mail_task_judgements j join crm.mail_messages m on m.id = j.message_id where j.user_id = $1 and m.thread_key = $2 and not j.worth", [owner.userId, key.split("|")[1]])).rowCount, 1);
+      assert.equal((await admin.query("select 1 from crm.mail_thread_relevance where user_id = $1 and thread_key = $2", [owner.userId, key.split("|")[1]])).rowCount, 0);
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal(timesAsked(), 1);
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [key])).rowCount, 0);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
   it("gives a colleague no task while a Capture sort of the thread is unfinished, then one once it is decided", async () => {
     const admin = getAdminPool();
     await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.held@personal-guard.test') where id = $1", [sam.userId]);

@@ -169,7 +169,7 @@ export function useTaskOutcome({
       if (result.error || !result.completed) {
         const problem = result.error ?? NOT_DONE;
         abandon(task.id);
-        if (result.field === "offer") drafts.set(task.id, { ...latestDraft, activityId: undefined, kind: null });
+        if (result.field === "offer") drafts.set(task.id, { ...latestDraft, activityId: undefined, kind: null, outcomeId: newOutcomeId() });
         else if (!result.error) drafts.set(task.id, { ...latestDraft, outcomeId: newOutcomeId() });
         const outcomeId = drafts.get(task.id)?.outcomeId ?? latestDraft.outcomeId;
         setOpen((now) => (now?.task.id === task.id ? { ...now, outcomeId } : quiet ? { task, focus: false, place, outcomeId } : now));
