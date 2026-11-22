@@ -130,20 +130,22 @@ function dueText(date: Date | null) {
   return date ? dayKeyAt(date) : null;
 }
 
-type MatchOptions = { deadline: number; fetchImpl?: typeof fetch };
+type MatchOptions = { deadline: number; fetchImpl?: typeof fetch; asked?: string[] };
 
 export async function matchActivityToTasks(activityId: string, options: MatchOptions) {
   const found = await query<ActivityRow>("select * from private.task_done_activity($1)", [activityId]);
   const activity = found.rows[0];
-  if (!activity) return { offered: 0, outOfTime: false };
+  if (!activity) return { offered: 0, outOfTime: false, asked: [] as string[] };
   const rows = (await query<TaskRow>("select * from private.task_done_candidates($1)", [activityId])).rows;
-  const assignees = [...new Set(rows.filter((row) => row.candidate).map((row) => row.assignee_id))];
-  if (assignees.length === 0) return { offered: 0, outOfTime: false };
+  const skip = new Set(options.asked ?? []);
+  const assignees = [...new Set(rows.filter((row) => row.candidate).map((row) => row.assignee_id))].filter((id) => !skip.has(id));
+  if (assignees.length === 0) return { offered: 0, outOfTime: false, asked: [] as string[] };
+  const finished: string[] = [];
   const today = dayKeyAt(new Date());
   const text = withinWindow([activity.summary, activity.body].filter(Boolean).join("\n\n"));
   let offered = 0;
   for (const assignee of assignees) {
-    if (options.deadline - Date.now() < MODEL_MIN_MS) return { offered, outOfTime: true };
+    if (options.deadline - Date.now() < MODEL_MIN_MS) return { offered, outOfTime: true, asked: finished };
     const mine = rows.filter((row) => row.assignee_id === assignee);
     const candidates = mine.filter((row) => row.candidate);
     const request = {
@@ -181,11 +183,12 @@ export async function matchActivityToTasks(activityId: string, options: MatchOpt
       ]);
       if (stored.rows[0]?.offer) offered += 1;
     }
+    finished.push(assignee);
   }
-  return { offered, outOfTime: false };
+  return { offered, outOfTime: false, asked: finished };
 }
 
-type Claimed = { id: string; activity_id: string; claim_token: string; attempts: number };
+type Claimed = { id: string; activity_id: string; claim_token: string; attempts: number; asked: string[] };
 
 export async function drainTaskDoneQueue(options: { deadline?: number; fetchImpl?: typeof fetch } = {}) {
   const totals = { processed: 0, offered: 0, retried: 0 };
@@ -195,10 +198,10 @@ export async function drainTaskDoneQueue(options: { deadline?: number; fetchImpl
     const claimed = (await query<Claimed>("select * from private.claim_task_done_queue($1)", [1])).rows[0];
     if (!claimed) break;
     try {
-      const matched = await matchActivityToTasks(claimed.activity_id, { deadline, fetchImpl: options.fetchImpl });
+      const matched = await matchActivityToTasks(claimed.activity_id, { deadline, fetchImpl: options.fetchImpl, asked: claimed.asked });
       totals.offered += matched.offered;
       if (matched.outOfTime) {
-        await query("select private.release_task_done_queue($1, $2)", [claimed.id, claimed.claim_token]);
+        await query("select private.release_task_done_queue($1, $2, $3)", [claimed.id, claimed.claim_token, matched.asked]);
         break;
       }
       await query("select private.finish_task_done_queue($1, $2)", [claimed.id, claimed.claim_token]);

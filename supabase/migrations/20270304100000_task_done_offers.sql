@@ -74,8 +74,11 @@ create table if not exists crm.task_done_queue (
   attempts integer not null default 0,
   claimed_at timestamptz,
   claim_token uuid,
+  asked uuid[] not null default '{}',
   constraint task_done_queue_reason check (reason in ('created', 'updated', 'summary'))
 );
+
+alter table crm.task_done_queue add column if not exists asked uuid[] not null default '{}';
 
 create index if not exists task_done_queue_due_idx on crm.task_done_queue (next_attempt_at, id);
 create index if not exists task_done_queue_activity_idx on crm.task_done_queue (activity_id);
@@ -219,7 +222,7 @@ end;
 $$;
 
 create or replace function private.claim_task_done_queue(p_limit integer)
-returns table (id uuid, activity_id uuid, claim_token uuid, attempts integer)
+returns table (id uuid, activity_id uuid, claim_token uuid, attempts integer, asked uuid[])
 language plpgsql
 security definer
 set search_path = ''
@@ -241,7 +244,7 @@ begin
     set claimed_at = now(), claim_token = gen_random_uuid(), attempts = q.attempts + 1
   from due
   where q.id = due.id
-  returning q.id, q.activity_id, q.claim_token, q.attempts;
+  returning q.id, q.activity_id, q.claim_token, q.attempts, q.asked;
 end;
 $$;
 
@@ -254,14 +257,15 @@ as $$
   delete from crm.task_done_queue where id = p_id and claim_token = p_token;
 $$;
 
-create or replace function private.release_task_done_queue(p_id uuid, p_token uuid)
+create or replace function private.release_task_done_queue(p_id uuid, p_token uuid, p_asked uuid[])
 returns void
 language sql
 security definer
 set search_path = ''
 as $$
   update crm.task_done_queue
-    set claimed_at = null, claim_token = null, attempts = greatest(0, attempts - 1), next_attempt_at = now()
+    set claimed_at = null, claim_token = null, attempts = greatest(0, attempts - 1), next_attempt_at = now(),
+        asked = (select coalesce(array_agg(distinct x), '{}') from unnest(asked || coalesce(p_asked, '{}')) as x)
   where id = p_id and claim_token = p_token;
 $$;
 
@@ -285,11 +289,11 @@ revoke all on function private.offer_task_done(uuid, uuid, text, text, date) fro
 revoke all on function private.claim_task_done_queue(integer) from public;
 revoke all on function private.finish_task_done_queue(uuid, uuid) from public;
 revoke all on function private.retry_task_done_queue(uuid, uuid, integer) from public;
-revoke all on function private.release_task_done_queue(uuid, uuid) from public;
+revoke all on function private.release_task_done_queue(uuid, uuid, uuid[]) from public;
 grant execute on function private.task_done_activity(uuid) to crm_app;
 grant execute on function private.task_done_candidates(uuid) to crm_app;
 grant execute on function private.offer_task_done(uuid, uuid, text, text, date) to crm_app;
 grant execute on function private.claim_task_done_queue(integer) to crm_app;
 grant execute on function private.finish_task_done_queue(uuid, uuid) to crm_app;
 grant execute on function private.retry_task_done_queue(uuid, uuid, integer) to crm_app;
-grant execute on function private.release_task_done_queue(uuid, uuid) to crm_app;
+grant execute on function private.release_task_done_queue(uuid, uuid, uuid[]) to crm_app;

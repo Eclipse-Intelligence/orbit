@@ -630,6 +630,34 @@ describe("looks done offers", () => {
       assert.equal((await openOffers(first)).length + (await openOffers(second)).length, 2);
     });
 
+    it("remembers who it already asked, so a rerun asks only the rest", async () => {
+      const { company, jane } = await scene();
+      await task(mark, "Call Jane", { contactId: jane, companyId: company });
+      await task(sam, "Sam calls Jane", { contactId: jane, companyId: company });
+      await log("call", { contactId: jane });
+      let asked = 0;
+      const slow = gateway((request) => request.tasks.map((entry) => ({ id: entry.id, satisfied: asked > 1, note: "Did it." })));
+      const inner = slow.fetchImpl;
+      slow.fetchImpl = async (input, init) => {
+        asked += 1;
+        const response = await inner(input, init);
+        await new Promise((resolve) => setTimeout(resolve, 5_500));
+        return response;
+      };
+      const short = await drainTaskDoneQueue({ deadline: Date.now() + 12_000, fetchImpl: slow.fetchImpl });
+      assert.equal(short.offered, 0);
+      assert.equal(slow.requests.length, 1);
+      const row = (await admin().query<{ attempts: number; asked: string[] }>("select attempts, asked from crm.task_done_queue")).rows[0];
+      assert.equal(row.attempts, 0);
+      assert.equal(row.asked.length, 1);
+      const rest = gateway();
+      const done = await drain(rest);
+      assert.equal(rest.requests.length, 1);
+      assert.notEqual(rest.requests[0].tasks[0].id, slow.requests[0].tasks[0].id);
+      assert.equal(done.offered, 1);
+      assert.equal((await queued()).length, 0);
+    });
+
     it("skips the model when nothing on the records is open", async () => {
       const { jane } = await scene();
       await log("call", { contactId: jane });
