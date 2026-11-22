@@ -17,6 +17,9 @@ function graph(trigger: WorkflowDefinition["trigger"], nodes: Omit<WorkflowNode,
   });
 }
 
+export const NEXT_STEP_INSTRUCTION =
+  "Suggest the one next task that moves this on, from what was agreed, promised or asked for in what Orbit knows below. Leave nextTask empty when an open task already covers it, when nothing clearly follows, or when the task wasn't about anyone.";
+
 export const STARTER_TEMPLATES: StarterTemplate[] = [
   {
     key: "at-risk-follow-up",
@@ -85,7 +88,7 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
             model: "claude-opus-5-5",
             context: true,
             prompt:
-              "I've just completed this task: {{task.title}}\nIts notes: {{task.notes}}\nIts opportunity: {{task.opportunityName}}\nWho it is with: {{contact.name}} at {{company.name}}\n\nOpen tasks on the same records:\n{{task.openTasks}}\n\nSuggest the one next task that moves this on, from what was agreed, promised or asked for in what Orbit knows below. Leave nextTask empty when an open task already covers it, when nothing clearly follows, or when the task wasn't about anyone.",
+              `I've just completed this task: {{task.title}}\nIts notes: {{task.notes}}\nIts opportunity: {{task.opportunityName}}\nWho it is with: {{contact.name}} at {{company.name}}\n\nOpen tasks on the same records:\n{{task.openTasks}}\n\n${NEXT_STEP_INSTRUCTION}`,
             outputs: [
               { key: "nextTask", type: "text", description: "The next task as a short instruction naming who it is with, such as \"Send Jane the signed order form\". Empty if none." },
               { key: "dueOn", type: "text", description: "The day it should be done by, as YYYY-MM-DD, from today on. Empty if no day fits." },

@@ -366,6 +366,12 @@ export async function handleCronRequest(
     console.error("Call health backfill failed", error);
   }
   try {
+    const { drainTaskDoneQueue } = await import("@/lib/crm/task-done");
+    await drainTaskDoneQueue({ deadline: Math.min(Date.now() + 15_000, received + 58_000) });
+  } catch (error) {
+    console.error("Looks done check failed", error);
+  }
+  try {
     const { queueWorkflowWork } = await import("@/lib/workflows/engine");
     await queueWorkflowWork();
   } catch (error) {
