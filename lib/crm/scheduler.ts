@@ -360,6 +360,12 @@ export async function handleCronRequest(
     console.error("Chat attachment sweep failed", error);
   }
   try {
+    const { drainTaskDoneQueue } = await import("@/lib/crm/task-done");
+    await drainTaskDoneQueue({ deadline: Math.min(Date.now() + 15_000, received + 58_000) });
+  } catch (error) {
+    console.error("Looks done check failed", error);
+  }
+  try {
     const { backfillCallHealth } = await import("@/lib/crm/call-health");
     await backfillCallHealth({ budgetMs: 12_000 });
   } catch (error) {

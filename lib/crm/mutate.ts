@@ -3,6 +3,7 @@ import type { Db } from "@/lib/db/pool";
 import { actorKey, withActor } from "@/lib/crm/context";
 import { CrmError, isPgError, pgFailure } from "@/lib/crm/errors";
 import { stableStringify } from "@/lib/crm/normalize";
+import { enqueueTaskDone } from "@/lib/crm/task-done";
 import { enqueueWebhookDeliveries } from "@/lib/crm/webhooks";
 import { enqueueWorkflowEvent } from "@/lib/workflows/events";
 import type { Actor, Provenance } from "@/lib/crm/types";
@@ -96,6 +97,7 @@ export async function recordAudit(
   const eventId = inserted.rows[0]?.id;
   if (!eventId) return;
   await enqueueWorkflowEvent(db, actor, eventType, entityType, entityId, provenance, changes);
+  await enqueueTaskDone(db, eventType, entityType, entityId, changes);
   await enqueueWebhookDeliveries(db, actor.workspaceId, eventId, eventType, {
     id: eventId,
     type: eventType,
