@@ -169,7 +169,7 @@ export function useTaskOutcome({
       if (result.error || !result.completed) {
         const problem = result.error ?? NOT_DONE;
         abandon(task.id);
-        if (result.field === "offer") drafts.set(task.id, { ...latestDraft, activityId: undefined, kind: null, outcomeId: newOutcomeId() });
+        if (result.field === "offer") drafts.set(task.id, { ...latestDraft, activityId: undefined, kind: null });
         else if (!result.error) drafts.set(task.id, { ...latestDraft, outcomeId: newOutcomeId() });
         const outcomeId = drafts.get(task.id)?.outcomeId ?? latestDraft.outcomeId;
         setOpen((now) => (now?.task.id === task.id ? { ...now, outcomeId } : quiet ? { task, focus: false, place, outcomeId } : now));
@@ -307,7 +307,10 @@ export default function TaskOutcomeForm({
     if (saving) return;
     setError(null);
     const problem = await onSave();
-    if (problem) setError(problem);
+    if (problem) {
+      setError(problem);
+      setDraft((current) => drafts.get(task.id) ?? current);
+    }
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {

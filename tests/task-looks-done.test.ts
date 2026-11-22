@@ -406,6 +406,20 @@ describe("looks done offers", () => {
       assert.equal((await openOffers(janes)).length, 0);
     });
 
+    it("does not bring back the older offer when its activity no longer counts", async () => {
+      const { company, jane, tom } = await scene();
+      const janes = await task(mark, "Call Jane", { contactId: jane });
+      const older = await log("call", { contactId: jane, companyId: company }, { occurredAt: new Date(Date.now() - 7_200_000).toISOString() });
+      await drain();
+      const newer = await log("call", { contactId: jane, companyId: company }, { occurredAt: new Date(Date.now() - 3_600_000).toISOString() });
+      await drain();
+      await updateActivity(mark, older, { type: "note" }, { operation: "retype", source: "web" });
+      await admin().query("delete from crm.task_done_queue");
+      await updateActivity(mark, newer, { contactId: tom }, { operation: "relink", source: "web" });
+      await drain();
+      assert.equal((await openOffers(janes)).length, 0);
+    });
+
     it("stores no offer for a task that is no longer linked to the activity", async () => {
       const { company, jane, tom } = await scene();
       const toms = await task(mark, "Call Tom", { contactId: tom });

@@ -43,12 +43,17 @@ declare
   v_back uuid;
 begin
   for v_task in
-    delete from crm.task_done_offers where activity_id = p_activity and state = 'offered' returning task_id
+    select distinct o.task_id from crm.task_done_offers o where o.activity_id = p_activity and o.state = 'offered' order by o.task_id
   loop
     perform pg_advisory_xact_lock(hashtextextended('task-done|' || v_task::text, 0));
+  end loop;
+  for v_task in
+    delete from crm.task_done_offers where activity_id = p_activity and state = 'offered' returning task_id
+  loop
     if exists (select 1 from crm.task_done_offers o where o.task_id = v_task and o.state = 'offered') then
       continue;
     end if;
+    v_back := null;
     select o.id into v_back
     from crm.task_done_offers o
     join crm.tasks t on t.id = o.task_id
@@ -57,6 +62,7 @@ begin
       and t.completed_at is null and t.archived_at is null
       and a.archived_at is null and a.workspace_id = t.workspace_id
       and a.occurred_at > t.created_at and a.occurred_at <= now()
+      and exists (select 1 from private.task_done_activity(o.activity_id))
       and (t.contact_id = a.contact_id or t.company_id = a.company_id)
       and case when t.contact_id is not null then t.contact_id = a.contact_id else t.company_id = a.company_id end
     order by o.created_at desc
