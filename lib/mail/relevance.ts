@@ -126,7 +126,7 @@ async function contactFacts(db: Db, actor: UserActor, items: Candidate[]): Promi
   return facts;
 }
 
-export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, items: T[], now = Date.now()): Promise<Judged<T>[]> {
+export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, items: T[], now = Date.now(), options: { ignoreHistory?: boolean } = {}): Promise<Judged<T>[]> {
   if (items.length === 0) return [];
   const workspaceIds = [...new Set(items.map((item) => item.workspaceId))];
   const senders = [...new Set(items.flatMap((item) => [item.email, ruleTarget(item.email)]))];
@@ -170,7 +170,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
     const judged = (verdict: Verdict, copy: Decision | null = null, retry = false): Judged<T> => ({ item, verdict, retry, copy: current ? null : copy, hint, stored });
     if (exact?.rule) return judged(verdictFor(exact, exact.engine));
     if (domainRule?.rule) return judged(verdictFor(domainRule, domainRule.engine));
-    if (facts.wroteSender.has(email) || facts.met.has(email)) {
+    if (!options.ignoreHistory && (facts.wroteSender.has(email) || facts.met.has(email))) {
       return judged({ state: "shown", engine: "history" }, thread?.engine === "history" && thread.workspace_id === item.workspaceId ? null : { category: "business", engine: "history", confidence: null, reason: null });
     }
     if (listUsable && listed.hide) {

@@ -211,12 +211,20 @@ async function sendFollowUpsToClickUp(actor: UserActor, taskIds: string[]) {
   }
 }
 
-type OwnDomainThread = { id: string; source_id: string; thread_key: string; address: string; from_name: string | null; subject: string | null; snippet: string | null; body_text: string | null; at: Date };
+const COLLEAGUE_SQL = `exists (
+           select 1 from crm.workspace_members w
+           join crm.profiles p on p.id = w.user_id
+           where w.user_id <> $1
+             and w.workspace_id in (select o.workspace_id from crm.workspace_members o where o.user_id = $1)
+             and (lower(p.email) = lower(m.from_email) or lower(m.from_email) = any (select lower(o) from unnest(coalesce(p.other_emails, '{}')) as o))
+         )`;
+
+type OwnDomainThread = { colleague: boolean; id: string; source_id: string; thread_key: string; address: string; from_name: string | null; subject: string | null; snippet: string | null; body_text: string | null; at: Date };
 
 async function ownDomainAndColleagueThreads(db: Db, actor: UserActor, workspaceIds: string[], filter: { sql: string; params: unknown[] }) {
   const result = await db.query<OwnDomainThread>(
     `select * from (
-     select distinct on (m.source_id, m.thread_key) m.id, m.source_id, m.thread_key, lower(m.from_email) as address, m.from_name, m.subject, m.snippet, m.body_text,
+     select distinct on (m.source_id, m.thread_key) m.id, m.source_id, m.thread_key, lower(m.from_email) as address, ${COLLEAGUE_SQL} as colleague, m.from_name, m.subject, m.snippet, m.body_text,
        coalesce(m.sent_at, m.received_at, m.created_at) as at
      from crm.mail_messages m
      join crm.mail_folders f on f.id = m.folder_id
@@ -230,13 +238,7 @@ async function ownDomainAndColleagueThreads(db: Db, actor: UserActor, workspaceI
            cross join lateral unnest(b.own_domains) as d(domain)
            where b.workspace_id in (select w.workspace_id from crm.workspace_members w where w.user_id = $1)
          ))
-         or exists (
-           select 1 from crm.workspace_members w
-           join crm.profiles p on p.id = w.user_id
-           where w.user_id <> $1
-             and w.workspace_id in (select o.workspace_id from crm.workspace_members o where o.user_id = $1)
-             and (lower(p.email) = lower(m.from_email) or lower(m.from_email) = any (select lower(o) from unnest(coalesce(p.other_emails, '{}')) as o))
-         )
+         or ${COLLEAGUE_SQL}
        )
        and not exists (select 1 from crm.mail_sources s where s.user_id = $1 and lower(s.email) = lower(m.from_email))
        and not exists (select 1 from crm.send_identities i where i.user_id = $1 and lower(i.email) = lower(m.from_email))
@@ -271,7 +273,7 @@ async function suggestForOwnDomainsAndColleagues(
     const target = workspaceId ? byWorkspace.get(workspaceId) : null;
     if (!target || !hasScope(target.scopes, "tasks:write") || !isRecent(new Date(row.at).toISOString())) continue;
     try {
-      const gate = { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs };
+      const gate = { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs, colleague: row.colleague };
       if (!(await mailWorthATask(target, row.id, gate))) continue;
       const title = await followUpTitle(
         { who: row.from_name?.trim() || row.address, subject: row.subject, text: bodyOf({ body_text: row.body_text, snippet: row.snippet }) },

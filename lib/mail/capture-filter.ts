@@ -53,6 +53,7 @@ type Header = { name: string; value: string };
 
 type ClassifyOptions = {
   deadline: number;
+  ignoreHistory?: boolean;
   fetchImpl?: typeof fetch;
   headers?: boolean;
   readHeaders?: (item: UnknownEmail) => Promise<Header[] | null>;
@@ -186,7 +187,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
               body: emailBodyText(bodies.get(item.messageId) ?? null),
               listedAs: hint,
             },
-            history.get(item.email),
+            options.ignoreHistory ? undefined : history.get(item.email),
           );
           let decision: Decision | null = null;
           if (reader && !state.history.userHasWrittenToSender) {
