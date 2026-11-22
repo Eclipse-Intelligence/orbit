@@ -356,4 +356,63 @@ describe("tasks suggested from mail are gated on relevance", () => {
     assert.equal(await count(outsider), 1);
     await saveBrandProfile(second, { ...PROFILE, ownDomains: "ridgeon-own.test" }, WEB);
   });
+  it("lets a real enquiry from a company through after spam from the same company in one inbox batch", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const { company, email } = await prospect(owner, "Acme Batch");
+      const domain = email.split("@")[1];
+      await createContact(owner, { companyId: company, firstName: "Jane", lastName: "Real", email: `jane@${domain}` });
+      const junk = await deliver(owner, box, email, "Spring sale");
+      const real = await deliver(owner, box, `jane@${domain}`, "Project enquiry");
+      const at = new Date(Date.now() - 600_000).toISOString();
+      const message = (key: string, from: string, subject: string) => ({ providerMessageId: key.split("|")[1], conversationId: key.split("|")[1], subject, fromEmail: from, fromName: "X", preview: subject, receivedAt: at });
+      const model = classifierGateway((address) => (address === email ? "newsletter" : "business"));
+      const result = await fileInboundMessages(owner, [message(junk, email, "Spring sale"), message(real, `jane@${domain}`, "Project enquiry")], { fetchImpl: model.fetchImpl });
+      assert.equal(result.followUps, 1);
+      assert.equal((await taskTitles(owner, company)).length, 1);
+      assert.equal((await getAdminPool().query("select 1 from crm.tasks where mail_thread_key = $1", [real])).rowCount, 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
+  it("never mutes a colleague from another of the owner's workspaces", async () => {
+    const admin = getAdminPool();
+    const kimId = (await admin.query<{ id: string }>("select private.create_local_user('kim.colleague@gmail.com', 'password-123', 'Kim Colleague') as id")).rows[0].id;
+    await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [second.workspaceId, kimId]);
+    const key = await deliver(owner, box, "kim.colleague@gmail.com", "Quick one");
+    const made = await createTask(owner, { title: "Reply to Kim", ownerId: owner.userId, mailThreadKey: key }, { provenance: { operation: "suggest_follow_up", source: "microsoft" } });
+    const outcome = await markTaskSpam(owner, made.body.task.id);
+    assert.equal(outcome.target, null);
+    const rules = await admin.query("select 1 from crm.mail_sender_relevance where user_id = $1 and sender = 'kim.colleague@gmail.com'", [owner.userId]);
+    assert.equal(rules.rowCount, 0);
+  });
+
+  it("gives no task to an unsubscribed sender, and none while another run is judging the thread", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const quiet = await prospect(owner, "Unsub Co");
+      await getAdminPool().query("insert into crm.mail_subscriptions (workspace_id, user_id, sender, status) values ($1, $2, $3, 'unsubscribed')", [owner.workspaceId, owner.userId, quiet.email]);
+      await deliver(owner, box, quiet.email, "Hello again");
+      const model = classifierGateway(() => "business");
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.deepEqual(await taskTitles(owner, quiet.company), []);
+
+      const busy = await prospect(owner, "Busy Co");
+      const key = await deliver(owner, box, busy.email, "Terms");
+      const { classifyItems } = await import("@/lib/mail/capture-filter");
+      let release: () => void = () => undefined;
+      const slow: typeof fetch = () => new Promise((resolve) => (release = () => resolve(new Response("down", { status: 400 }))));
+      const row = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where source_id = $1 and thread_key = $2", [key.split("|")[0], key.split("|")[1]])).rows[0];
+      const item = { key, messageId: row.id, email: busy.email, name: null, subject: "Terms", snippet: "Terms", address: "mark@guard-orbit.test", workspaceId: owner.workspaceId, at: new Date().toISOString(), neverAsk: "" };
+      const running = classifyItems(owner, [owner], [{ item, hint: null }], { deadline: Date.now() + 30_000, fetchImpl: slow });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.deepEqual(await taskTitles(owner, busy.company), []);
+      release();
+      await running;
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
 });

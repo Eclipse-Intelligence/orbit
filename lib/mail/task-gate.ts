@@ -1,6 +1,7 @@
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { randomUUID } from "node:crypto";
+import { hiddenSubscriptionSql } from "@/lib/mail/subscriptions";
 import { decideRelevance, decisionState, emailBodyText, historyInDb, judgeInDb, workspaceContext, type Candidate, type Judged } from "@/lib/mail/relevance";
 
 const CLASSIFY_MS = 10_000;
@@ -15,6 +16,7 @@ type MessageRow = {
   snippet: string | null;
   at: Date;
   account: string;
+  unsubscribed: boolean;
 };
 
 export type TaskGateOptions = { fetchImpl?: typeof fetch; deadline?: number; timeoutMs?: number };
@@ -43,7 +45,8 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
     const row = await withActor(actor, async (db) => {
       const result = await db.query<MessageRow>(
         `select m.id, m.source_id, m.thread_key, lower(m.from_email) as from_email, m.from_name, m.subject, m.snippet,
-           coalesce(m.received_at, m.created_at) as at, s.email as account
+           coalesce(m.received_at, m.created_at) as at, s.email as account,
+           ${hiddenSubscriptionSql("$2", "lower(m.from_email)")} as unsubscribed
          from crm.mail_messages m join crm.mail_sources s on s.id = m.source_id
          where m.id = $1 and m.user_id = $2`,
         [messageId, actor.userId],
@@ -51,6 +54,7 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
       return result.rows[0] ?? null;
     });
     if (!row) return true;
+    if (row.unsubscribed) return false;
     if (!row.thread_key || !row.from_email) return true;
     const item: Candidate = {
       key: `${row.source_id}|${row.thread_key}`,
@@ -67,9 +71,10 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
     const first = await judge();
     const decided = worthIt(first);
     if (decided !== null) return decided;
-    const { classifyItems } = await import("@/lib/mail/capture-filter");
+    const { classifyItems, isBeingSorted } = await import("@/lib/mail/capture-filter");
+    if (isBeingSorted(item.key)) return false;
     const deadline = Math.min(options.deadline ?? Number.POSITIVE_INFINITY, Date.now() + Math.min(options.timeoutMs ?? CLASSIFY_MS, CLASSIFY_MS));
-    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl });
+    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl, headers: true });
     return worthIt(await judge()) ?? true;
   } catch (error) {
     console.error("Couldn't judge an email before suggesting a task", error instanceof Error ? error.message : error);
@@ -85,8 +90,10 @@ export async function inboxMailWorthATask(actor: UserActor, email: InboxEmail, o
     if (!sender || !email.threadKey) return true;
     const found = await withActor(actor, async (db) => {
       const source = await db.query<{ id: string; email: string }>("select id, email from crm.mail_sources where connection_id = $1 and user_id = $2 limit 1", [email.connectionId, actor.userId]);
-      return { source: source.rows[0] ?? null };
+      const hidden = await db.query<{ hidden: boolean }>(`select ${hiddenSubscriptionSql("$1", "$2")} as hidden`, [actor.userId, sender]);
+      return { source: source.rows[0] ?? null, hidden: Boolean(hidden.rows[0]?.hidden) };
     });
+    if (found.hidden) return false;
     if (!found.source) return true;
     const item: Candidate = {
       key: `${found.source.id}|${email.threadKey.slice(0, 400)}`,

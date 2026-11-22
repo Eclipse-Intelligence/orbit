@@ -131,6 +131,10 @@ function recentlyUnstorable(item: UnknownEmail) {
   return false;
 }
 
+export function isBeingSorted(key: string) {
+  return inFlight.has(key);
+}
+
 export async function classifyItems(actor: UserActor, actors: UserActor[], work: Work[], options: ClassifyOptions) {
   const mine = work.filter(({ item }) => !inFlight.has(item.key) && !recentlyUnstorable(item));
   if (mine.length === 0) return 0;

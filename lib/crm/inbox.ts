@@ -808,7 +808,6 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
   const checked = new Set<string>();
   for (const candidate of candidates) {
     if (checked.has(candidate.companyId)) continue;
-    checked.add(candidate.companyId);
     try {
       if (await companyHasOpenTask(actor.workspaceId, candidate.companyId)) continue;
       const gate = { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs };
@@ -817,6 +816,7 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
         ? await mailWorthATask(actor, mirrored, gate)
         : await inboxMailWorthATask(actor, { connectionId: candidate.connectionId, threadKey: candidate.threadKey, fromEmail: candidate.fromEmail, fromName: candidate.fromName, subject: candidate.subject, text: candidate.text }, gate);
       if (!worth) continue;
+      checked.add(candidate.companyId);
       const due = await scheduleTaskDue(actor, { days: 2 });
       const title = await followUpTitle({ who: candidate.who, subject: candidate.subject, text: candidate.text }, { deadline: options.deadline, timeoutMs: options.titleTimeoutMs, fetchImpl: options.fetchImpl });
       const task = await createFollowUpUnlessOpen(actor, candidate.companyId, async (db) => {

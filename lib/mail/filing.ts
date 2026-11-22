@@ -23,10 +23,12 @@ import {
   NOT_AUTOMATED,
   parseRouteKey,
   setDomainRule,
+  teamDomainsInDb,
   threadFilingInDb,
   threadRoute,
   upsertRoute,
 } from "@/lib/mail/routing";
+import { hiddenSubscriptionSql } from "@/lib/mail/subscriptions";
 import { UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
 import { splitCase, splitJoin } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
@@ -326,11 +328,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
                where co.workspace_id = any($3::uuid[]) and co.archived_at is null and co.domain = split_part(lower(m.from_email), '@', 2)
              )
            )
-           and not exists (
-             select 1 from crm.mail_subscriptions ms
-             where ms.user_id = $1 and (ms.sender = lower(m.from_email) or ms.sender = '@' || split_part(lower(m.from_email), '@', 2))
-               and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
-           )
+           and not ${hiddenSubscriptionSql("$1", "lower(m.from_email)")}
            and not exists (
              select 1 from crm.mail_prepared p
              where p.user_id = $1 and p.source_id = l.source_id and p.thread_key = l.tk and p.kind = 'pitch' and p.state = 'ready'
@@ -441,7 +439,16 @@ export async function markTaskSpam(actor: UserActor, taskId: string) {
     await archiveTaskInDb(db, actor, taskId, { operation: "mark_task_spam", source: "web" });
     if (sender?.counterpart) {
       const internal = await internalAddresses(db, actor.workspaceId, [...sender.own], actor.userId);
-      if (!internal.isInternal(sender.counterpart.email)) {
+      const email = sender.counterpart.email;
+      const mine = (await db.query<{ workspace_id: string }>("select workspace_id from crm.workspace_members where user_id = $1", [actor.userId])).rows.map((row) => row.workspace_id);
+      const team = await teamDomainsInDb(db, actor, mine);
+      const colleague = await db.query(
+        `select 1 from crm.workspace_members w join crm.profiles p on p.id = w.user_id
+         where w.workspace_id = any($1::uuid[]) and ($2 = lower(p.email) or $2 = any (select lower(o) from unnest(coalesce(p.other_emails, '{}')) as o))
+         limit 1`,
+        [mine, email.toLowerCase()],
+      );
+      if (!internal.isInternal(email) && !team.has(email.split("@")[1] ?? "") && !colleague.rowCount) {
         target = ruleTarget(sender.counterpart.email);
         await upsertRoute(db, actor, sourceId, key, { ignored: true });
         await setSenderRule(db, actor, actor.workspaceId, target, "muted", "rule");
