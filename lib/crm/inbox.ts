@@ -24,7 +24,7 @@ import { composeEmailHtml, trackingPixelUrl } from "@/lib/mail/html";
 import { appNeedsAttention, reconnectProblem } from "@/lib/mail/microsoft";
 import { mailOrigin } from "@/lib/mail/origin";
 import { routedAway } from "@/lib/mail/routing";
-import { mailWorthATask, mirroredMessageId } from "@/lib/mail/task-gate";
+import { inboxMailWorthATask, mailWorthATask, mirroredMessageId } from "@/lib/mail/task-gate";
 import { ownDomainsInDb } from "@/lib/crm/own-domains";
 import { readStatusesOn } from "@/lib/mail/tracking";
 import {
@@ -799,7 +799,7 @@ export async function fileInboundMessages(
   return counts;
 }
 
-type FollowUpCandidate = { providerMessageId: string; companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null; text: string | null };
+type FollowUpCandidate = { fromEmail: string | null; fromName: string | null; providerMessageId: string; companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null; text: string | null };
 
 type TitleOptions = { deadline?: number; titleTimeoutMs?: number; fetchImpl?: typeof fetch };
 
@@ -811,8 +811,12 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
     checked.add(candidate.companyId);
     try {
       if (await companyHasOpenTask(actor.workspaceId, candidate.companyId)) continue;
+      const gate = { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs };
       const mirrored = await mirroredMessageId(actor, candidate.connectionId, candidate.providerMessageId);
-      if (mirrored && !(await mailWorthATask(actor, mirrored, { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs }))) continue;
+      const worth = mirrored
+        ? await mailWorthATask(actor, mirrored, gate)
+        : await inboxMailWorthATask(actor, { connectionId: candidate.connectionId, threadKey: candidate.threadKey, fromEmail: candidate.fromEmail, fromName: candidate.fromName, subject: candidate.subject, text: candidate.text }, gate);
+      if (!worth) continue;
       const due = await scheduleTaskDue(actor, { days: 2 });
       const title = await followUpTitle({ who: candidate.who, subject: candidate.subject, text: candidate.text }, { deadline: options.deadline, timeoutMs: options.titleTimeoutMs, fetchImpl: options.fetchImpl });
       const task = await createFollowUpUnlessOpen(actor, candidate.companyId, async (db) => {
@@ -1041,6 +1045,8 @@ async function fileMessages(
       );
       if (match.companyId && isRecent(message.receivedAt) && hasScope(actor.scopes, "tasks:write")) {
         followUps.push({
+          fromEmail: canonicalEmail(message.fromEmail ?? ""),
+          fromName: message.fromName ?? null,
           providerMessageId,
           companyId: match.companyId,
           contactId: match.contactId,

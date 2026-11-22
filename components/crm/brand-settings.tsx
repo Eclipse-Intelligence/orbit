@@ -237,7 +237,7 @@ export default function BrandSettings({ brand, canEdit, learned, multi }: { bran
             label="Your domains"
             htmlFor="brand-domains"
             error={errors.ownDomains}
-            hint="Separated by commas. Mail from these domains is never filed as a prospect or given a task."
+            hint="Separated by commas. Mail from these domains is never filed as a prospect."
           >
             <Input
               id="brand-domains"

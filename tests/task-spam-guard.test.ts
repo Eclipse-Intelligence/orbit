@@ -3,6 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { saveBrandProfile } from "@/lib/crm/brand";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
+import { fileInboundMessages } from "@/lib/crm/inbox";
 import { scopesForRole } from "@/lib/crm/scopes";
 import { createTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
@@ -201,12 +202,28 @@ describe("tasks suggested from mail are gated on relevance", () => {
     const home = await createCompany(owner, { name: "Own Website Co", domain: "ridgeon-own.test" });
     const company = home.body.company.id;
     await createContact(owner, { companyId: company, firstName: "Mark", lastName: "Ridgeon", email: "mark@ridgeon-own.test" });
-    await deliver(owner, box, "website@ridgeon-own.test", "New enquiry");
+    const enquiry = await deliver(owner, box, "website@ridgeon-own.test", "New enquiry");
     const result = await fileMailOnTimeline(owner, {});
     assert.equal(result.filed, 0);
     assert.deepEqual(await taskTitles(owner, company), []);
     const activities = await getAdminPool().query("select 1 from crm.activities where company_id = $1", [company]);
     assert.equal(activities.rowCount, 0);
+    const threadTasks = async (key: string) => (await getAdminPool().query<{ company_id: string | null; contact_id: string | null }>("select company_id, contact_id from crm.tasks where mail_thread_key = $1 and archived_at is null", [key])).rows;
+    assert.deepEqual(await threadTasks(enquiry), [{ company_id: null, contact_id: null }]);
+    await fileMailOnTimeline(owner, {});
+    assert.equal((await threadTasks(enquiry)).length, 1, "one task per thread");
+
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const junk = await deliver(owner, box, "junk@ridgeon-own.test", "You won a prize");
+      await fileMailOnTimeline(owner, { fetchImpl: classifierGateway(() => "spam").fetchImpl });
+      assert.deepEqual(await threadTasks(junk), []);
+      const real = await deliver(owner, box, "forms@ridgeon-own.test", "Pilot terms");
+      await fileMailOnTimeline(owner, { fetchImpl: classifierGateway(() => "business").fetchImpl });
+      assert.equal((await threadTasks(real)).length, 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
 
     const theirs = await createCompany(stranger, { name: "Own Website Co", domain: "ridgeon-own.test" });
     await createContact(stranger, { companyId: theirs.body.company.id, firstName: "Mark", lastName: "Ridgeon", email: "mark@ridgeon-own.test" });
@@ -258,5 +275,34 @@ describe("tasks suggested from mail are gated on relevance", () => {
     const rules = await admin.query("select 1 from crm.mail_sender_relevance where user_id = $1 and sender like '%guard-own.test'", [owner.userId]);
     assert.equal(rules.rowCount, 0);
     await saveBrandProfile(owner, { ...PROFILE, ownDomains: "" }, WEB);
+  });
+  it("judges an inbox sync email the mirror doesn't hold yet, without storing the decision", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const junk = await prospect(owner, "Inbox Junk Co");
+      const spam = classifierGateway(() => "spam");
+      const first = await fileInboundMessages(
+        owner,
+        [{ providerMessageId: "raw-spam", conversationId: "raw-spam-thread", subject: "You won", fromEmail: junk.email, fromName: "Pat", preview: "Claim your prize", receivedAt: new Date(Date.now() - 600_000).toISOString() }],
+        { fetchImpl: spam.fetchImpl },
+      );
+      assert.equal(first.attached, 1);
+      assert.equal(first.followUps, 0);
+      assert.deepEqual(spam.asked, [junk.email]);
+      assert.deepEqual(await taskTitles(owner, junk.company), []);
+      assert.equal((await threadCategory(`${box.sourceId}|raw-spam-thread`)), null);
+
+      const real = await prospect(owner, "Inbox Real Co");
+      const business = classifierGateway(() => "business");
+      const second = await fileInboundMessages(
+        owner,
+        [{ providerMessageId: "raw-real", conversationId: "raw-real-thread", subject: "Pilot terms", fromEmail: real.email, fromName: "Pat", preview: "Can we talk terms?", receivedAt: new Date(Date.now() - 600_000).toISOString() }],
+        { fetchImpl: business.fetchImpl },
+      );
+      assert.equal(second.followUps, 1);
+      assert.equal((await taskTitles(owner, real.company)).length, 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
   });
 });

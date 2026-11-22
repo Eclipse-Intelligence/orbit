@@ -14,7 +14,7 @@ export default function TaskSpamMenu({ task, onSpam }: { task: Task; onSpam?: (t
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="More actions" title="More actions" className="hit size-[34px]">
+        <Button variant="ghost" size="icon" aria-label="Task actions" title="Task actions" className="hit size-[34px]">
           <MoreIcon aria-hidden className="size-3.5" />
         </Button>
       </PopoverTrigger>

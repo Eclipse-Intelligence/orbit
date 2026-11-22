@@ -12,7 +12,7 @@ import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
 import { stripQuoted } from "@/lib/mail/format";
 import { mailWorthATask } from "@/lib/mail/task-gate";
-import { contactElsewhere, ensureContactInDb, NOT_AUTOMATED, routedParams, routedSql } from "@/lib/mail/routing";
+import { addressHomesInDb, captureWorkspaces, contactElsewhere, ensureContactInDb, NOT_AUTOMATED, routedParams, routedSql } from "@/lib/mail/routing";
 
 const WINDOW_DAYS = 60;
 const BATCH = 100;
@@ -211,6 +211,87 @@ async function sendFollowUpsToClickUp(actor: UserActor, taskIds: string[]) {
   }
 }
 
+type OwnDomainThread = { id: string; source_id: string; thread_key: string; address: string; from_name: string | null; subject: string | null; snippet: string | null; body_text: string | null; at: Date };
+
+async function ownDomainThreads(db: Db, actor: UserActor, workspaceIds: string[], filter: { sql: string; params: unknown[] }) {
+  const result = await db.query<OwnDomainThread>(
+    `select distinct on (m.source_id, m.thread_key) m.id, m.source_id, m.thread_key, lower(m.from_email) as address, m.from_name, m.subject, m.snippet, m.body_text,
+       coalesce(m.sent_at, m.received_at, m.created_at) as at
+     from crm.mail_messages m
+     join crm.mail_folders f on f.id = m.folder_id
+     where m.user_id = $1 and not m.is_draft and f.role = 'inbox' and f.role <> all($5::text[]) and cardinality($3::uuid[]) > 0 and (${filter.sql})
+       and m.thread_key is not null and m.from_email is not null
+       and lower(m.from_email) <> lower($2::text)
+       and split_part(lower(m.from_email), '@', 2) <> all($4::text[])
+       and ${NOT_AUTOMATED("lower(m.from_email)")}
+       and split_part(lower(m.from_email), '@', 2) in (
+         select d.domain from crm.workspace_brands b
+         cross join lateral unnest(b.own_domains) as d(domain)
+         where b.workspace_id in (select w.workspace_id from crm.workspace_members w where w.user_id = $1)
+       )
+       and not exists (select 1 from crm.mail_sources s where s.user_id = $1 and lower(s.email) = lower(m.from_email))
+       and not exists (select 1 from crm.send_identities i where i.user_id = $1 and lower(i.email) = lower(m.from_email))
+       and not exists (select 1 from crm.tasks t where t.mail_thread_key = m.source_id::text || '|' || m.thread_key and t.archived_at is null)
+     order by m.source_id, m.thread_key, coalesce(m.sent_at, m.received_at, m.created_at) desc
+     limit 20`,
+    routedParams(actor, workspaceIds, filter.params),
+  );
+  const homes = await addressHomesInDb(db, actor);
+  const where = await captureWorkspaces(db, actor, homes, workspaceIds, result.rows.map((row) => row.id));
+  return result.rows.map((row) => ({ row, workspaceId: where.get(row.id) ?? null }));
+}
+
+async function suggestForOwnDomains(
+  actor: UserActor,
+  workspaceIds: string[],
+  byWorkspace: Map<string, UserActor>,
+  filter: { sql: string; params: unknown[] },
+  options: { fetchImpl?: typeof fetch; deadline?: number; titleTimeoutMs?: number },
+) {
+  const created = new Map<string, string[]>();
+  const found = await withActor(actor, (db) => ownDomainThreads(db, actor, workspaceIds, filter));
+  for (const { row, workspaceId } of found) {
+    const target = workspaceId ? byWorkspace.get(workspaceId) : null;
+    if (!target || !hasScope(target.scopes, "tasks:write") || !isRecent(new Date(row.at).toISOString())) continue;
+    try {
+      const gate = { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs };
+      if (!(await mailWorthATask(target, row.id, gate))) continue;
+      const title = await followUpTitle(
+        { who: row.from_name?.trim() || row.address, subject: row.subject, text: bodyOf({ body_text: row.body_text, snippet: row.snippet }) },
+        { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs },
+      );
+      const due = await scheduleTaskDue(target, { days: 2 });
+      const key = `${row.source_id}|${row.thread_key}`;
+      const taskId = await withActor(target, async (db) => {
+        await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`own-domain-task:${key}`]);
+        const open = await db.query("select 1 from crm.tasks where mail_thread_key = $1 and archived_at is null limit 1", [key]);
+        if (open.rowCount) return null;
+        const task = await createTaskInDb(
+          db,
+          target,
+          {
+            title: title.slice(0, 200),
+            description: withDueNote(MAIL_SUGGESTION_NOTE, due),
+            mailThreadKey: key,
+            dueDate: due?.dueDate ?? null,
+            companyId: null,
+            contactId: null,
+            opportunityId: null,
+            priority: "normal",
+          },
+          { operation: "suggest_follow_up", source: "microsoft" },
+          { ownThread: true },
+        );
+        return task.id;
+      });
+      if (taskId) created.set(target.workspaceId, [...(created.get(target.workspaceId) ?? []), taskId]);
+    } catch (error) {
+      console.error("Suggesting a task for mail from your own domain failed", error);
+    }
+  }
+  return created;
+}
+
 export async function fileMailOnTimeline(
   actor: UserActor,
   options: { days?: number; limit?: number; now?: number; filter?: MailFilter; actors?: UserActor[]; fetchImpl?: typeof fetch; deadline?: number; titleTimeoutMs?: number } = {},
@@ -294,6 +375,8 @@ export async function fileMailOnTimeline(
       console.error("Filing an email on the timeline failed", error);
     }
   }
+  const own = await suggestForOwnDomains(actor, workspaceIds, byWorkspace, filter, options);
+  for (const [workspaceId, ids] of own) followUps.set(workspaceId, [...(followUps.get(workspaceId) ?? []), ...ids]);
   for (const [workspaceId, taskIds] of followUps) {
     const target = byWorkspace.get(workspaceId);
     if (target) await sendFollowUpsToClickUp(target, taskIds);
