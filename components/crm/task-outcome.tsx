@@ -9,6 +9,7 @@ import { TASK_CHIP } from "@/components/crm/task-fields";
 import { useComposer } from "@/components/mail/compose-dock";
 import { completeTaskWithOutcomeAction } from "@/app/(crm)/task-act";
 import type { OutcomeKind, TaskOutcome } from "@/lib/crm/task-act";
+import type { TaskDoneOffer } from "@/lib/crm/task-done";
 import { taskKind } from "@/lib/crm/task-kind";
 import type { Task } from "@/lib/crm/types";
 import { localInstant } from "@/lib/crm/task-time";
@@ -28,18 +29,21 @@ const KINDS: { id: OutcomeKind; label: string; icon: typeof PhoneIcon }[] = [
 const TOUCH = "hit";
 const NOT_SAVED = "Couldn't save. Try again.";
 const NOT_DONE = "Couldn't mark it done. Try again.";
+type SaveResult = { error?: string; field?: string; logged?: boolean; next?: boolean; completed?: boolean };
 
 export type OutcomePlace = "row" | "panel";
 export type OutcomeOpen = { task: Task; focus: boolean; place: OutcomePlace; outcomeId: string; restoring?: boolean };
-export type OutcomeDraft = { outcomeId: string; note: string; kind: OutcomeKind | null; nextTitle: string; nextDue: string; task?: Task; stranded?: boolean };
+export type OutcomeDraft = { outcomeId: string; note: string; kind: OutcomeKind | null; nextTitle: string; nextDue: string; task?: Task; stranded?: boolean; activityId?: string };
 
 const drafts = new Map<string, OutcomeDraft>();
 
-export function outcomeDraft(task: Task, outcomeId: string): OutcomeDraft {
+export function outcomeDraft(task: Task, outcomeId: string, offer?: TaskDoneOffer): OutcomeDraft {
   const kept = drafts.get(task.id);
   if (kept && kept.outcomeId === outcomeId) return kept;
   const preset = taskKind(task.title);
-  const fresh = { outcomeId, note: "", kind: preset === "todo" ? null : preset, nextTitle: "", nextDue: "", task };
+  const fresh: OutcomeDraft = offer
+    ? { outcomeId, note: offer.note ?? "", kind: offer.kind, nextTitle: offer.nextTitle ?? "", nextDue: offer.nextDue ?? "", task, activityId: offer.activityId }
+    : { outcomeId, note: "", kind: preset === "todo" ? null : preset, nextTitle: "", nextDue: "", task };
   drafts.set(task.id, fresh);
   return fresh;
 }
@@ -50,11 +54,17 @@ function keepDraft(taskId: string, draft: OutcomeDraft) {
 
 export function outcomeValue(draft: OutcomeDraft): TaskOutcome {
   const title = draft.nextTitle.trim();
-  return { outcomeId: draft.outcomeId, note: draft.note, kind: draft.kind, next: title ? { title, dueAt: draft.nextDue ? localInstant(draft.nextDue) : null } : null };
+  return {
+    outcomeId: draft.outcomeId,
+    note: draft.note,
+    kind: draft.kind,
+    next: title ? { title, dueAt: draft.nextDue ? localInstant(draft.nextDue) : null } : null,
+    ...(draft.activityId ? { activityId: draft.activityId } : {}),
+  };
 }
 
 export function typedOutcome(draft: OutcomeDraft | null | undefined) {
-  return Boolean(draft && (draft.note.trim() || draft.nextTitle.trim()));
+  return Boolean(draft && (draft.activityId || draft.note.trim() || draft.nextTitle.trim()));
 }
 
 export type OutcomeHandlers = {
@@ -130,6 +140,10 @@ export function useTaskOutcome({
 
   function skip(task: Task, quiet = false) {
     if (saving === task.id || outcome?.task.id !== task.id) return;
+    if (drafts.get(task.id)?.activityId) {
+      void save(task, quiet);
+      return;
+    }
     release(task.id);
     close(task, outcome.place, quiet);
   }
@@ -144,14 +158,13 @@ export function useTaskOutcome({
     const run = async (): Promise<string | null> => {
       const latestDraft = drafts.get(task.id) ?? draft;
       setSaving(task.id);
-      const result = await completeTaskWithOutcomeAction(task.id, outcomeValue(latestDraft)).catch(
-        () => ({ error: NOT_SAVED }) as { error?: string; logged?: boolean; next?: boolean; completed?: boolean },
-      );
+      const result = await completeTaskWithOutcomeAction(task.id, outcomeValue(latestDraft)).catch(() => ({ error: NOT_SAVED }) as SaveResult);
       setSaving(null);
       if (result.error || !result.completed) {
         const problem = result.error ?? NOT_DONE;
         abandon(task.id);
-        if (!result.error) drafts.set(task.id, { ...latestDraft, outcomeId: newOutcomeId() });
+        if (result.field === "offer") drafts.set(task.id, { ...latestDraft, activityId: undefined });
+        else if (!result.error) drafts.set(task.id, { ...latestDraft, outcomeId: newOutcomeId() });
         const outcomeId = drafts.get(task.id)?.outcomeId ?? latestDraft.outcomeId;
         setOpen((now) => (now?.task.id === task.id ? { ...now, outcomeId } : quiet ? { task, focus: false, place, outcomeId } : now));
         if (quiet) {
@@ -176,26 +189,26 @@ export function useTaskOutcome({
     else skip(task, quiet);
   }
 
-  function begin(task: Task, focus: boolean, place: OutcomePlace) {
+  function begin(task: Task, focus: boolean, place: OutcomePlace, offer?: TaskDoneOffer) {
     complete(task, { hold: true });
     const outcomeId = newOutcomeId();
-    outcomeDraft(task, outcomeId);
+    outcomeDraft(task, outcomeId, offer);
     setOpen({ task, focus, place, outcomeId });
   }
 
-  function start(task: Task, focus: boolean, place: OutcomePlace) {
+  function start(task: Task, focus: boolean, place: OutcomePlace, offer?: TaskDoneOffer) {
     if (saving === task.id || pending.current.has(task.id)) return;
     if (outcome && outcome.task.id !== task.id) {
       const previous = outcome.task;
       if (typedOutcome(drafts.get(previous.id))) {
         void save(previous, true).then((error) => {
-          if (!error) begin(task, focus, place);
+          if (!error) begin(task, focus, place, offer);
         });
         return;
       }
       skip(previous, true);
     }
-    begin(task, focus, place);
+    begin(task, focus, place, offer);
   }
 
   const latest = useRef(outcome);
@@ -277,7 +290,7 @@ export default function TaskOutcomeForm({
 
   function change(next: Partial<OutcomeDraft>) {
     setDraft((current) => {
-      const updated = { ...current, ...next };
+      const updated = { ...current, ...next, activityId: drafts.get(task.id)?.activityId };
       keepDraft(task.id, updated);
       return updated;
     });
@@ -325,10 +338,12 @@ export default function TaskOutcomeForm({
             </Button>
           ))}
         </div>
-        <span className="caption-style text-subtle flex items-center gap-1">
-          <UserIcon aria-hidden className="size-3" />
-          Shows on {timelineOwner(task)}
-        </span>
+        {!draft.activityId && (
+          <span className="caption-style text-subtle flex items-center gap-1">
+            <UserIcon aria-hidden className="size-3" />
+            Shows on {timelineOwner(task)}
+          </span>
+        )}
       </div>
       <label htmlFor={`${id}-note`} className="sr-only">
         What happened

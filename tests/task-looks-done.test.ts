@@ -8,8 +8,9 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError } from "@/lib/crm/errors";
 import { recordAudit } from "@/lib/crm/mutate";
 import { scopesForRole, SCOPES } from "@/lib/crm/scopes";
-import { dismissTaskDoneOffer, drainTaskDoneQueue, taskDoneOffers } from "@/lib/crm/task-done";
-import { addTaskParticipantsInDb, archiveTask, completeTask, createTask } from "@/lib/crm/tasks";
+import { completeTaskWithOutcome } from "@/lib/crm/task-act";
+import { dismissTaskDoneOffer, drainTaskDoneQueue, taskDoneNotes, taskDoneOffers } from "@/lib/crm/task-done";
+import { addTaskParticipantsInDb, archiveTask, completeTask, createTask, reopenTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool, query } from "@/lib/db/pool";
@@ -664,6 +665,144 @@ describe("looks done offers", () => {
       const done = await drain();
       assert.equal(done.requests.length, 0);
       assert.equal(done.processed, 1);
+    });
+  });
+
+  describe("closing from an offer", () => {
+    async function offered(actor = mark, title = "Call Jane about pricing") {
+      const { jane } = await scene(actor);
+      const taskId = await task(actor, title, { contactId: jane });
+      const activityId = await log("call", { contactId: jane }, { actor, body: "Agreed the price." });
+      await drain(gateway((request) => request.tasks.map((item) => ({ id: item.id, satisfied: true, note: "Agreed the price." }))));
+      return { jane, taskId, activityId };
+    }
+
+    const closing = (activityId: string, extra: Record<string, unknown> = {}) => ({
+      outcomeId: randomUUID(),
+      note: "Agreed the price.",
+      kind: "call" as const,
+      next: null,
+      activityId,
+      ...extra,
+    });
+
+    const activityCount = async (contactId: string) =>
+      Number((await admin().query<{ count: string }>("select count(*) from crm.activities where contact_id = $1", [contactId])).rows[0].count);
+
+    it("closes the task and the offer without a new activity, and keeps the note", async () => {
+      const { jane, taskId, activityId } = await offered();
+      const before = await activityCount(jane);
+      const input = closing(activityId, { next: { title: "Send Jane the pilot terms", dueAt: null } });
+      const saved = await completeTaskWithOutcome(mark, taskId, input);
+      assert.equal(saved.replayed, false);
+      assert.equal(saved.activityId, activityId);
+      assert.ok(saved.task.completedAt);
+      assert.ok(saved.next);
+      assert.equal(await activityCount(jane), before);
+      const outcome = (await admin().query<{ activity_id: string; note: string | null }>("select activity_id, note from crm.task_outcomes where id = $1", [input.outcomeId])).rows[0];
+      assert.equal(outcome.activity_id, activityId);
+      assert.equal(outcome.note, "Agreed the price.");
+      const [offer] = await offersFor(taskId);
+      assert.equal(offer.state, "closed");
+      assert.equal(offer.decided_by, mark.userId);
+      assert.deepEqual(await taskDoneOffers(mark, [taskId]), []);
+    });
+
+    it("replays the same outcome without changing anything", async () => {
+      const { jane, taskId, activityId } = await offered();
+      const input = closing(activityId);
+      await completeTaskWithOutcome(mark, taskId, input);
+      const before = await activityCount(jane);
+      const again = await completeTaskWithOutcome(mark, taskId, input);
+      assert.equal(again.replayed, true);
+      assert.equal(again.activityId, activityId);
+      assert.equal(await activityCount(jane), before);
+      assert.equal((await offersFor(taskId)).length, 1);
+      assert.equal(Number((await admin().query<{ count: string }>("select count(*) from crm.task_outcomes where task_id = $1", [taskId])).rows[0].count), 1);
+    });
+
+    it("keeps the link when no note or next task was typed", async () => {
+      const { taskId, activityId } = await offered();
+      await completeTaskWithOutcome(mark, taskId, closing(activityId, { note: "" }));
+      const outcome = (await admin().query<{ activity_id: string; note: string | null }>("select activity_id, note from crm.task_outcomes where task_id = $1", [taskId])).rows[0];
+      assert.equal(outcome.activity_id, activityId);
+      assert.equal(outcome.note, null);
+    });
+
+    it("refuses a tagged person and leaves the offer open", async () => {
+      const { taskId, activityId } = await offered();
+      await withActor(mark, (db) => addTaskParticipantsInDb(db, mark, taskId, [priya.userId]));
+      await assert.rejects(completeTaskWithOutcome(priya, taskId, closing(activityId)), (error: unknown) => error instanceof CrmError && error.status === 403);
+      assert.equal((await openOffers(taskId)).length, 1);
+      const open = (await admin().query<{ completed_at: Date | null }>("select completed_at from crm.tasks where id = $1", [taskId])).rows[0];
+      assert.equal(open.completed_at, null);
+    });
+
+    it("refuses an activity that has no offer on the task and completes nothing", async () => {
+      const first = await offered(mark, "Call Jane about the pilot");
+      const second = await offered(mark, "Call Jane about the contract");
+      for (const wrong of [second.activityId, randomUUID()]) {
+        await assert.rejects(completeTaskWithOutcome(mark, first.taskId, closing(wrong)), (error: unknown) => error instanceof CrmError && error.status === 409);
+      }
+      await assert.rejects(completeTaskWithOutcome(mark, first.taskId, closing("not-an-id")), (error: unknown) => error instanceof CrmError && error.status === 400);
+      const open = (await admin().query<{ completed_at: Date | null }>("select completed_at from crm.tasks where id = $1", [first.taskId])).rows[0];
+      assert.equal(open.completed_at, null);
+      assert.equal((await openOffers(first.taskId)).length, 1);
+      assert.equal((await admin().query("select 1 from crm.task_outcomes where task_id = $1", [first.taskId])).rowCount, 0);
+    });
+
+    it("refuses an offer that was dismissed, already closed or whose activity was archived", async () => {
+      const dismissed = await offered();
+      const [dismissedOffer] = await openOffers(dismissed.taskId);
+      await dismissTaskDoneOffer(mark, dismissedOffer.id);
+      await assert.rejects(completeTaskWithOutcome(mark, dismissed.taskId, closing(dismissed.activityId)), (error: unknown) => error instanceof CrmError && error.status === 409);
+
+      const closed = await offered();
+      await completeTaskWithOutcome(mark, closed.taskId, closing(closed.activityId));
+      await reopenTask(mark, closed.taskId);
+      await assert.rejects(completeTaskWithOutcome(mark, closed.taskId, closing(closed.activityId)), (error: unknown) => error instanceof CrmError && error.status === 409);
+
+      const archived = await offered();
+      await archiveActivity(mark, archived.activityId, { operation: "archive", source: "web" });
+      await assert.rejects(completeTaskWithOutcome(mark, archived.taskId, closing(archived.activityId)), (error: unknown) => error instanceof CrmError && error.status === 409);
+    });
+
+    it("reopens on Undo and leaves the offer closed", async () => {
+      const { taskId, activityId } = await offered();
+      await completeTaskWithOutcome(mark, taskId, closing(activityId));
+      assert.deepEqual((await taskDoneNotes(mark, [taskId])).closedAfter[taskId]?.kind, "call");
+      await reopenTask(mark, taskId);
+      const open = (await admin().query<{ completed_at: Date | null }>("select completed_at from crm.tasks where id = $1", [taskId])).rows[0];
+      assert.equal(open.completed_at, null);
+      assert.equal((await offersFor(taskId))[0].state, "closed");
+      const notes = await taskDoneNotes(mark, [taskId]);
+      assert.deepEqual(notes.offers, {});
+      assert.deepEqual(notes.closedAfter, {});
+    });
+
+    it("reads the reason on a closed task, with a link to the activity, for people who can see the task", async () => {
+      const { jane, taskId, activityId } = await offered();
+      await withActor(mark, (db) => addTaskParticipantsInDb(db, mark, taskId, [priya.userId]));
+      await completeTaskWithOutcome(mark, taskId, closing(activityId));
+      const mine = (await taskDoneNotes(mark, [taskId])).closedAfter[taskId];
+      assert.equal(mine.kind, "call");
+      assert.equal(mine.href, `/contacts/${jane}#activity-${activityId}`);
+      assert.ok(mine.at);
+      assert.equal((await taskDoneNotes(priya, [taskId])).closedAfter[taskId]?.kind, "call");
+      assert.deepEqual((await taskDoneNotes(sam, [taskId])).closedAfter, {});
+    });
+
+    it("gives the open offer with a link to the activity", async () => {
+      const { jane, taskId, activityId } = await offered();
+      const notes = await taskDoneNotes(mark, [taskId]);
+      assert.equal(notes.offers[taskId].href, `/contacts/${jane}#activity-${activityId}`);
+    });
+
+    it("shows no reason for a task done the usual way", async () => {
+      const { jane } = await scene();
+      const taskId = await task(mark, "Call Jane", { contactId: jane });
+      await completeTaskWithOutcome(mark, taskId, { outcomeId: randomUUID(), note: "Spoke to her.", kind: "call", next: null });
+      assert.deepEqual((await taskDoneNotes(mark, [taskId])).closedAfter, {});
     });
   });
 });

@@ -10,6 +10,7 @@ import { getInviteSetup, type InviteSetup } from "@/lib/crm/invites";
 import { isUuid } from "@/lib/crm/mutate";
 import { markTaskSpam } from "@/lib/mail/filing";
 import { completeTaskWithOutcome, relinkTaskUndoable, taskContext, undoTaskLinkChange, type LinkChange, type TaskContext, type TaskOutcome } from "@/lib/crm/task-act";
+import { dismissTaskDoneOffer } from "@/lib/crm/task-done";
 import { setTaskPrepareSettings, type TaskPrepareSettings } from "@/lib/crm/task-prepare";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import type { UserActor } from "@/lib/crm/types";
@@ -103,7 +104,7 @@ export async function undoTaskLinkAction(id: string, eventId: string): Promise<{
   }
 }
 
-export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOutcome): Promise<{ ok?: boolean; next?: boolean; logged?: boolean; completed?: boolean; error?: string }> {
+export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOutcome): Promise<{ ok?: boolean; next?: boolean; logged?: boolean; completed?: boolean; error?: string; field?: string }> {
   const user = await taskUser(id);
   if (!user) return { error: SIGN_IN };
   if (typeof user === "string") return { error: user };
@@ -112,7 +113,20 @@ export async function completeTaskWithOutcomeAction(id: string, outcome: TaskOut
     const saved = await completeTaskWithOutcome(user, id, outcome);
     pushLater(user, saved.next?.clickupListId ? [id, saved.next.id] : [id]);
     refresh();
-    return { ok: true, next: Boolean(saved.next), logged: Boolean(saved.activityId), completed: Boolean(saved.task.completedAt) };
+    return { ok: true, next: Boolean(saved.next), logged: Boolean(saved.activityId) && !outcome.activityId, completed: Boolean(saved.task.completedAt) };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function dismissTaskDoneOfferAction(offerId: string): Promise<{ ok?: boolean; error?: string }> {
+  const user = await getUserActor();
+  if (!user) return { error: SIGN_IN };
+  if (typeof offerId !== "string" || !isUuid(offerId)) return { error: "Couldn't save. Try again." };
+  try {
+    await dismissTaskDoneOffer(user, offerId);
+    refresh();
+    return { ok: true };
   } catch (error) {
     return actionError(error);
   }

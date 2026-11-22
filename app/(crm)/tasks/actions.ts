@@ -5,6 +5,7 @@ import { actionError } from "@/lib/companies";
 import { discussionCounts } from "@/lib/crm/chat";
 import { listMembers } from "@/lib/crm/companies";
 import { getDueActions, MAX_PAGES } from "@/lib/crm/relationships";
+import { taskDoneNotes, type TaskClosedAfter, type TaskDoneOffer } from "@/lib/crm/task-done";
 import { listTaskParticipants } from "@/lib/crm/tasks";
 import type { Company, Task, TaskView } from "@/lib/crm/types";
 import { TASK_VIEWS } from "@/lib/crm/types";
@@ -16,6 +17,8 @@ export type TaskWindow = {
   total: number;
   tagged: Record<string, string[]>;
   discussions: Record<string, number>;
+  looksDone: Record<string, TaskDoneOffer>;
+  closedAfter: Record<string, TaskClosedAfter>;
 };
 
 export async function taskWindowAction(input: { view: TaskView; who: "mine" | "tagged"; pages: number }): Promise<TaskWindow | { error: string }> {
@@ -31,8 +34,12 @@ export async function taskWindowAction(input: { view: TaskView; who: "mine" | "t
     const view = who === "tagged" && input.view === "none" ? "all" : input.view;
     const due = await getDueActions(user, view, { mine: who === "mine", tagged: who === "tagged", pages: input.pages });
     const ids = due.tasks.map((task) => task.id);
-    const [tagged, discussions] = await Promise.all([team ? listTaskParticipants(user, ids) : Promise.resolve({}), discussionCounts(user, "task", ids)]);
-    return { pages: input.pages, tasks: due.tasks, companies: due.companies, total: due.total, tagged, discussions };
+    const [tagged, discussions, doneNotes] = await Promise.all([
+      team ? listTaskParticipants(user, ids) : Promise.resolve({}),
+      discussionCounts(user, "task", ids),
+      taskDoneNotes(user, ids),
+    ]);
+    return { pages: input.pages, tasks: due.tasks, companies: due.companies, total: due.total, tagged, discussions, looksDone: doneNotes.offers, closedAfter: doneNotes.closedAfter };
   } catch (error) {
     return { error: actionError(error).error ?? "Couldn't load more. Try again." };
   }
