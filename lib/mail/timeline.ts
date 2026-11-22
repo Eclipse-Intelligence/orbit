@@ -215,7 +215,8 @@ type OwnDomainThread = { id: string; source_id: string; thread_key: string; addr
 
 async function ownDomainThreads(db: Db, actor: UserActor, workspaceIds: string[], filter: { sql: string; params: unknown[] }) {
   const result = await db.query<OwnDomainThread>(
-    `select distinct on (m.source_id, m.thread_key) m.id, m.source_id, m.thread_key, lower(m.from_email) as address, m.from_name, m.subject, m.snippet, m.body_text,
+    `select * from (
+     select distinct on (m.source_id, m.thread_key) m.id, m.source_id, m.thread_key, lower(m.from_email) as address, m.from_name, m.subject, m.snippet, m.body_text,
        coalesce(m.sent_at, m.received_at, m.created_at) as at
      from crm.mail_messages m
      join crm.mail_folders f on f.id = m.folder_id
@@ -231,8 +232,22 @@ async function ownDomainThreads(db: Db, actor: UserActor, workspaceIds: string[]
        )
        and not exists (select 1 from crm.mail_sources s where s.user_id = $1 and lower(s.email) = lower(m.from_email))
        and not exists (select 1 from crm.send_identities i where i.user_id = $1 and lower(i.email) = lower(m.from_email))
-       and not exists (select 1 from crm.tasks t where t.mail_thread_key = m.source_id::text || '|' || m.thread_key and t.archived_at is null)
+       and coalesce(m.sent_at, m.received_at, m.created_at) > now() - interval '48 hours'
+       and not exists (select 1 from crm.tasks t where t.mail_thread_key = m.source_id::text || '|' || m.thread_key)
+       and not exists (
+         select 1 from crm.mail_thread_relevance r
+         where r.user_id = $1 and r.source_id = m.source_id and r.thread_key = m.thread_key and r.message_id = m.id
+           and r.category is not null and r.category <> 'business'
+       )
+       and not exists (
+         select 1 from crm.workspace_members w
+         join crm.profiles p on p.id = w.user_id
+         where w.workspace_id = any($3::uuid[])
+           and (lower(p.email) = lower(m.from_email) or lower(m.from_email) = any (select lower(o) from unnest(coalesce(p.other_emails, '{}')) as o))
+       )
      order by m.source_id, m.thread_key, coalesce(m.sent_at, m.received_at, m.created_at) desc
+     ) newest
+     order by newest.at desc
      limit 20`,
     routedParams(actor, workspaceIds, filter.params),
   );
@@ -264,8 +279,8 @@ async function suggestForOwnDomains(
       const key = `${row.source_id}|${row.thread_key}`;
       const taskId = await withActor(target, async (db) => {
         await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`own-domain-task:${key}`]);
-        const open = await db.query("select 1 from crm.tasks where mail_thread_key = $1 and archived_at is null limit 1", [key]);
-        if (open.rowCount) return null;
+        const existing = await db.query("select 1 from crm.tasks where mail_thread_key = $1 limit 1", [key]);
+        if (existing.rowCount) return null;
         const task = await createTaskInDb(
           db,
           target,

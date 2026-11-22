@@ -5,7 +5,7 @@ import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { fileInboundMessages } from "@/lib/crm/inbox";
 import { scopesForRole } from "@/lib/crm/scopes";
-import { createTask, listTasks, updateTask } from "@/lib/crm/tasks";
+import { archiveTask, createTask, listTasks, updateTask } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -89,14 +89,14 @@ describe("tasks suggested from mail are gated on relevance", () => {
     return { sourceId: source, inbox };
   }
 
-  async function deliver(user: UserActor, where: Box, from: string, subject: string, to = "mark@guard-orbit.test") {
+  async function deliver(user: UserActor, where: Box, from: string, subject: string, to = "mark@guard-orbit.test", minutesAgo = 60) {
     counter += 1;
     const id = `guard-${counter}`;
     await getAdminPool().query(
       `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet, body_text,
          from_email, from_name, to_recipients, cc_recipients, sent_at, received_at)
        values ($1, $2, $3, $4, $5, $6, $5, $7, $8, $8, $9, 'Sender', $10::jsonb, '[]'::jsonb, $11, $11)`,
-      [user.workspaceId, user.userId, where.sourceId, where.inbox, id, `<${id}@guard.test>`, subject, `${subject} body`, from, JSON.stringify([{ name: "", address: to }]), new Date(Date.now() - 3_600_000).toISOString()],
+      [user.workspaceId, user.userId, where.sourceId, where.inbox, id, `<${id}@guard.test>`, subject, `${subject} body`, from, JSON.stringify([{ name: "", address: to }]), new Date(Date.now() - minutesAgo * 60_000).toISOString()],
     );
     return `${where.sourceId}|${id}`;
   }
@@ -304,5 +304,56 @@ describe("tasks suggested from mail are gated on relevance", () => {
     } finally {
       delete process.env.LLM_API_KEY;
     }
+  });
+  it("suggests at most one task per own-domain thread, even after it is deleted or marked as spam", async () => {
+    const gone = await deliver(owner, box, "forms@ridgeon-own.test", "Enquiry one");
+    const junk = await deliver(owner, box, "forms@ridgeon-own.test", "Enquiry two");
+    await fileMailOnTimeline(owner, {});
+    const open = async (key: string) => (await getAdminPool().query<{ id: string }>("select id from crm.tasks where mail_thread_key = $1", [key])).rows.map((row) => row.id);
+    const [first] = await open(gone);
+    const [second] = await open(junk);
+    assert.ok(first && second);
+    await archiveTask(owner, first);
+    const spammed = await markTaskSpam(owner, second);
+    assert.equal(spammed.target, null);
+    await fileMailOnTimeline(owner, {});
+    await fileMailOnTimeline(owner, {});
+    assert.equal((await open(gone)).length, 1);
+    assert.equal((await open(junk)).length, 1);
+    const live = await getAdminPool().query("select 1 from crm.tasks where mail_thread_key = any($1::text[]) and archived_at is null", [[gone, junk]]);
+    assert.equal(live.rowCount, 0);
+  });
+
+  it("gets to a business own-domain thread behind more than 20 spam threads", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const real = await deliver(owner, box, "enquiries@ridgeon-own.test", "Real project", "mark@guard-orbit.test", 120);
+      for (let index = 0; index < 22; index += 1) await deliver(owner, box, `spam${index}@ridgeon-own.test`, `Prize ${index}`, "mark@guard-orbit.test", 30);
+      const model = classifierGateway((address) => (address.startsWith("enquiries@") ? "business" : "spam"));
+      const tasks = async () => (await getAdminPool().query("select 1 from crm.tasks where mail_thread_key = $1", [real])).rowCount;
+      for (let round = 0; round < 4 && !(await tasks()); round += 1) await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal(await tasks(), 1);
+      const before = model.asked.length;
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal(model.asked.length, before, "judged threads are not read again");
+      const spamTasks = await getAdminPool().query("select 1 from crm.tasks where title like '%Prize%'");
+      assert.equal(spamTasks.rowCount, 0);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
+  it("gives no task for mail from a colleague on one of your domains", async () => {
+    await saveBrandProfile(second, { ...PROFILE, ownDomains: "ridgeon-own.test, guard.test" }, WEB);
+    await getAdminPool().query("update crm.profiles set other_emails = array['sam.alt@ridgeon-own.test'] where id = $1", [sam.userId]);
+    const direct = await deliver(owner, box, "sam@guard.test", "Quick question");
+    const alias = await deliver(owner, box, "sam.alt@ridgeon-own.test", "From my other address");
+    const outsider = await deliver(owner, box, "forms@ridgeon-own.test", "Colleague check");
+    await fileMailOnTimeline(owner, {});
+    const count = async (key: string) => (await getAdminPool().query("select 1 from crm.tasks where mail_thread_key = $1", [key])).rowCount;
+    assert.equal(await count(direct), 0);
+    assert.equal(await count(alias), 0);
+    assert.equal(await count(outsider), 1);
+    await saveBrandProfile(second, { ...PROFILE, ownDomains: "ridgeon-own.test" }, WEB);
   });
 });
