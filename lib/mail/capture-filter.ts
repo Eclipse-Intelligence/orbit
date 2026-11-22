@@ -60,7 +60,7 @@ type ClassifyOptions = {
 
 type Work = { item: UnknownEmail; hint: ListedCategory | null };
 
-const inFlight = new Set<string>();
+const inFlight = new Map<string, Promise<void>>();
 const unstorable = new Map<string, number>();
 
 function sortOut(judged: Judged<UnknownEmail>[], now = Date.now()): RelevantMail {
@@ -131,14 +131,16 @@ function recentlyUnstorable(item: UnknownEmail) {
   return false;
 }
 
-export function isBeingSorted(key: string) {
-  return inFlight.has(key);
+export function sortingNow(key: string): Promise<void> | null {
+  return inFlight.get(key) ?? null;
 }
 
 export async function classifyItems(actor: UserActor, actors: UserActor[], work: Work[], options: ClassifyOptions) {
   const mine = work.filter(({ item }) => !inFlight.has(item.key) && !recentlyUnstorable(item));
   if (mine.length === 0) return 0;
-  for (const { item } of mine) inFlight.add(item.key);
+  let finish: () => void = () => undefined;
+  const finished = new Promise<void>((resolve) => (finish = resolve));
+  for (const { item } of mine) inFlight.set(item.key, finished);
   const contexts = new Map<string, Promise<WorkspaceContext>>();
   const reader = options.readHeaders ?? (options.headers ? graphHeaders(actor, mine.map(({ item }) => item), options.fetchImpl) : null);
   const byWorkspace = new Map<string, Work[]>();
@@ -214,6 +216,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
     }
   } finally {
     for (const { item } of mine) inFlight.delete(item.key);
+    finish();
   }
   return decided;
 }

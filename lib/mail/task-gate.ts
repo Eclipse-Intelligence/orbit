@@ -71,9 +71,16 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
     const first = await judge();
     const decided = worthIt(first);
     if (decided !== null) return decided;
-    const { classifyItems, isBeingSorted } = await import("@/lib/mail/capture-filter");
-    if (isBeingSorted(item.key)) return false;
+    const { classifyItems, sortingNow } = await import("@/lib/mail/capture-filter");
     const deadline = Math.min(options.deadline ?? Number.POSITIVE_INFINITY, Date.now() + Math.min(options.timeoutMs ?? CLASSIFY_MS, CLASSIFY_MS));
+    const running = sortingNow(item.key);
+    if (running) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<void>((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now()))));
+      await Promise.race([running, expired]);
+      clearTimeout(timer);
+      return worthIt(await judge()) ?? true;
+    }
     await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl, headers: true });
     return worthIt(await judge()) ?? true;
   } catch (error) {

@@ -388,31 +388,44 @@ describe("tasks suggested from mail are gated on relevance", () => {
     assert.equal(rules.rowCount, 0);
   });
 
-  it("gives no task to an unsubscribed sender, and none while another run is judging the thread", async () => {
+  it("gives no task to an unsubscribed sender", async () => {
     process.env.LLM_API_KEY = "test-key";
     try {
       const quiet = await prospect(owner, "Unsub Co");
       await getAdminPool().query("insert into crm.mail_subscriptions (workspace_id, user_id, sender, status) values ($1, $2, $3, 'unsubscribed')", [owner.workspaceId, owner.userId, quiet.email]);
       await deliver(owner, box, quiet.email, "Hello again");
-      const model = classifierGateway(() => "business");
-      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      await fileMailOnTimeline(owner, { fetchImpl: classifierGateway(() => "business").fetchImpl });
       assert.deepEqual(await taskTitles(owner, quiet.company), []);
-
-      const busy = await prospect(owner, "Busy Co");
-      const key = await deliver(owner, box, busy.email, "Terms");
-      const { classifyItems } = await import("@/lib/mail/capture-filter");
-      let release: () => void = () => undefined;
-      const slow: typeof fetch = () => new Promise((resolve) => (release = () => resolve(new Response("down", { status: 400 }))));
-      const row = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where source_id = $1 and thread_key = $2", [key.split("|")[0], key.split("|")[1]])).rows[0];
-      const item = { key, messageId: row.id, email: busy.email, name: null, subject: "Terms", snippet: "Terms", address: "mark@guard-orbit.test", workspaceId: owner.workspaceId, at: new Date().toISOString(), neverAsk: "" };
-      const running = classifyItems(owner, [owner], [{ item, hint: null }], { deadline: Date.now() + 30_000, fetchImpl: slow });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
-      assert.deepEqual(await taskTitles(owner, busy.company), []);
-      release();
-      await running;
     } finally {
       delete process.env.LLM_API_KEY;
     }
   });
+
+  for (const verdict of ["spam", "business"] as const) {
+    it(`waits for a sort already running on the thread, which stores ${verdict}`, async () => {
+      process.env.LLM_API_KEY = "test-key";
+      try {
+        const busy = await prospect(owner, `Busy ${verdict} Co`);
+        const key = await deliver(owner, box, busy.email, "Terms");
+        const { classifyItems } = await import("@/lib/mail/capture-filter");
+        let release: () => void = () => undefined;
+        const slow: typeof fetch = () =>
+          new Promise((resolve) => {
+            release = () => resolve(Response.json({ model: "test", choices: [{ message: { content: JSON.stringify({ category: verdict, confidence: 0.9, reason: "Test." }) }, finish_reason: "stop" }] }));
+          });
+        const row = (await getAdminPool().query<{ id: string }>("select id from crm.mail_messages where source_id = $1 and thread_key = $2", [key.split("|")[0], key.split("|")[1]])).rows[0];
+        const item = { key, messageId: row.id, email: busy.email, name: null, subject: "Terms", snippet: "Terms", address: "mark@guard-orbit.test", workspaceId: owner.workspaceId, at: new Date().toISOString(), neverAsk: "" };
+        const sorting = classifyItems(owner, [owner], [{ item, hint: null }], { deadline: Date.now() + 30_000, fetchImpl: slow });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const filing = fileMailOnTimeline(owner, { fetchImpl: classifierGateway(() => "business").fetchImpl });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        release();
+        await sorting;
+        await filing;
+        assert.equal((await taskTitles(owner, busy.company)).length, verdict === "spam" ? 0 : 1);
+      } finally {
+        delete process.env.LLM_API_KEY;
+      }
+    });
+  }
 });
