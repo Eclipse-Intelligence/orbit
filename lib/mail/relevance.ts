@@ -162,6 +162,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
       thread.sender === email &&
       (thread.message_id ? thread.message_id === item.messageId : new Date(thread.decided_at).getTime() >= new Date(item.at).getTime()) &&
       !(thread.engine === "history") &&
+      !(options.ignoreHistory && thread.engine === "cached") &&
       !(thread.engine === "listed" && !(listUsable && listed.hide))
         ? thread
         : undefined;

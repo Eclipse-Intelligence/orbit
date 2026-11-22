@@ -417,6 +417,30 @@ describe("tasks suggested from mail are gated on relevance", () => {
     }
   });
 
+  it("asks the classifier for a colleague after Capture has copied a cached verdict onto the thread", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.copy@personal-guard.test') where id = $1", [sam.userId]);
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      let answer = "business";
+      const model = classifierGateway(() => answer);
+      const first = await deliver(owner, box, "sam.copy@personal-guard.test", "Contract draft", "mark@guard-orbit.test", 90);
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [first])).rowCount, 1);
+      answer = "personal";
+      const second = await deliver(owner, box, "sam.copy@personal-guard.test", "Lunch Thursday?");
+      await classifyCapture(owner, { fetchImpl: model.fetchImpl });
+      const copied = await admin.query("select engine from crm.mail_thread_relevance where user_id = $1 and thread_key = $2", [owner.userId, second.split("|")[1]]);
+      assert.equal(copied.rows[0]?.engine, "cached");
+      const before = model.asked.length;
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.ok(model.asked.length > before);
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [second])).rowCount, 0);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
   it("gives a colleague no task while a Capture sort of the thread is unfinished, then one once it is decided", async () => {
     const admin = getAdminPool();
     await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.held@personal-guard.test') where id = $1", [sam.userId]);
