@@ -410,5 +410,24 @@ describe("looks done in the brief, assistant, API and MCP", () => {
       assert.equal(result.error, true);
       assert.match(result.text, /conflict/);
     });
+
+    it("says the offer is gone, not to save again, when it was dismissed after the cards were made, and still replays an earlier close", async () => {
+      const first = await mine(mark, "Send Jane the notes");
+      const second = await mine(mark, "Send Jane the agenda");
+      await offer(first, activities.meeting, "Sent.");
+      await offer(second, activities.meeting, "Sent.");
+      const keyed = (id: string, key: string) => ({ id, activity_id: activities.meeting, idempotency_key: key });
+      const done = await mcp(mark, "complete_next_action", keyed(first, "gone-1"));
+      assert.equal(done.error, false, done.text);
+      await admin().query("update crm.task_done_offers set state = 'dismissed' where task_id = $1", [second]);
+      const refused = await mcp(mark, "complete_next_action", keyed(second, "gone-2"));
+      assert.equal(refused.error, true);
+      assert.match(refused.text, /conflict: That task has no open Looks done offer for that activity\./);
+      assert.doesNotMatch(refused.text, /Save again/);
+      assert.equal(await completedAt(second), null);
+      const replay = await mcp(mark, "complete_next_action", keyed(first, "gone-1"));
+      assert.equal(replay.error, false, replay.text);
+      assert.ok((JSON.parse(replay.text) as { task: { completedAt: string } }).task.completedAt);
+    });
   });
 });

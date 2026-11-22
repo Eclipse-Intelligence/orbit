@@ -356,6 +356,12 @@ export async function closeTaskFromOffer(actor: Actor, taskId: string, input: { 
   const offer = (await taskDoneOffers(actor, [taskId])).find((item) => item.activityId === activityId);
   const key = input.idempotencyKey?.trim();
   const outcomeId = key ? outcomeIdFor(actor, taskId, activityId, key) : crypto.randomUUID();
-  if (!offer && !key) throw new CrmError("conflict", "That task has no open Looks done offer for that activity.", 409, { field: "activityId" });
-  return completeTaskWithOutcome(actor, taskId, { outcomeId, note: offer?.note ?? "", kind: null, next: null, activityId });
+  const gone = () => new CrmError("conflict", "That task has no open Looks done offer for that activity.", 409, { field: "activityId" });
+  if (!offer && !key) throw gone();
+  try {
+    return await completeTaskWithOutcome(actor, taskId, { outcomeId, note: offer?.note ?? "", kind: null, next: null, activityId });
+  } catch (error) {
+    if (!offer && error instanceof CrmError && error.details?.field === "offer") throw gone();
+    throw error;
+  }
 }
