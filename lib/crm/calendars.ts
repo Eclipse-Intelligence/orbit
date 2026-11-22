@@ -341,7 +341,7 @@ export async function listCalendarItems(
         if (!contacts.has(row.normalized_email)) contacts.set(row.normalized_email, row.id);
       }
     }
-    const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor));
+    const internal = await internalAddresses(db, actor.workspaceId, await ownAddresses(db, actor), actor.userId);
     const stored = await readStored(db, actor);
     const writable = stored?.status === "connected" && stored.refreshTokenCipher ? stored.id : null;
     const accounts = await db.query<{ id: string }>(

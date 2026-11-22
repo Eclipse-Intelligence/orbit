@@ -4,12 +4,14 @@ import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
 import { hasScope } from "@/lib/crm/scopes";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
+import { MAIL_SUGGESTION_NOTE } from "@/lib/crm/suggested-task";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { followUpTitle } from "@/lib/mail/follow-up-title";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
 import { stripQuoted } from "@/lib/mail/format";
+import { mailWorthATask } from "@/lib/mail/task-gate";
 import { contactElsewhere, ensureContactInDb, NOT_AUTOMATED, routedParams, routedSql } from "@/lib/mail/routing";
 
 const WINDOW_DAYS = 60;
@@ -183,7 +185,7 @@ async function suggestFollowUp(actor: UserActor, row: Candidate, title: string) 
       actor,
       {
         title: title.slice(0, 200),
-        description: withDueNote("Suggested after an email arrived.", due),
+        description: withDueNote(MAIL_SUGGESTION_NOTE, due),
         mailThreadKey: mail?.thread_key ? `${mail.source_id}|${mail.thread_key}` : null,
         dueDate: due?.dueDate ?? null,
         companyId,
@@ -281,6 +283,7 @@ export async function fileMailOnTimeline(
       if (!outcome.created) continue;
       filed += 1;
       if (outcome.who === null) continue;
+      if (!(await mailWorthATask(target, row.message_id, { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs }))) continue;
       const title = await followUpTitle(
         { who: outcome.who, subject: row.subject, text: bodyOf(row) },
         { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs },

@@ -8,6 +8,7 @@ import AssigneePicker, { MemberAvatar, type AssignableMember } from "@/component
 import { ClickUpBadge } from "@/components/crm/clickup";
 import Button from "@/components/_ui/button";
 import { TaskAct } from "@/components/crm/task-actions";
+import TaskSpamMenu from "@/components/crm/task-spam";
 import TaskAskButton from "@/components/crm/task-ask";
 import { TaskPrepare } from "@/components/crm/task-prepare";
 import TaskFields, { canChangeTaskAs, TaskTitleField, useTaskDetails } from "@/components/crm/task-fields";
@@ -151,6 +152,7 @@ function ActionTask({
   onOpen,
   onRemind,
   onReopen,
+  onSpam,
   canComplete = false,
   comments = 0,
   onAssign,
@@ -176,6 +178,7 @@ function ActionTask({
   onOpen: (task: Task) => void;
   onRemind?: (task: Task) => void;
   onReopen?: (task: Task) => void;
+  onSpam?: (task: Task) => void;
   canComplete?: boolean;
   comments?: number;
   onAssign?: (task: Task, ownerId: string) => void;
@@ -459,6 +462,7 @@ function ActionTask({
                       <TaskAskButton taskId={task.id} variant="ghost" className="max-sm:hidden" />
                       {prepare}
                       <span className="flex-1 max-sm:hidden" />
+                      {canChange && <TaskSpamMenu task={task} onSpam={onSpam} />}
                       <Button variant="secondary" size="md" onClick={open} aria-haspopup="dialog" shortcut={keyboard ? ["⇧", "↵"] : undefined} className="hit max-sm:flex-1">
                         Open
                       </Button>

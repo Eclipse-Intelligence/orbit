@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Renderer } from "@/lib/browserbase";
 import { withActor } from "@/lib/crm/context";
+import { isFreeMailDomain } from "@/lib/crm/communications";
 import { CrmError, ShownError, isPgError, errorText, tooLong, tooMany } from "@/lib/crm/errors";
 import { recordAudit } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
@@ -10,7 +11,7 @@ import { completeJson, LlmError, windowShare } from "@/lib/llm";
 import { normaliseWebsite } from "@/lib/personal-context-rules";
 import { readWebPage, type Lookup, type WebPage } from "@/lib/web-page";
 import { writingStyle } from "@/lib/writing-style";
-import { BRAND_LIMITS, FORMER_NAME_LIMITS, formerNamesFrom, type BrandDraft, type BrandPlaybookInput, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
+import { BRAND_LIMITS, FORMER_NAME_LIMITS, OWN_DOMAIN_LIMITS, formerNamesFrom, ownDomainParts, type BrandDraft, type BrandPlaybookInput, type BrandProfile, type BrandProfileInput } from "@/lib/crm/brand-rules";
 
 export type { BrandDraft, BrandPlaybookInput, BrandProfile, BrandProfileInput } from "@/lib/crm/brand-rules";
 
@@ -22,11 +23,12 @@ type BrandRow = {
   outreach_brief: string | null;
   playbook_updated_at: Date | null;
   former_names: string[] | null;
+  own_domains: string[] | null;
   updated_at: Date | null;
   icp_text: string | null;
 };
 
-const SELECT = `select b.website, b.what_you_sell, b.tone, b.playbook, b.outreach_brief, b.playbook_updated_at, b.former_names, b.updated_at, e.icp_text
+const SELECT = `select b.website, b.what_you_sell, b.tone, b.playbook, b.outreach_brief, b.playbook_updated_at, b.former_names, b.own_domains, b.updated_at, e.icp_text
   from (select $1::uuid as workspace_id) w
   left join crm.workspace_brands b on b.workspace_id = w.workspace_id
   left join crm.enrichment_settings e on e.workspace_id = w.workspace_id`;
@@ -44,6 +46,7 @@ function mapBrand(workspaceId: string, workspaceName: string, row: BrandRow | un
     playbook: row?.playbook ?? "",
     outreachBrief: row?.outreach_brief ?? "",
     formerNames: row?.former_names ?? [],
+    ownDomains: row?.own_domains ?? [],
     playbookUpdatedAt: row?.playbook_updated_at ? row.playbook_updated_at.toISOString() : null,
     updatedAt: row?.updated_at ? row.updated_at.toISOString() : null,
   };
@@ -107,7 +110,27 @@ function formerNames(value: unknown) {
   return names;
 }
 
-function cleanProfile(raw: unknown): BrandProfileInput & { formerNames?: string[] } {
+const DOMAIN_SHAPE = /^(?=.{3,100}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+
+function ownDomains(value: unknown) {
+  if (value === undefined) return undefined;
+  const domains = value === null ? [] : ownDomainParts(value);
+  if (!domains) throw new CrmError("invalid_input", "Your domains must be text, separated by commas.", 400, { field: "ownDomains" });
+  if (domains.length > OWN_DOMAIN_LIMITS.count) {
+    throw new CrmError("invalid_input", tooMany(OWN_DOMAIN_LIMITS.count, "domains"), 400, { field: "ownDomains" });
+  }
+  for (const domain of domains) {
+    if (!DOMAIN_SHAPE.test(domain)) {
+      throw new CrmError("invalid_input", `${domain.slice(0, OWN_DOMAIN_LIMITS.length)} isn't a domain. Use a name such as example.com.`, 400, { field: "ownDomains" });
+    }
+    if (isFreeMailDomain(domain)) {
+      throw new CrmError("invalid_input", `${domain} is shared by many people, so it can't be one of your domains.`, 400, { field: "ownDomains" });
+    }
+  }
+  return domains;
+}
+
+function cleanProfile(raw: unknown): BrandProfileInput & { formerNames?: string[]; ownDomains?: string[] } {
   if (!raw || typeof raw !== "object") throw new CrmError("invalid_input", "Send the brand profile.", 400);
   const input = raw as Record<string, unknown>;
   return {
@@ -116,6 +139,7 @@ function cleanProfile(raw: unknown): BrandProfileInput & { formerNames?: string[
     whoItsFor: text(input, "whoItsFor", "Ideal customer"),
     tone: text(input, "tone", "Tone"),
     formerNames: formerNames(input.formerNames),
+    ownDomains: ownDomains(input.ownDomains),
   };
 }
 
@@ -127,8 +151,8 @@ async function writeIdealCustomer(db: Db, workspaceId: string, value: string) {
   );
 }
 
-function profileFields(brand: BrandProfileInput & { formerNames: string[] }) {
-  return { website: brand.website, whatYouSell: brand.whatYouSell, whoItsFor: brand.whoItsFor, tone: brand.tone, formerNames: brand.formerNames };
+function profileFields(brand: BrandProfileInput & { formerNames: string[]; ownDomains: string[] }) {
+  return { website: brand.website, whatYouSell: brand.whatYouSell, whoItsFor: brand.whoItsFor, tone: brand.tone, formerNames: brand.formerNames, ownDomains: brand.ownDomains };
 }
 
 export async function saveBrandProfile(actor: UserActor, raw: unknown, provenance: Provenance): Promise<BrandProfile> {
@@ -136,12 +160,12 @@ export async function saveBrandProfile(actor: UserActor, raw: unknown, provenanc
   const cleaned = cleanProfile(raw);
   return withActor(actor, async (db) => {
     const before = mapBrand(actor.workspaceId, actor.workspaceName, await readBrand(db, actor.workspaceId));
-    const next = { ...cleaned, formerNames: cleaned.formerNames ?? before.formerNames };
+    const next = { ...cleaned, formerNames: cleaned.formerNames ?? before.formerNames, ownDomains: cleaned.ownDomains ?? before.ownDomains };
     await db
       .query(
-        `insert into crm.workspace_brands (workspace_id, website, what_you_sell, tone, former_names, updated_by) values ($1, $2, $3, $4, $5, $6)
-         on conflict (workspace_id) do update set website = excluded.website, what_you_sell = excluded.what_you_sell, tone = excluded.tone, former_names = excluded.former_names, updated_by = excluded.updated_by`,
-        [actor.workspaceId, next.website, next.whatYouSell, next.tone, next.formerNames, actor.userId],
+        `insert into crm.workspace_brands (workspace_id, website, what_you_sell, tone, former_names, own_domains, updated_by) values ($1, $2, $3, $4, $5, $6, $7)
+         on conflict (workspace_id) do update set website = excluded.website, what_you_sell = excluded.what_you_sell, tone = excluded.tone, former_names = excluded.former_names, own_domains = excluded.own_domains, updated_by = excluded.updated_by`,
+        [actor.workspaceId, next.website, next.whatYouSell, next.tone, next.formerNames, next.ownDomains, actor.userId],
       )
       .catch(rlsRefused);
     if (next.whoItsFor !== before.whoItsFor.trim()) await writeIdealCustomer(db, actor.workspaceId, next.whoItsFor);

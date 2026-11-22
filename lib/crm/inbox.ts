@@ -16,6 +16,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { checkSuppressed, sentToSuppressed, type SuppressionPolicy } from "@/lib/crm/suppressions";
 import { followUpTitle } from "@/lib/mail/follow-up-title";
 import { FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
+import { MAIL_SUGGESTION_NOTE } from "@/lib/crm/suggested-task";
 import { createTaskInDb } from "@/lib/crm/tasks";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import type { Provenance, UserActor } from "@/lib/crm/types";
@@ -23,6 +24,8 @@ import { composeEmailHtml, trackingPixelUrl } from "@/lib/mail/html";
 import { appNeedsAttention, reconnectProblem } from "@/lib/mail/microsoft";
 import { mailOrigin } from "@/lib/mail/origin";
 import { routedAway } from "@/lib/mail/routing";
+import { mailWorthATask, mirroredMessageId } from "@/lib/mail/task-gate";
+import { ownDomainsInDb } from "@/lib/crm/own-domains";
 import { readStatusesOn } from "@/lib/mail/tracking";
 import {
   fetchInboxMessages,
@@ -796,7 +799,7 @@ export async function fileInboundMessages(
   return counts;
 }
 
-type FollowUpCandidate = { companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null; text: string | null };
+type FollowUpCandidate = { providerMessageId: string; companyId: string; contactId: string | null; who: string; connectionId: string; threadKey: string | null; subject: string | null; text: string | null };
 
 type TitleOptions = { deadline?: number; titleTimeoutMs?: number; fetchImpl?: typeof fetch };
 
@@ -808,6 +811,8 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
     checked.add(candidate.companyId);
     try {
       if (await companyHasOpenTask(actor.workspaceId, candidate.companyId)) continue;
+      const mirrored = await mirroredMessageId(actor, candidate.connectionId, candidate.providerMessageId);
+      if (mirrored && !(await mailWorthATask(actor, mirrored, { fetchImpl: options.fetchImpl, deadline: options.deadline, timeoutMs: options.titleTimeoutMs }))) continue;
       const due = await scheduleTaskDue(actor, { days: 2 });
       const title = await followUpTitle({ who: candidate.who, subject: candidate.subject, text: candidate.text }, { deadline: options.deadline, timeoutMs: options.titleTimeoutMs, fetchImpl: options.fetchImpl });
       const task = await createFollowUpUnlessOpen(actor, candidate.companyId, async (db) => {
@@ -819,7 +824,7 @@ async function suggestFollowUps(actor: UserActor, candidates: FollowUpCandidate[
           actor,
           {
             title: title.slice(0, 200),
-            description: withDueNote("Suggested after an email arrived.", due),
+            description: withDueNote(MAIL_SUGGESTION_NOTE, due),
             mailThreadKey: source && candidate.threadKey ? `${source.id}|${candidate.threadKey.slice(0, 400)}` : null,
             dueDate: due?.dueDate ?? null,
             companyId: candidate.companyId,
@@ -943,12 +948,13 @@ async function attachUnmatched(
       [...FREE_MAIL_DOMAINS],
     ],
   );
+  const own = await ownDomainsInDb(db, actor.workspaceId, actor.userId);
   let attached = 0;
   for (const row of pending.rows) {
     const parties = counterpartEmails({
       mailboxEmail: mailbox.email,
       fromEmail: row.from_email,
-    });
+    }).filter((email) => !own.has(email.split("@")[1] ?? ""));
     const match = await matchParties(db, actor.workspaceId, parties);
     if (!match.contactId && !match.companyId) continue;
     if (await routedAway(db, actor.userId, actor.workspaceId, row.conversation_id, row.from_email, mailbox.id)) continue;
@@ -989,6 +995,7 @@ async function fileMessages(
     skipped: 0,
     followUps: 0,
   };
+  const own = await ownDomainsInDb(db, actor.workspaceId, actor.userId);
   for (const message of messages) {
     const providerMessageId = message.providerMessageId.trim().slice(0, 400);
     if (!providerMessageId || message.isDraft) {
@@ -1009,7 +1016,7 @@ async function fileMessages(
       fromEmail: message.fromEmail,
       toEmails: message.toEmails,
       ccEmails: message.ccEmails,
-    });
+    }).filter((email) => !own.has(email.split("@")[1] ?? ""));
     const found = await matchParties(db, actor.workspaceId, parties);
     const away = (found.contactId || found.companyId) && (await routedAway(db, actor.userId, actor.workspaceId, message.conversationId, message.fromEmail, mailbox.id));
     const match = away ? { contactId: null, contactName: null, companyId: null, companyName: null } : found;
@@ -1034,6 +1041,7 @@ async function fileMessages(
       );
       if (match.companyId && isRecent(message.receivedAt) && hasScope(actor.scopes, "tasks:write")) {
         followUps.push({
+          providerMessageId,
           companyId: match.companyId,
           contactId: match.contactId,
           who: match.contactName || match.companyName || "them",

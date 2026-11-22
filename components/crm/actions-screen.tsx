@@ -19,6 +19,7 @@ import { ConnectionMark, Monogram } from "@/components/beautifui/record-marks";
 import { RecordList, RecordRow } from "@/components/crm/record-form";
 import type { Viewer } from "@/components/crm/viewer";
 import { assignTaskAction } from "@/app/(crm)/records";
+import { markTaskSpamAction } from "@/app/(crm)/task-act";
 import { useTaskDone } from "@/components/crm/use-task-done";
 import { claimUndoKey, undoLinkChange } from "@/lib/task-link-undo";
 import { taskWindowAction, type TaskWindow } from "@/app/(crm)/tasks/actions";
@@ -221,6 +222,7 @@ export default function ActionsScreen({
   const { singleKeys } = useShortcuts();
   const desktop = useDesktop();
   const [assigningIds, setAssigningIds] = useState<Set<string>>(() => new Set());
+  const [spammed, setSpammed] = useState<Set<string>>(() => new Set());
   const search = useSearchParams();
   const panelId = search.get(TASK_PARAM);
   const listed = panelId ? (allTasks.find((task) => task.id === panelId) ?? (openTask?.id === panelId ? openTask : null)) : null;
@@ -368,6 +370,25 @@ export default function ActionsScreen({
     openPanel(next);
   }
 
+  async function spam(task: Task) {
+    if (spammed.has(task.id)) return;
+    setMessage(null);
+    setSpammed((current) => new Set(current).add(task.id));
+    setExpandedId((current) => (current === task.id ? null : current));
+    if (panelId === task.id) closePanel();
+    const result = await markTaskSpamAction(task.id).catch(() => ({ error: "Couldn't mark it as spam. Try again." }));
+    if (result.error) {
+      setSpammed((current) => {
+        const next = new Set(current);
+        next.delete(task.id);
+        return next;
+      });
+      setMessage(result.error);
+      return;
+    }
+    router.refresh();
+  }
+
   async function assign(id: string, ownerId: string) {
     if (assigningIds.has(id)) return;
     setMessage(null);
@@ -387,7 +408,8 @@ export default function ActionsScreen({
 
   const canChange = (task: Task) => canChangeTaskAs(viewer, task);
   const rowOutcome = outcome?.place === "row" ? outcome.task : null;
-  const listedTasks = view === "completed" ? allTasks : allTasks.filter((task) => !done.has(task.id) || task.id === rowOutcome?.id);
+  const visibleTasks = allTasks.filter((task) => !spammed.has(task.id));
+  const listedTasks = view === "completed" ? visibleTasks : visibleTasks.filter((task) => !done.has(task.id) || task.id === rowOutcome?.id);
   const shownTasks = rowOutcome && !listedTasks.some((task) => task.id === rowOutcome.id) ? [rowOutcome, ...listedTasks] : listedTasks;
   const entries =
     view === "all"
@@ -427,9 +449,9 @@ export default function ActionsScreen({
     setExpandedId(next);
   }
 
-  const latest = useRef({ toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, concluding });
+  const latest = useRef({ toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, spam, concluding });
   useEffect(() => {
-    latest.current = { toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, concluding };
+    latest.current = { toggle, complete, completeFromPanel, remind, reopen, openPanel, assign, spam, concluding };
   });
   const onToggle = useCallback((task: Task) => latest.current.toggle(task), []);
   const onComplete = useCallback((task: Task, via?: "swipe") => latest.current.complete(task, via), []);
@@ -445,6 +467,7 @@ export default function ActionsScreen({
   const onReopen = useCallback((task: Task) => void latest.current.reopen(task), []);
   const onOpen = useCallback((task: Task) => latest.current.openPanel(task.id), []);
   const onAssign = useCallback((task: Task, ownerId: string) => void latest.current.assign(task.id, ownerId), []);
+  const onSpam = useCallback((task: Task) => void latest.current.spam(task), []);
   const onPanelComplete = useCallback((task: Task) => latest.current.completeFromPanel(task), []);
 
   useEffect(() => () => window.clearTimeout(follow.current), []);
@@ -629,6 +652,7 @@ export default function ActionsScreen({
                 onComplete={onComplete}
                 onRemind={onRemind}
                 onReopen={onReopen}
+                onSpam={onSpam}
                 canComplete={view !== "completed" && canChange(entry.task)}
                 onOpen={onOpen}
                 comments={allDiscussions[entry.task.id] ?? 0}
@@ -661,6 +685,7 @@ export default function ActionsScreen({
         completed={done.has((panelTask ?? kept)?.id ?? "")}
         onComplete={onPanelComplete}
         onReopen={onReopen}
+        onSpam={onSpam}
         outcome={outcome?.place === "panel" && outcome.task.id === (panelTask ?? kept)?.id ? { focus: outcome.focus, saving: concluding.saving === outcome.task.id, outcomeId: outcome.outcomeId } : null}
         outcomeHandlers={outcomeHandlers}
       />

@@ -103,7 +103,7 @@ export async function routeCallInDb(
   const unmatched: UserActor[] = [];
   const ruled: RuledPerson[] = [];
   for (const actor of actors) {
-    const internal = await internalAddresses(db, actor.workspaceId, [...own]);
+    const internal = await internalAddresses(db, actor.workspaceId, [...own], actor.userId);
     const outside = emails.filter((item) => !internal.isInternal(item.email));
     const allowed = outside.filter((item) => {
       const rule = rules.get(domainOf(item.email));

@@ -287,7 +287,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       added += 1;
     }
     if (added > 0) route = await routeCallInDb(db, owner, open, participants, routing);
-    const internal = await internalAddresses(db, owner.workspaceId, [...own]);
+    const internal = await internalAddresses(db, owner.workspaceId, [...own], owner.userId);
     const attendeeless = participants.every((person) => !person.email || internal.isInternal(person.email));
     const phones = route.targets.length === 0 && attendeeless
       ? (

@@ -351,11 +351,17 @@ describe("follow-up titles from the email", () => {
     );
     process.env.LLM_API_KEY = "llm-test";
     try {
-      const llm = scripted(() => ({ title: "Send Emma Lowe the deck before Thursday" }));
+      const llm = scripted((system) =>
+        system.startsWith("You decide whether an email belongs in a CRM")
+          ? { category: "business", confidence: 0.9, reason: "A real person." }
+          : { title: "Send Emma Lowe the deck before Thursday" },
+      );
       await fileMailOnTimeline(owner, { fetchImpl: llm.fetchImpl });
-      assert.equal(llm.seen.length, 1);
-      assert.match(llm.seen[0].user, /Can you send the deck before Thursday\?/);
-      assert.match(llm.seen[0].system, /An email from Emma Lowe/);
+      const titled = llm.seen.filter((call) => !call.system.startsWith("You decide whether an email belongs in a CRM"));
+      assert.equal(llm.seen.length - titled.length, 1);
+      assert.equal(titled.length, 1);
+      assert.match(titled[0].user, /Can you send the deck before Thursday\?/);
+      assert.match(titled[0].system, /An email from Emma Lowe/);
     } finally {
       delete process.env.LLM_API_KEY;
     }

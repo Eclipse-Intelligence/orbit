@@ -6,6 +6,8 @@ import { CrmError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { assertScope } from "@/lib/crm/scopes";
+import { internalAddresses } from "@/lib/crm/conversations";
+import { archiveTaskInDb } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { actorIn, workspaceActors } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
@@ -286,6 +288,10 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
            union select lower(p.email) from crm.workspace_members wm join crm.profiles p on p.id = wm.user_id where wm.workspace_id = any($3::uuid[])
          ) x
          where x.e like '%@%' and split_part(x.e, '@', 2) <> all($4::text[])
+         union
+         select d.domain from crm.workspace_brands b
+         cross join lateral unnest(b.own_domains) as d(domain)
+         where b.workspace_id in (select m.workspace_id from crm.workspace_members m where m.user_id = $1)
        ),
        inbound as (
          select m.id, m.source_id, m.thread_key as tk, coalesce(m.received_at, m.created_at) as at
@@ -398,6 +404,50 @@ export async function neverAskUnknownMail(actor: UserActor, threadKey: string) {
     await upsertRoute(db, actor, sourceId, key, { ignored: true });
     await setSenderRule(db, actor, actor.workspaceId, target, "muted", "rule");
     return { key: threadKey, target };
+  });
+}
+
+export async function markTaskSpam(actor: UserActor, taskId: string) {
+  assertScope(actor.scopes, "tasks:write");
+  if (!isUuid(taskId)) throw new CrmError("not_found", "Task not found.", 404);
+  return withActor(actor, async (db) => {
+    const found = await db.query<{ mail_thread_key: string | null; suggested: boolean; mine: boolean }>(
+      `select t.mail_thread_key,
+         exists (
+           select 1 from crm.audit_events a
+           where a.entity_id = t.id and a.entity_type = 'task' and a.event_type = 'task.created'
+             and a.operation = 'suggest_follow_up' and a.source = 'microsoft'
+         ) as suggested,
+         exists (select 1 from crm.mail_sources s where s.user_id = $3 and s.id::text = split_part(t.mail_thread_key, '|', 1)) as mine
+       from crm.tasks t
+       where t.id = $1 and t.workspace_id = $2 and t.archived_at is null`,
+      [taskId, actor.workspaceId, actor.userId],
+    );
+    const task = found.rows[0];
+    if (!task) throw new CrmError("not_found", "Task not found.", 404);
+    if (!task.mail_thread_key || !task.suggested) {
+      throw new CrmError("invalid_input", "Only a task suggested from an email can be marked as spam.", 400);
+    }
+    if (!task.mine) throw new CrmError("forbidden", "Only the person who got this email can mark it as spam.", 403);
+    const { sourceId, key } = parseRouteKey(task.mail_thread_key);
+    let target: string | null = null;
+    const sender = await threadInfo(db, actor, sourceId, key).then(
+      (info) => info,
+      (error: unknown) => {
+        if (error instanceof CrmError && error.code === "not_found") return null;
+        throw error;
+      },
+    );
+    await archiveTaskInDb(db, actor, taskId, { operation: "mark_task_spam", source: "web" });
+    if (sender?.counterpart) {
+      const internal = await internalAddresses(db, actor.workspaceId, [...sender.own], actor.userId);
+      if (!internal.isInternal(sender.counterpart.email)) {
+        target = ruleTarget(sender.counterpart.email);
+        await upsertRoute(db, actor, sourceId, key, { ignored: true });
+        await setSenderRule(db, actor, actor.workspaceId, target, "muted", "rule");
+      }
+    }
+    return { taskId, target };
   });
 }
 
