@@ -350,7 +350,7 @@ export function taskDetailLines(found: TaskDetail, lead: string): Lines {
     const when = londonWhen(offer.when);
     const note = text(offer.note);
     lines.push(
-      `Looks done: Orbit thinks ${offer.kind === "email" ? "an email" : offer.kind === "call" ? "a call" : "a meeting"}${when ? ` on ${when}` : ""} may have done this task [activity id ${offer.activityId}]${note ? `, note ${note}` : ""}. It never closes a task itself. To close it when the user asks, propose update_task with completed true and activityId.`,
+      `Looks done: Orbit thinks ${offer.kind === "email" ? "an email" : offer.kind === "call" ? "a call" : "a meeting"}${when ? ` on ${when}` : ""} may have done this task [activity id ${offer.activityId}]${note ? `, note ${note}` : ""}. It never closes a task itself.${!found.readOnly && found.canChange ? " To close it when the user asks, propose update_task with completed true and activityId." : ""}`,
     );
   }
   return lines;

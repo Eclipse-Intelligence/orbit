@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { randomUUID } from "node:crypto";
 import { hiddenSubscriptionSql } from "@/lib/mail/subscriptions";
-import { decideRelevance, decisionState, emailBodyText, historyInDb, judgeInDb, workspaceContext, type Candidate, type Judged } from "@/lib/mail/relevance";
+import { decideRelevance, decisionState, emailBodyText, historyInDb, judgeInDb, workspaceContext, type Candidate, type Decision, type Judged } from "@/lib/mail/relevance";
 
 const CLASSIFY_MS = 10_000;
 
@@ -81,8 +81,20 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
       clearTimeout(timer);
       return worthIt(await judge()) ?? !options.colleague;
     }
-    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl, headers: true, ignoreHistory: options.colleague });
-    return worthIt(await judge()) ?? !options.colleague;
+    const decisions = new Map<string, Decision>();
+    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], {
+      deadline,
+      fetchImpl: options.fetchImpl,
+      headers: true,
+      ignoreHistory: options.colleague,
+      store: !options.colleague,
+      decisions,
+    });
+    if (options.colleague) {
+      const decision = decisions.get(item.key);
+      return decision ? decision.engine === "failed" || !decision.category || decision.category === "business" : false;
+    }
+    return worthIt(await judge()) ?? true;
   } catch (error) {
     console.error("Couldn't judge an email before suggesting a task", error instanceof Error ? error.message : error);
     return true;

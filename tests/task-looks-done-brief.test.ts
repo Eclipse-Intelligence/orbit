@@ -259,6 +259,18 @@ describe("looks done in the brief, assistant, API and MCP", () => {
       assert.doesNotMatch(taskDetailLines(await taskDetail(mark, ids.none), "Task they have open").join("\n"), /Looks done/);
     });
 
+    it("tells the assistant to close the task only when the person can change it here", async () => {
+      const detail = await taskDetail(mark, ids.call);
+      const instruction = /propose update_task with completed true and activityId/;
+      assert.match(taskDetailLines({ ...detail, readOnly: false, canChange: true }, "Task they have open").join("\n"), instruction);
+      for (const blocked of [{ readOnly: false, canChange: false }, { readOnly: true, canChange: true }]) {
+        const lines = taskDetailLines({ ...detail, ...blocked }, "Task they have open").join("\n");
+        assert.match(lines, /Looks done: Orbit thinks a call/);
+        assert.match(lines, /It never closes a task itself\./);
+        assert.doesNotMatch(lines, instruction);
+      }
+    });
+
     it("gives a teammate who can't see the task nothing", async () => {
       await assert.rejects(taskDetail(sam, ids.call));
       const theirs = (await runTool(sam, "list_tasks", { view: "all" })) as { data: { id: string }[] };

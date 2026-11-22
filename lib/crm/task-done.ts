@@ -39,6 +39,7 @@ const STEP_MIN_MS = 10_000;
 const MODEL_MIN_MS = 7_500;
 const RETRY_SECONDS = [60, 300, 900, 3600];
 const UPDATED_FIELDS = ["type", "body", "occurredAt", "companyId", "contactId"];
+const MOVING_FIELDS = ["type", "occurredAt", "companyId", "contactId"];
 const COUNTING_TYPES = ["email", "call", "meeting"];
 const OPEN_TASKS_SHOWN = 20;
 
@@ -62,6 +63,7 @@ function queuedFor(eventType: string, entityType: string, entityId: string, chan
   }
   if (eventType === "activity.updated") {
     const fields = Array.isArray(changes.fields) ? changes.fields : [];
+    if (fields.some((field) => MOVING_FIELDS.includes(String(field)))) return { activityId: entityId, reason: "moved" };
     return fields.some((field) => UPDATED_FIELDS.includes(String(field))) ? { activityId: entityId, reason: "updated" } : null;
   }
   return null;
@@ -140,6 +142,15 @@ function dueText(date: Date | null) {
   return date ? dayKeyAt(date) : null;
 }
 
+export class TaskDoneRunError extends Error {
+  asked: string[];
+
+  constructor(cause: unknown, asked: string[]) {
+    super(cause instanceof Error ? cause.message : "Looks done check failed", { cause });
+    this.asked = asked;
+  }
+}
+
 type MatchOptions = { deadline: number; fetchImpl?: typeof fetch; asked?: string[] };
 
 export async function matchActivityToTasks(activityId: string, options: MatchOptions) {
@@ -171,13 +182,20 @@ export async function matchActivityToTasks(activityId: string, options: MatchOpt
       tasks: candidates.map((row) => ({ id: row.task_id, title: row.title, notes: row.notes, due: dueText(row.due_at) })),
       "Open tasks on the same records": mine.slice(0, OPEN_TASKS_SHOWN).map((row) => (row.due_at ? `${row.title} (due ${dueText(row.due_at)})` : row.title)),
     };
-    const { data } = await completeJson({
-      system: SYSTEM,
-      user: JSON.stringify(request),
-      schema: answerSchema,
-      deadline: options.deadline,
-      fetchImpl: options.fetchImpl,
-    });
+    let data: z.infer<typeof answerSchema>;
+    try {
+      data = (
+        await completeJson({
+          system: SYSTEM,
+          user: JSON.stringify(request),
+          schema: answerSchema,
+          deadline: options.deadline,
+          fetchImpl: options.fetchImpl,
+        })
+      ).data;
+    } catch (error) {
+      throw new TaskDoneRunError(error, finished);
+    }
     const allowed = new Set(candidates.map((row) => row.task_id));
     const decided = new Set<string>();
     for (const answer of data.tasks) {
@@ -198,7 +216,7 @@ export async function matchActivityToTasks(activityId: string, options: MatchOpt
   return { offered, outOfTime: false, asked: finished };
 }
 
-type Claimed = { id: string; activity_id: string; claim_token: string; attempts: number; asked: string[] };
+type Claimed = { id: string; activity_id: string; claim_token: string; attempts: number; asked: string[]; reason: string };
 
 export async function drainTaskDoneQueue(options: { deadline?: number; fetchImpl?: typeof fetch } = {}) {
   const totals = { processed: 0, offered: 0, retried: 0 };
@@ -208,6 +226,7 @@ export async function drainTaskDoneQueue(options: { deadline?: number; fetchImpl
     const claimed = (await query<Claimed>("select * from private.claim_task_done_queue($1)", [1])).rows[0];
     if (!claimed) break;
     try {
+      if (claimed.reason === "moved" && claimed.asked.length === 0) await query("select private.reset_task_done_offers($1)", [claimed.activity_id]);
       const matched = await matchActivityToTasks(claimed.activity_id, { deadline, fetchImpl: options.fetchImpl, asked: claimed.asked });
       totals.offered += matched.offered;
       if (matched.outOfTime) {
@@ -219,7 +238,8 @@ export async function drainTaskDoneQueue(options: { deadline?: number; fetchImpl
     } catch (error) {
       console.error("Looks done check failed", error);
       const delay = RETRY_SECONDS[Math.min(claimed.attempts, RETRY_SECONDS.length) - 1] ?? RETRY_SECONDS[0];
-      await query("select private.retry_task_done_queue($1, $2, $3)", [claimed.id, claimed.claim_token, delay]);
+      const asked = error instanceof TaskDoneRunError ? error.asked : [];
+      await query("select private.retry_task_done_queue($1, $2, $3, $4::uuid[])", [claimed.id, claimed.claim_token, delay, asked]);
       totals.retried += 1;
     }
   }
@@ -361,7 +381,7 @@ export async function closeTaskFromOffer(actor: Actor, taskId: string, input: { 
   try {
     return await completeTaskWithOutcome(actor, taskId, { outcomeId, note: offer?.note ?? "", kind: null, next: null, activityId });
   } catch (error) {
-    if (!offer && error instanceof CrmError && error.details?.field === "offer") throw gone();
+    if (error instanceof CrmError && error.details?.field === "offer") throw gone();
     throw error;
   }
 }
