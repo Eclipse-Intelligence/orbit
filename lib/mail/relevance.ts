@@ -180,7 +180,7 @@ export async function judgeInDb<T extends Candidate>(db: Db, actor: UserActor, i
       if (current.category === null) return judged({ state: "shown", engine: "failed" }, null, now - new Date(current.decided_at).getTime() > RETRY_MS && configured);
       return judged(verdictFor(current, current.engine));
     }
-    if (exact && exact.category === "business" && now - new Date(exact.decided_at).getTime() < CACHE_MS) {
+    if (!options.ignoreHistory && exact && exact.category === "business" && now - new Date(exact.decided_at).getTime() < CACHE_MS) {
       return judged(verdictFor(exact, "cached"), { category: exact.category, engine: "cached", confidence: exact.confidence, reason: exact.reason });
     }
     if (!configured) return judged({ state: "shown", engine: null });
@@ -529,7 +529,7 @@ const ANSWER = z.object({
   reason: z.string().max(300),
 });
 
-export type DecideOptions = { fetchImpl?: typeof fetch; deadline: number };
+export type DecideOptions = { fetchImpl?: typeof fetch; deadline: number; ignoreHistory?: boolean };
 
 type DecisionState = ReturnType<typeof decisionState>;
 
@@ -581,7 +581,7 @@ async function decideWithHaiku(state: DecisionState, options: DecideOptions): Pr
 }
 
 export async function decideRelevance(state: DecisionState, options: DecideOptions): Promise<Decision> {
-  if (state.history.userHasWrittenToSender) return { category: "business", engine: "history", confidence: null, reason: null };
+  if (!options.ignoreHistory && state.history.userHasWrittenToSender) return { category: "business", engine: "history", confidence: null, reason: null };
   if (jevConfigured() && options.deadline - Date.now() > 1_000) {
     try {
       return await decideWithJev(state, options);

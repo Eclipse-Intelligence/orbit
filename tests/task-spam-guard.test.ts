@@ -396,6 +396,55 @@ describe("tasks suggested from mail are gated on relevance", () => {
     }
   });
 
+  it("asks the classifier again for a colleague whose earlier email was business", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.cache@personal-guard.test') where id = $1", [sam.userId]);
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      let answer = "business";
+      const model = classifierGateway(() => answer);
+      const first = await deliver(owner, box, "sam.cache@personal-guard.test", "Contract draft", "mark@guard-orbit.test", 90);
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [first])).rowCount, 1);
+      answer = "personal";
+      const second = await deliver(owner, box, "sam.cache@personal-guard.test", "Lunch Thursday?");
+      const before = model.asked.length;
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.ok(model.asked.length > before);
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [second])).rowCount, 0);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
+  it("gives a colleague no task while a Capture sort of the thread is unfinished, then one once it is decided", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.held@personal-guard.test') where id = $1", [sam.userId]);
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const key = await deliver(owner, box, "sam.held@personal-guard.test", "Held thread");
+      const { classifyItems } = await import("@/lib/mail/capture-filter");
+      let release: () => void = () => undefined;
+      const slow: typeof fetch = () =>
+        new Promise((resolve) => {
+          release = () => resolve(Response.json({ model: "test", choices: [{ message: { content: JSON.stringify({ category: "business", confidence: 0.9, reason: "Test." }) }, finish_reason: "stop" }] }));
+        });
+      const row = (await admin.query<{ id: string }>("select id from crm.mail_messages where source_id = $1 and thread_key = $2", [key.split("|")[0], key.split("|")[1]])).rows[0];
+      const item = { key, messageId: row.id, email: "sam.held@personal-guard.test", name: null, subject: "Held thread", snippet: "Held thread", address: "mark@guard-orbit.test", workspaceId: owner.workspaceId, at: new Date().toISOString(), neverAsk: "" };
+      const sorting = classifyItems(owner, [owner], [{ item, hint: null }], { deadline: Date.now() + 30_000, fetchImpl: slow });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await fileMailOnTimeline(owner, { fetchImpl: classifierGateway(() => "business").fetchImpl, titleTimeoutMs: 400 });
+      const tasks = async () => (await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [key])).rowCount;
+      assert.equal(await tasks(), 0);
+      release();
+      await sorting;
+      await fileMailOnTimeline(owner, { fetchImpl: classifierGateway(() => "business").fetchImpl });
+      assert.equal(await tasks(), 1);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
   it("gives no task to people outside your workspaces or to your own addresses, and files no activity for colleagues", async () => {
     const admin = getAdminPool();
     await saveBrandProfile(second, { ...PROFILE, ownDomains: "ridgeon-own.test, guard.test" }, WEB);

@@ -187,10 +187,10 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
               body: emailBodyText(bodies.get(item.messageId) ?? null),
               listedAs: hint,
             },
-            options.ignoreHistory ? undefined : history.get(item.email),
+            history.get(item.email),
           );
           let decision: Decision | null = null;
-          if (reader && !state.history.userHasWrittenToSender) {
+          if (reader && (options.ignoreHistory || !state.history.userHasWrittenToSender)) {
             const headers = await reader(item).catch(() => null);
             const category = headers ? bulkHeaderCategory(headers) : null;
             if (category) decision = { category, engine: "headers", confidence: null, reason: null };
@@ -202,7 +202,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
             if (reused && verdictFor(reused, reused.engine).state === "shown" && reused.engine !== "failed") {
               decision = reused;
             } else {
-              const own = decideRelevance(state, { deadline: options.deadline, fetchImpl: options.fetchImpl });
+              const own = decideRelevance(state, { deadline: options.deadline, fetchImpl: options.fetchImpl, ignoreHistory: options.ignoreHistory });
               if (!earlier) shared.set(key, own);
               decision = await own;
             }

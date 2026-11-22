@@ -79,10 +79,10 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
       const expired = new Promise<void>((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now()))));
       await Promise.race([running, expired]);
       clearTimeout(timer);
-      return worthIt(await judge()) ?? true;
+      return worthIt(await judge()) ?? !options.colleague;
     }
     await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl, headers: true, ignoreHistory: options.colleague });
-    return worthIt(await judge()) ?? true;
+    return worthIt(await judge()) ?? !options.colleague;
   } catch (error) {
     console.error("Couldn't judge an email before suggesting a task", error instanceof Error ? error.message : error);
     return true;
