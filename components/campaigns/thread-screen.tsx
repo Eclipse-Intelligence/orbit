@@ -222,7 +222,7 @@ function Composer({
           aria-label={placeholder}
           placeholder={placeholder}
           rows={2}
-          className="text-foreground placeholder:text-subtle min-h-11 w-full resize-none rounded-none border-0 bg-transparent p-0 text-[14px] leading-[1.45] shadow-none outline-none focus-visible:ring-0"
+          className="text-foreground placeholder:text-subtle min-h-11 w-full resize-none rounded-none border-0 bg-transparent p-0 text-[14px] leading-[1.45] shadow-none outline-none hover:bg-transparent focus-visible:border-transparent focus-visible:bg-transparent focus-visible:ring-0"
         />
       ) : (
         <p role="status" className="caption-style text-subtle">
