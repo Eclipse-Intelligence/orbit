@@ -89,7 +89,7 @@ create policy task_done_queue_insert on crm.task_done_queue
   with check (activity_id in (select a.id from crm.activities a));
 
 revoke all on crm.task_done_queue from anon, authenticated, crm_agent;
-grant insert on crm.task_done_queue to authenticated, crm_agent;
+grant insert (activity_id, reason) on crm.task_done_queue to authenticated, crm_agent;
 
 create or replace function private.task_done_activity(p_activity uuid)
 returns table (
@@ -122,11 +122,10 @@ as $$
     and a.occurred_at <= now()
     and (a.contact_id is not null or a.company_id is not null)
     and (
-      a.type = 'call'
-      or (a.type = 'meeting' and coalesce(a.metadata->>'source', '') <> 'orbit')
+      (a.type = 'call' and coalesce(a.metadata->>'durationSeconds', '') <> '0')
+      or (a.type = 'meeting' and coalesce(a.metadata->>'source', '') not in ('orbit', 'booking'))
       or (
         a.type = 'email'
-        and a.metadata->>'campaignMessageId' is null
         and (
           a.metadata->>'direction' = 'outbound'
           or (a.metadata->>'direction' is null and coalesce(a.metadata->>'source', '') <> 'microsoft')
@@ -255,6 +254,17 @@ as $$
   delete from crm.task_done_queue where id = p_id and claim_token = p_token;
 $$;
 
+create or replace function private.release_task_done_queue(p_id uuid, p_token uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update crm.task_done_queue
+    set claimed_at = null, claim_token = null, attempts = greatest(0, attempts - 1), next_attempt_at = now()
+  where id = p_id and claim_token = p_token;
+$$;
+
 create or replace function private.retry_task_done_queue(p_id uuid, p_token uuid, p_delay_seconds integer)
 returns void
 language plpgsql
@@ -275,9 +285,11 @@ revoke all on function private.offer_task_done(uuid, uuid, text, text, date) fro
 revoke all on function private.claim_task_done_queue(integer) from public;
 revoke all on function private.finish_task_done_queue(uuid, uuid) from public;
 revoke all on function private.retry_task_done_queue(uuid, uuid, integer) from public;
+revoke all on function private.release_task_done_queue(uuid, uuid) from public;
 grant execute on function private.task_done_activity(uuid) to crm_app;
 grant execute on function private.task_done_candidates(uuid) to crm_app;
 grant execute on function private.offer_task_done(uuid, uuid, text, text, date) to crm_app;
 grant execute on function private.claim_task_done_queue(integer) to crm_app;
 grant execute on function private.finish_task_done_queue(uuid, uuid) to crm_app;
 grant execute on function private.retry_task_done_queue(uuid, uuid, integer) to crm_app;
+grant execute on function private.release_task_done_queue(uuid, uuid) to crm_app;

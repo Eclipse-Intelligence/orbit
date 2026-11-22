@@ -276,11 +276,13 @@ describe("looks done offers", () => {
       );
     });
 
-    it("ignores Orbit's own invites, campaign emails, inbound mail and campaign replies", async () => {
+    it("ignores Orbit's own invites, bookings, missed calls and inbound mail", async () => {
       const { jane } = await scene();
       const taskId = await task(mark, "Meet Jane", { contactId: jane });
       await log("meeting", { contactId: jane }, { metadata: { source: "orbit", kind: "invite" } });
-      await log("email", { contactId: jane }, { metadata: { campaignMessageId: randomUUID(), direction: "outbound" } });
+      await log("meeting", { contactId: jane }, { metadata: { source: "booking" } });
+      await log("call", { contactId: jane }, { metadata: { durationSeconds: 0 } });
+      await log("email", { contactId: jane }, { metadata: { campaignMessageId: randomUUID(), direction: "inbound" } });
       await log("email", { contactId: jane }, { metadata: { direction: "inbound" } });
       await log("email", { contactId: jane }, { metadata: { source: "microsoft", providerMessageId: "x" } });
       await log("note", { contactId: jane });
@@ -299,6 +301,17 @@ describe("looks done offers", () => {
       const done = await drain(gateway(() => []));
       assert.equal(done.requests.length, 4);
       assert.equal((await offersFor(taskId)).length, 0);
+    });
+
+    it("counts a reply a person typed on a campaign thread and a call that connected", async () => {
+      const { jane, tom } = await scene();
+      const reply = await task(mark, "Reply to Jane about the pilot", { contactId: jane });
+      const call = await task(mark, "Call Tom", { contactId: tom });
+      await log("email", { contactId: jane }, { metadata: { campaignMessageId: randomUUID(), direction: "outbound" } });
+      await log("call", { contactId: tom }, { metadata: { durationSeconds: 240 } });
+      await drain();
+      assert.equal((await openOffers(reply)).length, 1);
+      assert.equal((await openOffers(call)).length, 1);
     });
 
     it("matches mail that synced late", async () => {
@@ -486,6 +499,7 @@ describe("looks done offers", () => {
       const [offer] = await openOffers(taskId);
       await assert.rejects(queryAsUser(mark.userId, "update crm.task_done_offers set note = 'Rewritten' where id = $1", [offer.id]), (error: unknown) => (error as { code?: string }).code === "42501");
       await assert.rejects(queryAsUser(mark.userId, "insert into crm.task_done_offers (task_id, activity_id, kind) values ($1, $2, 'call')", [taskId, offer.activity_id]), (error: unknown) => (error as { code?: string }).code === "42501");
+      await assert.rejects(queryAsUser(mark.userId, "insert into crm.task_done_queue (activity_id, reason, attempts) values ($1, 'created', 0)", [offer.activity_id]), (error: unknown) => (error as { code?: string }).code === "42501");
       await assert.rejects(queryAsUser(mark.userId, "select * from crm.task_done_queue"), (error: unknown) => (error as { code?: string }).code === "42501");
       const asOther = await queryAsUser<{ id: string }>(mark.userId, "update crm.task_done_offers set state = 'dismissed', decided_at = now(), decided_by = $2 where id = $1 returning id", [offer.id, sam.userId]).catch(() => "refused");
       assert.equal(asOther, "refused");
@@ -591,6 +605,29 @@ describe("looks done offers", () => {
       assert.equal((await queued()).length, 1);
       await query("select private.finish_task_done_queue($1, $2)", [claimed.id, claimed.claim_token]);
       assert.equal((await queued()).length, 0);
+    });
+
+    it("stops before a model call with too little time and finishes on the rerun without losing an attempt", async () => {
+      const { company, jane } = await scene();
+      const first = await task(mark, "Call Jane", { contactId: jane, companyId: company });
+      const second = await task(sam, "Sam calls Jane", { contactId: jane, companyId: company });
+      await log("call", { contactId: jane });
+      const slow = gateway();
+      const inner = slow.fetchImpl;
+      slow.fetchImpl = async (input, init) => {
+        const response = await inner(input, init);
+        await new Promise((resolve) => setTimeout(resolve, 5_500));
+        return response;
+      };
+      const short = await drainTaskDoneQueue({ deadline: Date.now() + 12_000, fetchImpl: slow.fetchImpl });
+      assert.equal(short.offered, 1);
+      assert.equal(slow.requests.length, 1);
+      const row = (await admin().query<{ attempts: number; claimed_at: Date | null }>("select attempts, claimed_at from crm.task_done_queue")).rows;
+      assert.deepEqual(row.map((entry) => [entry.attempts, entry.claimed_at]), [[0, null]]);
+      const done = await drain();
+      assert.equal(done.requests.length, 1);
+      assert.equal((await queued()).length, 0);
+      assert.equal((await openOffers(first)).length + (await openOffers(second)).length, 2);
     });
 
     it("skips the model when nothing on the records is open", async () => {

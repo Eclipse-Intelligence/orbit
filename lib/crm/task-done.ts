@@ -26,6 +26,7 @@ export type TaskDoneOffer = {
 
 const BACKGROUND_BUDGET_MS = 25_000;
 const STEP_MIN_MS = 10_000;
+const MODEL_MIN_MS = 7_500;
 const RETRY_SECONDS = [60, 300, 900, 3600];
 const UPDATED_FIELDS = ["type", "body", "occurredAt", "companyId", "contactId"];
 const COUNTING_TYPES = ["email", "call", "meeting"];
@@ -134,14 +135,15 @@ type MatchOptions = { deadline: number; fetchImpl?: typeof fetch };
 export async function matchActivityToTasks(activityId: string, options: MatchOptions) {
   const found = await query<ActivityRow>("select * from private.task_done_activity($1)", [activityId]);
   const activity = found.rows[0];
-  if (!activity) return 0;
+  if (!activity) return { offered: 0, outOfTime: false };
   const rows = (await query<TaskRow>("select * from private.task_done_candidates($1)", [activityId])).rows;
   const assignees = [...new Set(rows.filter((row) => row.candidate).map((row) => row.assignee_id))];
-  if (assignees.length === 0) return 0;
+  if (assignees.length === 0) return { offered: 0, outOfTime: false };
   const today = dayKeyAt(new Date());
   const text = withinWindow([activity.summary, activity.body].filter(Boolean).join("\n\n"));
   let offered = 0;
   for (const assignee of assignees) {
+    if (options.deadline - Date.now() < MODEL_MIN_MS) return { offered, outOfTime: true };
     const mine = rows.filter((row) => row.assignee_id === assignee);
     const candidates = mine.filter((row) => row.candidate);
     const request = {
@@ -180,7 +182,7 @@ export async function matchActivityToTasks(activityId: string, options: MatchOpt
       if (stored.rows[0]?.offer) offered += 1;
     }
   }
-  return offered;
+  return { offered, outOfTime: false };
 }
 
 type Claimed = { id: string; activity_id: string; claim_token: string; attempts: number };
@@ -193,7 +195,12 @@ export async function drainTaskDoneQueue(options: { deadline?: number; fetchImpl
     const claimed = (await query<Claimed>("select * from private.claim_task_done_queue($1)", [1])).rows[0];
     if (!claimed) break;
     try {
-      totals.offered += await matchActivityToTasks(claimed.activity_id, { deadline, fetchImpl: options.fetchImpl });
+      const matched = await matchActivityToTasks(claimed.activity_id, { deadline, fetchImpl: options.fetchImpl });
+      totals.offered += matched.offered;
+      if (matched.outOfTime) {
+        await query("select private.release_task_done_queue($1, $2)", [claimed.id, claimed.claim_token]);
+        break;
+      }
       await query("select private.finish_task_done_queue($1, $2)", [claimed.id, claimed.claim_token]);
       totals.processed += 1;
     } catch (error) {
