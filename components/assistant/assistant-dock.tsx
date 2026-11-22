@@ -41,8 +41,8 @@ import { relativeWhen } from "@/lib/companies";
 import { pageHref, TEAM_HREF } from "@/lib/docs/routes";
 import type { DocDiffLine } from "@/lib/docs/types";
 import type { UnreadBrief } from "@/lib/learning/nightly";
-import { briefKey, offersCreateThose, opensBriefOnExpand, pendingBrief as unhandledBrief } from "@/lib/assistant/brief-dock";
-import { CREATE_THOSE } from "@/lib/learning/brief-format";
+import { briefKey, offersCloseThose, offersCreateThose, opensBriefOnExpand, pendingBrief as unhandledBrief } from "@/lib/assistant/brief-dock";
+import { CLOSE_THOSE, CREATE_THOSE } from "@/lib/learning/brief-format";
 import { companyHref, contactHref } from "@/lib/crm/hrefs";
 import { encodeMentions, liveMentions, splitMentions, type Mention } from "@/lib/mentions";
 import { cn } from "@/lib/utils";
@@ -1396,11 +1396,18 @@ export default function AssistantDock({ brief = null, workspaceName = "", worksp
                   <ToolTrail key={item.key} tools={item.tools} />
                 ),
               )}
-              {offersCreateThose({ messages, busy, working: Boolean(working) }) && (
-                <div>
-                  <Button variant="secondary" size="sm" className="hit" onClick={() => sendPrompt(CREATE_THOSE)}>
-                    {CREATE_THOSE}
-                  </Button>
+              {(offersCloseThose({ messages, busy, working: Boolean(working) }) || offersCreateThose({ messages, busy, working: Boolean(working) })) && (
+                <div className="flex flex-wrap gap-2">
+                  {offersCloseThose({ messages, busy, working: Boolean(working) }) && (
+                    <Button variant="secondary" size="sm" className="hit" onClick={() => sendPrompt(CLOSE_THOSE)}>
+                      {CLOSE_THOSE}
+                    </Button>
+                  )}
+                  {offersCreateThose({ messages, busy, working: Boolean(working) }) && (
+                    <Button variant="secondary" size="sm" className="hit" onClick={() => sendPrompt(CREATE_THOSE)}>
+                      {CREATE_THOSE}
+                    </Button>
+                  )}
                 </div>
               )}
               {busy && (live.length > 0 || !streamed) && <LiveSteps tools={live} thinking={live.every((tool) => tool.status === "done") && !streamed} />}

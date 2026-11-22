@@ -2,6 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { assertScope, hasScope } from "@/lib/crm/scopes";
+import { looksDoneInDb, type LooksDone } from "@/lib/crm/task-done";
 import { linkedThread, sharedTaskContextInDb, viewerLastEmailInDb, type TaskPerson } from "@/lib/crm/task-act";
 import type { TaskPreparation } from "@/lib/crm/task-preparation";
 import { currentBasisInDb, readPreparationInDb, type CurrentBasis } from "@/lib/crm/task-preparation-store";
@@ -28,6 +29,7 @@ export type TaskDetail = {
   mail: { lastEmail: { subject: string | null; at: string } | null; thread: TaskThread | null } | null;
   docs: TaskDocEntry[];
   preparation: TaskPreparation | null;
+  looksDone: LooksDone | null;
 };
 
 export async function threadSummaryInDb(db: Db, userId: string, value: string): Promise<TaskThread | null> {
@@ -95,6 +97,7 @@ export async function taskDetailWithBasisInDb(db: Db, home: Actor, task: Task, v
     mail,
     docs: await listTaskDocsInDb(db, home, task),
     preparation: null,
+    looksDone: (await looksDoneInDb(db, home.workspaceId, [task.id]))[task.id] ?? null,
   };
   if (home.type !== "user" || !viewed) return { detail, current: null };
   const current = await currentBasisInDb(

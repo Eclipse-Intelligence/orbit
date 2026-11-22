@@ -146,7 +146,7 @@ type CampaignSeed = {
   prospects?: CampaignProspectSeed[];
 };
 
-type TaskSeed = { title: string; due?: When; company?: string; contact?: string; done?: boolean; remindMinutes?: number; owner?: "colleague"; docs?: string[] };
+type TaskSeed = { title: string; due?: When; company?: string; contact?: string; done?: boolean; remindMinutes?: number; owner?: "colleague"; docs?: string[]; looksDone?: { activity: string; note: string } };
 
 type DealSeed = { name: string; company: string; stage: string; value: number; contact?: string; close?: When };
 

@@ -164,6 +164,8 @@ import { withActor } from "@/lib/crm/context";
 import { isUuid, replayOrRun, requestHash } from "@/lib/crm/mutate";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { taskDetail } from "@/lib/crm/task-detail";
+import { closeTaskFromOffer, taskDoneOffers, withLooksDone } from "@/lib/crm/task-done";
+import { closedAfterText } from "@/lib/crm/task-done-text";
 import { hasScope, type Scope } from "@/lib/crm/scopes";
 import { formatDateLabel, formatDateTimeLabel } from "@/lib/date-input";
 import { appTimeZone, dateTimeInputValue, parseDateTime, readDateTime, zonedParts } from "@/lib/time";
@@ -2348,7 +2350,7 @@ const TOOL_LIST: AssistantTool[] = [
     name: "list_tasks",
     label: "Checking tasks",
     description:
-      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact, linked docs (docIds, and docs with each title when the user can read it) and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it is pinned to, the docs linked to it or mentioning it, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
+      "List tasks. view: all (every open task), overdue, today, upcoming, completed. Each task includes dueDate (its London day), dueHasTime (false means due any time that day, with dueAt at London midnight), durationMinutes, reminder, company, contact, linked docs (docIds, and docs with each title when the user can read it) and ClickUp link and sync status. With taskId it returns that one task with its full picture in one call: the task, its person (job title, phone, email), company and phone, opportunity with stage, status and value, the company's people when no person is linked, the last activity, the user's own last email with them and the email thread it is pinned to, the docs linked to it or mentioning it, and in preparation the call brief or email draft the user prepared for it (private to them, with stale true when the task or its records changed since). Every open task also has looksDone: null, or the activityId, kind (email, call or meeting), when and note of an email, call or meeting Orbit thinks does what the task asks and the user hasn't answered yet. Use taskId instead of chaining get_contact, opportunity and mail lookups for a task you already have the id of.",
     parameters: {
       type: "object",
       properties: {
@@ -2381,7 +2383,7 @@ const TOOL_LIST: AssistantTool[] = [
         limit: int(args.limit, 100, 1, 100),
         offset: int(args.offset, 0, 0, 10000),
       });
-      return { ...result, data: result.data.map(withTask) };
+      return { ...result, data: (await withLooksDone(actor, result.data)).map(withTask) };
     },
   },
   {
@@ -4034,7 +4036,7 @@ const TOOL_LIST: AssistantTool[] = [
     label: "Updating a task",
     write: true,
     description:
-      "Change a task's title, detail, due day or time, duration, reminder, priority, assignee, linked docs (docIds) or who it is about (contactId, companyId, opportunityId), or mark it done with completed true (false reopens it). ClickUp is updated too. To relink, find the record with search_records and pass its id; null takes that link off and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company, and opportunityId too (that company's opportunity, or null) when the task has an opportunity, since an opportunity must belong to the task's company. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
+      "Change a task's title, detail, due day or time, duration, reminder, priority, assignee, linked docs (docIds) or who it is about (contactId, companyId, opportunityId), or mark it done with completed true (false reopens it). To close a task that has looksDone, send completed true with its activityId from list_tasks and nothing else: the task closes after that call, email or meeting and the offer is answered, with no new activity. ClickUp is updated too. To relink, find the record with search_records and pass its id; null takes that link off and a link left out stays as it is. A person brings their company only when the task has none, so pass companyId too when they're at another company, and opportunityId too (that company's opportunity, or null) when the task has an opportunity, since an opportunity must belong to the task's company. To put several of the user's own tasks on their calendar at once (\"plan my week\"), send schedule instead of taskId: read list_tasks and list_calendar_events first, group calls back to back, then emails, put them in list_calendar_events' preferredTimes first, and keep to the user's working hours. Plan's rules apply: a dated task keeps its day, an overdue one moves only with moveDay naming the new day, a block the user placed never moves, a slot must be inside working hours and clear of Busy meetings and other blocks, and if any entry breaks a rule nothing is applied.",
     parameters: {
       type: "object",
       properties: {
@@ -4042,6 +4044,7 @@ const TOOL_LIST: AssistantTool[] = [
         ...TASK_FIELDS,
         ownerId: { type: "string", description: "Team member id from list_team_members to assign it to, or null to unassign it." },
         completed: { type: "boolean", description: "True marks the task done; false reopens a done task." },
+        activityId: { type: "string", description: "With taskId and completed true only: the looksDone activityId of that task from list_tasks. Closes the task after that call, email or meeting." },
         contactId: { type: "string", description: "Person id the task is about, or null to take the person off." },
         companyId: { type: "string", description: "Company id the task is about, or null to take the company off." },
         opportunityId: { type: "string", description: "Opportunity id the task is about, or null to take the opportunity off." },
@@ -4076,6 +4079,10 @@ const TOOL_LIST: AssistantTool[] = [
       if (args.schedule !== undefined && args.schedule !== null) return scheduleDetails(actor, args.schedule);
       const details = await taskOwnerDetails(actor, args.taskId);
       const taskId = str(args.taskId);
+      if (isUuid(taskId) && isUuid(str(args.activityId))) {
+        const offer = (await taskDoneOffers(actor, [taskId]).catch(() => [])).find((item) => item.activityId === str(args.activityId).toLowerCase());
+        if (offer) details[`${taskId}:after`] = closedAfterText({ kind: offer.kind, at: offer.activityAt });
+      }
       if (endsKept(args.repeat) && isUuid(taskId)) {
         const repeat = await withActor(actor, async (db) => (await readTaskInDb(db, actor, taskId))?.repeat ?? null).catch(() => null);
         if (repeat?.end) details[`${taskId}:${REPEAT_END_KEY}`] = repeat.end;
@@ -4105,6 +4112,7 @@ const TOOL_LIST: AssistantTool[] = [
         ),
         lines: [
           ...fieldLines(args, { title: "Title" }),
+          ...(args.activityId !== undefined && detail(name, `${id}:after`) ? [detail(name, `${id}:after`)] : []),
           ...taskTimingLines(args, name, current),
           ...fieldLines(args, { priority: "Priority", description: "Detail" }),
           ...clearedLines(args, { description: "Detail" }),
@@ -4128,6 +4136,15 @@ const TOOL_LIST: AssistantTool[] = [
         return { scheduled: scheduled.map((item) => withTask(item.task)) };
       }
       const completing = args.completed === true;
+      if (args.activityId !== undefined && args.activityId !== null) {
+        const onlyClosing = Object.keys(args).every((key) => ["taskId", "completed", "activityId"].includes(key) || args[key] === undefined);
+        if (!completing || !optionalStr(args.taskId) || !onlyClosing) {
+          throw new CrmError("invalid_input", "To close a task from looksDone, send only taskId, completed true and activityId.", 400, { field: "activityId" });
+        }
+        const closed = await closeTaskFromOffer(actor, str(args.taskId), { activityId: str(args.activityId), idempotencyKey: context.callId ? keyFor(context.callId) : null });
+        await pushIfLinked(actor, closed.task);
+        return { task: withTask(closed.task), closedFromLooksDone: true };
+      }
       if (args.skip !== undefined && args.skip !== true) throw new CrmError("invalid_input", "Send skip: true, or leave it out.", 400, { field: "skip" });
       if (args.repeatScope !== undefined && !oneOf(args.repeatScope, REPEAT_SCOPES)) throw new CrmError("invalid_input", "repeatScope is this, following or all.", 400, { field: "repeatScope" });
       if (optionalStr(args.seriesId) && !optionalStr(args.occursOn) && !optionalStr(args.taskId)) throw new CrmError("invalid_input", "Send occursOn with seriesId, or send the open task's taskId.", 400, { field: "occursOn" });

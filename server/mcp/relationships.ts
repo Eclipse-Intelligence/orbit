@@ -11,6 +11,7 @@ import {
 } from "@/lib/crm/opportunities";
 import { findStaleRelationships, getCompanyContext, getDueActions } from "@/lib/crm/relationships";
 import { taskDetail } from "@/lib/crm/task-detail";
+import { closeTaskFromOffer, withLooksDone } from "@/lib/crm/task-done";
 import { completeTask } from "@/lib/crm/tasks";
 import { createTaskFromApi } from "@/lib/crm/task-series";
 import {
@@ -438,14 +439,22 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "complete_next_action",
     {
-      description: "Mark a task complete. The completed time is kept if it was already set.",
-      inputSchema: { id: z.uuid(), ...provenanceFields },
+      description:
+        "Mark a task complete. The completed time is kept if it was already set. To close a task that has looksDone (in get_next_action and get_due_actions), pass its activity_id: the task closes after that call, email or meeting and the offer is answered, with no new activity. That is for people's own tokens only; workspace agent tokens are refused. idempotency_key makes a retry safe.",
+      inputSchema: { id: z.uuid(), activity_id: z.uuid().optional(), idempotency_key: z.string().max(200).optional(), ...provenanceFields },
     },
     async (args) =>
       run(async () => {
+        if (args.activity_id) {
+          const closed = await withTaskWorkspaceHint(actor, args.id, () =>
+            closeTaskFromOffer(actor, args.id, { activityId: args.activity_id as string, idempotencyKey: mcpIdempotencyKey(args.idempotency_key) }),
+          );
+          return { task: closed.task, activityId: closed.activityId };
+        }
         const result = await withTaskWorkspaceHint(actor, args.id, () =>
           completeTask(actor, args.id, {
             provenance: provenance(args, "complete_task"),
+            idempotencyKey: mcpIdempotencyKey(args.idempotency_key),
           }),
         );
         return result.body;
@@ -457,8 +466,8 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     {
       description:
         actor.type === "user"
-          ? "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, docs linked to it or mentioning it (a linked doc you can't read has no title), and in mail the person's own last email with them and the email thread the task is pinned to. Use it instead of looking up the contact, opportunity and mail one by one."
-          : "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, and docs linked to it or mentioning it (only shared docs show a title). mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
+          ? "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, looksDone (null, or the activityId, kind, when and note of an email, call or meeting that may do what the task asks), docs linked to it or mentioning it (a linked doc you can't read has no title), and in mail the person's own last email with them and the email thread the task is pinned to. Use it instead of looking up the contact, opportunity and mail one by one."
+          : "One task with its full picture in one call: the task, workspace, whether you can change it, its person (job title, phone, email), company and phone, opportunity with stage, status and value (or the person's or company's open one when none is linked), the company's people when no person is linked, the last activity, looksDone (null, or the activityId, kind, when and note of an email, call or meeting that may do what the task asks; agent tokens can read it but can't close from it), and docs linked to it or mentioning it (only shared docs show a title). mail is null: agent tokens have no mailbox. Use it instead of looking up the contact and opportunity one by one.",
       inputSchema: { id: z.uuid() },
     },
     async (args) => run(() => withTaskWorkspaceHint(actor, args.id, () => taskDetail(actor, args.id))),
@@ -468,10 +477,14 @@ export function registerRelationshipTools(server: McpServer, actor: Actor) {
     "get_due_actions",
     {
       description:
-        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none). Each task has dueDate (its London day), dueHasTime (false means due any time that day; dueAt is then London midnight), durationMinutes and scheduledBy (person when someone gave it a time, including dragging or resizing it on the Calendar page; planner when Plan placed it). Plan never moves a block a person placed.",
+        "List tasks: all open tasks (overdue first, then by due date, undated last), overdue, today (including undated, the default), upcoming, recently completed, or companies with no open task (view none). Each task has dueDate (its London day), dueHasTime (false means due any time that day; dueAt is then London midnight), durationMinutes and scheduledBy (person when someone gave it a time, including dragging or resizing it on the Calendar page; planner when Plan placed it). Plan never moves a block a person placed. Open tasks have looksDone: null, or the activityId, kind (email, call or meeting), when and note of something Orbit thinks does what the task asks.",
       inputSchema: { view: z.enum(TASK_VIEWS).optional() },
     },
-    async (args) => run(() => getDueActions(actor, args.view ?? "today")),
+    async (args) =>
+      run(async () => {
+        const due = await getDueActions(actor, args.view ?? "today");
+        return { ...due, tasks: await withLooksDone(actor, due.tasks) };
+      }),
   );
 
   server.registerTool(

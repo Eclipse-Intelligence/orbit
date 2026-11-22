@@ -1,7 +1,9 @@
 export const DUE_HEADING = "Due today";
+export const LOOKS_DONE_HEADING = "Looks done";
 export const QUIET_HEADING = "Opportunities gone quiet";
 export const SUGGESTED_TASK = "Suggested task:";
 export const CREATE_THOSE = "Create those";
+export const CLOSE_THOSE = "Close those";
 
 export function suggestsTasks(body: string) {
   const lines = body.split("\n");
@@ -10,6 +12,17 @@ export function suggestsTasks(body: string) {
   for (const line of lines.slice(start + 1)) {
     if (line.startsWith("### ")) return false;
     if (line.startsWith("- ") && line.includes(SUGGESTED_TASK)) return true;
+  }
+  return false;
+}
+
+export function suggestsClosing(body: string) {
+  const lines = body.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `### ${LOOKS_DONE_HEADING}`);
+  if (start < 0) return false;
+  for (const line of lines.slice(start + 1)) {
+    if (line.startsWith("### ")) return false;
+    if (line.startsWith("- [") && line.includes("](/tasks?task=")) return true;
   }
   return false;
 }

@@ -488,6 +488,34 @@ export const CORE_TASKS: EvalTask[] = [
     ],
   }),
   task({
+    id: "close-those-from-brief",
+    suite: "core",
+    category: "propose_write",
+    origin: "Phase 3 of Looks done: Close those under a morning brief closes only the tasks with an open offer, one approval card each, with the offer's activity id.",
+    fixture: {
+      eclipse: {
+        tasks: [
+          { title: "Send Odile the review outline", due: { days: -1 }, company: "Fernhill Capital", contact: "Odile Marsh", looksDone: { activity: "fernhill-email", note: "Sent the review outline and an example report." } },
+          { title: "Hold a discovery call with Ansel", due: { days: 0 }, company: "Copperleaf Digital", contact: "Ansel Pike", looksDone: { activity: "copperleaf-call", note: "The call covered contract writers and brand voice." } },
+        ],
+      },
+    },
+    earlier: [
+      {
+        role: "assistant",
+        content:
+          "### Due today\n- [Chase Ansel if he's gone quiet](/tasks?task={{id:task:Chase Ansel if he's gone quiet}}) (09:30, Copperleaf Digital)\n\n### Looks done\n- [Send Odile the review outline](/tasks?task={{id:task:Send Odile the review outline}}) · you emailed Odile Marsh, Fri 13 Nov 10:00\n- [Hold a discovery call with Ansel](/tasks?task={{id:task:Hold a discovery call with Ansel}}) · Meeting with Ansel Pike, Tue 17 Nov 15:00",
+      },
+    ],
+    message: "Close those",
+    checks: [
+      exactlyCards(["update_task", "update_task"]),
+      card("update_task", arg.all(arg.is("taskId", "task:Send Odile the review outline"), arg.equals("completed", true), arg.is("activityId", "activity:fernhill-email")), "closes the Odile task after the email"),
+      card("update_task", arg.all(arg.is("taskId", "task:Hold a discovery call with Ansel"), arg.equals("completed", true), arg.is("activityId", "activity:copperleaf-call")), "closes the Ansel task after the call"),
+      noCard("update_task", arg.is("taskId", "task:Chase Ansel if he's gone quiet"), "leaves the task with no offer alone"),
+    ],
+  }),
+  task({
     id: "write-note-on-contact",
     suite: "core",
     category: "propose_write",

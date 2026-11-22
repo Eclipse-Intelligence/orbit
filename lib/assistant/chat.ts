@@ -56,7 +56,7 @@ import { userLinks } from "@/lib/assistant/links";
 import { aboutYouSection, getColleagues, getPersonalContext } from "@/lib/crm/personal-context";
 import { memoryBriefing } from "@/lib/learning/memories";
 import { BRIEF_MESSAGE_MODEL, latestBrief, londonDay } from "@/lib/learning/nightly";
-import { CREATE_THOSE, QUIET_HEADING, SUGGESTED_TASK, suggestsTasks } from "@/lib/learning/brief-format";
+import { CLOSE_THOSE, CREATE_THOSE, LOOKS_DONE_HEADING, QUIET_HEADING, SUGGESTED_TASK, suggestsClosing, suggestsTasks } from "@/lib/learning/brief-format";
 import { buildPrompt } from "@/lib/companion/transcript";
 import { expandMentions, plainMentions } from "@/lib/mentions";
 import { withActor } from "@/lib/crm/context";
@@ -125,6 +125,7 @@ export type DisplayMessage = {
   createdAt: string;
   waiting?: boolean;
   suggestsTasks?: boolean;
+  suggestsClosing?: boolean;
 };
 
 export type AssistantEvent =
@@ -200,6 +201,7 @@ function display(row: MessageRow): DisplayMessage {
     createdAt: iso(row.created_at) ?? new Date().toISOString(),
     ...(row.steering === "waiting" ? { waiting: true } : {}),
     ...(row.role === "assistant" && row.model === BRIEF_MESSAGE_MODEL && suggestsTasks(row.content) ? { suggestsTasks: true } : {}),
+    ...(row.role === "assistant" && row.model === BRIEF_MESSAGE_MODEL && suggestsClosing(row.content) ? { suggestsClosing: true } : {}),
   };
 }
 
@@ -431,7 +433,7 @@ export async function getConversation(actor: UserActor, id: string) {
       conversation: summary(conversation),
       messages: [...shown.filter((row) => row.steering !== "waiting"), ...shown.filter((row) => row.steering === "waiting")]
         .map(display)
-        .map((message) => (message.suggestsTasks && !briefToday ? { ...message, suggestsTasks: undefined } : message)),
+        .map((message) => (briefToday || (!message.suggestsTasks && !message.suggestsClosing) ? message : { ...message, suggestsTasks: undefined, suggestsClosing: undefined })),
       working: workingState(messages, conversation, job.rows[0] ?? null),
     };
   });
@@ -543,7 +545,7 @@ export function history(all: MessageRow[], budget = HISTORY_BUDGET, context = ""
 
 const BRIEF_PREFACE =
   "(Orbit wrote the user's morning brief overnight and opened this conversation with it. The next message is that brief, not something the user wrote. " +
-  `Each line under ${QUIET_HEADING} ends with "${SUGGESTED_TASK}" and a task. When the user says "${CREATE_THOSE}" or asks for those tasks, first call list_tasks once with mine true and skip any opportunity that already has an open task. Then call create_task once for each remaining suggestion, all in one round so each gets its own approval card: the suggested text as title, the id from the opportunity's /opportunities/<id> link as opportunityId, and today as dueDate unless the user says otherwise. Don't search for the records.)`;
+  `Each line under ${QUIET_HEADING} ends with "${SUGGESTED_TASK}" and a task. When the user says "${CREATE_THOSE}" or asks for those tasks, first call list_tasks once with mine true and skip any opportunity that already has an open task. Then call create_task once for each remaining suggestion, all in one round so each gets its own approval card: the suggested text as title, the id from the opportunity's /opportunities/<id> link as opportunityId, and today as dueDate unless the user says otherwise. Don't search for the records. Each line under ${LOOKS_DONE_HEADING} is an open task with a call, email or meeting that may have done it. When the user says "${CLOSE_THOSE}" or asks to close those tasks, first call list_tasks once with mine true, then call update_task once for each of those tasks that still has an open looksDone, all in one round so each gets its own approval card: the task's id as taskId, completed true and the looksDone activityId as activityId, and nothing else. Skip any task that is done or has no looksDone now.)`;
 
 export function briefTitle(day: string) {
   const date = new Date(`${day}T12:00:00Z`);
