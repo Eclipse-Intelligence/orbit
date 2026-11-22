@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { randomUUID } from "node:crypto";
 import { hiddenSubscriptionSql } from "@/lib/mail/subscriptions";
-import { decideRelevance, decisionState, emailBodyText, historyInDb, judgeInDb, workspaceContext, type Candidate, type Judged } from "@/lib/mail/relevance";
+import { decideRelevance, decisionState, emailBodyText, historyInDb, judgeInDb, workspaceContext, type Candidate, type Decision, type Judged } from "@/lib/mail/relevance";
 
 const CLASSIFY_MS = 10_000;
 
@@ -56,6 +56,13 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
     if (!row) return true;
     if (row.unsubscribed) return false;
     if (!row.thread_key || !row.from_email) return true;
+    if (options.colleague) {
+      const judged = await withActor(actor, async (db) => {
+        const result = await db.query<{ worth: boolean }>("select worth from crm.mail_task_judgements where user_id = $1 and message_id = $2", [actor.userId, row.id]);
+        return result.rows[0]?.worth ?? null;
+      });
+      if (judged !== null) return judged;
+    }
     const item: Candidate = {
       key: `${row.source_id}|${row.thread_key}`,
       messageId: row.id,
@@ -81,8 +88,30 @@ export async function mailWorthATask(actor: UserActor, messageId: string, option
       clearTimeout(timer);
       return worthIt(await judge()) ?? !options.colleague;
     }
-    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], { deadline, fetchImpl: options.fetchImpl, headers: true, ignoreHistory: options.colleague });
-    return worthIt(await judge()) ?? !options.colleague;
+    const decisions = new Map<string, Decision>();
+    await classifyItems(actor, [actor], [{ item: { ...item, neverAsk: "" }, hint: first.hint }], {
+      deadline,
+      fetchImpl: options.fetchImpl,
+      headers: true,
+      ignoreHistory: options.colleague,
+      store: !options.colleague,
+      decisions,
+    });
+    if (options.colleague) {
+      const decision = decisions.get(item.key);
+      if (!decision) return false;
+      if (decision.engine === "failed") return true;
+      const worth = !decision.category || decision.category === "business";
+      await withActor(actor, (db) =>
+        db.query(
+          `insert into crm.mail_task_judgements (user_id, message_id, worth) values ($1, $2, $3)
+           on conflict (user_id, message_id) do update set worth = excluded.worth, decided_at = now()`,
+          [actor.userId, row.id, worth],
+        ),
+      );
+      return worth;
+    }
+    return worthIt(await judge()) ?? true;
   } catch (error) {
     console.error("Couldn't judge an email before suggesting a task", error instanceof Error ? error.message : error);
     return true;

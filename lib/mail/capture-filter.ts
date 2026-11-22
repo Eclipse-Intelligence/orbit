@@ -56,6 +56,8 @@ type ClassifyOptions = {
   ignoreHistory?: boolean;
   fetchImpl?: typeof fetch;
   headers?: boolean;
+  store?: boolean;
+  decisions?: Map<string, Decision>;
   readHeaders?: (item: UnknownEmail) => Promise<Header[] | null>;
 };
 
@@ -137,11 +139,18 @@ export function sortingNow(key: string): Promise<void> | null {
 }
 
 export async function classifyItems(actor: UserActor, actors: UserActor[], work: Work[], options: ClassifyOptions) {
-  const mine = work.filter(({ item }) => !inFlight.has(item.key) && !recentlyUnstorable(item));
+  const persist = options.store !== false;
+  const mine = persist ? work.filter(({ item }) => !inFlight.has(item.key) && !recentlyUnstorable(item)) : work;
   if (mine.length === 0) return 0;
+  const keep = persist
+    ? (item: UnknownEmail, decision: Decision) => store(actor, item, decision)
+    : async (item: UnknownEmail, decision: Decision) => {
+        options.decisions?.set(item.key, decision);
+      };
+  const keepFailed = persist ? (item: UnknownEmail) => storeFailed(actor, item) : (item: UnknownEmail) => keep(item, { category: null, engine: "failed", confidence: null, reason: null });
   let finish: () => void = () => undefined;
   const finished = new Promise<void>((resolve) => (finish = resolve));
-  for (const { item } of mine) inFlight.set(item.key, finished);
+  if (persist) for (const { item } of mine) inFlight.set(item.key, finished);
   const contexts = new Map<string, Promise<WorkspaceContext>>();
   const reader = options.readHeaders ?? (options.headers ? graphHeaders(actor, mine.map(({ item }) => item), options.fetchImpl) : null);
   const byWorkspace = new Map<string, Work[]>();
@@ -169,7 +178,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
         ]);
       } catch (error) {
         console.error("Reading Capture email context failed", error instanceof Error ? error.message : error);
-        for (const { item } of group) await storeFailed(actor, item);
+        for (const { item } of group) await keepFailed(item);
         continue;
       }
       const shared = new Map<string, Promise<Decision>>();
@@ -207,16 +216,16 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
               decision = await own;
             }
           }
-          await store(actor, item, decision);
+          await keep(item, decision);
           if (decision.engine !== "failed") decided += 1;
         } catch (error) {
           console.error("Sorting a Capture email failed", error instanceof Error ? error.message : error);
-          await storeFailed(actor, item);
+          await keepFailed(item);
         }
       });
     }
   } finally {
-    for (const { item } of mine) inFlight.delete(item.key);
+    if (persist) for (const { item } of mine) inFlight.delete(item.key);
     finish();
   }
   return decided;

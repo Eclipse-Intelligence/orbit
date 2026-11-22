@@ -9,7 +9,7 @@ import { archiveTask, createTask, listTasks, updateTask } from "@/lib/crm/tasks"
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { classifyCapture, listSenderRules } from "@/lib/mail/capture-filter";
+import { classifyCapture, listSenderRules, relevantMail } from "@/lib/mail/capture-filter";
 import { markTaskSpam } from "@/lib/mail/filing";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
@@ -427,6 +427,7 @@ describe("tasks suggested from mail are gated on relevance", () => {
       const first = await deliver(owner, box, "sam.copy@personal-guard.test", "Contract draft", "mark@guard-orbit.test", 90);
       await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
       assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [first])).rowCount, 1);
+      await classifyCapture(owner, { fetchImpl: model.fetchImpl });
       answer = "personal";
       const second = await deliver(owner, box, "sam.copy@personal-guard.test", "Lunch Thursday?");
       await classifyCapture(owner, { fetchImpl: model.fetchImpl });
@@ -436,6 +437,60 @@ describe("tasks suggested from mail are gated on relevance", () => {
       await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
       assert.ok(model.asked.length > before);
       assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [second])).rowCount, 0);
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
+  it("never changes what Capture shows when it judges a colleague's thread personal", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.shown@personal-guard.test') where id = $1", [sam.userId]);
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      let answer = "business";
+      const model = classifierGateway(() => answer);
+      const first = await deliver(owner, box, "sam.shown@personal-guard.test", "Contract draft", "mark@guard-orbit.test", 90);
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [first])).rowCount, 1);
+      await classifyCapture(owner, { fetchImpl: model.fetchImpl });
+      answer = "personal";
+      const second = await deliver(owner, box, "sam.shown@personal-guard.test", "Lunch Thursday?");
+      await classifyCapture(owner, { fetchImpl: model.fetchImpl });
+      const stored = async () =>
+        (await admin.query("select category, engine, decided_at from crm.mail_thread_relevance where user_id = $1 and thread_key = $2", [owner.userId, second.split("|")[1]])).rows[0];
+      const sender = async () => (await admin.query("select category, engine, decided_at from crm.mail_sender_relevance where user_id = $1 and sender = 'sam.shown@personal-guard.test'", [owner.userId])).rows;
+      const thread = await stored();
+      const senders = await sender();
+      assert.equal(thread.category, "business");
+      const before = model.asked.length;
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.ok(model.asked.length > before);
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [second])).rowCount, 0);
+      assert.deepEqual(await stored(), thread);
+      assert.deepEqual(await sender(), senders);
+      const shown = await relevantMail(owner, [owner], Date.now(), { fetchImpl: model.fetchImpl });
+      assert.ok(shown.shown.some((email) => email.key === second));
+      assert.ok(!shown.skipped.some((email) => email.key === second));
+    } finally {
+      delete process.env.LLM_API_KEY;
+    }
+  });
+
+  it("asks the classifier nothing more about a colleague thread it already judged personal", async () => {
+    const admin = getAdminPool();
+    await admin.query("update crm.profiles set other_emails = array_append(other_emails, 'sam.once@personal-guard.test') where id = $1", [sam.userId]);
+    process.env.LLM_API_KEY = "test-key";
+    try {
+      const model = classifierGateway(() => "personal");
+      const key = await deliver(owner, box, "sam.once@personal-guard.test", "Lunch Thursday?");
+      const timesAsked = () => model.asked.filter((address) => address === "sam.once@personal-guard.test").length;
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal(timesAsked(), 1);
+      assert.equal((await admin.query("select 1 from crm.mail_task_judgements j join crm.mail_messages m on m.id = j.message_id where j.user_id = $1 and m.thread_key = $2 and not j.worth", [owner.userId, key.split("|")[1]])).rowCount, 1);
+      assert.equal((await admin.query("select 1 from crm.mail_thread_relevance where user_id = $1 and thread_key = $2", [owner.userId, key.split("|")[1]])).rowCount, 0);
+      await fileMailOnTimeline(owner, { fetchImpl: model.fetchImpl });
+      assert.equal(timesAsked(), 1);
+      assert.equal((await admin.query("select 1 from crm.tasks where mail_thread_key = $1", [key])).rowCount, 0);
     } finally {
       delete process.env.LLM_API_KEY;
     }
