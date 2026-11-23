@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
-import { acceptFrameMessage, forwardedKey } from "@/lib/mail/frame-keys";
+import { acceptFrameMessage, forwardedKey, frameToken, frameTokenMeta } from "@/lib/mail/frame-keys";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 
@@ -242,7 +242,7 @@ function documentFor(html: string, rich: boolean, hideQuotes: boolean, nonce: st
   const theme = rich
     ? "html,body{background:#fff;color:#111;}"
     : "html,body{background:transparent;color:#e6e8ec;} body *{color:inherit !important;background-color:transparent !important;border-color:#333 !important;} a,a *{color:#9db4ff !important;}";
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy(nonce)}"><base target="_blank"><meta name="color-scheme" content="${rich ? "light" : "dark"}"><style>
+  return `<!doctype html><html><head><meta charset="utf-8">${frameTokenMeta(token)}<meta http-equiv="Content-Security-Policy" content="${policy(nonce)}"><base target="_blank"><meta name="color-scheme" content="${rich ? "light" : "dark"}"><style>
 html,body{margin:0;padding:0;touch-action:pan-y;}
 html,body{overflow-x:hidden !important;}
 #${WRAP_ID}{transform-origin:0 0;}
@@ -287,10 +287,6 @@ export default function EmailFrame({
   const heard = useRef(false);
   const source = useMemo(() => documentFor(html, rich, hideQuotes, nonce, token), [html, rich, hideQuotes, nonce, token]);
 
-  useLayoutEffect(() => {
-    if (frame.current && frame.current.srcdoc !== source) frame.current.srcdoc = source;
-  }, [source]);
-
   const ask = useCallback(() => {
     if (!heard.current) frame.current?.contentWindow?.postMessage({ type: "measure" }, "*");
   }, []);
@@ -313,7 +309,7 @@ export default function EmailFrame({
     const unwatch = swipe ? watchSwipe(proxy, swipe) : null;
     const listen = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;
-      const message = acceptFrameMessage(event.data, token) as FrameMessage | null;
+      const message = acceptFrameMessage(event.data, frameToken(frame.current.getAttribute("srcdoc"))) as FrameMessage | null;
       if (!message) return;
       if (message.type === "height" && Number.isFinite(message.value)) {
         heard.current = true;
@@ -339,7 +335,7 @@ export default function EmailFrame({
       window.removeEventListener("message", listen);
       unwatch?.();
     };
-  }, [swipe, token]);
+  }, [swipe]);
 
   const toggleQuotes = () => {
     const next = !showQuotes;
@@ -354,6 +350,8 @@ export default function EmailFrame({
         title={title}
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
+        srcDoc={source}
+        suppressHydrationWarning
         onLoad={() => {
           heard.current = false;
           ask();

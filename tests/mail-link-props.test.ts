@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { linkMatchesUrl, listFromUrl } from "@/lib/mail/link-props";
-import { acceptFrameMessage } from "@/lib/mail/frame-keys";
+import { acceptFrameMessage, frameToken, frameTokenMeta } from "@/lib/mail/frame-keys";
 
 const inbox = { view: "inbox", account: null, query: "" };
 
@@ -35,5 +35,15 @@ describe("messages from the email frame", () => {
     assert.equal(acceptFrameMessage({ type: "height", value: 10, token: "" }, ""), null);
     assert.equal(acceptFrameMessage(null, "abc"), null);
     assert.equal(acceptFrameMessage("abc", "abc"), null);
+    assert.equal(acceptFrameMessage({ type: "key", key: "#", token: "abc" }, null), null);
+  });
+
+  it("reads the token from the start of the frame document and nowhere else", () => {
+    const token = "0123456789abcdef0123456789abcdef";
+    const doc = `<!doctype html><html><head><meta charset="utf-8">${frameTokenMeta(token)}<meta http-equiv="x"></head><body><p>${"x".repeat(2000)}</p>${frameTokenMeta("ffffffffffffffffffffffffffffffff")}</body></html>`;
+    assert.equal(frameToken(doc), token);
+    assert.equal(frameToken(`<html><head></head><body>${frameTokenMeta(token)}</body></html>`.padStart(700, " ")), null);
+    assert.equal(frameToken(null), null);
+    assert.equal(frameToken(""), null);
   });
 });

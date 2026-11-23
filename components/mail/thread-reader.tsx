@@ -642,7 +642,11 @@ function ThreadReader({
   const [invite, setInvite] = useState<{ prefill: InvitePrefill; setup: InviteSetup; at: number } | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const { showToast } = useComposer();
-  const deleteFailed = useRef<(id: string, problem: string) => void>(() => undefined);
+  const detailRef = useRef(detail);
+  useEffect(() => {
+    detailRef.current = detail;
+  });
+  const discardVersion = useSyncExternalStore(draftDeletes.subscribe, draftDeletes.version, draftDeletes.version);
   const replyHint = useShortcutHint("mail-reply");
   const replyAllHint = useShortcutHint("mail-reply-all");
   const forwardHint = useShortcutHint("mail-forward");
@@ -801,7 +805,7 @@ function ThreadReader({
     setDraftError(null);
     setRemovedDrafts((existing) => new Set(existing).add(message.id));
     const id = message.id;
-    scheduleDraftDelete(id, detail?.key ?? "", (draftId, problem) => deleteFailed.current(draftId, problem));
+    scheduleDraftDelete(id, detail?.key ?? "", (_draftId, problem) => showToast({ message: problem, tone: "alert" }));
     showToast({
       message: "Draft discarded.",
       duration: UNDO_DELETE_MS - 500,
@@ -826,7 +830,7 @@ function ThreadReader({
   function draftsLeft(sending: { draftId?: string | null; replaces?: string | null }) {
     if (!detail) return false;
     const orbit = detail.drafts.some((draft) => draft.id !== sending.draftId);
-    const outside = detail.messages.some((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id) && message.id !== sending.replaces);
+    const outside = detail.messages.some((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id) && !draftDeletes.isDiscarded(message.id) && message.id !== sending.replaces);
     return orbit || outside;
   }
 
@@ -904,16 +908,20 @@ function ThreadReader({
     };
   }, [swipe]);
 
-  useEffect(() => {
-    deleteFailed.current = (id, problem) => {
-      if (alive.current) {
-        restoreDraft(id);
+  useEffect(
+    () =>
+      draftDeletes.onFailure((id, problem) => {
+        if (!detailRef.current?.messages.some((message) => message.id === id)) return false;
+        setRemovedDrafts((existing) => {
+          const next = new Set(existing);
+          next.delete(id);
+          return next;
+        });
         setDraftError(problem);
-      } else {
-        showToast({ message: problem, tone: "alert" });
-      }
-    };
-  });
+        return true;
+      }),
+    [],
+  );
 
   const composeStarted = useRef(false);
   useEffect(() => {
@@ -968,8 +976,11 @@ function ThreadReader({
   const deleteDraft = useCallback((message: ThreadMessage) => draftActions.current.remove(message), []);
   const replacing = active?.replaces ?? null;
   const shownDetail = useMemo(
-    () => (detail ? { ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id) && !draftDeletes.isDiscarded(message.id) && message.id !== replacing) } : null),
-    [detail, removedDrafts, replacing],
+    () => {
+      void discardVersion;
+      return detail ? { ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id) && !draftDeletes.isDiscarded(message.id) && message.id !== replacing) } : null;
+    },
+    [detail, removedDrafts, replacing, discardVersion],
   );
   const repliedFollowUp = detail?.followUpReplied ?? null;
   const followUpNote = useMemo(
