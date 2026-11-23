@@ -100,7 +100,7 @@ export async function deferralEligible(actor: UserActor, messageId: string, from
   });
 }
 
-async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
+async function candidates(db: Db, actor: UserActor, workspaceIds: string[], exclude: string[] = []) {
   const result = await db.query<Candidate>(
     `select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.from_name, m.body_text, m.snippet,
        coalesce(m.received_at, m.sent_at, m.created_at) as at
@@ -108,6 +108,7 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
      where m.user_id = $1 and not m.is_draft and f.role not in ('sent', 'drafts', 'junk', 'outbox', 'trash')
        and nullif(m.from_email, '') is not null
        and coalesce(m.received_at, m.created_at) > now() - make_interval(hours => $3)
+       and m.id <> all($7::uuid[])
        and lower(m.from_email) <> all ${ownAddresses("$1", "$4")}
        and not exists (
          select 1 from crm.mail_deferral_checks d
@@ -125,7 +126,7 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
        )
      order by at desc
      limit $6`,
-    [actor.userId, workspaceIds, LOOKBACK_HOURS, actor.email, [...FREE_MAIL_DOMAINS], CANDIDATES_PER_RUN],
+    [actor.userId, workspaceIds, LOOKBACK_HOURS, actor.email, [...FREE_MAIL_DOMAINS], CANDIDATES_PER_RUN, exclude],
   );
   return result.rows;
 }
@@ -514,9 +515,9 @@ async function askEach(actor: UserActor, batch: Candidate[], options: { deadline
   return recorded;
 }
 
-export async function checkDeferrals(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
+export async function checkDeferrals(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number; exclude?: string[] }) {
   const workspaceIds = await workspaceIdsOf(actor);
-  const list = await withActor(actor, (db) => candidates(db, actor, workspaceIds));
+  const list = await withActor(actor, (db) => candidates(db, actor, workspaceIds, options.exclude));
   let recorded = 0;
   for (const batch of deferralBatches(list)) {
     if (options.deadline - Date.now() < STEP_MS) break;

@@ -12,7 +12,7 @@ import { assertScope } from "@/lib/crm/scopes";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { workspaceActors, type WorkspaceRef } from "@/lib/crm/workspaces";
 import type { Db } from "@/lib/db/pool";
-import { AUTOMATED_DOMAIN, AUTOMATED_SENDER } from "@/lib/mail/patterns";
+import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, STRICT_AUTOMATED_SENDER } from "@/lib/mail/patterns";
 import type { ThreadFiling } from "@/lib/mail/view";
 
 export const SKIPPED_ROLES = ["drafts", "junk", "outbox"];
@@ -233,6 +233,14 @@ export function routedParams(actor: UserActor, workspaceIds: string[], extra: un
 }
 
 export const NOT_AUTOMATED = (column: string) => `(${column} !~* '${AUTOMATED_SENDER}' and ${column} !~* '${AUTOMATED_DOMAIN}')`;
+
+export const NOT_STRICTLY_AUTOMATED = (column: string) => `(${column} !~* '${STRICT_AUTOMATED_SENDER}' and ${column} !~* '${AUTOMATED_DOMAIN}')`;
+
+export const KNOWN_ADDRESS = (userParam: string, column: string) =>
+  `exists (
+    select 1 from crm.mail_known_addresses known
+    where known.user_id = ${userParam} and known.address = ${column} and (known.sent_count > 0 or known.met_first <= now())
+  )`;
 
 export function captureWorkspaceSql(alias: string, routeAlias: string, homesParam: string, mineParam: string) {
   const received = `coalesce(

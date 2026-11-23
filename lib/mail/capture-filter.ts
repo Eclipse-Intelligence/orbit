@@ -42,6 +42,7 @@ const BACKGROUND_CAP = 25;
 const PARALLEL = 4;
 const STOP_MARGIN_MS = 1_500;
 const CLAIM_SECONDS = 120;
+const SETTLED_FOR_MS = 6 * 60 * 60_000;
 
 export type SkippedEmail = UnknownEmail & { category: SkippedCategory; engine: RelevanceEngine; reason: string | null; stored: StoredCategory | null };
 
@@ -195,6 +196,7 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
               snippet: item.snippet,
               body: emailBodyText(bodies.get(item.messageId) ?? null),
               listedAs: hint,
+              signals: item.signals,
             },
             history.get(item.email),
           );
@@ -286,10 +288,34 @@ async function claimRun(actor: UserActor, gapSeconds: number) {
   });
 }
 
-async function releaseRun(actor: UserActor, startedAt: string) {
+async function releaseRun(actor: UserActor, startedAt: string, settled: "set" | "clear" | "keep") {
   await withActor(actor, (db) =>
-    db.query("update crm.mail_relevance_runs set running_until = now() where user_id = $1 and started_at = $2::timestamptz", [actor.userId, startedAt]),
+    db.query(
+      `update crm.mail_relevance_runs set running_until = now(),
+         settled_at = case when $3 = 'set' then started_at when $3 = 'clear' then null else settled_at end
+       where user_id = $1 and started_at = $2::timestamptz`,
+      [actor.userId, startedAt, settled],
+    ),
   ).catch(() => undefined);
+}
+
+async function nothingToSort(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ idle: boolean }>(
+      `select r.settled_at is not null and r.settled_at > now() - make_interval(secs => $2)
+         and not exists (
+           select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+           where m.user_id = $1 and m.created_at > r.settled_at and not m.is_draft and f.role in ('inbox', 'archive', 'snoozed')
+         )
+         and not exists (
+           select 1 from crm.mail_thread_relevance t
+           where t.user_id = $1 and t.category is null and t.decided_at <= now() - make_interval(secs => $3)
+         ) as idle
+       from crm.mail_relevance_runs r where r.user_id = $1`,
+      [actor.userId, SETTLED_FOR_MS / 1000, RETRY_MS / 1000],
+    );
+    return Boolean(result.rows[0]?.idle);
+  });
 }
 
 export async function classifyCapture(
@@ -306,7 +332,12 @@ export async function classifyCapture(
   const deadline = options.deadline ?? Date.now() + (options.budgetMs ?? 20_000);
   const claimed = await claimRun(actor, options.gapSeconds ?? 0);
   if (!claimed) return { decided: 0, waiting: 0, skipped: true };
+  let settled: "set" | "clear" | "keep" = "clear";
   try {
+    if (await nothingToSort(actor).catch(() => false)) {
+      settled = "keep";
+      return { decided: 0, waiting: 0, skipped: false };
+    }
     const actors = await workspaceActors(actor);
     const raw = await unknownMail(actor, actors);
     const judged = await withActor(actor, (db) => judgeInDb(db, actor, raw));
@@ -332,9 +363,10 @@ export async function classifyCapture(
       todo.map(({ item, hint }) => ({ item, hint })),
       { deadline, fetchImpl: options.fetchImpl, headers: true, readHeaders: options.readHeaders },
     );
+    if (todo.length === 0) settled = "set";
     return { decided, waiting: todo.length - decided, skipped: false };
   } finally {
-    await releaseRun(actor, claimed);
+    await releaseRun(actor, claimed, settled);
   }
 }
 

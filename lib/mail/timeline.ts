@@ -70,7 +70,7 @@ async function ruledSenders(db: Db, actor: UserActor, workspaceIds: string[], fi
        and not exists (
          select 1 from crm.mail_subscriptions ms
          where ms.user_id = $1 and (ms.sender = t.address or ms.sender = '@' || split_part(t.address, '@', 2))
-           and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
+           and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null)
        )
        and not exists (select 1 from matched x where x.id = t.id and x.workspace_id = w.id)
      order by t.id, w.id
