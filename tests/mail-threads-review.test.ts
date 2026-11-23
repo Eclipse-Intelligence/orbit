@@ -5,10 +5,12 @@ import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { applyMailAction } from "@/lib/mail/actions";
+import { processDueMail } from "@/lib/mail/due";
+import { queueMailAction, runPendingMailActions } from "@/lib/mail/pending";
 import { threadText } from "@/lib/mail/ai";
 import { getMailThread } from "@/lib/mail/store";
 import { syncMail } from "@/lib/mail/sync";
-import { getThread, listThreads } from "@/lib/mail/threads";
+import { getThread, listThreads, mailNav } from "@/lib/mail/threads";
 import type { ThreadCursor, ThreadSummary } from "@/lib/mail/view";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -194,6 +196,39 @@ describe("mail threads and mailbox actions", () => {
       assert.deepEqual([await roleOf("snz-mixed-sent"), await roleOf("snz-mixed-in"), await roleOf("snz-mixed-draft")], ["sent", "snoozed", "drafts"]);
     });
 
+    it("shows a Sent-only reminder in Reminders while waiting and lifts it into the Inbox when due, without touching sent mail", async () => {
+      const keys = async (view: Parameters<typeof listThreads>[1]["view"]) => (await listThreads(owner, { view, limit: 100 })).threads.map((item) => item.key);
+      await seed({ thread: "snz-due-sent", folder: "sent", at: new Date(Date.now() - DAY), provider: "snz-due-sent-1", from: "mark@eclipse.test", read: true });
+      await seed({ thread: "snz-due-queued", folder: "sent", at: new Date(Date.now() - DAY), provider: "snz-due-queued-1", from: "mark@eclipse.test", read: true });
+      await seed({ thread: "snz-due-draft", folder: "drafts", at: new Date(Date.now() - DAY), provider: "snz-due-draft-1", from: "mark@eclipse.test", draft: true, read: true });
+      await applyMailAction(owner, { thread: thread("snz-due-sent"), action: "snooze", until: until() }, outlook().fetchImpl);
+      await queueMailAction(owner, { thread: thread("snz-due-queued"), action: "snooze", view: { role: "sent" }, until: until() });
+      const queued = outlook();
+      await runPendingMailActions(owner, { fetchImpl: queued.fetchImpl });
+      assert.deepEqual(queued.writes(), []);
+      await applyMailAction(owner, { thread: thread("snz-due-draft"), action: "snooze", until: until() }, outlook().fetchImpl);
+
+      const names = ["snz-due-sent", "snz-due-queued", "snz-due-draft"].map(thread);
+      const waiting = await keys({ role: "snoozed" });
+      for (const name of names) assert.ok(waiting.includes(name), `${name} is in Reminders while waiting`);
+      assert.equal((await mailNav(owner)).snoozed, waiting.length);
+      assert.ok(!(await keys({ role: "inbox" })).some((name) => names.includes(name)), "not in the Inbox yet");
+
+      await admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where thread_key like 'snz-due-%' and kind = 'snooze' and state = 'waiting'");
+      const box = outlook();
+      const report = await processDueMail(owner, { fetchImpl: box.fetchImpl, origin: null });
+      assert.equal(report.returned, 3);
+      assert.deepEqual(box.writes(), [], "nothing is moved or marked unread in Outlook");
+      assert.equal((await admin().query("select 1 from crm.mail_messages where thread_key like 'snz-due-%' and not is_read and not is_draft")).rowCount, 0, "no sent message becomes unread");
+      const inbox = await listThreads(owner, { view: { role: "inbox" }, limit: 100 });
+      for (const name of names) {
+        const row = inbox.threads.find((item) => item.key === name);
+        assert.ok(row, `${name} is in the Inbox when due`);
+        assert.equal(row.reminder?.kind, "snooze");
+      }
+      assert.ok(!(await keys({ role: "snoozed" })).some((name) => names.includes(name)), "gone from Reminders once it is back");
+    });
+
     it("says so, and sets no reminder, when the thread is only in Trash", async () => {
       await seed({ thread: "snz-trash", folder: "trash", at: new Date(Date.now() - DAY), provider: "snz-trash-1" });
       const box = outlook();
@@ -328,7 +363,7 @@ describe("mail threads and mailbox actions", () => {
 
     it("lists Sent, including mail with no received time, and a chosen folder page by page", async () => {
       const sent = await listThreads(owner, { view: { role: "sent" }, limit: 100 });
-      const at = sent.threads.map((item) => new Date(item.latestAt!).getTime());
+      const at = sent.threads.filter((item) => !item.reminder).map((item) => new Date(item.latestAt!).getTime());
       assert.deepEqual(at, [...at].sort((x, y) => y - x));
       assert.ok(sent.threads.length >= 6);
       assert.ok(sent.threads.some((item) => item.key === thread("sent-null")));

@@ -59,7 +59,17 @@ function mailHref(sourceId: string, key: string) {
 async function returnSnooze(actor: UserActor, reminder: ReminderRow, fetchImpl: typeof fetch) {
   const thread = threadKey(reminder.source_id, reminder.thread_key);
   await everyEmailChanged(applyMailAction(actor, { thread, action: "inbox", view: { role: "snoozed" } }, fetchImpl));
-  await applyMailAction(actor, { thread, action: "unread", view: { role: "inbox" } }, fetchImpl).catch(() => undefined);
+  const inInbox = await withActor(actor, async (db) => {
+    const result = await db.query<{ found: boolean }>(
+      `select exists (
+         select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+         where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role = 'inbox'
+       ) as found`,
+      [actor.userId, reminder.source_id, reminder.thread_key],
+    );
+    return Boolean(result.rows[0]?.found);
+  });
+  if (inInbox) await applyMailAction(actor, { thread, action: "unread", view: { role: "inbox" } }, fetchImpl).catch(() => undefined);
   await withActor(actor, (db) =>
     db.query("update crm.mail_reminders set state = 'due', surfaced_at = now() where id = $1", [reminder.id]),
   );

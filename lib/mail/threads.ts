@@ -68,6 +68,16 @@ const SCOPED_COLUMNS = `m.id, m.source_id, m.thread_key as tk, m.subject, m.snip
   m.is_read, m.is_flagged, m.has_attachments, (m.is_draft and f.role = 'drafts') as is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
   m.tracking_id, m.focused`;
 
+const REMINDED_WITHOUT_FOLDER = `(m.source_id, m.thread_key) in (
+    select rm.source_id, rm.thread_key from crm.mail_reminders rm
+    where rm.user_id = m.user_id and rm.state = 'waiting' and rm.kind = 'snooze'
+  )
+  and not exists (
+    select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+    where o.user_id = m.user_id and o.source_id = m.source_id and o.thread_key = m.thread_key
+      and ofo.role in ('snoozed', 'inbox', 'other', 'archive')
+  )`;
+
 const WINDOW_DAYS = [7, 56, 448];
 const CURSOR_SLACK_MS = 1000;
 
@@ -96,7 +106,9 @@ export async function listThreads(
       split = role === "inbox" && input.view && "role" in input.view ? (input.view.split ?? null) : null;
       splitting = role === "inbox";
       inbox = role === "inbox";
-      if (!inbox) {
+      if (role === "snoozed") {
+        where.push(`(f.role = 'snoozed' or (f.role in ('sent', 'drafts') and ${REMINDED_WITHOUT_FOLDER}))`);
+      } else if (!inbox) {
         values.push(role);
         where.push(`f.role = $${values.length}`);
       }
@@ -132,11 +144,15 @@ export async function listThreads(
            where ${where.join(" and ")} and f.role = 'inbox'
            union all
            select ${SCOPED_COLUMNS} from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-           where ${where.join(" and ")} and f.role not in ('inbox', 'trash', 'junk', 'outbox', 'drafts')
+           where ${where.join(" and ")} and f.role not in ('inbox', 'trash', 'junk', 'outbox')
              and (m.source_id, m.thread_key) in (
                select rm.source_id, rm.thread_key from crm.mail_reminders rm
-               where rm.user_id = $1 and rm.state = 'due' and rm.kind = 'follow_up'
-             )`
+               where rm.user_id = $1 and rm.state = 'due' and rm.kind in ('follow_up', 'snooze')
+             )
+             and (f.role <> 'drafts' or (m.source_id, m.thread_key) in (
+               select rm.source_id, rm.thread_key from crm.mail_reminders rm
+               where rm.user_id = $1 and rm.state = 'due' and rm.kind = 'snooze'
+             ))`
         : windowed
           ? `${base} and (m.source_id, m.thread_key) in (select source_id, thread_key from candidates)`
           : base;
