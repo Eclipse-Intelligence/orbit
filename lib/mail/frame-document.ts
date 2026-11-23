@@ -1,5 +1,3 @@
-import { frameTokenComment } from "@/lib/mail/frame-keys";
-
 export const QUOTE_SELECTORS = [
   ".gmail_quote_container",
   ".gmail_quote",
@@ -23,8 +21,8 @@ function policy(nonce: string) {
   return `default-src 'none'; script-src 'nonce-${nonce}'; img-src https: http: data:; style-src 'unsafe-inline' https: http:; font-src https: http: data:; media-src https: data:`;
 }
 
-function frameScript(hideQuotes: boolean, token: string) {
-  const config = JSON.stringify({ token, hideQuotes, selectors: QUOTE_SELECTORS, hideClass: HIDE_QUOTES, wrapId: WRAP_ID, panId: PAN_ID, maxZoom: MAX_ZOOM });
+function frameScript(hideQuotes: boolean) {
+  const config = JSON.stringify({ hideQuotes, selectors: QUOTE_SELECTORS, hideClass: HIDE_QUOTES, wrapId: WRAP_ID, panId: PAN_ID, maxZoom: MAX_ZOOM });
   return `(function () {
   var cfg = ${config.replace(/</g, "\\u003c")};
   var layout = { available: 0, width: 0, height: 0 };
@@ -34,7 +32,18 @@ function frameScript(hideQuotes: boolean, token: string) {
   var started = false;
   var quotesFound = null;
   var lastWidth = -1;
-  function post(message) { message.token = cfg.token; parent.postMessage(message, "*"); }
+  var port = null;
+  var queue = [];
+  function post(message) {
+    if (port) port.postMessage(message);
+    else { queue.push(message); if (queue.length > 60) queue.shift(); }
+  }
+  function hello() {
+    if (port) return;
+    parent.postMessage({ type: "hello", complete: document.readyState === "complete" }, "*");
+  }
+  [0, 100, 300, 700, 1500, 3000, 6000, 10000, 15000].forEach(function (delay) { setTimeout(hello, delay); });
+  window.addEventListener("load", hello);
   function height(force) {
     if (!document.body) return;
     var value = Math.ceil(document.body.scrollHeight);
@@ -46,13 +55,21 @@ function frameScript(hideQuotes: boolean, token: string) {
     height(true);
     if (quotesFound !== null) post({ type: "quotes", found: quotesFound });
   }
-  window.addEventListener("message", function (event) {
-    if (event.source !== parent || !event.data) return;
+  function receive(event) {
+    if (!event.data) return;
     if (event.data.type === "measure") report();
     else if (event.data.type === "quotes" && started) {
       document.documentElement.classList.toggle(cfg.hideClass, !event.data.show);
       fit();
     }
+  }
+  window.addEventListener("message", function (event) {
+    if (port || event.source !== parent || !event.data || event.data.type !== "port" || !event.ports || !event.ports[0]) return;
+    port = event.ports[0];
+    port.onmessage = receive;
+    var waiting = queue;
+    queue = [];
+    for (var i = 0; i < waiting.length; i++) port.postMessage(waiting[i]);
   });
   function wrap() { return document.getElementById(cfg.wrapId); }
   function maxPan() { return Math.max(0, layout.available * zoom - layout.available); }
@@ -213,11 +230,11 @@ function frameScript(hideQuotes: boolean, token: string) {
 })();`;
 }
 
-export function frameDocument(html: string, rich: boolean, hideQuotes: boolean, nonce: string, token: string) {
+export function frameDocument(html: string, rich: boolean, hideQuotes: boolean, nonce: string) {
   const theme = rich
     ? "html,body{background:#fff;color:#111;}"
     : "html,body{background:transparent;color:#e6e8ec;} body *{color:inherit !important;background-color:transparent !important;border-color:#333 !important;} a,a *{color:#9db4ff !important;}";
-  return `<!doctype html>${frameTokenComment(token)}<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy(nonce)}"><base target="_blank"><meta name="color-scheme" content="${rich ? "light" : "dark"}"><style>
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy(nonce)}"><base target="_blank"><meta name="color-scheme" content="${rich ? "light" : "dark"}"><style>
 html,body{margin:0;padding:0;touch-action:pan-y;}
 html,body{overflow-x:hidden !important;}
 #${WRAP_ID}{transform-origin:0 0;}
@@ -228,5 +245,5 @@ pre{white-space:pre-wrap;}
 blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid ${rich ? "#ddd" : "#3a3a3a"};}
 ${QUOTE_SELECTORS.map((selector) => `html.${HIDE_QUOTES} ${selector}`).join(",")}{display:none !important;}
 ${theme}
-</style><script nonce="${nonce}">${frameScript(hideQuotes, token)}</script></head><body><div id="${PAN_ID}"><div id="${WRAP_ID}">${html}</div></div></body></html>`;
+</style><script nonce="${nonce}">${frameScript(hideQuotes)}</script></head><body><div id="${PAN_ID}"><div id="${WRAP_ID}">${html}</div></div></body></html>`;
 }

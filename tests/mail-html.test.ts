@@ -92,4 +92,38 @@ describe("email links", () => {
   it("forces every link, including one inside an svg, to open in a new tab", () => {
     assert.equal(cleanEmailHtml('<svg><a href="https://x.test" target="_self"><text>x</text></a></svg>'), '<svg><a href="https://x.test" target="_blank"><text>x</text></a></svg>');
   });
+
+  it("cannot be tricked into rebuilding a tag by removing another", () => {
+    const refresh = 'http-equiv="refresh" content="0;url=https://evil.example/"';
+    const hostile = [
+      `<me<meta>ta ${refresh}>`,
+      `<me src="javascript:x"ta http-equiv=refresh content="0;url=https://evil.example/">`,
+      `<m<meta><meta>eta ${refresh}>`,
+      `<<meta>meta ${refresh}>`,
+      `<scr<script>x</script>ipt>alert(1)</script>`,
+      `<ifr<iframe></iframe>ame src="https://evil.example/"></iframe>`,
+      `<ba<base href="https://a.test/">se href="https://evil.example/">`,
+      `<fo<form></form>rm action="https://evil.example/"></form>`,
+      `<img sr<img src="https://x.test/api/mail/open/0e9b1b8a-6a6c-4b7a-9d43-5d2f1a2b3c4d">c="https://x.test/api/mail/open/0e9b1b8a-6a6c-4b7a-9d43-5d2f1a2b3c4d">`,
+      `<a hr<a href="javascript:x">ef="javascript:x">x</a>`,
+      `<img sr<img src="cid:a">c="cid:a">`,
+      `<me<me<meta>ta>ta ${refresh}>`,
+    ];
+    for (const attack of hostile) {
+      const cleaned = cleanEmailHtml(`<p>a</p>${attack}<p>b</p>`);
+      const tags = [...cleaned.matchAll(/<[^>]*>/g)].map((match) => match[0]).join("");
+      assert.equal(/<\/?(meta|script|iframe|base|form)\b/i.test(cleaned), false, attack);
+      assert.equal(/refresh|javascript:|\/api\/mail\/open\/|cid:|evil\.example/i.test(tags), false, attack);
+      assert.equal(cleanEmailHtml(cleaned), cleaned, attack);
+    }
+  });
+
+  it("gives up safely on input that keeps rebuilding itself", () => {
+    const depth = 40;
+    const attack = `${"<me".repeat(depth)}${"<meta>".repeat(1)}${"ta>".repeat(depth)} http-equiv="refresh" content="0;url=https://evil.example/">`;
+    const cleaned = cleanEmailHtml(attack);
+    assert.equal(/<meta/i.test(cleaned), false);
+    assert.equal(/<[a-z]/i.test(cleaned), false);
+    assert.equal(cleanEmailHtml("<p>Plain <strong>mail</strong></p>"), "<p>Plain <strong>mail</strong></p>");
+  });
 });

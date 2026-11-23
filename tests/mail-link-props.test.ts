@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { linkMatchesUrl, listFromUrl } from "@/lib/mail/link-props";
-import { acceptFrameMessage, frameToken, frameTokenComment } from "@/lib/mail/frame-keys";
+import { createFrameGuard } from "@/lib/mail/frame-guard";
 import { frameDocument } from "@/lib/mail/frame-document";
 
 const inbox = { view: "inbox", account: null, query: "" };
@@ -28,36 +28,84 @@ describe("links into Mail", () => {
   });
 });
 
-describe("messages from the email frame", () => {
-  it("only accepts messages carrying the frame's own token", () => {
-    assert.ok(acceptFrameMessage({ type: "key", key: "#", token: "abc" }, "abc"));
-    assert.equal(acceptFrameMessage({ type: "key", key: "#" }, "abc"), null);
-    assert.equal(acceptFrameMessage({ type: "key", key: "#", token: "other" }, "abc"), null);
-    assert.equal(acceptFrameMessage({ type: "height", value: 10, token: "" }, ""), null);
-    assert.equal(acceptFrameMessage(null, "abc"), null);
-    assert.equal(acceptFrameMessage("abc", "abc"), null);
-    assert.equal(acceptFrameMessage({ type: "key", key: "#", token: "abc" }, null), null);
+describe("the email frame", () => {
+  it("connects the first hello of each srcdoc and ignores the rest", () => {
+    const guard = createFrameGuard();
+    guard.fresh();
+    assert.equal(guard.hello(false), true);
+    assert.equal(guard.hello(false), false);
+    assert.equal(guard.hello(true), false);
+    guard.fresh();
+    assert.equal(guard.hello(false), true);
   });
 
-  it("reads the token from the start of the frame document and nowhere else", () => {
-    const token = "0123456789abcdef0123456789abcdef";
-    const planted = "ffffffffffffffffffffffffffffffff";
-    const doc = `<!doctype html>${frameTokenComment(token)}<html><head><meta charset="utf-8"></head><body><p>${"x".repeat(2000)}</p>${frameTokenComment(planted)}</body></html>`;
-    assert.equal(frameToken(doc), token);
-    assert.equal(frameToken(`<!doctype html><html><head></head><body>${frameTokenComment(planted)}</body></html>`), null);
-    assert.equal(frameToken(`<!doctype html><html><head></head><body><meta name="orbit-frame" content="${planted}">orbit-frame:${planted}</body></html>`), null);
-    assert.equal(frameToken(`${frameTokenComment(planted)}<!doctype html>`), null);
-    assert.equal(frameToken(null), null);
-    assert.equal(frameToken(""), null);
+  it("treats a second load of the same srcdoc as a navigation and restores it", () => {
+    const guard = createFrameGuard();
+    guard.fresh();
+    assert.equal(guard.hello(false), true);
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.load(), "restore");
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.hello(false), true);
   });
 
-  it("keeps the token out of every attribute of the frame document", () => {
-    const token = "0123456789abcdef0123456789abcdef";
-    const doc = frameDocument('<p style="color:red">Hi</p><a href="https://x.test">x</a>', true, true, "n0nce", token);
-    assert.equal(frameToken(doc), token);
-    const attributes = [...doc.matchAll(/<[a-z][^>]*>/gi)].map((match) => match[0]).filter((tag) => !tag.startsWith("<script"));
-    for (const tag of attributes) assert.equal(tag.includes(token), false, tag);
-    assert.equal(doc.split(token).length - 1, 2);
-    assert.equal(doc.indexOf(token) < doc.indexOf("<html>"), true);
+  it("does not hand a port to the navigated page that is still in the frame while it is restored", () => {
+    const guard = createFrameGuard();
+    guard.fresh();
+    assert.equal(guard.hello(false), true);
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.load(), "restore");
+    assert.equal(guard.hello(true), false);
+    assert.equal(guard.hello(false), false);
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.hello(true), true);
+    assert.equal(guard.load(), "restore");
+    assert.equal(guard.hello(false), false);
+  });
+
+  it("counts a load that happened before the page was hydrated", () => {
+    const guard = createFrameGuard();
+    guard.fresh();
+    assert.equal(guard.hello(true), true);
+    assert.equal(guard.load(), "restore");
+  });
+
+  it("does not count the same load twice when hello says it was already complete", () => {
+    const guard = createFrameGuard();
+    guard.fresh();
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.hello(true), true);
+    assert.equal(guard.load(), "restore");
+  });
+
+  it("does not misfire when the email changes", () => {
+    const guard = createFrameGuard();
+    guard.fresh();
+    guard.hello(false);
+    assert.equal(guard.load(), "first");
+    guard.fresh();
+    assert.equal(guard.hello(false), true);
+    assert.equal(guard.load(), "first");
+  });
+
+  it("stops restoring an email that keeps navigating away", () => {
+    const guard = createFrameGuard(2);
+    guard.fresh();
+    guard.hello(false);
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.load(), "restore");
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.load(), "restore");
+    assert.equal(guard.load(), "first");
+    assert.equal(guard.load(), "blocked");
+    guard.fresh();
+    assert.equal(guard.load(), "first");
+  });
+
+  it("keeps any secret out of the frame document", () => {
+    const doc = frameDocument('<p style="color:red">Hi</p><a href="https://x.test">x</a>', true, true, "n0nce");
+    assert.equal(/token|orbit-frame/i.test(doc), false);
+    assert.equal(doc.includes("MessageChannel") || doc.includes("event.ports"), true);
+    assert.equal(doc.indexOf("<!--"), -1);
   });
 });

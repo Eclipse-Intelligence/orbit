@@ -51,7 +51,7 @@ function stripScriptUrls(html: string) {
   );
 }
 
-export function cleanEmailHtml(html: string) {
+function cleanOnce(html: string) {
   return openLinksInNewTab(
     stripScriptUrls(
       stripTrackers(html)
@@ -61,6 +61,18 @@ export function cleanEmailHtml(html: string) {
         .replace(EVENT_ATTRIBUTES, ""),
     ).replace(CID_IMAGES, ""),
   );
+}
+
+const MAX_CLEAN_PASSES = 8;
+
+export function cleanEmailHtml(html: string) {
+  let current = html;
+  for (let pass = 0; pass < MAX_CLEAN_PASSES; pass += 1) {
+    const next = cleanOnce(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current.replace(/</g, "&lt;");
 }
 
 export function richEmail(html: string) {
