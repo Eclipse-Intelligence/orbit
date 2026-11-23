@@ -24,14 +24,24 @@ export function trackingIdIn(html: string | null | undefined) {
   return html?.match(TRACKING_ID)?.[1]?.toLowerCase() ?? null;
 }
 
+const LINK_TAGS = /<(a|area)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/gi;
+const ATTRIBUTE = /\s+([^\s"'<>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+))?/g;
+
+export function openLinksInNewTab(html: string) {
+  return html.replace(LINK_TAGS, (_tag, name: string, attributes: string) => {
+    const kept = [...attributes.matchAll(ATTRIBUTE)].filter((match) => match[1].toLowerCase() !== "target").map((match) => match[0]);
+    return `<${name}${kept.join("")} target="_blank">`;
+  });
+}
+
 export function cleanEmailHtml(html: string) {
-  return stripTrackers(html)
+  return openLinksInNewTab(stripTrackers(html)
     .replace(BLOCKED_BLOCKS, "")
     .replace(BLOCKED_TAGS, "")
     .replace(REFRESH, "")
     .replace(EVENT_ATTRIBUTES, "")
     .replace(SCRIPT_URLS, "")
-    .replace(CID_IMAGES, "");
+    .replace(CID_IMAGES, ""));
 }
 
 export function richEmail(html: string) {

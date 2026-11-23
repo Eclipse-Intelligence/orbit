@@ -143,15 +143,14 @@ describe("thread summaries from an open thread", () => {
 });
 
 describe("keys forwarded from an email", () => {
-  it("passes plain letters, symbols, Escape and the up and down arrows", () => {
+  it("passes plain letters, symbols and Escape", () => {
     assert.deepEqual(forwardedKey({ type: "key", key: "j", code: "KeyJ", shiftKey: false, repeat: true }), { key: "j", code: "KeyJ", shiftKey: false, repeat: true });
     assert.equal(forwardedKey({ type: "key", key: "#", shiftKey: true })?.shiftKey, true);
     assert.ok(forwardedKey({ type: "key", key: "Escape" }));
-    assert.ok(forwardedKey({ type: "key", key: "ArrowDown" }));
   });
 
   it("ignores everything else", () => {
-    for (const key of [" ", "Enter", "Tab", "Backspace", "ArrowLeft", "Meta", "ab"]) assert.equal(forwardedKey({ type: "key", key }), null);
+    for (const key of [" ", "Enter", "Tab", "Backspace", "ArrowLeft", "ArrowUp", "ArrowDown", "Meta", "ab"]) assert.equal(forwardedKey({ type: "key", key }), null);
     assert.equal(forwardedKey({ type: "height", key: "j" }), null);
     assert.equal(forwardedKey({ type: "key", key: 4 }), null);
     assert.equal(forwardedKey(null), null);

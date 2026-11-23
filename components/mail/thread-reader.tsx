@@ -7,6 +7,7 @@ import DeferralNotice from "@/components/mail/deferral-notice";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
+import { createDraftDeletes } from "@/lib/mail/draft-deletes";
 import { cancelReminder, forgetThread, loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import type { ComposerDraft, ComposerStart, SendTracker } from "@/components/mail/mail-composer";
@@ -71,47 +72,21 @@ async function sendDraftDelete(id: string, keepalive: boolean) {
   return body?.error ?? DRAFT_DELETE_FAILED;
 }
 
-type PendingDraftDelete = { timer: number; thread: string; failed: (id: string, problem: string) => void };
-
-const pendingDraftDeletes = new Map<string, PendingDraftDelete>();
+const draftDeletes = createDraftDeletes({ delayMs: UNDO_DELETE_MS, send: sendDraftDelete, deleted: forgetThread });
 let flushWatched = false;
-
-function runDraftDelete(id: string, keepalive: boolean) {
-  const entry = pendingDraftDeletes.get(id);
-  if (!entry) return;
-  window.clearTimeout(entry.timer);
-  pendingDraftDeletes.delete(id);
-  void sendDraftDelete(id, keepalive).then((problem) => {
-    if (problem) entry.failed(id, problem);
-    else forgetThread(entry.thread);
-  });
-}
-
-function flushDraftDeletes() {
-  for (const id of [...pendingDraftDeletes.keys()]) runDraftDelete(id, true);
-}
 
 function watchDraftFlush() {
   if (flushWatched) return;
   flushWatched = true;
-  window.addEventListener("pagehide", flushDraftDeletes);
+  window.addEventListener("pagehide", draftDeletes.flush);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushDraftDeletes();
+    if (document.visibilityState === "hidden") draftDeletes.flush();
   });
 }
 
-function scheduleDraftDelete(id: string, thread: string, failed: PendingDraftDelete["failed"]) {
+function scheduleDraftDelete(id: string, thread: string, failed: (id: string, problem: string) => void) {
   watchDraftFlush();
-  const timer = window.setTimeout(() => runDraftDelete(id, false), UNDO_DELETE_MS);
-  pendingDraftDeletes.set(id, { timer, thread, failed });
-}
-
-function cancelDraftDelete(id: string) {
-  const entry = pendingDraftDeletes.get(id);
-  if (!entry) return false;
-  window.clearTimeout(entry.timer);
-  pendingDraftDeletes.delete(id);
-  return true;
+  draftDeletes.schedule(id, thread, failed);
 }
 
 function minuteNow() {
@@ -643,7 +618,7 @@ function ThreadReader({
   accounts: ComposeAccount[];
   onAction: (action: ReaderAction) => void;
   onBack: () => void;
-  onSent: () => void;
+  onSent: (key: string) => void;
   onSending: (draftOnly: boolean, others: boolean) => ReturnType<SendTracker>;
   onLeave: () => void;
   onNext: (swiped?: boolean) => void;
@@ -691,7 +666,7 @@ function ThreadReader({
       : null);
 
   const outsideDraft =
-    !dismissed && !active && target ? (detail?.messages.filter((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id)).at(-1) ?? null) : null;
+    !dismissed && !active && target ? (detail?.messages.filter((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id) && !draftDeletes.isDiscarded(message.id)).at(-1) ?? null) : null;
   const [openedOutside, setOpenedOutside] = useState<string | null>(null);
   if (outsideDraft && openedOutside !== outsideDraft.id) editOutsideDraft(outsideDraft, true);
 
@@ -833,7 +808,7 @@ function ThreadReader({
       action: {
         label: "Undo",
         run: () => {
-          if (cancelDraftDelete(id)) restoreDraft(id);
+          if (draftDeletes.cancel(id)) restoreDraft(id);
         },
       },
     });
@@ -993,7 +968,7 @@ function ThreadReader({
   const deleteDraft = useCallback((message: ThreadMessage) => draftActions.current.remove(message), []);
   const replacing = active?.replaces ?? null;
   const shownDetail = useMemo(
-    () => (detail ? { ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id) && message.id !== replacing) } : null),
+    () => (detail ? { ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id) && !draftDeletes.isDiscarded(message.id) && message.id !== replacing) } : null),
     [detail, removedDrafts, replacing],
   );
   const repliedFollowUp = detail?.followUpReplied ?? null;
@@ -1237,7 +1212,7 @@ function ThreadReader({
                 target && (
                   <>
                   {prepared && <PreparedCard prepared={prepared} onUse={() => void takePrepared(prepared)} onDismiss={() => dismissPrepared(prepared)} />}
-                  {followUp?.action === "send" && <FollowUpBanner key={followUp.id} followUp={followUp} onChanged={onSent} />}
+                  {followUp?.action === "send" && <FollowUpBanner key={followUp.id} followUp={followUp} onChanged={() => onSent(detail.key)} />}
                   <div className="flex flex-wrap items-center gap-2 px-4">
                     {tracked && (
                       <span className="order-last ml-auto">

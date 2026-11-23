@@ -67,6 +67,7 @@ import type { SendTracker } from "@/components/mail/mail-composer";
 import { watchEdgeSwipe, type EdgeHandlers } from "@/components/mail/swipe";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
+import { linkMatchesUrl } from "@/lib/mail/link-props";
 import { THREAD_CACHE_LIMIT, trimRecord } from "@/lib/mail/lru";
 import { bareSummary, summaryFromDetail } from "@/lib/mail/thread-summary";
 import { MAIL_SPLITS, refusalMessage, SPLIT_LABELS, type MailSplit, type ComposeAccount, type ComposeIntent, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
@@ -184,7 +185,7 @@ type ReaderActions = {
   onSplit: (sender: string, split: MailSplit) => void;
   onUnsubscribe: (mode: UnsubscribeMode) => void;
   onBlock: () => void;
-  onSent: () => void;
+  onSent: (key: string) => void;
   onSending: (draftOnly: boolean, others: boolean) => ReturnType<SendTracker>;
   onLeave: () => void;
 };
@@ -858,7 +859,7 @@ export default function MailScreen({
     }
     const opened = details[key] ?? cachedThread(key);
     const thread = listed ?? (opened ? summaryFromDetail(opened) : bareSummary(key));
-    const from = target.query ? "search" : target.view;
+    const from = !listed || target.query ? "search" : target.view;
     if (MOVES.has(action)) {
       const list = currentPage?.threads ?? [];
       const index = list.findIndex((item) => item.key === key);
@@ -884,7 +885,7 @@ export default function MailScreen({
         closeReader();
       }
       forgetOtherLists(target);
-      const undoable = (inInbox(from) && action !== "inbox") || action === "snooze";
+      const undoable = Boolean(listed) && ((inInbox(from) && action !== "inbox") || action === "snooze");
       const undoFrom = action === "snooze" ? "snoozed" : action === "archive" ? "archive" : "trash";
       const shown = showToast({
         message: action === "snooze" && detail ? `Reminder set for ${detail}.` : DONE_LABEL[action],
@@ -1086,21 +1087,25 @@ export default function MailScreen({
     selectRef.current(target, true);
   }, [linkedShare, initialShared, initialThread]);
 
-  const seenInitial = useRef({ thread: initialThread?.key ?? null, list: listKey(initialQuery) });
+  const seenProps = useRef({ thread: initialThread, query: initialQuery });
   useEffect(() => {
-    const key = initialThread?.key ?? null;
-    const list = listKey(initialQuery);
-    const seen = seenInitial.current;
-    seenInitial.current = { thread: key ?? seen.thread, list };
+    const seen = seenProps.current;
+    if (seen.thread === initialThread && seen.query === initialQuery) return;
+    seenProps.current = { thread: initialThread, query: initialQuery };
     if (linkedShare) return;
+    const link = { thread: initialThread?.key ?? null, query: initialQuery };
+    if (!linkMatchesUrl(new URL(window.location.href).searchParams, link)) return;
     const { query: shown, cursor: at, open: reading } = latest.current;
-    if (list !== seen.list && list !== listKey(shown)) showRef.current(initialQuery);
-    if (initialThread && initialThread.key !== seen.thread && (initialThread.key !== at || (!reading && narrow()))) {
+    if (listKey(initialQuery) !== listKey(shown)) {
+      searchText.set(initialQuery.query);
+      showRef.current(initialQuery);
+    }
+    if (initialThread && (initialThread.key !== at || (!reading && narrow()) || listKey(initialQuery) !== listKey(shown))) {
       storeThread(initialThread);
       if (sharedView(latest.current.query)) showRef.current({ view: HOME_VIEW, account: null, query: "" });
       selectRef.current(initialThread.key, true);
     }
-  }, [initialThread, initialQuery, linkedShare]);
+  }, [initialThread, initialQuery, linkedShare, searchText]);
 
   const readerPane = useRef<HTMLDivElement>(null);
   const backSwiped = useRef(false);
@@ -1489,9 +1494,7 @@ export default function MailScreen({
       onBlock: () => {
         if (cursor) setUnsubscribing({ thread: cursor, mode: "block" });
       },
-      onSent: () => {
-        if (cursor) sent(cursor, 2500);
-      },
+      onSent: (key: string) => sent(key, 2500),
       onSending: (draftOnly: boolean, others: boolean) => (cursor ? sending(cursor, draftOnly, others) : UNTRACKED),
       onLeave: () => {
         if (cursor) leave(cursor);
@@ -1507,7 +1510,7 @@ export default function MailScreen({
       onSplit: (sender: string, split: MailSplit) => readerActions.current?.onSplit(sender, split),
       onUnsubscribe: (mode: UnsubscribeMode) => readerActions.current?.onUnsubscribe(mode),
       onBlock: () => readerActions.current?.onBlock(),
-      onSent: () => readerActions.current?.onSent(),
+      onSent: (key: string) => readerActions.current?.onSent(key),
       onSending: (draftOnly: boolean, others: boolean) => readerActions.current?.onSending(draftOnly, others) ?? UNTRACKED,
       onLeave: () => readerActions.current?.onLeave(),
     }),

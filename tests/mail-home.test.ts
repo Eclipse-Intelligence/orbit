@@ -130,7 +130,7 @@ describe("mail home", () => {
 
   it("strips scripts and handlers from email HTML and spots designed emails", () => {
     const cleaned = cleanEmailHtml('<p onclick="x()">Hi</p><script>alert(1)</script><a href="javascript:alert(1)">x</a><img src="cid:logo"><iframe src="https://x.test"></iframe><base href="https://x.test">');
-    assert.equal(cleaned, "<p>Hi</p><a>x</a>");
+    assert.equal(cleaned, '<p>Hi</p><a target="_blank">x</a>');
     assert.equal(richEmail('<table width="600" bgcolor="#fff"><tr><td>x</td></tr></table>'), true);
     assert.equal(richEmail("<div>Plain reply</div>"), false);
   });

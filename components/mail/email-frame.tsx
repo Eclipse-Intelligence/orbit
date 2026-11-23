@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
-import { forwardedKey } from "@/lib/mail/frame-keys";
+import { acceptFrameMessage, forwardedKey } from "@/lib/mail/frame-keys";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 
@@ -27,13 +27,14 @@ const MAX_ZOOM = 4;
 const ASK_AGAIN_MS = [80, 250, 600, 1200, 2000];
 const GIVE_UP_MS = 3000;
 
-type FrameMessage =
+type FrameMessage = { token: string } & (
   | { type: "height"; value: number }
   | { type: "quotes"; found: boolean }
   | { type: "zoom"; zoomed: boolean }
   | { type: "pan"; dy: number }
   | { type: "key"; key: string; code: string; shiftKey: boolean; repeat: boolean }
-  | { type: "touch"; phase: "touchstart" | "touchmove" | "touchend" | "touchcancel"; touches: FrameTouch[]; changed: FrameTouch[] };
+  | { type: "touch"; phase: "touchstart" | "touchmove" | "touchend" | "touchcancel"; touches: FrameTouch[]; changed: FrameTouch[] }
+);
 
 type FrameTouch = { identifier: number; clientX: number; clientY: number };
 
@@ -47,8 +48,8 @@ function policy(nonce: string) {
   return `default-src 'none'; script-src 'nonce-${nonce}'; img-src https: http: data:; style-src 'unsafe-inline' https: http:; font-src https: http: data:; media-src https: data:`;
 }
 
-function frameScript(hideQuotes: boolean) {
-  const config = JSON.stringify({ hideQuotes, selectors: QUOTE_SELECTORS, hideClass: HIDE_QUOTES, wrapId: WRAP_ID, panId: PAN_ID, maxZoom: MAX_ZOOM });
+function frameScript(hideQuotes: boolean, token: string) {
+  const config = JSON.stringify({ token, hideQuotes, selectors: QUOTE_SELECTORS, hideClass: HIDE_QUOTES, wrapId: WRAP_ID, panId: PAN_ID, maxZoom: MAX_ZOOM });
   return `(function () {
   var cfg = ${config.replace(/</g, "\\u003c")};
   var layout = { available: 0, width: 0, height: 0 };
@@ -58,7 +59,7 @@ function frameScript(hideQuotes: boolean) {
   var started = false;
   var quotesFound = null;
   var lastWidth = -1;
-  function post(message) { parent.postMessage(message, "*"); }
+  function post(message) { message.token = cfg.token; parent.postMessage(message, "*"); }
   function height(force) {
     if (!document.body) return;
     var value = Math.ceil(document.body.scrollHeight);
@@ -200,12 +201,22 @@ function frameScript(hideQuotes: boolean) {
       zoomTo(zoom * Math.exp(-event.deltaY / 200), event.clientX, event.clientY);
     }, { passive: false });
     document.addEventListener("dblclick", function () { if (zoom > 1) zoomTo(1, 0); });
+    function newTab(event) {
+      var node = event.target;
+      var link = node && node.closest ? node.closest("a,area") : null;
+      if (link) link.setAttribute("target", "_blank");
+    }
+    document.addEventListener("click", newTab, true);
+    document.addEventListener("auxclick", newTab, true);
+    document.addEventListener("keydown", newTab, true);
+    var tagged = document.querySelectorAll("a[target],area[target]");
+    for (var t = 0; t < tagged.length; t++) tagged[t].setAttribute("target", "_blank");
     document.addEventListener("keydown", function (event) {
       if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing || event.defaultPrevented) return;
       var target = event.target;
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/i.test(target.tagName || ""))) return;
       var key = event.key;
-      if (key !== "Escape" && key !== "ArrowUp" && key !== "ArrowDown" && (key.length !== 1 || key === " ")) return;
+      if (key !== "Escape" && (key.length !== 1 || key === " ")) return;
       post({ type: "key", key: key, code: event.code || "", shiftKey: event.shiftKey, repeat: event.repeat });
     });
     document.addEventListener("load", fit, true);
@@ -227,7 +238,7 @@ function frameScript(hideQuotes: boolean) {
 })();`;
 }
 
-function documentFor(html: string, rich: boolean, hideQuotes: boolean, nonce: string) {
+function documentFor(html: string, rich: boolean, hideQuotes: boolean, nonce: string, token: string) {
   const theme = rich
     ? "html,body{background:#fff;color:#111;}"
     : "html,body{background:transparent;color:#e6e8ec;} body *{color:inherit !important;background-color:transparent !important;border-color:#333 !important;} a,a *{color:#9db4ff !important;}";
@@ -242,7 +253,7 @@ pre{white-space:pre-wrap;}
 blockquote{margin:0 0 0 .6em;padding-left:.8em;border-left:2px solid ${rich ? "#ddd" : "#3a3a3a"};}
 ${QUOTE_SELECTORS.map((selector) => `html.${HIDE_QUOTES} ${selector}`).join(",")}{display:none !important;}
 ${theme}
-</style><script nonce="${nonce}">${frameScript(hideQuotes)}</script></head><body><div id="${PAN_ID}"><div id="${WRAP_ID}">${html}</div></div></body></html>`;
+</style><script nonce="${nonce}">${frameScript(hideQuotes, token)}</script></head><body><div id="${PAN_ID}"><div id="${WRAP_ID}">${html}</div></div></body></html>`;
 }
 
 function touchEvent(message: Extract<FrameMessage, { type: "touch" }>) {
@@ -267,13 +278,18 @@ export default function EmailFrame({
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [nonce] = useState(randomNonce);
+  const [token] = useState(randomNonce);
   const [height, setHeight] = useState(rich ? 320 : 80);
   const [measured, setMeasured] = useState(false);
   const [gaveUp, setGaveUp] = useState(false);
   const [quoted, setQuoted] = useState(false);
   const [showQuotes, setShowQuotes] = useState(false);
   const heard = useRef(false);
-  const source = useMemo(() => documentFor(html, rich, hideQuotes, nonce), [html, rich, hideQuotes, nonce]);
+  const source = useMemo(() => documentFor(html, rich, hideQuotes, nonce, token), [html, rich, hideQuotes, nonce, token]);
+
+  useLayoutEffect(() => {
+    if (frame.current && frame.current.srcdoc !== source) frame.current.srcdoc = source;
+  }, [source]);
 
   const ask = useCallback(() => {
     if (!heard.current) frame.current?.contentWindow?.postMessage({ type: "measure" }, "*");
@@ -297,8 +313,8 @@ export default function EmailFrame({
     const unwatch = swipe ? watchSwipe(proxy, swipe) : null;
     const listen = (event: MessageEvent) => {
       if (!frame.current || event.source !== frame.current.contentWindow) return;
-      const message = event.data as FrameMessage | null;
-      if (!message || typeof message !== "object") return;
+      const message = acceptFrameMessage(event.data, token) as FrameMessage | null;
+      if (!message) return;
       if (message.type === "height" && Number.isFinite(message.value)) {
         heard.current = true;
         setHeight(Math.max(24, Math.ceil(message.value)));
@@ -323,7 +339,7 @@ export default function EmailFrame({
       window.removeEventListener("message", listen);
       unwatch?.();
     };
-  }, [swipe]);
+  }, [swipe, token]);
 
   const toggleQuotes = () => {
     const next = !showQuotes;
@@ -338,8 +354,6 @@ export default function EmailFrame({
         title={title}
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
-        srcDoc={source}
-        suppressHydrationWarning
         onLoad={() => {
           heard.current = false;
           ask();
