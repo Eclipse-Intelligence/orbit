@@ -94,11 +94,11 @@ export async function loadAttachments(
   actor: UserActor,
   ids: unknown,
   fetchImpl: typeof fetch = fetch,
-): Promise<{ files: MailAttachment[]; summary: AttachmentSummary[] }> {
+): Promise<{ files: (MailAttachment & { id: string })[]; summary: AttachmentSummary[] }> {
   const wanted = attachmentIds(ids);
   if (wanted.length === 0) return { files: [], summary: [] };
   const ordered = await attachmentRows(actor, wanted);
-  const files: MailAttachment[] = [];
+  const files: (MailAttachment & { id: string })[] = [];
   for (const row of ordered) {
     let bytes: Uint8Array;
     try {
@@ -107,7 +107,7 @@ export async function loadAttachments(
       throw new CrmError("invalid_input", `${row.name} didn't finish uploading. Attach it again.`, 400, { field: "attachments", cause: storageFailure(error).message });
     }
     if (bytes.byteLength !== row.size) throw new CrmError("invalid_input", `${row.name} didn't finish uploading. Attach it again.`, 400, { field: "attachments" });
-    files.push({ name: row.name, contentType: row.content_type, bytes });
+    files.push({ id: row.id, name: row.name, contentType: row.content_type, bytes });
   }
   return { files, summary: ordered.map((row) => ({ name: row.name, size: row.size })) };
 }
