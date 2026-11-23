@@ -35,9 +35,11 @@ const REPLY_CHECK_MS = 10_000;
 const REPLY_CHECK_MAX_MS = 25_000;
 const REPLY_LANES = 3;
 const REPLY_LANES_SERVERLESS = 2;
-const CONNECTION_TROUBLE = /timeout exceeded when trying to connect|connection terminated|econnreset|econnrefused|too many clients|sorry, too many/i;
+const CONNECTION_TROUBLE = /timeout exceeded when trying to connect|connection terminated|econnreset|econnrefused|too many clients|sorry, too many|statement timeout|canceling statement|max client connections|connection terminated unexpectedly/i;
 const REPLY_MAX_FAILURES = 3;
 const REPLY_RETRY_MINUTES = 60;
+const REPLY_MAX_SLOW = 6;
+const REPLY_SLOW_RETRY_MINUTES = 180;
 const PREPARE_CLAIM_SECONDS = 150;
 
 type PreparedKind = "reply" | "nudge";
@@ -240,7 +242,10 @@ async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[],
          and ($7 or not exists (
            select 1 from crm.mail_prepared rf
            where rf.message_id = m.id and rf.kind = 'reply_failed'
-             and (rf.misses >= ${REPLY_MAX_FAILURES} or rf.updated_at > now() - make_interval(mins => ${REPLY_RETRY_MINUTES}))
+             and (
+               rf.misses >= ${REPLY_MAX_FAILURES} or rf.transient >= ${REPLY_MAX_SLOW}
+               or rf.updated_at > now() - make_interval(mins => case when rf.transient > 0 then ${REPLY_SLOW_RETRY_MINUTES} else ${REPLY_RETRY_MINUTES} end)
+             )
          ))
          and not ($7 and exists (
            select 1 from crm.mail_pitch_failures pf
@@ -662,19 +667,27 @@ async function releasePrepare(actor: UserActor, startedAt: string) {
   ).catch(() => undefined);
 }
 
-function blamesTheEmail(error: unknown) {
+export function blamesTheEmail(error: unknown) {
   if (error instanceof LlmError) return failedOnTheInput(error);
   return !CONNECTION_TROUBLE.test(error instanceof Error ? error.message : String(error));
 }
 
-async function noteReplyFailure(actor: UserActor, candidate: ReplyCandidate, error: unknown) {
+const SLOW_REPLY = /took too long/i;
+
+function slowForThisEmail(error: unknown) {
+  if (!(error instanceof LlmError) || !error.retryable || error.status === 429) return false;
+  return SLOW_REPLY.test(error.message) || (error.status !== null && error.status >= 500);
+}
+
+async function noteReplyFailure(actor: UserActor, candidate: ReplyCandidate, kind: "strike" | "slow", error: unknown) {
   console.error("Preparing a reply failed", error instanceof Error ? error.message : error);
   await withActor(actor, (db) =>
     db.query(
-      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state, misses)
-       values ($1, $2, $3, $4, $5, 'reply_failed', 'scheduled', 1)
-       on conflict (message_id, kind) do update set misses = least(crm.mail_prepared.misses + 1, 10), updated_at = now()`,
-      [actor.workspaceId, actor.userId, candidate.source_id, candidate.tk, candidate.id],
+      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state, misses, transient)
+       values ($1, $2, $3, $4, $5, 'reply_failed', 'scheduled', $6, $7)
+       on conflict (message_id, kind) do update set
+         misses = least(crm.mail_prepared.misses + $6, 10), transient = least(crm.mail_prepared.transient + $7, 10), updated_at = now()`,
+      [actor.workspaceId, actor.userId, candidate.source_id, candidate.tk, candidate.id, kind === "strike" ? 1 : 0, kind === "slow" ? 1 : 0],
     ),
   ).catch((failure) => console.error("Couldn't record a reply failure", failure instanceof Error ? failure.message : failure));
 }
@@ -689,6 +702,8 @@ async function prepareReplies(
 ) {
   let next = 0;
   let halted = false;
+  let finished = 0;
+  const slow: { candidate: ReplyCandidate; error: unknown }[] = [];
   const lane = async () => {
     while (next < candidates.length && !halted) {
       if (options.deadline - Date.now() < STEP_MS) return;
@@ -697,12 +712,16 @@ async function prepareReplies(
       try {
         const target = await threadWorkspace(actor, candidate.source_id, candidate.tk, actors);
         const outcome = await prepareReply(actor, target, candidate, options.deadline, settings.coldPitches, options.fetchImpl);
+        finished += 1;
         if (outcome === "prepared") report.prepared += 1;
         if (outcome === "skipped") report.skipped += 1;
         if (outcome === "pitch") report.pitches += 1;
       } catch (error) {
         if (blamesTheEmail(error)) {
-          await noteReplyFailure(actor, candidate, error);
+          await noteReplyFailure(actor, candidate, "strike", error);
+        } else if (slowForThisEmail(error)) {
+          slow.push({ candidate, error });
+          if (finished === 0) halted = true;
         } else {
           halted = true;
           console.error("Preparing replies stopped on a temporary failure", error instanceof Error ? error.message : error);
@@ -712,6 +731,8 @@ async function prepareReplies(
   };
   const lanes = process.env.VERCEL ? REPLY_LANES_SERVERLESS : REPLY_LANES;
   await Promise.all(Array.from({ length: Math.min(lanes, candidates.length) }, lane));
+  if (finished > 0) for (const { candidate, error } of slow) await noteReplyFailure(actor, candidate, "slow", error);
+  else if (slow.length) console.error("Preparing replies stopped on repeated slow answers");
 }
 
 export async function prepareMail(

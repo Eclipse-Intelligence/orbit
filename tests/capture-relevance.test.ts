@@ -771,6 +771,41 @@ describe("Capture relevance", () => {
     await admin.query("delete from crm.mail_messages where provider_message_id like 'kb-%'");
   });
 
+  it("keeps threads in the scan that the judge no longer treats as sorted out", async () => {
+    const admin = getAdminPool();
+    await addMessage(primary, { id: "kb-bob", from: "bob@acme-rule.test", to: ["mark@geteclipse.co"], subject: "Earlier skip", at: minutesAgo(60 * 24 * 17) });
+    await addMessage(primary, { id: "kb-dave", from: "dave@listed-written.test", to: ["mark@geteclipse.co"], subject: "Listed before", at: minutesAgo(60 * 24 * 18) });
+    await addMessage(primary, { id: "kb-sent", from: "mark@geteclipse.co", to: ["ops@listed-written.test"], subject: "Earlier", sent: true, at: minutesAgo(60 * 24 * 20) });
+    await admin.query(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet, body_text,
+         from_email, from_name, to_recipients, cc_recipients, sent_at, received_at, focused)
+       select $1, $2, $3, $4, 'kb-bulk-' || i, '<kb-bulk-' || i || '@mail.test>', 'kb-bulk-' || i, 'Our spring offer', 'Offer', 'Offer. Unsubscribe here.',
+         'hello@bulk' || i || '.test', null, '[{"name": "", "address": "mark@geteclipse.co"}]'::jsonb, '[]'::jsonb,
+         now() - make_interval(mins => 5 + i), now() - make_interval(mins => 5 + i), false
+       from generate_series(1, 320) i`,
+      [eclipse.workspaceId, eclipse.userId, primary.sourceId, primary.inbox],
+    );
+    await admin.query(
+      `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, message_id, category, engine, confidence)
+       select workspace_id, user_id, source_id, thread_key, from_email, id,
+         case when provider_message_id = 'kb-dave' then 'supplier' else 'newsletter' end,
+         case when provider_message_id = 'kb-dave' then 'listed' else 'haiku' end,
+         0.95
+       from crm.mail_messages where provider_message_id like 'kb-%' and provider_message_id <> 'kb-sent'`,
+    );
+    await admin.query("insert into crm.mail_sender_relevance (workspace_id, user_id, sender, category, engine, rule) values ($1, $2, '@acme-rule.test', 'business', 'filed', true)", [
+      eclipse.workspaceId,
+      eclipse.userId,
+    ]);
+    const scanned = await unknownMail(eclipse, [eclipse]);
+    assert.equal(scanned.length, 300);
+    assert.ok(scanned.some((email) => email.email === "bob@acme-rule.test"), "a business rule for the domain decides before an older skip");
+    assert.ok(scanned.some((email) => email.email === "dave@listed-written.test"), "a listed decision stops counting once the domain has been written to");
+    await admin.query("delete from crm.mail_sender_relevance where sender = '@acme-rule.test'");
+    await admin.query("delete from crm.mail_thread_relevance where thread_key like 'kb-%'");
+    await admin.query("delete from crm.mail_messages where provider_message_id like 'kb-%'");
+  });
+
   it("skips the sorting scan when nothing new has arrived, and scans again for new mail", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: () => ({ category: "business" }) });

@@ -8,7 +8,7 @@ import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { failedOnTheInput, LlmError } from "@/lib/llm";
 import { workingDaysLater } from "@/lib/mail/later";
-import { cancelFollowUp, mailHelpSettings, notePreparedSent, prepareMail, prepareNudge, setMailHelp, updatePrepared } from "@/lib/mail/prepare";
+import { blamesTheEmail, cancelFollowUp, mailHelpSettings, notePreparedSent, prepareMail, prepareNudge, setMailHelp, updatePrepared } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
 import { getThread, listThreads } from "@/lib/mail/threads";
 import { spelledFigures } from "@/lib/writing-style";
@@ -440,6 +440,12 @@ describe("prepared replies and automatic reminders", () => {
     assert.equal(failedOnTheInput(new LlmError("Ran out of time. Try again.", true)), false);
     assert.equal(failedOnTheInput(new LlmError("Check LLM_API_KEY.", false, true, 401)), false);
     assert.equal(failedOnTheInput(new Error("timeout exceeded when trying to connect")), false);
+    for (const trouble of ["timeout exceeded when trying to connect", "canceling statement due to statement timeout", "Max client connections reached", "Connection terminated unexpectedly", "connect ECONNREFUSED 127.0.0.1:5432"]) {
+      assert.equal(blamesTheEmail(new Error(trouble)), false, trouble);
+    }
+    assert.equal(blamesTheEmail(new Error("That thread has gone.")), true);
+    assert.equal(blamesTheEmail(new LlmError("The AI gave an unusable answer. Try again.", true)), true);
+    assert.equal(blamesTheEmail(new LlmError("The AI took too long. Try again.", true)), false);
   });
 
   it("records no failure for a gateway outage, a rate limit or a bad connection, and stops starting new replies", async () => {
@@ -455,7 +461,13 @@ describe("prepared replies and automatic reminders", () => {
     const failures = async () => (await admin.query("select 1 from crm.mail_prepared where kind = 'reply_failed'")).rowCount;
     const tokens = (users: string[]) => new Set(users.map((user) => user.match(/TRANS[A-Z]+/)?.[0]).filter(Boolean));
 
-    for (const outage of [() => Response.json({ error: { message: "Down" } }, { status: 503 }), () => Response.json({ error: { message: "Slow down" } }, { status: 429 })]) {
+    for (const outage of [
+      () => Response.json({ error: { message: "Down" } }, { status: 503 }),
+      () => Response.json({ error: { message: "Slow down" } }, { status: 429 }),
+      () => {
+        throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+      },
+    ]) {
       const asked: string[] = [];
       const fetchImpl: typeof fetch = async (_input, init) => {
         const [system, user] = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages.map((item) => item.content);
@@ -484,5 +496,72 @@ describe("prepared replies and automatic reminders", () => {
     };
     await prepareMail(owner, { deadline: soon(), fetchImpl: garbage });
     assert.equal(await failures(), 1, "an answer that can't be used is the email's strike");
+  });
+
+  it("counts an email whose reply always times out on its own, with a higher cap and a longer wait, but only while other replies work", async () => {
+    const admin = getAdminPool();
+    await prepareMail(owner, { deadline: soon(), fetchImpl: replyModel().fetchImpl });
+    await admin.query("delete from crm.mail_prepared where kind = 'reply_failed'");
+    await syncMail(owner, {
+      budgetMs: 30_000,
+      fetchImpl: mailbox({
+        inbox: [
+          message("m-slow", { conversationId: "conv-slow", subject: "Question SLOWMARK", receivedDateTime: ago(0.02), sentDateTime: ago(0.02), from: { emailAddress: { name: "Slow", address: "slow@slow.test" } }, body: { contentType: "text", content: "Could you confirm SLOWMARK for me this week?" } }),
+          message("m-ok", { conversationId: "conv-ok", subject: "Question OKMARK", receivedDateTime: ago(0.03), sentDateTime: ago(0.03), from: { emailAddress: { name: "Ok", address: "ok@slow.test" } }, body: { contentType: "text", content: "Could you confirm OKMARK for me this week?" } }),
+        ],
+        sent: [],
+      }),
+    });
+    const slowModel = () => {
+      const asked: string[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        const [system, user] = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages.map((item) => item.content);
+        if (system.includes("put the conversation off until later")) return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ deferrals: [] }) }, finish_reason: "stop" }] });
+        asked.push(user);
+        if (user.includes("SLOWMARK")) throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+        return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ needsReply: true, meeting: false, body: "Hi,\n\nYes.\n\nMark" }) }, finish_reason: "stop" }] });
+      };
+      return { fetchImpl, slow: () => asked.filter((user) => user.includes("SLOWMARK")).length };
+    };
+    const again = () => admin.query("delete from crm.mail_prepared p using crm.mail_messages m where p.message_id = m.id and p.kind = 'reply' and m.provider_message_id = 'm-ok'");
+    const age = (hours: number) => admin.query("update crm.mail_prepared set updated_at = now() - make_interval(hours => $1) where kind = 'reply_failed'", [hours]);
+    const counts = async () => (await admin.query<{ misses: number; transient: number }>("select misses, transient from crm.mail_prepared where kind = 'reply_failed'")).rows;
+
+    const first = slowModel();
+    await prepareMail(owner, { deadline: soon(), fetchImpl: first.fetchImpl });
+    assert.ok(first.slow() > 0);
+    assert.deepEqual(await counts(), [{ misses: 0, transient: 1 }]);
+
+    await again();
+    await age(2);
+    const early = slowModel();
+    await prepareMail(owner, { deadline: soon(), fetchImpl: early.fetchImpl });
+    assert.equal(early.slow(), 0, "it waits longer than a failure caused by the email");
+
+    for (let round = 2; round <= 6; round += 1) {
+      await again();
+      await age(4);
+      const next = slowModel();
+      await prepareMail(owner, { deadline: soon(), fetchImpl: next.fetchImpl });
+      assert.ok(next.slow() > 0, `round ${round}`);
+    }
+    assert.deepEqual(await counts(), [{ misses: 0, transient: 6 }]);
+    await again();
+    await age(4);
+    const last = slowModel();
+    await prepareMail(owner, { deadline: soon(), fetchImpl: last.fetchImpl });
+    assert.equal(last.slow(), 0, "it stops after six slow answers");
+
+    await admin.query("delete from crm.mail_prepared where kind = 'reply_failed'");
+    await syncMail(owner, { budgetMs: 30_000, fetchImpl: mailbox({ inbox: [message("m-slow-2", { conversationId: "conv-slow-2", subject: "Question SLOWMARK", receivedDateTime: ago(0.01), sentDateTime: ago(0.01), body: { contentType: "text", content: "Could you confirm SLOWMARK again?" } })], sent: [] }) });
+    await admin.query("delete from crm.mail_prepared p using crm.mail_messages m where p.message_id = m.id and p.kind = 'reply' and m.provider_message_id = 'm-ok'");
+    await admin.query("update crm.mail_prepared set state = 'dismissed' where kind = 'reply'");
+    const outage: typeof fetch = async (_input, init) => {
+      const [system] = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages.map((item) => item.content);
+      if (system.includes("put the conversation off until later")) return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ deferrals: [] }) }, finish_reason: "stop" }] });
+      throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    };
+    await prepareMail(owner, { deadline: soon(), fetchImpl: outage });
+    assert.deepEqual(await counts(), [], "when nothing works, nobody is counted");
   });
 });

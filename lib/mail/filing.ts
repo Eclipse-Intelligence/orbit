@@ -42,34 +42,47 @@ const CAPTURE_SCAN = 300;
 
 const CERTAIN_ENGINES_SQL = "'listed', 'headers', 'rule', 'filed', 'shown'";
 
-const ALREADY_SKIPPED = (alias: string, userParam: string) => `(
+const ALREADY_SKIPPED = (alias: string, userParam: string, freeParam: string) => {
+  const domain = `split_part(${alias}.from_email, '@', 2)`;
+  const own = `${alias}.capture_workspace_id`;
+  return `(
   exists (
     select 1 from crm.mail_sender_relevance er
-    where er.user_id = ${userParam} and er.workspace_id = ${alias}.capture_workspace_id and er.rule and er.category = 'muted' and er.sender = ${alias}.from_email
+    where er.user_id = ${userParam} and er.workspace_id = ${own} and er.rule and er.category = 'muted' and er.sender = ${alias}.from_email
   )
   or (
     not exists (
       select 1 from crm.mail_sender_relevance er
-      where er.user_id = ${userParam} and er.workspace_id = ${alias}.capture_workspace_id and er.rule and er.sender = ${alias}.from_email
+      where er.user_id = ${userParam} and er.workspace_id = ${own} and er.rule and er.sender = ${alias}.from_email
     )
     and not ${KNOWN_ADDRESS(userParam, `${alias}.from_email`)}
-    and (
-      exists (
+    and case
+      when ${domain} <> all(${freeParam}::text[]) and exists (
         select 1 from crm.mail_sender_relevance dr
-        where dr.user_id = ${userParam} and dr.workspace_id = ${alias}.capture_workspace_id and dr.rule and dr.category = 'muted'
-          and dr.sender = '@' || split_part(${alias}.from_email, '@', 2)
+        where dr.user_id = ${userParam} and dr.workspace_id = ${own} and dr.rule and dr.sender = '@' || ${domain}
+      ) then exists (
+        select 1 from crm.mail_sender_relevance dr
+        where dr.user_id = ${userParam} and dr.workspace_id = ${own} and dr.rule and dr.category = 'muted' and dr.sender = '@' || ${domain}
       )
-      or exists (
+      else exists (
         select 1 from crm.mail_thread_relevance tr
         where tr.user_id = ${userParam} and tr.source_id = ${alias}.source_id and tr.thread_key = ${alias}.tk
-          and tr.workspace_id = ${alias}.capture_workspace_id and tr.sender = ${alias}.from_email
+          and tr.workspace_id = ${own} and tr.sender = ${alias}.from_email
           and (case when tr.message_id is not null then tr.message_id = ${alias}.id else tr.decided_at >= ${alias}.at end)
           and tr.engine <> 'history' and tr.category is not null and tr.category <> 'business'
           and (tr.category = 'muted' or tr.engine in (${CERTAIN_ENGINES_SQL}) or coalesce(tr.confidence, 0) >= 0.8)
+          and (
+            tr.engine <> 'listed' or ${domain} = any(${freeParam}::text[])
+            or not exists (
+              select 1 from crm.mail_known_addresses lk
+              where lk.user_id = ${userParam} and lk.domain = ${domain} and lk.sent_count > 0
+            )
+          )
       )
-    )
+    end
   )
 )`;
+};
 
 export type UnknownEmail = {
   key: string;
@@ -393,7 +406,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
              offset 0
            ) n
          ) w
-         order by ${ALREADY_SKIPPED("w", "$1")}, w.at desc
+         order by ${ALREADY_SKIPPED("w", "$1", "$4")}, w.at desc
          limit ${CAPTURE_SCAN}
        ) r`,
       [actor.userId, actor.email, workspaceIds, [...FREE_MAIL_DOMAINS], captureCutoff(now), homesJson(homes)],
