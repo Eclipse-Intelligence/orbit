@@ -16,12 +16,12 @@ export function acceptFrameMessage(data: unknown, token: string | null): Record<
   return token !== null && typeof message.token === "string" && message.token.length > 0 && message.token === token ? message : null;
 }
 
-const TOKEN_META = /<meta name="orbit-frame" content="([0-9a-f]{32})">/;
+const TOKEN_COMMENT = /^<!doctype html><!--orbit-frame:([0-9a-f]{32})-->/i;
 
-export function frameTokenMeta(token: string) {
-  return `<meta name="orbit-frame" content="${token}">`;
+export function frameTokenComment(token: string) {
+  return `<!--orbit-frame:${token}-->`;
 }
 
 export function frameToken(srcdoc: string | null | undefined) {
-  return srcdoc?.slice(0, 600).match(TOKEN_META)?.[1] ?? null;
+  return srcdoc?.slice(0, 80).match(TOKEN_COMMENT)?.[1] ?? null;
 }

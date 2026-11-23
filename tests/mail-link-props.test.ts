@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { linkMatchesUrl, listFromUrl } from "@/lib/mail/link-props";
-import { acceptFrameMessage, frameToken, frameTokenMeta } from "@/lib/mail/frame-keys";
+import { acceptFrameMessage, frameToken, frameTokenComment } from "@/lib/mail/frame-keys";
+import { frameDocument } from "@/lib/mail/frame-document";
 
 const inbox = { view: "inbox", account: null, query: "" };
 
@@ -40,10 +41,23 @@ describe("messages from the email frame", () => {
 
   it("reads the token from the start of the frame document and nowhere else", () => {
     const token = "0123456789abcdef0123456789abcdef";
-    const doc = `<!doctype html><html><head><meta charset="utf-8">${frameTokenMeta(token)}<meta http-equiv="x"></head><body><p>${"x".repeat(2000)}</p>${frameTokenMeta("ffffffffffffffffffffffffffffffff")}</body></html>`;
+    const planted = "ffffffffffffffffffffffffffffffff";
+    const doc = `<!doctype html>${frameTokenComment(token)}<html><head><meta charset="utf-8"></head><body><p>${"x".repeat(2000)}</p>${frameTokenComment(planted)}</body></html>`;
     assert.equal(frameToken(doc), token);
-    assert.equal(frameToken(`<html><head></head><body>${frameTokenMeta(token)}</body></html>`.padStart(700, " ")), null);
+    assert.equal(frameToken(`<!doctype html><html><head></head><body>${frameTokenComment(planted)}</body></html>`), null);
+    assert.equal(frameToken(`<!doctype html><html><head></head><body><meta name="orbit-frame" content="${planted}">orbit-frame:${planted}</body></html>`), null);
+    assert.equal(frameToken(`${frameTokenComment(planted)}<!doctype html>`), null);
     assert.equal(frameToken(null), null);
     assert.equal(frameToken(""), null);
+  });
+
+  it("keeps the token out of every attribute of the frame document", () => {
+    const token = "0123456789abcdef0123456789abcdef";
+    const doc = frameDocument('<p style="color:red">Hi</p><a href="https://x.test">x</a>', true, true, "n0nce", token);
+    assert.equal(frameToken(doc), token);
+    const attributes = [...doc.matchAll(/<[a-z][^>]*>/gi)].map((match) => match[0]).filter((tag) => !tag.startsWith("<script"));
+    for (const tag of attributes) assert.equal(tag.includes(token), false, tag);
+    assert.equal(doc.split(token).length - 1, 2);
+    assert.equal(doc.indexOf(token) < doc.indexOf("<html>"), true);
   });
 });
