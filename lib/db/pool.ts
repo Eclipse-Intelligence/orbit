@@ -27,7 +27,7 @@ function createPool(connectionString: string) {
   return new Pool({
     connectionString: connectionUrl(connectionString),
     max: serverless ? 2 : 10,
-    idleTimeoutMillis: 10_000,
+    idleTimeoutMillis: serverless ? 60_000 : 10_000,
     connectionTimeoutMillis: 5_000,
     allowExitOnIdle: serverless,
   });
