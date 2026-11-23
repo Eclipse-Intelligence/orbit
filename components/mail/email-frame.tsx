@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import { frameDocument } from "@/lib/mail/frame-document";
-import { acceptedHello, forwardedKey } from "@/lib/mail/frame-keys";
+import { acceptedHello, forwardedKey, frameToken, portIsStale } from "@/lib/mail/frame-keys";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +57,7 @@ export default function EmailFrame({
   const heard = useRef(false);
   const port = useRef<MessagePort | null>(null);
   const connected = useRef<string | null>(null);
+  const portToken = useRef<string | null>(null);
   const handle = useRef<(message: unknown) => void>(() => undefined);
   const source = useMemo(() => frameDocument(html, rich, hideQuotes, nonce, token), [html, rich, hideQuotes, nonce, token]);
 
@@ -72,8 +73,11 @@ export default function EmailFrame({
   }, []);
 
   useEffect(() => {
-    connected.current = null;
-    closePort();
+    if (portIsStale(frame.current?.getAttribute("srcdoc"), portToken.current)) {
+      connected.current = null;
+      portToken.current = null;
+      closePort();
+    }
     heard.current = false;
     const timers = ASK_AGAIN_MS.map((delay) => window.setTimeout(ask, delay));
     const giveUp = window.setTimeout(() => {
@@ -116,9 +120,11 @@ export default function EmailFrame({
     const listen = (event: MessageEvent) => {
       const target = frame.current?.contentWindow;
       if (!target || event.source !== target) return;
-      const id = acceptedHello(event.data, frame.current?.getAttribute("srcdoc"), connected.current);
+      const srcdoc = frame.current?.getAttribute("srcdoc");
+      const id = acceptedHello(event.data, srcdoc, connected.current);
       if (!id) return;
       connected.current = id;
+      portToken.current = frameToken(srcdoc);
       closePort();
       const channel = new MessageChannel();
       channel.port1.onmessage = (message) => handle.current(message.data);

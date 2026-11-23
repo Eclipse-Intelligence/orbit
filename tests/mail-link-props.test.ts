@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { linkMatchesUrl, listFromUrl } from "@/lib/mail/link-props";
-import { acceptedHello, frameToken, frameTokenComment } from "@/lib/mail/frame-keys";
+import { acceptedHello, frameToken, frameTokenComment, portIsStale } from "@/lib/mail/frame-keys";
 import { frameDocument } from "@/lib/mail/frame-document";
 
 const inbox = { view: "inbox", account: null, query: "" };
@@ -58,6 +58,23 @@ describe("the email frame", () => {
   it("answers a document once, and a reloaded copy of it again", () => {
     assert.equal(acceptedHello({ type: "hello", token, id: "a1" }, doc, "a1"), null);
     assert.equal(acceptedHello({ type: "hello", token, id: "a2" }, doc, "a1"), "a2");
+  });
+
+  it("keeps a port made for the current document and drops one made for an earlier document", () => {
+    const next = frameDocument("<p>Changed</p>", true, true, "n0nce", other);
+    assert.equal(portIsStale(doc, token), false);
+    assert.equal(portIsStale(next, token), true);
+    assert.equal(portIsStale(next, other), false);
+    assert.equal(portIsStale(next, null), true);
+    assert.equal(portIsStale(null, token), true);
+  });
+
+  it("keeps the port a new document got before the reset ran", () => {
+    const next = frameDocument("<p>Changed</p>", true, true, "n0nce", other);
+    assert.equal(portIsStale(next, token), true);
+    const id = acceptedHello({ type: "hello", token: other, id: "b1" }, next, "a1");
+    assert.equal(id, "b1");
+    assert.equal(portIsStale(next, frameToken(next)), false);
   });
 
   it("reads the token from the start of the document and nowhere else", () => {

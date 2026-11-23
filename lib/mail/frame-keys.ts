@@ -20,6 +20,10 @@ export function frameToken(srcdoc: string | null | undefined) {
   return srcdoc?.slice(0, 80).match(TOKEN_COMMENT)?.[1] ?? null;
 }
 
+export function portIsStale(srcdoc: string | null | undefined, portToken: string | null) {
+  return frameToken(srcdoc) !== portToken;
+}
+
 export function acceptedHello(data: unknown, srcdoc: string | null | undefined, connected: string | null) {
   if (!data || typeof data !== "object") return null;
   const { type, token, id } = data as Record<string, unknown>;
