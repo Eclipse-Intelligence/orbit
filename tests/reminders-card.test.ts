@@ -102,13 +102,31 @@ describe("reminders card", () => {
       );
     });
 
-    it("keeps a ticked reminder in place, crossed out, until the card closes", () => {
+    it("keeps a ticked reminder in place, crossed out, until it settles", () => {
       const ticked = { ...call, completedAt: "2026-11-19T12:00:00.000Z" };
       const list = all.map((item) => (item.id === call.id ? ticked : item));
       const groups = groupReminders(list, { [call.id]: { snapshot: call, doneId: call.id } }, TODAY);
       assert.deepEqual(titles(groups.today), ["Old one", "Renew car tax", "Bins out", "Call Mum back"]);
       assert.equal(groups.today[3].ticked, true);
       assert.equal(groups.done.some((item) => item.id === call.id), false);
+    });
+
+    it("moves a settled tick into Done", () => {
+      const ticked = { ...call, completedAt: "2026-11-19T12:00:00.000Z" };
+      const list = all.map((item) => (item.id === call.id ? ticked : item));
+      const groups = groupReminders(list, { [call.id]: { snapshot: call, doneId: call.id, settled: true } }, TODAY);
+      assert.deepEqual(titles(groups.today), ["Old one", "Renew car tax", "Bins out"]);
+      assert.equal(groups.done.some((item) => item.id === call.id), true);
+    });
+
+    it("moves a settled repeating tick into Done and keeps its next date", () => {
+      const moved = { ...bins, dueOn: "2026-11-26" };
+      const copy = reminder({ title: "Bins out", dueOn: TODAY, completedAt: "2026-11-19T12:00:00.000Z", repeatOf: bins.id, movedTo: "2026-11-26" });
+      const list = [...all.map((item) => (item.id === bins.id ? moved : item)), copy];
+      const groups = groupReminders(list, { [bins.id]: { snapshot: bins, doneId: copy.id, settled: true } }, TODAY);
+      assert.equal(groups.today.some((row) => row.reminder.title === "Bins out"), false);
+      assert.deepEqual(titles(groups.upcoming), ["Dentist", "Book flights", "Bins out"]);
+      assert.equal(groups.done.some((item) => item.id === copy.id), true);
     });
 
     it("hides the open row while the tick is on its way", () => {
