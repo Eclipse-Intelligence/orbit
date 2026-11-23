@@ -10,6 +10,9 @@ import {
   ALREADY_SENT_WARNING,
   DRAFT_GONE,
   MAYBE_SENT,
+  SENT_ALREADY,
+  STILL_SAVING,
+  draftContent,
   SEND_FAILED,
   readDraftInput,
   saveMailDraft,
@@ -383,6 +386,117 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     assert.equal(again.sends(), 1);
     const left = await getAdminPool().query("select 1 from crm.mail_drafts where user_id = $1 and subject = 'Keyed retry'", [owner.userId]);
     assert.equal(left.rowCount, 0);
+  });
+
+  it("makes one draft for one compose card however many times its first save is repeated", async () => {
+    const box = outlook("ok");
+    const createKey = randomUUID();
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Card draft", body: "First" }), createKey };
+    const save = (body: string) => saveMailDraft(owner, { ...input, body }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    const first = await save("First");
+    const again = await save("Second, from a retry that never learned the id");
+    assert.equal(again.id, first.id);
+    assert.equal(again.body, "Second, from a retry that never learned the id");
+    assert.equal(box.created(), 1);
+    const rows = await getAdminPool().query("select 1 from crm.mail_drafts where user_id = $1 and subject = 'Card draft'", [owner.userId]);
+    assert.equal(rows.rowCount, 1);
+  });
+
+  it("makes one draft when the same first save arrives together", async () => {
+    const box = outlook("ok");
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Card race", body: "Together" }), createKey: randomUUID() };
+    const results = await Promise.allSettled(Array.from({ length: 4 }, () => saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl })));
+    assert.equal(box.created(), 1);
+    assert.ok(results.some((result) => result.status === "fulfilled"));
+    for (const result of results) if (result.status === "rejected") assert.equal(result.reason.message, STILL_SAVING);
+    const rows = await getAdminPool().query("select 1 from crm.mail_drafts where user_id = $1 and subject = 'Card race'", [owner.userId]);
+    assert.equal(rows.rowCount, 1);
+  });
+
+  it("lets a first save try again after Outlook refused to make the draft", async () => {
+    const box = outlook("ok");
+    let refuse = true;
+    const flaky: typeof fetch = async (input, init) => {
+      if (refuse && init?.method === "POST" && String(input) === `${GRAPH}/me/messages`) {
+        refuse = false;
+        return Response.json({ error: { code: "ErrorServerBusy", message: "Busy." } }, { status: 503 });
+      }
+      return box.fetchImpl(input, init);
+    };
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Card retry", body: "Retry" }), createKey: randomUUID() };
+    await assert.rejects(() => saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: flaky }));
+    const saved = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: flaky });
+    assert.ok(saved.id);
+    assert.equal(box.created(), 1);
+  });
+
+  it("doesn't bring back a compose card's draft after it was sent", async () => {
+    const box = outlook("ok");
+    const createKey = randomUUID();
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Card sent", body: "Gone" }), createKey };
+    const saved = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    await sendMailDraft(owner, { ...input, id: saved.id }, { storedFiles: "keep", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    await assert.rejects(() => saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl }), { message: SENT_ALREADY });
+    assert.equal(box.created(), 1);
+  });
+
+  it("sends the draft a compose card already made when the send doesn't know its id", async () => {
+    const box = outlook("ok");
+    const createKey = randomUUID();
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Card send", body: "Hello" }), createKey };
+    await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    await sendMailDraft(owner, { ...input, sendKey: randomUUID() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    assert.equal(box.created(), 1);
+    assert.equal(box.sends(), 1);
+    const left = await getAdminPool().query("select 1 from crm.mail_drafts where user_id = $1 and subject = 'Card send'", [owner.userId]);
+    assert.equal(left.rowCount, 0);
+  });
+
+  it("schedules the draft a compose card already made instead of making another", async () => {
+    const box = outlook("ok");
+    const createKey = randomUUID();
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Card later", body: "Hello" }), createKey };
+    const saved = await saveMailDraft(owner, input, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    const scheduled = await scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    assert.equal(scheduled.id, saved.id);
+    assert.equal(box.created(), 1);
+  });
+
+  it("hands back what a draft holds, and nothing for a draft that isn't there", async () => {
+    const box = outlook("ok");
+    const { id } = await draftFor(box, "Holds");
+    const content = await draftContent(owner, id);
+    assert.equal(content?.subject, "Holds");
+    assert.equal(content?.sourceId, sourceId);
+    assert.equal(content?.identityId, null);
+    assert.equal(content?.body, "Only once, please");
+    assert.deepEqual(content?.to.map((item) => item.address), ["sam@acme.test"]);
+    assert.equal(await draftContent(owner, randomUUID()), null);
+    assert.equal(await draftContent(owner, "not-an-id"), null);
+  });
+
+  it("won't hand back a draft that belongs to someone else", async () => {
+    const box = outlook("ok");
+    const { id } = await draftFor(box, "Private");
+    const other = await createUser("nosy@orbit.test", "Nosy");
+    assert.equal(await draftContent(other, id), null);
+  });
+
+  it("asks a send or schedule to wait while the card's first save is still running, instead of making a second draft", async () => {
+    const box = outlook("ok");
+    const createKey = randomUUID();
+    await getAdminPool().query("insert into crm.mail_send_keys (user_id, workspace_id, key) values ($1, $2, $3)", [owner.userId, owner.workspaceId, createKey]);
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Still saving", body: "Wait" }), createKey };
+    await assert.rejects(() => sendMailDraft(owner, { ...input, sendKey: randomUUID() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl }), { message: STILL_SAVING });
+    await assert.rejects(
+      () => scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl }),
+      { message: STILL_SAVING },
+    );
+    assert.equal(box.created(), 0);
+    assert.equal(box.sends(), 0);
+    await getAdminPool().query("update crm.mail_send_keys set created_at = now() - interval '11 minutes' where user_id = $1 and key = $2", [owner.userId, createKey]);
+    await sendMailDraft(owner, { ...input, sendKey: randomUUID() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    assert.equal(box.sends(), 1);
   });
 
   it("won't unschedule an email the scheduler is already sending", async () => {

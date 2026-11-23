@@ -33,6 +33,7 @@ import { addressHomesInDb } from "@/lib/mail/routing";
 import { graphReconnect, SOURCE_SCOPES } from "@/lib/mail/accounts";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { readStatusesOn } from "@/lib/mail/tracking";
+import type { StoredDraftContent } from "@/lib/mail/composer-state";
 import type { MailAddress } from "@/lib/mail/types";
 import { replyDefaults, type ComposeAccount, type MailDraft } from "@/lib/mail/view";
 import {
@@ -71,6 +72,7 @@ type DraftInput = {
   replaces?: string | null;
   identityId?: string | null;
   sendKey?: string | null;
+  createKey?: string | null;
 };
 
 const SCHEDULE_MIN_MS = 30_000;
@@ -154,6 +156,7 @@ export function readDraftInput(value: unknown): DraftInput {
     replaces: typeof input.replaces === "string" && isUuid(input.replaces) ? input.replaces : null,
     identityId: typeof input.identityId === "string" && isUuid(input.identityId) ? input.identityId : null,
     sendKey: typeof input.sendKey === "string" && isUuid(input.sendKey) ? input.sendKey : null,
+    createKey: typeof input.createKey === "string" && isUuid(input.createKey) ? input.createKey : null,
     remindHours:
       typeof input.remindHours === "number" && Number.isInteger(input.remindHours) && input.remindHours >= 1 && input.remindHours <= 2160
         ? input.remindHours
@@ -478,7 +481,19 @@ export async function saveMailDraft(
 ): Promise<MailDraft> {
   const attachments = await draftFileList(actor, input, options.storedFiles);
   const keyed = await keyedDraft(actor, input);
-  const { row } = await withReplaced(actor, keyed, (claimed) => writeDraft(actor, claimed, { origin: options.origin, fetchImpl: options.fetchImpl ?? fetch, attachments }));
+  const creating = !keyed.id && keyed.createKey ? await claimCreateKey(actor, keyed.createKey) : null;
+  const target = creating?.draftId ? { ...keyed, id: creating.draftId } : keyed;
+  const { row } = await withReplaced(actor, target, (claimed) =>
+    writeDraft(actor, claimed, {
+      origin: options.origin,
+      fetchImpl: options.fetchImpl ?? fetch,
+      attachments,
+      onDraftRow: creating && !creating.draftId ? (id) => linkCreateKey(actor, creating.key, id) : undefined,
+    }),
+  ).catch(async (error: unknown) => {
+    if (creating && !creating.draftId) await dropCreateKey(actor, creating.key).catch(() => undefined);
+    throw error;
+  });
   if (input.followUpDays === undefined) return toDraft(row);
   return withActor(actor, async (db) => {
     const result = await db.query<DraftRow>(
@@ -765,6 +780,95 @@ async function keyedDraft<T extends DraftInput>(actor: UserActor, input: T): Pro
   return input;
 }
 
+type CreateClaim = { key: string; draftId: string | null };
+
+async function claimCreateKey(actor: UserActor, key: string): Promise<CreateClaim> {
+  return withActor(actor, async (db) => {
+    const inserted = await db.query(
+      `insert into crm.mail_send_keys (user_id, workspace_id, key) values ($1, $2, $3)
+       on conflict (user_id, key) do nothing returning key`,
+      [actor.userId, actor.workspaceId, key],
+    );
+    if (inserted.rowCount) return { key, draftId: null };
+    const found = await db.query<{ draft_id: string | null; sent: boolean; fresh: boolean; live: boolean }>(
+      `select k.draft_id, k.sent_at is not null as sent, k.created_at > now() - ${SENDING_FRESH} as fresh,
+         exists (select 1 from crm.mail_drafts d where d.id = k.draft_id and d.user_id = k.user_id) as live
+       from crm.mail_send_keys k where k.user_id = $1 and k.key = $2 for update of k`,
+      [actor.userId, key],
+    );
+    const row = found.rows[0];
+    if (!row) throw stillSaving();
+    if (row.sent) throw new CrmError("conflict", SENT_ALREADY, 409);
+    if (row.draft_id && row.live) return { key, draftId: row.draft_id };
+    if (!row.draft_id && row.fresh) throw stillSaving();
+    await db.query("update crm.mail_send_keys set draft_id = null, created_at = now() where user_id = $1 and key = $2", [actor.userId, key]);
+    return { key, draftId: null };
+  });
+}
+
+async function linkCreateKey(actor: UserActor, key: string, draftId: string) {
+  await withActor(actor, (db) => db.query("update crm.mail_send_keys set draft_id = $3 where user_id = $1 and key = $2 and sent_at is null", [actor.userId, key, draftId]));
+}
+
+async function withCreatedDraft<T extends DraftInput>(actor: UserActor, input: T): Promise<T> {
+  if (input.id || !input.createKey) return input;
+  const found = await withActor(actor, async (db) => {
+    const result = await db.query<{ draft_id: string | null; live: boolean; fresh: boolean }>(
+      `select k.draft_id, k.created_at > now() - ${SENDING_FRESH} as fresh,
+         exists (select 1 from crm.mail_drafts d where d.id = k.draft_id and d.user_id = k.user_id) as live
+       from crm.mail_send_keys k where k.user_id = $1 and k.key = $2 and k.sent_at is null`,
+      [actor.userId, input.createKey],
+    );
+    return result.rows[0] ?? null;
+  });
+  if (!found) return input;
+  if (found.draft_id && found.live) return { ...input, id: found.draft_id };
+  if (!found.draft_id && found.fresh) throw stillSaving();
+  return input;
+}
+
+async function dropCreateKey(actor: UserActor, key: string) {
+  await withActor(actor, (db) => db.query("delete from crm.mail_send_keys where user_id = $1 and key = $2 and draft_id is null and sent_at is null", [actor.userId, key]));
+}
+
+export async function draftContent(actor: UserActor, id: string): Promise<StoredDraftContent | null> {
+  if (!isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{
+      source_id: string;
+      identity_id: string | null;
+      subject: string | null;
+      body: string;
+      to_recipients: MailAddress[] | null;
+      cc_recipients: MailAddress[] | null;
+      bcc_recipients: MailAddress[] | null;
+      remind_hours: number | null;
+      follow_up_days: number | null;
+      follow_up_body: string | null;
+      attachments: string[] | null;
+    }>(
+      `select source_id, identity_id, subject, body, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body, attachments
+       from crm.mail_drafts where id = $1 and user_id = $2`,
+      [id, actor.userId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      sourceId: row.source_id,
+      identityId: row.identity_id,
+      subject: row.subject ?? "",
+      body: row.body,
+      to: row.to_recipients ?? [],
+      cc: row.cc_recipients ?? [],
+      bcc: row.bcc_recipients ?? [],
+      remindHours: row.remind_hours,
+      followUpDays: row.follow_up_days,
+      followUpBody: row.follow_up_body,
+      attachments: row.attachments ?? [],
+    };
+  });
+}
+
 function stillSaving() {
   return new CrmError("conflict", STILL_SAVING, 409, { stillSaving: true });
 }
@@ -860,7 +964,8 @@ async function sendableWithSharedText(actor: UserActor, input: DraftInput) {
   }
 }
 
-async function sendDraftOnce(actor: UserActor, input: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<SendOutcome> {
+async function sendDraftOnce(actor: UserActor, given: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<SendOutcome> {
+  const input = await withCreatedDraft(actor, given);
   await sendableWithSharedText(actor, input);
   await refuseSuppressed(actor, input, options.suppression);
   const sendKey = !options.claimed && input.sendKey ? input.sendKey : null;
@@ -1298,7 +1403,7 @@ export async function scheduleMailDraft(
   const at = scheduleTime(input.sendAt);
   const ids = await draftFileList(actor, input, options.storedFiles);
   await attachmentSummary(actor, ids);
-  const { row } = await withReplaced(actor, await keyedDraft(actor, input), (claimed) =>
+  const { row } = await withReplaced(actor, await withCreatedDraft(actor, await keyedDraft(actor, input)), (claimed) =>
     writeDraft(actor, claimed, { origin: options.origin, fetchImpl: options.fetchImpl ?? fetch, attachments: ids, onDraftRow: options.onDraftRow }),
   );
   const scheduled = await withActor(actor, async (db) => {

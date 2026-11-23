@@ -4,20 +4,10 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import Button from "@/components/_ui/button";
 import { useComposer } from "@/components/mail/compose-dock";
 import { personName } from "@/lib/mail/format";
+import { settleRecipients, type SettledRecipients } from "@/lib/mail/recipient-text";
 import type { MailAddress } from "@/lib/mail/types";
 import { cn } from "@/lib/utils";
 import CloseIcon from "@/public/assets/images/mail/close.svg";
-
-const EMAIL = /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/;
-
-function parse(text: string): MailAddress | null {
-  const value = text.trim().replace(/[,;]$/, "").trim();
-  const angled = value.match(/^(.*)<([^>]+)>$/);
-  const address = (angled ? angled[2] : value).trim().toLowerCase();
-  if (!EMAIL.test(address)) return null;
-  const name = angled ? angled[1].trim().replace(/^"|"$/g, "") : "";
-  return { address, name: name || null };
-}
 
 export default function RecipientField({
   label,
@@ -25,12 +15,14 @@ export default function RecipientField({
   onChange,
   autoFocus,
   trailing,
+  register,
 }: {
   label: string;
   value: MailAddress[];
   onChange: (next: MailAddress[]) => void;
   autoFocus?: boolean;
   trailing?: React.ReactNode;
+  register?: (label: string, flush: () => SettledRecipients) => () => void;
 }) {
   const id = useId();
   const listId = `${id}-list`;
@@ -105,32 +97,34 @@ export default function RecipientField({
     input.current?.focus();
   }
 
-  function commit() {
-    const parts = text
-      .split(/[,;\n]+/)
-      .flatMap((part) => ((part.match(/@/g)?.length ?? 0) > 1 ? part.split(/\s+/) : [part]))
-      .map((part) => part.trim())
-      .filter(Boolean);
-    if (parts.length === 0) return true;
-    const parsed = parts.map(parse);
-    if (parsed.some((item) => !item)) {
+  function commit(): SettledRecipients {
+    const settled = settleRecipients(input.current?.value ?? text, latest.current.value);
+    if (!settled.ok) {
       setInvalid(true);
-      return false;
+      return settled;
     }
-    const next = [...value];
-    const added: MailAddress[] = [];
-    for (const item of parsed as MailAddress[]) {
-      if (next.some((entry) => entry.address === item.address)) continue;
-      next.push(item);
-      added.push(item);
-    }
-    onChange(next);
-    if (added.length) setAnnouncement(`Added ${added.map(personName).join(", ")} to ${label}.`);
+    if (settled.added.length) latest.current.onChange(settled.value);
+    if (settled.added.length) setAnnouncement(`Added ${settled.added.map(personName).join(", ")} to ${label}.`);
     setText("");
     setSuggestions([]);
     setInvalid(false);
-    return true;
+    return settled;
   }
+
+  const commitRef = useRef(commit);
+  useEffect(() => {
+    commitRef.current = commit;
+  });
+
+  useEffect(
+    () =>
+      register?.(label, () => {
+        const settled = commitRef.current();
+        if (!settled.ok) input.current?.focus();
+        return settled;
+      }),
+    [register, label],
+  );
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -149,6 +143,7 @@ export default function RecipientField({
       setActive(event.key === "Home" ? 0 : shown.length - 1);
       return;
     }
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) return;
     if (event.key === "Escape" && open) {
       event.preventDefault();
       event.stopPropagation();
@@ -208,7 +203,7 @@ export default function RecipientField({
             if (event.target.value.trim().length < 2) setSuggestions([]);
           }}
           onKeyDown={onKeyDown}
-          onBlur={() => window.setTimeout(() => commit(), 120)}
+          onBlur={() => window.setTimeout(() => commitRef.current(), 120)}
           role="combobox"
           aria-expanded={open}
           aria-controls={listId}

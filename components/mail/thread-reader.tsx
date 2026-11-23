@@ -641,7 +641,7 @@ function ThreadReader({
   const [reminderError, setReminderError] = useState<string | null>(null);
   const [invite, setInvite] = useState<{ prefill: InvitePrefill; setup: InviteSetup; at: number } | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
-  const { showToast } = useComposer();
+  const { showToast, cardDraftIds, focusDraft } = useComposer();
   const detailRef = useRef(detail);
   useEffect(() => {
     detailRef.current = detail;
@@ -654,6 +654,7 @@ function ThreadReader({
   const target = detail?.messages.filter((message) => !(message.isDraft && message.folderRole === "drafts")).at(-1) ?? null;
   const sourceId = detail?.key.split("|")[0] ?? "";
   const newDraft = detail?.drafts.find((draft) => draft.mode === "new") ?? null;
+  const cardHas = (id: string | null | undefined) => Boolean(id) && cardDraftIds.includes(id!);
   const restored = !dismissed ? (detail?.drafts.find((draft) => draft.mode !== "new") ?? null) : null;
   const active: ComposerStart | null =
     composer ??
@@ -668,6 +669,11 @@ function ThreadReader({
           draft: restored,
         }
       : null);
+
+  const inCard = [active?.draft?.id, !target ? newDraft?.id : null].find((id) => cardHas(id)) ?? null;
+  useEffect(() => {
+    if (inCard) focusDraft(inCard);
+  }, [inCard, focusDraft]);
 
   const outsideDraft =
     !dismissed && !active && target ? (detail?.messages.filter((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id) && !draftDeletes.isDiscarded(message.id)).at(-1) ?? null) : null;
@@ -698,6 +704,10 @@ function ThreadReader({
 
   async function takePrepared(item: PreparedReply, auto = false) {
     if (!target) return;
+    if (active?.draft?.id && cardHas(active.draft.id)) {
+      focusDraft(active.draft.id);
+      return;
+    }
     const everyone = target.to.length + target.cc.length > 1;
     const fresh = item.times ? await preparedAction(item.id, "use") : null;
     startReply(everyone ? "reply_all" : "reply", fresh?.body ?? item.body, auto);
@@ -753,7 +763,8 @@ function ThreadReader({
   function startReply(mode: Exclude<DraftMode, "new">, body?: string, auto = false) {
     if (!detail || !target) return false;
     if (active) {
-      document.querySelector<HTMLElement>("[data-reader-composer] [data-composer-body]")?.focus();
+      if (active.draft?.id && cardHas(active.draft.id)) focusDraft(active.draft.id);
+      else document.querySelector<HTMLElement>("[data-reader-composer] [data-composer-body]")?.focus();
       return;
     }
     const defaults = replyDefaults(mode, target, detail.subject, own);
@@ -1171,7 +1182,7 @@ function ThreadReader({
                   </span>
                 </article>
               )}
-              {active && target ? (
+              {active && target && !cardHas(active.draft?.id) ? (
                 <div data-reader-composer="">
                 <MailComposer
                   key={active.draft?.id ?? active.mode}
@@ -1197,7 +1208,7 @@ function ThreadReader({
                   threadPeople={share.state?.people ?? []}
                 />
                 </div>
-              ) : !target && newDraft ? (
+              ) : !target && newDraft && !cardHas(newDraft.id) ? (
                 <div data-reader-composer="">
                   <MailComposer
                     key={newDraft.id}

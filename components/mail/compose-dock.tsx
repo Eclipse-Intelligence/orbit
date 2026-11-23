@@ -7,7 +7,8 @@ import type { LaterRequest } from "@/components/mail/later-picker";
 import type { ComposerDraft, ComposerStart, SendPayload, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
 import { handOverPayload } from "@/components/mail/hand-over";
-import { heldDrafts } from "@/components/mail/held-drafts";
+import { fitsKeepalive, heldIsSaved, sameAccounts, type HoldReason, type StoredDraftContent } from "@/lib/mail/composer-state";
+import { heldDrafts, releaseDraft, type HeldDraft } from "@/components/mail/held-drafts";
 import { flagReconnect, hasReconnectHost, reconnectOf } from "@/components/mail/reconnect-store";
 import { MODE_LABEL } from "@/lib/mail/format";
 import { emailRecipientAction } from "@/app/(crm)/quick-add";
@@ -50,11 +51,12 @@ type Card = {
   minimised: boolean;
   position: { x: number; y: number } | null;
   layer: number;
+  draftId?: string | null;
   onSent?: () => void;
   track?: SendTracker;
 };
 
-type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void; heldKey?: string; fromEmail?: string | null; track?: SendTracker };
+type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void; heldKey?: string; heldReason?: HoldReason; fromEmail?: string | null; track?: SendTracker };
 
 type ComposerContextValue = {
   openComposer: (options?: OpenOptions) => void;
@@ -65,10 +67,13 @@ type ComposerContextValue = {
   showToast: (toast: Toast) => number;
   dismissToast: (id: number) => void;
   undoLatest: () => boolean;
+  cardDraftIds: string[];
+  focusDraft: (id: string) => boolean;
 };
 
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
-  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive });
+  const text = JSON.stringify(body);
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: text, keepalive: keepalive && fitsKeepalive(text) });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string };
   if (!response.ok) {
     throw Object.assign(new Error(json.error ?? "Couldn't send. Try again."), { status: response.status, detail: json, reconnect: (json as { reconnect?: unknown }).reconnect ?? null });
@@ -80,10 +85,11 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
   return {
     id: failure?.detail?.draftId ?? payload.id ?? "",
     sendKey: payload.sendKey ?? null,
+    createKey: payload.createKey ?? null,
     sendProblem: failure?.detail?.maybeSent ? failure.message : null,
     sourceId: payload.sourceId,
     replaces: payload.replaces ?? null,
-    unsaved: Boolean(failure?.detail?.draftId || failure?.detail?.stillSaving),
+    unsaved: true,
     mode: payload.mode,
     messageId: payload.messageId,
     to: payload.to,
@@ -141,6 +147,13 @@ async function loadAccounts(): Promise<ComposeAccount[]> {
   return body.accounts;
 }
 
+async function storedDraft(id: string): Promise<StoredDraftContent | null | undefined> {
+  const response = await fetch(`/api/mail/drafts?id=${encodeURIComponent(id)}`, { cache: "no-store" }).catch(() => null);
+  if (!response?.ok) return undefined;
+  const body = (await response.json().catch(() => null)) as { draft?: StoredDraftContent | null } | null;
+  return body ? (body.draft ?? null) : undefined;
+}
+
 const ComposeCard = memo(function ComposeCard({
   card,
   index,
@@ -167,6 +180,7 @@ const ComposeCard = memo(function ComposeCard({
   const element = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointer: number; dx: number; dy: number } | null>(null);
   const setTitle = useCallback((subject: string) => onChange(card.key, { title: subject.trim() }), [onChange, card.key]);
+  const setDraftId = useCallback((id: string | null) => onChange(card.key, { draftId: id }), [onChange, card.key]);
   const remove = useCallback(() => onRemove(card.key), [onRemove, card.key]);
   const front = useCallback(() => onFront(card.key), [onFront, card.key]);
   const [held, setHeld] = useState(false);
@@ -278,6 +292,7 @@ const ComposeCard = memo(function ComposeCard({
             onScheduled={card.onSent}
             track={card.track}
             onHeld={setHeld}
+            onDraftId={setDraftId}
           />
         )}
       </div>
@@ -313,12 +328,39 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
     cardsRef.current = cards;
   });
 
+  const focusDraft = useCallback((id: string) => {
+    const existing = cardsRef.current.find((card) => (card.draftId ?? card.start.draft?.id) === id);
+    if (!existing) return false;
+    const layer = ++layers.current;
+    setCards((current) => current.map((card) => (card.key === existing.key ? { ...card, minimised: false, layer } : card)));
+    return true;
+  }, []);
+
+  const refreshAccounts = useCallback(() => {
+    const request = loadAccounts().catch(() => null);
+    accountsRequest.current = request;
+    void request.then((list) => {
+      if (accountsRequest.current !== request) return;
+      if (!list) {
+        accountsRequest.current = null;
+        return;
+      }
+      const kept = accountsCache.current && sameAccounts(accountsCache.current, list) ? accountsCache.current : list;
+      accountsCache.current = kept;
+      setAccounts(kept);
+    });
+    return request;
+  }, []);
+
   useEffect(() => {
     const idle = window.requestIdleCallback ?? ((run: () => void) => window.setTimeout(run, 1500));
     const cancel = window.cancelIdleCallback ?? window.clearTimeout;
-    const handle = idle(() => void loadComposer().catch(() => null));
+    const handle = idle(() => {
+      void loadComposer().catch(() => null);
+      if (!accountsRequest.current) void refreshAccounts();
+    });
     return () => cancel(handle);
-  }, []);
+  }, [refreshAccounts]);
 
   useEffect(() => {
     const resize = () => setViewport(window.innerWidth);
@@ -334,13 +376,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
 
   const openComposer = useCallback((options: OpenOptions = {}) => {
     const cached = accountsCache.current;
-    const fresh = loadAccounts().catch(() => null);
-    accountsRequest.current = fresh;
-    void fresh.then((list) => {
-      if (!list || accountsRequest.current !== fresh) return;
-      accountsCache.current = list;
-      setAccounts(list);
-    });
+    const fresh = cached || !accountsRequest.current ? refreshAccounts() : accountsRequest.current;
     void (async () => {
       const [list, contact] = await Promise.all([
         cached ? Promise.resolve(cached) : fresh.then((loaded) => loaded ?? []),
@@ -370,14 +406,10 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             ? (earlier.find((item) => item.id === (options.draft!.identityId ? `smtp:${options.draft!.identityId}` : options.draft!.sourceId))?.email ?? null)
             : null),
         heldKey: options.heldKey,
+        heldReason: options.heldReason,
         replaces: options.draft?.replaces ?? null,
       };
-      const existing = options.draft?.id ? cardsRef.current.find((card) => card.start.draft?.id === options.draft!.id) : null;
-      if (existing) {
-        const layer = ++layers.current;
-        setCards((current) => current.map((card) => (card.key === existing.key ? { ...card, minimised: false, layer } : card)));
-        return;
-      }
+      if (options.draft?.id && focusDraft(options.draft.id)) return;
       if (cardsRef.current.length >= MAX_CARDS) {
         setNotice(`${MAX_CARDS} emails are open. Close one first.`);
         return;
@@ -396,10 +428,17 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
       cardsRef.current = [...cardsRef.current, card];
       setCards((current) => [...current, card]);
     })();
-  }, []);
+  }, [refreshAccounts, focusDraft]);
 
   useEffect(() => {
-    for (const held of heldDrafts().slice(0, MAX_CARDS)) openComposer({ draft: held.draft, heldKey: held.key, fromEmail: held.fromEmail });
+    const reopen = async (held: HeldDraft) => {
+      if (held.draft.id && heldIsSaved(held.draft, await storedDraft(held.draft.id))) {
+        releaseDraft(held.key);
+        return;
+      }
+      openComposer({ draft: held.draft, heldKey: held.key, heldReason: held.reason, fromEmail: held.fromEmail });
+    };
+    for (const held of heldDrafts().slice(0, MAX_CARDS)) void reopen(held);
   }, [openComposer]);
 
   const dismiss = useCallback((id: number) => {
@@ -454,6 +493,11 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
           })
           .catch((error: SendFailure) => {
             item.onUndone?.();
+            if (error.detail?.stillSaving) {
+              openComposer({ draft: payloadDraft(payload, error), track: item.track });
+              showToast({ message: `“${payload.subject || "Your email"}” didn't send. ${error.message}`, tone: "alert", duration: 15_000 });
+              return;
+            }
             const reconnect = reconnectOf(error);
             const covered = reconnect ? flagReconnect(error, { sourceId: payload.sourceId }) && hasReconnectHost() : false;
             showToast({
@@ -561,9 +605,20 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
     const flush = () => {
       for (const id of [...outgoing.current.keys()]) deliver(id, true);
     };
+    const hidden = () => {
+      if (document.visibilityState !== "hidden" || !window.matchMedia("(pointer: coarse)").matches) return;
+      for (const id of [...outgoing.current.keys()]) {
+        dismiss(id);
+        deliver(id, true);
+      }
+    };
     window.addEventListener("pagehide", flush);
-    return () => window.removeEventListener("pagehide", flush);
-  }, [deliver]);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [deliver, dismiss]);
 
   const update = useCallback((key: number, change: Partial<Card>) => {
     setCards((current) => {
@@ -590,9 +645,11 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
     [update],
   );
 
+  const draftKey = cards.map((card) => card.draftId ?? card.start.draft?.id ?? "").join("|");
+  const cardDraftIds = useMemo(() => draftKey.split("|").filter(Boolean), [draftKey]);
   const value = useMemo(
-    () => ({ openComposer, sent, queueSend, scheduleSend, pickLater: setLater, showToast, dismissToast: dismiss, undoLatest }),
-    [openComposer, sent, queueSend, scheduleSend, showToast, dismiss, undoLatest],
+    () => ({ openComposer, sent, queueSend, scheduleSend, pickLater: setLater, showToast, dismissToast: dismiss, undoLatest, cardDraftIds, focusDraft }),
+    [openComposer, sent, queueSend, scheduleSend, showToast, dismiss, undoLatest, cardDraftIds, focusDraft],
   );
   const docked = cards.filter((card) => !card.minimised && !card.position);
   const desktop = viewport >= 768;
