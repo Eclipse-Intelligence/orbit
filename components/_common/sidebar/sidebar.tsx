@@ -54,7 +54,7 @@ export default function Sidebar({ boards, companyCount, openActionCount, workspa
             boards={boards}
             companyCount={companyCount}
             openActionCount={openActionCount}
-              workspace={workspace}
+            workspace={workspace}
           />
         </SheetContent>
       </Sheet>
