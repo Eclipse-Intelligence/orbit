@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import { frameDocument } from "@/lib/mail/frame-document";
-import { createFrameGuard } from "@/lib/mail/frame-guard";
-import { forwardedKey } from "@/lib/mail/frame-keys";
+import { acceptedHello, forwardedKey } from "@/lib/mail/frame-keys";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 
@@ -49,18 +48,17 @@ export default function EmailFrame({
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [nonce] = useState(randomNonce);
+  const [token] = useState(randomNonce);
   const [height, setHeight] = useState(rich ? 320 : 80);
   const [measured, setMeasured] = useState(false);
   const [gaveUp, setGaveUp] = useState(false);
   const [quoted, setQuoted] = useState(false);
   const [showQuotes, setShowQuotes] = useState(false);
-  const [blockedSource, setBlockedSource] = useState<string | null>(null);
   const heard = useRef(false);
   const port = useRef<MessagePort | null>(null);
-  const guard = useRef(createFrameGuard());
+  const connected = useRef<string | null>(null);
   const handle = useRef<(message: unknown) => void>(() => undefined);
-  const source = useMemo(() => frameDocument(html, rich, hideQuotes, nonce), [html, rich, hideQuotes, nonce]);
-  const sourceRef = useRef(source);
+  const source = useMemo(() => frameDocument(html, rich, hideQuotes, nonce, token), [html, rich, hideQuotes, nonce, token]);
 
   const ask = useCallback(() => {
     if (!heard.current) port.current?.postMessage({ type: "measure" });
@@ -74,8 +72,7 @@ export default function EmailFrame({
   }, []);
 
   useEffect(() => {
-    sourceRef.current = source;
-    guard.current.fresh();
+    connected.current = null;
     closePort();
     heard.current = false;
     const timers = ASK_AGAIN_MS.map((delay) => window.setTimeout(ask, delay));
@@ -118,9 +115,10 @@ export default function EmailFrame({
   useEffect(() => {
     const listen = (event: MessageEvent) => {
       const target = frame.current?.contentWindow;
-      const data = event.data as { type?: unknown; complete?: unknown } | null;
-      if (!target || event.source !== target || !data || data.type !== "hello") return;
-      if (!guard.current.hello(data.complete === true)) return;
+      if (!target || event.source !== target) return;
+      const id = acceptedHello(event.data, frame.current?.getAttribute("srcdoc"), connected.current);
+      if (!id) return;
+      connected.current = id;
       closePort();
       const channel = new MessageChannel();
       channel.port1.onmessage = (message) => handle.current(message.data);
@@ -135,35 +133,11 @@ export default function EmailFrame({
     };
   }, [ask, closePort]);
 
-  const framed = useCallback(() => {
-    const verdict = guard.current.load();
-    if (verdict === "first") {
-      heard.current = false;
-      ask();
-      return;
-    }
-    closePort();
-    if (verdict === "blocked") {
-      setBlockedSource(sourceRef.current);
-      return;
-    }
-    heard.current = false;
-    frame.current?.setAttribute("srcdoc", sourceRef.current);
-  }, [ask, closePort]);
-
   const toggleQuotes = () => {
     const next = !showQuotes;
     setShowQuotes(next);
     port.current?.postMessage({ type: "quotes", show: next });
   };
-
-  if (blockedSource === source) {
-    return (
-      <p role="alert" className="text-subtle px-1">
-        Couldn&apos;t show this email.
-      </p>
-    );
-  }
 
   return (
     <>
@@ -174,7 +148,10 @@ export default function EmailFrame({
         referrerPolicy="no-referrer"
         srcDoc={source}
         suppressHydrationWarning
-        onLoad={framed}
+        onLoad={() => {
+          heard.current = false;
+          ask();
+        }}
         aria-busy={!measured && !gaveUp}
         className={cn("block w-full border-0", rich && "rounded-xl bg-white")}
         style={{ height: measured || !gaveUp ? height : "min(70dvh, 40rem)" }}

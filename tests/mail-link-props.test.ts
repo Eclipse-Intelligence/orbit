@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { linkMatchesUrl, listFromUrl } from "@/lib/mail/link-props";
-import { createFrameGuard } from "@/lib/mail/frame-guard";
+import { acceptedHello, frameToken, frameTokenComment } from "@/lib/mail/frame-keys";
 import { frameDocument } from "@/lib/mail/frame-document";
 
 const inbox = { view: "inbox", account: null, query: "" };
@@ -29,83 +29,52 @@ describe("links into Mail", () => {
 });
 
 describe("the email frame", () => {
-  it("connects the first hello of each srcdoc and ignores the rest", () => {
-    const guard = createFrameGuard();
-    guard.fresh();
-    assert.equal(guard.hello(false), true);
-    assert.equal(guard.hello(false), false);
-    assert.equal(guard.hello(true), false);
-    guard.fresh();
-    assert.equal(guard.hello(false), true);
+  const token = "0123456789abcdef0123456789abcdef";
+  const other = "fedcba9876543210fedcba9876543210";
+  const doc = frameDocument('<p>Hi</p><a href="https://x.test">x</a>', true, true, "n0nce", token);
+
+  it("hands a port to a hello with the document's own token", () => {
+    assert.equal(acceptedHello({ type: "hello", token, id: "a1" }, doc, null), "a1");
   });
 
-  it("treats a second load of the same srcdoc as a navigation and restores it", () => {
-    const guard = createFrameGuard();
-    guard.fresh();
-    assert.equal(guard.hello(false), true);
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.load(), "restore");
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.hello(false), true);
+  it("refuses a hello with a wrong token, no token or no document", () => {
+    assert.equal(acceptedHello({ type: "hello", token: other, id: "a1" }, doc, null), null);
+    assert.equal(acceptedHello({ type: "hello", id: "a1" }, doc, null), null);
+    assert.equal(acceptedHello({ type: "hello", token: "", id: "a1" }, doc, null), null);
+    assert.equal(acceptedHello({ type: "hello", token, id: "a1" }, null, null), null);
+    assert.equal(acceptedHello({ type: "hello", token, id: "a1" }, "<p>no comment</p>", null), null);
+    assert.equal(acceptedHello({ type: "key", token, id: "a1" }, doc, null), null);
+    assert.equal(acceptedHello({ type: "hello", token, id: 4 }, doc, null), null);
+    assert.equal(acceptedHello(null, doc, null), null);
+    assert.equal(acceptedHello("hello", doc, null), null);
   });
 
-  it("does not hand a port to the navigated page that is still in the frame while it is restored", () => {
-    const guard = createFrameGuard();
-    guard.fresh();
-    assert.equal(guard.hello(false), true);
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.load(), "restore");
-    assert.equal(guard.hello(true), false);
-    assert.equal(guard.hello(false), false);
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.hello(true), true);
-    assert.equal(guard.load(), "restore");
-    assert.equal(guard.hello(false), false);
+  it("refuses a hello carrying the previous document's token after the srcdoc changed", () => {
+    const next = frameDocument("<p>Changed</p>", true, true, "n0nce", other);
+    assert.equal(acceptedHello({ type: "hello", token, id: "a1" }, next, null), null);
+    assert.equal(acceptedHello({ type: "hello", token: other, id: "b1" }, next, null), "b1");
   });
 
-  it("counts a load that happened before the page was hydrated", () => {
-    const guard = createFrameGuard();
-    guard.fresh();
-    assert.equal(guard.hello(true), true);
-    assert.equal(guard.load(), "restore");
+  it("answers a document once, and a reloaded copy of it again", () => {
+    assert.equal(acceptedHello({ type: "hello", token, id: "a1" }, doc, "a1"), null);
+    assert.equal(acceptedHello({ type: "hello", token, id: "a2" }, doc, "a1"), "a2");
   });
 
-  it("does not count the same load twice when hello says it was already complete", () => {
-    const guard = createFrameGuard();
-    guard.fresh();
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.hello(true), true);
-    assert.equal(guard.load(), "restore");
+  it("reads the token from the start of the document and nowhere else", () => {
+    const planted = `<!doctype html><html><head></head><body>${frameTokenComment(other)}<meta name="orbit-frame" content="${other}">orbit-frame:${other}</body></html>`;
+    assert.equal(frameToken(doc), token);
+    assert.equal(frameToken(planted), null);
+    assert.equal(frameToken(`${frameTokenComment(other)}${doc}`), null);
+    assert.equal(frameToken(frameDocument(`<!--orbit-frame:${other}-->`, true, true, "n0nce", token)), token);
+    assert.equal(frameToken(null), null);
   });
 
-  it("does not misfire when the email changes", () => {
-    const guard = createFrameGuard();
-    guard.fresh();
-    guard.hello(false);
-    assert.equal(guard.load(), "first");
-    guard.fresh();
-    assert.equal(guard.hello(false), true);
-    assert.equal(guard.load(), "first");
-  });
-
-  it("stops restoring an email that keeps navigating away", () => {
-    const guard = createFrameGuard(2);
-    guard.fresh();
-    guard.hello(false);
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.load(), "restore");
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.load(), "restore");
-    assert.equal(guard.load(), "first");
-    assert.equal(guard.load(), "blocked");
-    guard.fresh();
-    assert.equal(guard.load(), "first");
-  });
-
-  it("keeps any secret out of the frame document", () => {
-    const doc = frameDocument('<p style="color:red">Hi</p><a href="https://x.test">x</a>', true, true, "n0nce");
-    assert.equal(/token|orbit-frame/i.test(doc), false);
-    assert.equal(doc.includes("MessageChannel") || doc.includes("event.ports"), true);
-    assert.equal(doc.indexOf("<!--"), -1);
+  it("keeps the token out of every attribute and removes the script that holds it", () => {
+    const tags = [...doc.matchAll(/<[a-z][^>]*>/gi)].map((match) => match[0]).filter((tag) => !tag.startsWith("<script"));
+    for (const tag of tags) assert.equal(tag.includes(token), false, tag);
+    assert.equal(doc.startsWith(`<!doctype html><!--orbit-frame:${token}-->`), true);
+    assert.equal(doc.includes("document.currentScript"), true);
+    assert.equal(doc.includes("removeChild(holder)"), true);
+    assert.equal(doc.split(token).length - 1, 2);
   });
 });
