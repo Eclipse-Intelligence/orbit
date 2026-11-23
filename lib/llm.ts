@@ -205,6 +205,12 @@ async function attempt<T>(
   };
 }
 
+export function failedOnTheInput(error: unknown) {
+  if (!(error instanceof LlmError)) return false;
+  if (error.message === UNUSABLE) return true;
+  return !error.retryable && !error.actionable && error.status !== 408 && error.status !== 429;
+}
+
 export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJsonResult<T>> {
   const apiKey = process.env.LLM_API_KEY?.trim();
   if (!apiKey) throw missingKey(request.viewer);

@@ -6,6 +6,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { failedOnTheInput, LlmError } from "@/lib/llm";
 import { workingDaysLater } from "@/lib/mail/later";
 import { cancelFollowUp, mailHelpSettings, notePreparedSent, prepareMail, prepareNudge, setMailHelp, updatePrepared } from "@/lib/mail/prepare";
 import { syncMail } from "@/lib/mail/sync";
@@ -427,5 +428,61 @@ describe("prepared replies and automatic reminders", () => {
     assert.equal(after.asked.length, 0);
     const claimed = await getAdminPool().query<{ running: boolean }>("select running_until > now() as running from crm.mail_prepare_runs where user_id = $1", [owner.userId]);
     assert.equal(claimed.rows[0].running, false, "the claim is let go when the run ends");
+  });
+
+  it("only blames the email for failures that come from the email", () => {
+    assert.equal(failedOnTheInput(new LlmError("The AI gave an unusable answer. Try again.", true)), true);
+    assert.equal(failedOnTheInput(new LlmError("The AI returned an error. Try again.", false, false, 400)), true);
+    assert.equal(failedOnTheInput(new LlmError("The AI's answer was cut off.", false)), true);
+    assert.equal(failedOnTheInput(new LlmError("The AI returned an error. Try again.", false, false, 429)), false);
+    assert.equal(failedOnTheInput(new LlmError("The AI returned an error. Try again.", true, false, 503)), false);
+    assert.equal(failedOnTheInput(new LlmError("Couldn't reach the AI. Try again.", true)), false);
+    assert.equal(failedOnTheInput(new LlmError("Ran out of time. Try again.", true)), false);
+    assert.equal(failedOnTheInput(new LlmError("Check LLM_API_KEY.", false, true, 401)), false);
+    assert.equal(failedOnTheInput(new Error("timeout exceeded when trying to connect")), false);
+  });
+
+  it("records no failure for a gateway outage, a rate limit or a bad connection, and stops starting new replies", async () => {
+    const admin = getAdminPool();
+    await admin.query("delete from crm.mail_prepared where kind = 'reply_failed'");
+    await syncMail(owner, {
+      budgetMs: 30_000,
+      fetchImpl: mailbox({
+        inbox: ["ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX"].map((token, index) => incoming(`m-t${index}`, `t${index}@transient.test`, `TRANS${token}`)),
+        sent: [],
+      }),
+    });
+    const failures = async () => (await admin.query("select 1 from crm.mail_prepared where kind = 'reply_failed'")).rowCount;
+    const tokens = (users: string[]) => new Set(users.map((user) => user.match(/TRANS[A-Z]+/)?.[0]).filter(Boolean));
+
+    for (const outage of [() => Response.json({ error: { message: "Down" } }, { status: 503 }), () => Response.json({ error: { message: "Slow down" } }, { status: 429 })]) {
+      const asked: string[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        const [system, user] = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages.map((item) => item.content);
+        if (system.includes("put the conversation off until later")) return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ deferrals: [] }) }, finish_reason: "stop" }] });
+        asked.push(user);
+        return outage();
+      };
+      await prepareMail(owner, { deadline: soon(), fetchImpl });
+      assert.equal(await failures(), 0, "no strike for a temporary failure");
+      assert.ok(tokens(asked).size <= 3, `new replies stop being started, ${tokens(asked).size} were tried`);
+    }
+
+    const unreachable: typeof fetch = async (_input, init) => {
+      const [system] = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages.map((item) => item.content);
+      if (system.includes("put the conversation off until later")) return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ deferrals: [] }) }, finish_reason: "stop" }] });
+      throw new TypeError("fetch failed");
+    };
+    await prepareMail(owner, { deadline: soon(), fetchImpl: unreachable });
+    assert.equal(await failures(), 0, "no strike when the AI can't be reached");
+
+    const garbage: typeof fetch = async (_input, init) => {
+      const [system, user] = (JSON.parse(String(init?.body)) as { messages: { content: string }[] }).messages.map((item) => item.content);
+      if (system.includes("put the conversation off until later")) return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify({ deferrals: [] }) }, finish_reason: "stop" }] });
+      const content = user.includes("TRANSONE") ? "not json at all" : JSON.stringify({ needsReply: false, body: null });
+      return Response.json({ model: "test-model", choices: [{ message: { content }, finish_reason: "stop" }] });
+    };
+    await prepareMail(owner, { deadline: soon(), fetchImpl: garbage });
+    assert.equal(await failures(), 1, "an answer that can't be used is the email's strike");
   });
 });

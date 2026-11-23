@@ -10,7 +10,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { UserActor } from "@/lib/crm/types";
 import type { Db } from "@/lib/db/pool";
 import { emailWritingNotes } from "@/lib/learning/memories";
-import { completeJson, windowShare } from "@/lib/llm";
+import { completeJson, failedOnTheInput, LlmError, windowShare } from "@/lib/llm";
 import { clean, formatThread, recipientContext, threadText, today, voiceSamples } from "@/lib/mail/ai";
 import { attachmentNotes } from "@/lib/mail/attachment-context";
 import { DEFER_SCHEMA } from "@/lib/mail/deferral-dates";
@@ -34,6 +34,8 @@ const BODY_MAX = 20_000;
 const REPLY_CHECK_MS = 10_000;
 const REPLY_CHECK_MAX_MS = 25_000;
 const REPLY_LANES = 3;
+const REPLY_LANES_SERVERLESS = 2;
+const CONNECTION_TROUBLE = /timeout exceeded when trying to connect|connection terminated|econnreset|econnrefused|too many clients|sorry, too many/i;
 const REPLY_MAX_FAILURES = 3;
 const REPLY_RETRY_MINUTES = 60;
 const PREPARE_CLAIM_SECONDS = 150;
@@ -660,6 +662,11 @@ async function releasePrepare(actor: UserActor, startedAt: string) {
   ).catch(() => undefined);
 }
 
+function blamesTheEmail(error: unknown) {
+  if (error instanceof LlmError) return failedOnTheInput(error);
+  return !CONNECTION_TROUBLE.test(error instanceof Error ? error.message : String(error));
+}
+
 async function noteReplyFailure(actor: UserActor, candidate: ReplyCandidate, error: unknown) {
   console.error("Preparing a reply failed", error instanceof Error ? error.message : error);
   await withActor(actor, (db) =>
@@ -681,8 +688,9 @@ async function prepareReplies(
   options: { deadline: number; fetchImpl?: typeof fetch },
 ) {
   let next = 0;
+  let halted = false;
   const lane = async () => {
-    while (next < candidates.length) {
+    while (next < candidates.length && !halted) {
       if (options.deadline - Date.now() < STEP_MS) return;
       const candidate = candidates[next];
       next += 1;
@@ -693,11 +701,17 @@ async function prepareReplies(
         if (outcome === "skipped") report.skipped += 1;
         if (outcome === "pitch") report.pitches += 1;
       } catch (error) {
-        await noteReplyFailure(actor, candidate, error);
+        if (blamesTheEmail(error)) {
+          await noteReplyFailure(actor, candidate, error);
+        } else {
+          halted = true;
+          console.error("Preparing replies stopped on a temporary failure", error instanceof Error ? error.message : error);
+        }
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(REPLY_LANES, candidates.length) }, lane));
+  const lanes = process.env.VERCEL ? REPLY_LANES_SERVERLESS : REPLY_LANES;
+  await Promise.all(Array.from({ length: Math.min(lanes, candidates.length) }, lane));
 }
 
 export async function prepareMail(
@@ -750,7 +764,14 @@ export async function prepareMail(
         console.error("Deferral check failed", error instanceof Error ? error.message : error);
       }
     };
-    await Promise.all([prepareReplies(actor, actors, candidates, settings, report, options), sentMail(), pitches(), deferrals()]);
+    const checks = process.env.VERCEL
+      ? (async () => {
+          await sentMail();
+          await pitches();
+          await deferrals();
+        })()
+      : Promise.all([sentMail(), pitches(), deferrals()]);
+    await Promise.all([prepareReplies(actor, actors, candidates, settings, report, options), checks]);
     return report;
   } finally {
     await releasePrepare(actor, claimed);

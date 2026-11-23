@@ -15,7 +15,7 @@ import { askJev } from "@/lib/jev";
 import { learnNow } from "@/lib/learning/nightly";
 import { completeJson } from "@/lib/llm";
 import { classifyCapture, listSenderRules, listUnknownMail } from "@/lib/mail/capture-filter";
-import { createAndFileUnknown } from "@/lib/mail/filing";
+import { createAndFileUnknown, unknownMail } from "@/lib/mail/filing";
 import { recordFiledInDb, verdictFor } from "@/lib/mail/relevance";
 import { setAddressHome } from "@/lib/mail/routing";
 import { AUTOMATED_DOMAIN, FREE_MAIL_DOMAINS, ROLE_SENDER, STRICT_AUTOMATED_SENDER } from "@/lib/mail/patterns";
@@ -743,6 +743,32 @@ describe("Capture relevance", () => {
     assert.ok(!everyone.includes("sub@kept-link.test") && !everyone.includes("sub@really-gone.test"));
     await admin.query("delete from crm.mail_subscriptions where sender like 'sub@%'");
     await admin.query("delete from crm.mail_messages where provider_message_id like 'ks-%'");
+  });
+
+  it("keeps real mail in the scan when more than 300 newer bulk threads have already been sorted out", async () => {
+    const admin = getAdminPool();
+    await addMessage(primary, { id: "kb-real", from: "pat@real-enquiry.test", to: ["mark@geteclipse.co"], subject: "A real enquiry", at: minutesAgo(60 * 24 * 16) });
+    await admin.query(
+      `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet, body_text,
+         from_email, from_name, to_recipients, cc_recipients, sent_at, received_at, focused)
+       select $1, $2, $3, $4, 'kb-bulk-' || i, '<kb-bulk-' || i || '@mail.test>', 'kb-bulk-' || i, 'Our spring offer', 'Offer', 'Offer. Unsubscribe here.',
+         'hello@bulk' || i || '.test', null, '[{"name": "", "address": "mark@geteclipse.co"}]'::jsonb, '[]'::jsonb,
+         now() - make_interval(mins => 5 + i), now() - make_interval(mins => 5 + i), false
+       from generate_series(1, 320) i`,
+      [eclipse.workspaceId, eclipse.userId, primary.sourceId, primary.inbox],
+    );
+    await admin.query(
+      `insert into crm.mail_thread_relevance (workspace_id, user_id, source_id, thread_key, sender, message_id, category, engine, confidence)
+       select workspace_id, user_id, source_id, thread_key, from_email, id, 'newsletter', 'haiku', 0.95
+       from crm.mail_messages where provider_message_id like 'kb-bulk-%'`,
+    );
+    const scanned = await unknownMail(eclipse, [eclipse]);
+    assert.ok(scanned.some((email) => email.email === "pat@real-enquiry.test"), "the older real enquiry is still scanned");
+    assert.equal(scanned.length, 300);
+    const list = await capture(eclipse);
+    assert.ok(list.notShownTotal > 0, "the bulk threads are still listed as not shown");
+    await admin.query("delete from crm.mail_thread_relevance where thread_key like 'kb-%'");
+    await admin.query("delete from crm.mail_messages where provider_message_id like 'kb-%'");
   });
 
   it("skips the sorting scan when nothing new has arrived, and scans again for new mail", async () => {

@@ -40,6 +40,37 @@ import type { ThreadFiling } from "@/lib/mail/view";
 
 const CAPTURE_SCAN = 300;
 
+const CERTAIN_ENGINES_SQL = "'listed', 'headers', 'rule', 'filed', 'shown'";
+
+const ALREADY_SKIPPED = (alias: string, userParam: string) => `(
+  exists (
+    select 1 from crm.mail_sender_relevance er
+    where er.user_id = ${userParam} and er.workspace_id = ${alias}.capture_workspace_id and er.rule and er.category = 'muted' and er.sender = ${alias}.from_email
+  )
+  or (
+    not exists (
+      select 1 from crm.mail_sender_relevance er
+      where er.user_id = ${userParam} and er.workspace_id = ${alias}.capture_workspace_id and er.rule and er.sender = ${alias}.from_email
+    )
+    and not ${KNOWN_ADDRESS(userParam, `${alias}.from_email`)}
+    and (
+      exists (
+        select 1 from crm.mail_sender_relevance dr
+        where dr.user_id = ${userParam} and dr.workspace_id = ${alias}.capture_workspace_id and dr.rule and dr.category = 'muted'
+          and dr.sender = '@' || split_part(${alias}.from_email, '@', 2)
+      )
+      or exists (
+        select 1 from crm.mail_thread_relevance tr
+        where tr.user_id = ${userParam} and tr.source_id = ${alias}.source_id and tr.thread_key = ${alias}.tk
+          and tr.workspace_id = ${alias}.capture_workspace_id and tr.sender = ${alias}.from_email
+          and (case when tr.message_id is not null then tr.message_id = ${alias}.id else tr.decided_at >= ${alias}.at end)
+          and tr.engine <> 'history' and tr.category is not null and tr.category <> 'business'
+          and (tr.category = 'muted' or tr.engine in (${CERTAIN_ENGINES_SQL}) or coalesce(tr.confidence, 0) >= 0.8)
+      )
+    )
+  )
+)`;
+
 export type UnknownEmail = {
   key: string;
   messageId: string;
@@ -341,23 +372,30 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
              where o.source_id = l.source_id and o.thread_key = l.tk and ofo.role = 'sent' and coalesce(o.sent_at, o.created_at) > l.at
            )
        )
-       select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at,
-         ${capture.received} as received_by, ${capture.workspace} as capture_workspace_id,
+       select r.id, r.source_id, r.tk, r.subject, r.snippet, r.from_email, r.from_name, r.at, r.received_by, r.capture_workspace_id,
          array_remove(array[
-           case when n.from_email ~* '${ROLE_SENDER}' and split_part(n.from_email, '@', 2) <> all($4::text[]) then 'the address is a role address such as info@ or billing@' end,
-           case when n.focused is false then 'the mail app put it in Other, not Focused' end,
+           case when r.from_email ~* '${ROLE_SENDER}' and split_part(r.from_email, '@', 2) <> all($4::text[]) then 'the address is a role address such as info@ or billing@' end,
+           case when r.focused is false then 'the mail app put it in Other, not Focused' end,
            case when exists (
-             select 1 from crm.mail_messages b where b.id = n.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
+             select 1 from crm.mail_messages b where b.id = r.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
            ) then 'the end of the email mentions unsubscribing or opting out' end
          ], null) as signals
        from (
-         select n.* from candidates n
-         ${splitJoin("n", "$1")}
-         where ${captureSplitSql("n")}
-         order by n.at desc
-         offset 0
-       ) n
-       limit ${CAPTURE_SCAN}`,
+         select w.id, w.source_id, w.tk, w.subject, w.snippet, w.from_email, w.from_name, w.at, w.focused, w.received_by, w.capture_workspace_id
+         from (
+           select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at, n.focused,
+             ${capture.received} as received_by, ${capture.workspace} as capture_workspace_id
+           from (
+             select n.* from candidates n
+             ${splitJoin("n", "$1")}
+             where ${captureSplitSql("n")}
+             order by n.at desc
+             offset 0
+           ) n
+         ) w
+         order by ${ALREADY_SKIPPED("w", "$1")}, w.at desc
+         limit ${CAPTURE_SCAN}
+       ) r`,
       [actor.userId, actor.email, workspaceIds, [...FREE_MAIL_DOMAINS], captureCutoff(now), homesJson(homes)],
     );
     const rows = result.rows.sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime());
