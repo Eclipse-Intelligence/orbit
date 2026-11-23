@@ -597,7 +597,7 @@ export async function updateMicrosoftDraft(
   draft: { subject: string; html: string; to: MailAddress[]; cc: MailAddress[]; bcc: MailAddress[] },
   fetchImpl: typeof fetch = fetch,
 ) {
-  await graphJson<unknown>(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}`, token, fetchImpl, undefined, {
+  const updated = await graphJson<{ internetMessageId?: string | null }>(`${GRAPH}/me/messages/${encodeURIComponent(draftId)}`, token, fetchImpl, undefined, {
     method: "PATCH",
     body: {
       subject: draft.subject,
@@ -607,6 +607,33 @@ export async function updateMicrosoftDraft(
       bccRecipients: recipientsFor(draft.bcc),
     },
   });
+  return { internetMessageId: updated.internetMessageId?.slice(0, 1000) || null };
+}
+
+export type DraftFile = { id: string; name: string; size: number };
+
+export async function listDraftFiles(token: string, draftId: string, fetchImpl: typeof fetch = fetch): Promise<DraftFile[]> {
+  const page = await graphJson<{ value?: { id?: string; name?: string | null; size?: number | null }[] }>(
+    `${GRAPH}/me/messages/${encodeURIComponent(draftId)}/attachments?$select=id,name,size`,
+    token,
+    fetchImpl,
+  );
+  return (page.value ?? []).flatMap((item) => (item.id ? [{ id: item.id, name: item.name ?? "", size: item.size ?? 0 }] : []));
+}
+
+export async function deleteDraftFile(token: string, draftId: string, fileId: string, fetchImpl: typeof fetch = fetch) {
+  try {
+    await graphJson<unknown>(
+      `${GRAPH}/me/messages/${encodeURIComponent(draftId)}/attachments/${encodeURIComponent(fileId)}`,
+      token,
+      fetchImpl,
+      undefined,
+      { method: "DELETE" },
+    );
+  } catch (error) {
+    if (error instanceof GraphMailError && error.status === 404) return;
+    throw error;
+  }
 }
 
 export async function sendMicrosoftDraft(token: string, draftId: string, fetchImpl: typeof fetch = fetch) {
