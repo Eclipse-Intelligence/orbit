@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, heldIsSaved, sameAccounts, saveDelay, type DraftFields, type StoredDraftContent } from "@/lib/mail/composer-state";
+import { afterEach, beforeEach, describe, it } from "node:test";
+import { heldDrafts, holdDraft, releaseDraft, type HeldDraft } from "@/components/mail/held-drafts";
+import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, heldIsSaved, openingSignature, sameAccounts, saveDelay, type DraftFields, type StoredDraftContent } from "@/lib/mail/composer-state";
 import type { MailAddress } from "@/lib/mail/types";
 import { parseAddress, recipientsError, settleRecipients } from "@/lib/mail/recipient-text";
 
@@ -80,6 +81,8 @@ describe("unsaved draft text", () => {
     const changes: Partial<DraftFields>[] = [
       { body: "Hi Bob, one more line" },
       { subject: "Pricing v2" },
+      { sourceId: "mailbox-2" },
+      { identityId: "smtp-1" },
       { to: [] },
       { cc: [{ address: "ann@x.com", name: null }] },
       { bcc: [{ address: "ann@x.com", name: null }] },
@@ -145,6 +148,8 @@ describe("compose accounts", () => {
 describe("held copies on reopen", () => {
   const held = {
     id: "draft-1",
+    sourceId: "mailbox-1",
+    identityId: null as string | null,
     subject: "Pricing",
     body: "Hi Bob\n\nS1 and S2",
     to: [{ address: "bob@y.com", name: "Bob" }],
@@ -156,6 +161,8 @@ describe("held copies on reopen", () => {
     attachments: [],
   };
   const stored: StoredDraftContent = {
+    sourceId: "mailbox-1",
+    identityId: null,
     subject: "Pricing",
     body: "Hi Bob\n\nS1 and S2",
     to: [{ address: "bob@y.com", name: null }],
@@ -178,6 +185,8 @@ describe("held copies on reopen", () => {
   it("keeps a held copy whenever the server's draft differs in anything the held one has", () => {
     const differs: Partial<StoredDraftContent>[] = [
       { subject: "Pricing v2" },
+      { sourceId: "mailbox-2" },
+      { identityId: "smtp-1" },
       { to: [] },
       { cc: [{ address: "ann@x.com", name: null }] },
       { bcc: [{ address: "ann@x.com", name: null }] },
@@ -200,5 +209,64 @@ describe("held copies on reopen", () => {
 
   it("doesn't depend on any clock", () => {
     assert.equal(heldIsSaved({ ...held, at: 0 } as typeof held, stored), heldIsSaved({ ...held, at: Date.now() + 86_400_000 } as typeof held, stored));
+  });
+});
+
+describe("a reopened held copy", () => {
+  const phone: DraftFields = { ...fields, body: "Hi Bob, typed on the phone" };
+
+  it("makes no save of its own until someone edits it", () => {
+    const opened = openingSignature(phone, {});
+    assert.equal(hasUnsaved(phone, opened), false);
+  });
+
+  it("saves everything it holds on the first edit", () => {
+    const opened = openingSignature(phone, {});
+    const edited = { ...phone, subject: "Pricing v2" };
+    assert.equal(hasUnsaved(edited, opened), true);
+    assert.notEqual(draftSignature(edited), draftSignature(phone));
+    assert.equal(edited.body, "Hi Bob, typed on the phone");
+  });
+
+  it("still saves at once when it is marked as never saved", () => {
+    assert.equal(hasUnsaved(phone, openingSignature(phone, { unsaved: true })), true);
+  });
+});
+
+describe("held copies in the tab", () => {
+  const store = new Map<string, string>();
+  const original = Object.getOwnPropertyDescriptor(globalThis, "window");
+
+  beforeEach(() => {
+    store.clear();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { sessionStorage: { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value), removeItem: (key: string) => void store.delete(key) } },
+    });
+  });
+
+  afterEach(() => {
+    if (original) Object.defineProperty(globalThis, "window", original);
+    else delete (globalThis as { window?: unknown }).window;
+  });
+
+  const held = (key: string): HeldDraft => ({
+    key,
+    at: 1,
+    fromEmail: "mark@eclipse.test",
+    draft: { id: "", sourceId: "mailbox-1", mode: "new", messageId: null, to: [], cc: [], bcc: [], subject: "Held", body: "Text", savedAt: "", sendAt: null, sendError: null },
+  });
+
+  it("keeps a held copy until it is released", () => {
+    holdDraft(held("a"));
+    holdDraft(held("b"));
+    assert.deepEqual(heldDrafts().map((item) => item.key), ["a", "b"]);
+    releaseDraft("a");
+    assert.deepEqual(heldDrafts().map((item) => item.key), ["b"]);
+    releaseDraft(null);
+    releaseDraft("missing");
+    assert.deepEqual(heldDrafts().map((item) => item.key), ["b"]);
+    releaseDraft("b");
+    assert.deepEqual(heldDrafts(), []);
   });
 });

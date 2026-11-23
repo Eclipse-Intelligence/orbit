@@ -20,7 +20,7 @@ import { ComposerReconnect, flagReconnect } from "@/components/mail/reconnect-no
 import { fromFallback } from "@/lib/mail/mailboxes";
 import { draftQueued, holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
-import { SAVE_DELAY_MS, draftSignature, fitsKeepalive, hasUnsaved, saveDelay, type DraftFields } from "@/lib/mail/composer-state";
+import { SAVE_DELAY_MS, draftSignature, fitsKeepalive, hasUnsaved, openingSignature, saveDelay, type DraftFields } from "@/lib/mail/composer-state";
 import { recipientsError, type SettledRecipients } from "@/lib/mail/recipient-text";
 import { useSuppressionCaution } from "@/components/mail/suppression-caution";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
@@ -84,7 +84,9 @@ export type ComposerStart = {
   heldKey?: string;
 };
 
-type SaveState = { kind: "idle" | "saving" | "saved" | "held" | "error"; message?: string };
+type SaveState = { kind: "idle" | "saving" | "saved" | "held" | "kept" | "error"; message?: string };
+
+const KEPT_STATUS = "Not saved";
 
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
   const text = JSON.stringify(body);
@@ -171,7 +173,7 @@ export default function MailComposer({
   const [noReplyThen, setNoReplyThen] = useState<NoReplyThen>(draft?.followUpDays ? "send" : "remind");
   const [followUpBody, setFollowUpBody] = useState(draft?.followUpBody ?? "");
   const [withSignature, setWithSignature] = useState(true);
-  const [save, setSave] = useState<SaveState>(draft?.savedAt ? { kind: "saved" } : { kind: "idle" });
+  const [save, setSave] = useState<SaveState>(start.heldKey ? { kind: "kept" } : draft?.savedAt ? { kind: "saved" } : { kind: "idle" });
   const lastSaveError = useRef<string | null>(null);
   const [scheduledFor, setScheduledFor] = useState(draft?.sendAt ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -225,7 +227,7 @@ export default function MailComposer({
     followUpDays: noReply.followUpDays,
     followUpBody: noReply.followUpDays ? followUpBody : null,
   });
-  const savedAs = useRef<string | null>(start.heldKey || draft?.unsaved ? null : draftSignature(payload.current));
+  const savedAs = useRef<string | null>(openingSignature(payload.current, { unsaved: Boolean(draft?.unsaved) }));
   const unsaved = () => !discarded.current && hasUnsaved(payload.current, savedAs.current);
   const markSaved = (fields: DraftFields = payload.current) => {
     savedAs.current = draftSignature(fields);
@@ -273,7 +275,7 @@ export default function MailComposer({
   });
 
   useEffect(() => {
-    heldListener.current?.(save.kind === "held");
+    heldListener.current?.(save.kind === "held" || save.kind === "kept");
   }, [save.kind]);
 
   useEffect(() => {
@@ -837,7 +839,7 @@ export default function MailComposer({
     window.setTimeout(() => aiInput.current?.focus(), 0);
   }
 
-  const status = save.kind === "error" ? save.message : "";
+  const status = save.kind === "error" ? save.message : save.kind === "kept" ? KEPT_STATUS : "";
 
   return (
     <form

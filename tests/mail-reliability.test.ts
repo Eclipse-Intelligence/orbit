@@ -467,6 +467,8 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     const { id } = await draftFor(box, "Holds");
     const content = await draftContent(owner, id);
     assert.equal(content?.subject, "Holds");
+    assert.equal(content?.sourceId, sourceId);
+    assert.equal(content?.identityId, null);
     assert.equal(content?.body, "Only once, please");
     assert.deepEqual(content?.to.map((item) => item.address), ["sam@acme.test"]);
     assert.equal(await draftContent(owner, randomUUID()), null);

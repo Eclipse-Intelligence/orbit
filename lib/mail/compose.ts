@@ -826,6 +826,8 @@ export async function draftContent(actor: UserActor, id: string): Promise<Stored
   if (!isUuid(id)) return null;
   return withActor(actor, async (db) => {
     const result = await db.query<{
+      source_id: string;
+      identity_id: string | null;
       subject: string | null;
       body: string;
       to_recipients: MailAddress[] | null;
@@ -836,13 +838,15 @@ export async function draftContent(actor: UserActor, id: string): Promise<Stored
       follow_up_body: string | null;
       attachments: string[] | null;
     }>(
-      `select subject, body, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body, attachments
+      `select source_id, identity_id, subject, body, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body, attachments
        from crm.mail_drafts where id = $1 and user_id = $2`,
       [id, actor.userId],
     );
     const row = result.rows[0];
     if (!row) return null;
     return {
+      sourceId: row.source_id,
+      identityId: row.identity_id,
       subject: row.subject ?? "",
       body: row.body,
       to: row.to_recipients ?? [],

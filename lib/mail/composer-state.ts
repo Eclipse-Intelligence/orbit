@@ -47,6 +47,10 @@ export function draftSignature(fields: DraftFields) {
   ]);
 }
 
+export function openingSignature(fields: DraftFields, opened: { unsaved?: boolean }) {
+  return opened.unsaved ? null : draftSignature(fields);
+}
+
 export function hasUnsaved(fields: DraftFields, saved: string | null) {
   return saved === null || draftSignature(fields) !== saved;
 }
@@ -60,6 +64,8 @@ export function fitsKeepalive(text: string) {
 }
 
 export type StoredDraftContent = {
+  sourceId: string;
+  identityId: string | null;
   subject: string;
   body: string;
   to: MailAddress[];
@@ -72,6 +78,8 @@ export type StoredDraftContent = {
 };
 
 type HeldContent = {
+  sourceId: string;
+  identityId?: string | null;
   subject: string;
   body: string;
   to: MailAddress[];
@@ -88,6 +96,8 @@ function addresses(list: MailAddress[]) {
 }
 
 function contentKey(content: {
+  sourceId: string;
+  identityId: string | null;
   subject: string;
   body: string;
   to: MailAddress[];
@@ -99,6 +109,8 @@ function contentKey(content: {
   attachments: string[];
 }) {
   return JSON.stringify([
+    content.sourceId,
+    content.identityId,
     content.subject.replace(/\s+/g, " ").trim(),
     content.body.replace(/\r\n/g, "\n"),
     addresses(content.to),
@@ -115,6 +127,8 @@ export function heldIsSaved(held: HeldContent, stored: StoredDraftContent | null
   if (!stored) return false;
   return (
     contentKey({
+      sourceId: held.sourceId,
+      identityId: held.identityId ?? null,
       subject: held.subject,
       body: held.body,
       to: held.to,
