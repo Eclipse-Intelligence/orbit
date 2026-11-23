@@ -1,8 +1,9 @@
+import type { HoldReason } from "@/lib/mail/composer-state";
 import type { MailDraft } from "@/lib/mail/view";
 
 const KEY = "orbit.mail.held-drafts";
 
-export type HeldDraft = { key: string; draft: MailDraft & { replaces?: string | null; createKey?: string | null }; fromEmail: string | null; at: number };
+export type HeldDraft = { key: string; draft: MailDraft & { replaces?: string | null; createKey?: string | null }; fromEmail: string | null; at: number; reason?: HoldReason };
 
 function readAll(): HeldDraft[] {
   if (typeof window === "undefined") return [];

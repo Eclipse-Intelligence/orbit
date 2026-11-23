@@ -20,7 +20,7 @@ import { ComposerReconnect, flagReconnect } from "@/components/mail/reconnect-no
 import { fromFallback } from "@/lib/mail/mailboxes";
 import { draftQueued, holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
-import { SAVE_DELAY_MS, draftSignature, fitsKeepalive, hasUnsaved, openingSignature, saveDelay, type DraftFields } from "@/lib/mail/composer-state";
+import { SAVE_DELAY_MS, draftSignature, fitsKeepalive, hasUnsaved, heldOpening, openingSignature, saveDelay, type DraftFields, type HoldReason } from "@/lib/mail/composer-state";
 import { recipientsError, type SettledRecipients } from "@/lib/mail/recipient-text";
 import { useSuppressionCaution } from "@/components/mail/suppression-caution";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
@@ -82,6 +82,7 @@ export type ComposerStart = {
   fromId?: string | null;
   fromEmail?: string | null;
   heldKey?: string;
+  heldReason?: HoldReason;
 };
 
 type SaveState = { kind: "idle" | "saving" | "saved" | "held" | "kept" | "error"; message?: string };
@@ -173,7 +174,10 @@ export default function MailComposer({
   const [noReplyThen, setNoReplyThen] = useState<NoReplyThen>(draft?.followUpDays ? "send" : "remind");
   const [followUpBody, setFollowUpBody] = useState(draft?.followUpBody ?? "");
   const [withSignature, setWithSignature] = useState(true);
-  const [save, setSave] = useState<SaveState>(start.heldKey ? { kind: "kept" } : draft?.savedAt ? { kind: "saved" } : { kind: "idle" });
+  const heldMode = heldOpening({ key: start.heldKey, reason: start.heldReason }, draft?.id);
+  const [save, setSave] = useState<SaveState>(
+    heldMode === "kept" ? { kind: "kept" } : heldMode === "reconnect" ? { kind: "held" } : draft?.savedAt ? { kind: "saved" } : { kind: "idle" },
+  );
   const lastSaveError = useRef<string | null>(null);
   const [scheduledFor, setScheduledFor] = useState(draft?.sendAt ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -186,6 +190,7 @@ export default function MailComposer({
   const unsavedSince = useRef<number | null>(null);
   const discarded = useRef(false);
   const heldKey = useRef<string | null>(start.heldKey ?? null);
+  const holdReason = useRef<HoldReason>(start.heldReason ?? "page");
   const heldNow = useRef(false);
   const heldExtras = useRef({ email: fromAccount?.email ?? null, files: attachments.files });
   const sendKey = useRef<string | null>(draft?.sendKey ?? null);
@@ -227,7 +232,7 @@ export default function MailComposer({
     followUpDays: noReply.followUpDays,
     followUpBody: noReply.followUpDays ? followUpBody : null,
   });
-  const savedAs = useRef<string | null>(openingSignature(payload.current, { unsaved: Boolean(draft?.unsaved) }));
+  const savedAs = useRef<string | null>(openingSignature(payload.current, { unsaved: Boolean(draft?.unsaved) || heldMode === "save" || heldMode === "reconnect" }));
   const unsaved = () => !discarded.current && hasUnsaved(payload.current, savedAs.current);
   const markSaved = (fields: DraftFields = payload.current) => {
     savedAs.current = draftSignature(fields);
@@ -338,7 +343,7 @@ export default function MailComposer({
         if (typeof recreated === "string") adoptDraftId(recreated);
         lastSaveError.current = problem instanceof Error ? problem.message : "Couldn't save the draft. Try again.";
         if (flagReconnect(problem, { sourceId: snapshot.sourceId, email: account?.email ?? null })) {
-          keepHeld();
+          keepHeld("reconnect");
           setSave({ kind: "held" });
         } else setSave({ kind: "error", message: problem instanceof Error ? problem.message : "Couldn't save the draft." });
       } finally {
@@ -349,14 +354,16 @@ export default function MailComposer({
     return run;
   }
 
-  function keepHeld() {
+  function keepHeld(reason: HoldReason = "page") {
     if (discarded.current || shared.current.id) return;
+    if (heldKey.current === null || reason === "reconnect") holdReason.current = reason;
     heldKey.current ??= crypto.randomUUID();
     const current = payload.current;
     holdDraft({
       key: heldKey.current,
       fromEmail: heldExtras.current.email,
       at: Date.now(),
+      reason: holdReason.current,
       draft: {
         id: draftId.current ?? "",
         sourceId: current.sourceId,

@@ -47,6 +47,16 @@ export function draftSignature(fields: DraftFields) {
   ]);
 }
 
+export type HoldReason = "reconnect" | "page";
+
+export type HeldOpening = "none" | "kept" | "save" | "reconnect";
+
+export function heldOpening(held: { key?: string | null; reason?: HoldReason | null }, draftId: string | null | undefined): HeldOpening {
+  if (!held.key) return "none";
+  if (held.reason === "reconnect") return "reconnect";
+  return draftId ? "kept" : "save";
+}
+
 export function openingSignature(fields: DraftFields, opened: { unsaved?: boolean }) {
   return opened.unsaved ? null : draftSignature(fields);
 }

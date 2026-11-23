@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { heldDrafts, holdDraft, releaseDraft, type HeldDraft } from "@/components/mail/held-drafts";
-import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, heldIsSaved, openingSignature, sameAccounts, saveDelay, type DraftFields, type StoredDraftContent } from "@/lib/mail/composer-state";
+import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, heldIsSaved, heldOpening, openingSignature, sameAccounts, saveDelay, type DraftFields, type StoredDraftContent } from "@/lib/mail/composer-state";
 import type { MailAddress } from "@/lib/mail/types";
 import { parseAddress, recipientsError, settleRecipients } from "@/lib/mail/recipient-text";
 
@@ -233,6 +233,40 @@ describe("a reopened held copy", () => {
   });
 });
 
+describe("how a held copy reopens", () => {
+  const phone: DraftFields = { ...fields, body: "Typed and then the tab went" };
+  const savesOnItsOwn = (mode: ReturnType<typeof heldOpening>) => hasUnsaved(phone, openingSignature(phone, { unsaved: mode === "save" || mode === "reconnect" }));
+
+  it("saves an email that was held before its first save, so the text can't be lost", () => {
+    const mode = heldOpening({ key: "k", reason: "page" }, "");
+    assert.equal(mode, "save");
+    assert.equal(savesOnItsOwn(mode), true);
+    assert.equal(heldOpening({ key: "k" }, null), "save");
+  });
+
+  it("saves a copy held after a reconnect failure, so the prompt and the retry work as before", () => {
+    const mode = heldOpening({ key: "k", reason: "reconnect" }, "draft-1");
+    assert.equal(mode, "reconnect");
+    assert.equal(savesOnItsOwn(mode), true);
+    assert.equal(heldOpening({ key: "k", reason: "reconnect" }, ""), "reconnect");
+  });
+
+  it("waits for an edit when the server already has a draft the held text may be older than", () => {
+    const mode = heldOpening({ key: "k", reason: "page" }, "draft-1");
+    assert.equal(mode, "kept");
+    assert.equal(savesOnItsOwn(mode), false);
+  });
+
+  it("takes the safe path for a copy held before reasons were recorded", () => {
+    assert.equal(heldOpening({ key: "k" }, "draft-1"), "kept");
+  });
+
+  it("is not a held copy without a key", () => {
+    assert.equal(heldOpening({ key: undefined, reason: "reconnect" }, "draft-1"), "none");
+    assert.equal(heldOpening({}, ""), "none");
+  });
+});
+
 describe("held copies in the tab", () => {
   const store = new Map<string, string>();
   const original = Object.getOwnPropertyDescriptor(globalThis, "window");
@@ -255,6 +289,12 @@ describe("held copies in the tab", () => {
     at: 1,
     fromEmail: "mark@eclipse.test",
     draft: { id: "", sourceId: "mailbox-1", mode: "new", messageId: null, to: [], cc: [], bcc: [], subject: "Held", body: "Text", savedAt: "", sendAt: null, sendError: null },
+  });
+
+  it("remembers why a copy was held", () => {
+    holdDraft({ ...held("a"), reason: "reconnect" });
+    holdDraft(held("b"));
+    assert.deepEqual(heldDrafts().map((item) => [item.key, item.reason]), [["a", "reconnect"], ["b", undefined]]);
   });
 
   it("keeps a held copy until it is released", () => {

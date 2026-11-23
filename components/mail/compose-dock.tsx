@@ -7,7 +7,7 @@ import type { LaterRequest } from "@/components/mail/later-picker";
 import type { ComposerDraft, ComposerStart, SendPayload, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
 import { handOverPayload } from "@/components/mail/hand-over";
-import { fitsKeepalive, heldIsSaved, sameAccounts, type StoredDraftContent } from "@/lib/mail/composer-state";
+import { fitsKeepalive, heldIsSaved, sameAccounts, type HoldReason, type StoredDraftContent } from "@/lib/mail/composer-state";
 import { heldDrafts, releaseDraft, type HeldDraft } from "@/components/mail/held-drafts";
 import { flagReconnect, hasReconnectHost, reconnectOf } from "@/components/mail/reconnect-store";
 import { MODE_LABEL } from "@/lib/mail/format";
@@ -56,7 +56,7 @@ type Card = {
   track?: SendTracker;
 };
 
-type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void; heldKey?: string; fromEmail?: string | null; track?: SendTracker };
+type OpenOptions = { to?: MailAddress[]; contactId?: string | null; draft?: ComposerDraft; subject?: string; body?: string; onSent?: () => void; heldKey?: string; heldReason?: HoldReason; fromEmail?: string | null; track?: SendTracker };
 
 type ComposerContextValue = {
   openComposer: (options?: OpenOptions) => void;
@@ -406,6 +406,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
             ? (earlier.find((item) => item.id === (options.draft!.identityId ? `smtp:${options.draft!.identityId}` : options.draft!.sourceId))?.email ?? null)
             : null),
         heldKey: options.heldKey,
+        heldReason: options.heldReason,
         replaces: options.draft?.replaces ?? null,
       };
       if (options.draft?.id && focusDraft(options.draft.id)) return;
@@ -435,7 +436,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
         releaseDraft(held.key);
         return;
       }
-      openComposer({ draft: held.draft, heldKey: held.key, fromEmail: held.fromEmail });
+      openComposer({ draft: held.draft, heldKey: held.key, heldReason: held.reason, fromEmail: held.fromEmail });
     };
     for (const held of heldDrafts().slice(0, MAX_CARDS)) void reopen(held);
   }, [openComposer]);
