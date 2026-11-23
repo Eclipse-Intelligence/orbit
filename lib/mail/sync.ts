@@ -52,6 +52,7 @@ const ROLE_ORDER: MailRole[] = ["inbox", "sent", "drafts", "snoozed", "archive",
 const DEFAULT_STORAGE_LIMIT_MB = 400;
 const MAX_PASSES = 2;
 const AGAIN_MIN_MS = 4_000;
+const ARRIVAL_SLACK_MS = 5 * 60 * 1000;
 
 type SourceRow = {
   id: string;
@@ -88,11 +89,21 @@ type FolderRow = {
   last_synced_at: Date | string | null;
   failures: number;
   retry_at: Date | string | null;
+  walk_started_at: Date | string | null;
+  walk_was_live: boolean;
+  classify_link: string | null;
 };
 
 type Source = SourceRow & { tokens: StoredTokens };
 
-type Places = { folders: Map<string, string>; refreshed: boolean; mailScope: boolean | null };
+type Places = { folders: Map<string, string>; skipped: Set<string>; refreshed: boolean; mailScope: boolean | null };
+
+function placesOf(folders: FolderRow[]) {
+  return {
+    folders: new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id])),
+    skipped: new Set(folders.filter((folder) => folder.sync_state === "skipped").map((folder) => folder.provider_folder_id)),
+  };
+}
 
 type Removals = { deleted: string[]; moved: { id: string; folder_id: string }[] };
 
@@ -210,10 +221,10 @@ async function loadSources(actor: UserActor): Promise<Source[]> {
 
 async function saveToken(db: Db, source: Source, token: MicrosoftToken) {
   if (source.connection_id) {
-    await storeToken(db, source.connection_id, token);
+    await storeToken(db, source.connection_id, token, source.tokens.refreshTokenCipher);
     return;
   }
-  if (source.account_id) await storeAccountToken(db, source.account_id, token);
+  if (source.account_id) await storeAccountToken(db, source.account_id, token, source.tokens.refreshTokenCipher);
 }
 
 async function loadSource(actor: UserActor, sourceId: string): Promise<Source | null> {
@@ -365,7 +376,8 @@ async function storePage(
   folder: FolderRow,
   messages: ProviderMessage[],
   removals: Removals,
-  arrivals: boolean,
+  arrival: { arrivals: boolean; since: Date | null },
+  walk: { startedAt: Date | string; finished: boolean } | null,
 ) {
   const rows = messageRows(messages, source.email);
   const inserted: string[] = [];
@@ -388,7 +400,7 @@ async function storePage(
          body_html, body_text, body_truncated, from_email, from_name, to_recipients, cc_recipients, bcc_recipients,
          sent_at, received_at, is_read, is_draft, is_flagged, importance, has_attachments, categories, web_link, tracking_id, focused
        )
-       select $1, $2, $3, $4, $6, x.provider_message_id, x.internet_message_id, x.thread_key, x.subject, x.snippet,
+       select $1, $2, $3, $4, coalesce($6 and ($7::timestamptz is null or x.received_at > $7::timestamptz), false), x.provider_message_id, x.internet_message_id, x.thread_key, x.subject, x.snippet,
          x.body_html, x.body_text, coalesce(x.body_truncated, false), x.from_email, x.from_name,
          coalesce(x.to_recipients, '[]'), coalesce(x.cc_recipients, '[]'), coalesce(x.bcc_recipients, '[]'),
          x.sent_at, x.received_at, coalesce(x.is_read, false), coalesce(x.is_draft, false), coalesce(x.is_flagged, false),
@@ -425,6 +437,19 @@ async function storePage(
          web_link = excluded.web_link,
          tracking_id = excluded.tracking_id,
          focused = coalesce(excluded.focused, crm.mail_messages.focused)
+       where (
+         crm.mail_messages.folder_id, crm.mail_messages.internet_message_id, crm.mail_messages.thread_key, crm.mail_messages.subject, crm.mail_messages.snippet,
+         crm.mail_messages.body_html, crm.mail_messages.body_text, crm.mail_messages.body_truncated, crm.mail_messages.from_email, crm.mail_messages.from_name,
+         crm.mail_messages.to_recipients, crm.mail_messages.cc_recipients, crm.mail_messages.bcc_recipients, crm.mail_messages.sent_at, crm.mail_messages.received_at,
+         crm.mail_messages.is_read, crm.mail_messages.is_draft, crm.mail_messages.is_flagged, crm.mail_messages.importance, crm.mail_messages.has_attachments,
+         crm.mail_messages.categories, crm.mail_messages.web_link, crm.mail_messages.tracking_id, crm.mail_messages.focused
+       ) is distinct from (
+         excluded.folder_id, excluded.internet_message_id, excluded.thread_key, excluded.subject, excluded.snippet,
+         excluded.body_html, excluded.body_text, excluded.body_truncated, excluded.from_email, excluded.from_name,
+         excluded.to_recipients, excluded.cc_recipients, excluded.bcc_recipients, excluded.sent_at, excluded.received_at,
+         excluded.is_read, excluded.is_draft, excluded.is_flagged, excluded.importance, excluded.has_attachments,
+         excluded.categories, excluded.web_link, excluded.tracking_id, coalesce(excluded.focused, crm.mail_messages.focused)
+       )
        returning id, provider_message_id, folder_id, is_draft, thread_key, is_read, is_flagged, has_attachments, subject, snippet,
          from_email, from_name, received_at, sent_at, focused, tracking_id, (xmax = 0) as inserted
        )
@@ -434,7 +459,7 @@ async function storePage(
          (b.provider_message_id is not null and (b.folder_id, b.thread_key, b.is_draft, b.is_read, b.is_flagged, b.has_attachments, b.subject, b.snippet, b.from_email, b.from_name, b.received_at, b.sent_at, b.focused, b.tracking_id)
            is distinct from (s.folder_id, s.thread_key, s.is_draft, s.is_read, s.is_flagged, s.has_attachments, s.subject, s.snippet, s.from_email, s.from_name, s.received_at, s.sent_at, s.focused, s.tracking_id)) as differs
        from stored s left join before b on b.provider_message_id = s.provider_message_id`,
-      [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows), arrivals],
+      [actor.workspaceId, actor.userId, source.id, folder.id, JSON.stringify(rows), arrival.arrivals, arrival.since],
     );
     for (const row of result.rows) {
       if (row.inserted) inserted.push(row.id);
@@ -455,6 +480,13 @@ async function storePage(
     );
     changed += partial.rowCount ?? 0;
   }
+  if (walk && messages.length > 0) {
+    await db.query(
+      `update crm.mail_messages set walk_seen_at = $3::timestamptz
+       where source_id = $1 and provider_message_id = any($2::text[]) and walk_seen_at is distinct from $3::timestamptz`,
+      [source.id, messages.map((message) => message.providerId), walk.startedAt],
+    );
+  }
   if (removals.moved.length > 0) {
     const moved = await db.query<{ thread_key: string | null }>(
       `update crm.mail_messages m set folder_id = x.folder_id
@@ -472,12 +504,23 @@ async function storePage(
   }
   if (removals.deleted.length > 0) {
     const deleted = await db.query<{ thread_key: string | null }>(
-      "delete from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[]) returning thread_key",
-      [folder.id, removals.deleted],
+      "delete from crm.mail_messages where source_id = $1 and folder_id = $2 and provider_message_id = any($3::text[]) returning thread_key",
+      [source.id, folder.id, removals.deleted],
     );
     if (!quiet) for (const row of deleted.rows) if (row.thread_key) touched.add(row.thread_key);
     changed += deleted.rows.length;
     if (deleted.rows.length > 0) exact = true;
+  }
+  if (walk?.finished) {
+    const vanished = await db.query<{ thread_key: string | null }>(
+      `delete from crm.mail_messages
+       where source_id = $1 and folder_id = $2 and (walk_seen_at is null or walk_seen_at < $3::timestamptz) and updated_at < $3::timestamptz
+       returning thread_key`,
+      [source.id, folder.id, walk.startedAt],
+    );
+    if (!quiet) for (const row of vanished.rows) if (row.thread_key) touched.add(row.thread_key);
+    changed += vanished.rows.length;
+    if (vanished.rows.length > 0) exact = true;
   }
   others.delete(folder.id);
   if (others.size > 0) await recountFolders(db, [...others]);
@@ -492,14 +535,8 @@ export async function recountFolders(db: Db, folderIds: string[]) {
   );
 }
 
-async function folderPlaces(actor: UserActor, sourceId: string): Promise<Map<string, string>> {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ id: string; provider_folder_id: string }>(
-      "select id, provider_folder_id from crm.mail_folders where source_id = $1 and sync_state <> 'skipped'",
-      [sourceId],
-    );
-    return new Map(result.rows.map((row) => [row.provider_folder_id, row.id]));
-  });
+async function folderPlaces(actor: UserActor, sourceId: string) {
+  return placesOf(await loadFolders(actor, sourceId));
 }
 
 async function placeRemoved(
@@ -515,8 +552,8 @@ async function placeRemoved(
   if (removed.length === 0) return { deleted: [], moved: [] };
   const held = await withActor(actor, async (db) => {
     const result = await db.query<{ provider_message_id: string }>(
-      "select provider_message_id from crm.mail_messages where folder_id = $1 and provider_message_id = any($2::text[])",
-      [folder.id, removed],
+      "select provider_message_id from crm.mail_messages where source_id = $1 and folder_id = $2 and provider_message_id = any($3::text[])",
+      [source.id, folder.id, removed],
     );
     return result.rows.map((row) => row.provider_message_id);
   });
@@ -527,11 +564,11 @@ async function placeRemoved(
     const found = await Promise.all(batch.map((id) => fetchMicrosoftMessageFolder(token, id, fetchImpl, { deadline, mailScope: places.mailScope })));
     batch.forEach((id, position) => parents.set(id, found[position]));
   }
-  const unknown = [...parents.values()].some((parent) => parent && !places.folders.has(parent));
+  const unknown = [...parents.values()].some((parent) => parent && !places.folders.has(parent) && !places.skipped.has(parent));
   if (unknown && !places.refreshed) {
     places.refreshed = true;
     await refreshFolders(actor, source, token, fetchImpl, deadline);
-    places.folders = await folderPlaces(actor, source.id);
+    Object.assign(places, await folderPlaces(actor, source.id));
   }
   const removals: Removals = { deleted: [], moved: [] };
   for (const [id, parent] of parents) {
@@ -541,6 +578,13 @@ async function placeRemoved(
     else removals.deleted.push(id);
   }
   return removals;
+}
+
+function arrivalRule(folder: FolderRow): { arrivals: boolean; since: Date | null } {
+  if (folder.role !== "inbox") return { arrivals: false, since: null };
+  if (folder.sync_state === "live") return { arrivals: true, since: null };
+  if (folder.walk_was_live && folder.last_synced_at) return { arrivals: true, since: new Date(new Date(folder.last_synced_at).getTime() - ARRIVAL_SLACK_MS) };
+  return { arrivals: false, since: null };
 }
 
 function syncedAt(folder: FolderRow) {
@@ -572,6 +616,7 @@ async function syncFolder(
 ) {
   let link = folder.sync_link ?? initialDeltaUrl(folder.provider_folder_id);
   const live = folder.sync_state === "live";
+  const arrival = arrivalRule(folder);
   while (Date.now() < options.deadline) {
     let page;
     try {
@@ -579,7 +624,12 @@ async function syncFolder(
     } catch (error) {
       if (error instanceof MailSyncReset) {
         await withActor(actor, (db) =>
-          db.query("update crm.mail_folders set sync_link = null, sync_state = 'pending', last_error = null, failures = 0, retry_at = null where id = $1", [folder.id]),
+          db.query(
+            `update crm.mail_folders set sync_link = null, sync_state = 'pending', last_error = null, failures = 0, retry_at = null,
+               walk_started_at = now(), walk_was_live = walk_was_live or sync_state = 'live', classify_link = null
+             where id = $1`,
+            [folder.id],
+          ),
         );
         return;
       }
@@ -589,7 +639,8 @@ async function syncFolder(
     if (!removals) break;
     let touched: string[] = [];
     const full = await withActor(actor, async (db) => {
-      const stored = await storePage(db, actor, source, folder, page.messages, removals, live && folder.role === "inbox");
+      const walk = folder.walk_started_at ? { startedAt: folder.walk_started_at, finished: Boolean(page.deltaLink) } : null;
+      const stored = await storePage(db, actor, source, folder, page.messages, removals, arrival, walk);
       touched = stored.touched;
       report.stored += stored.stored;
       report.removed += removals.deleted.length;
@@ -607,11 +658,14 @@ async function syncFolder(
              else synced_count + $6::int
            end,
            last_synced_at = case when $4 then now() else last_synced_at end,
+           classified_at = case when $4 and not $7::boolean and classified_at is null then now() else classified_at end,
+           walk_started_at = case when $4 then null else walk_started_at end,
+           walk_was_live = case when $4 then false else walk_was_live end,
            last_error = null,
            failures = 0,
            retry_at = null
          where id = $1`,
-        [folder.id, next, state, Boolean(page.deltaLink), stored.exact || (walkEnds && stored.changed > 0), stored.added],
+        [folder.id, next, state, Boolean(page.deltaLink), stored.exact || (walkEnds && stored.changed > 0), stored.added, live],
       );
       return options.guard && state === "backfill" ? storageFull(db) : false;
     });
@@ -723,22 +777,25 @@ async function keepSubscription(actor: UserActor, source: Source, token: string,
 }
 
 async function classifyFolder(actor: UserActor, source: Source, folder: FolderRow, token: string, deadline: number, fetchImpl: typeof fetch) {
-  let url: string | null = classificationUrl(folder.provider_folder_id);
+  let url: string | null = folder.classify_link ?? classificationUrl(folder.provider_folder_id);
   while (url && Date.now() < deadline) {
     const page = await fetchMicrosoftClassifications(url, token, fetchImpl, { deadline });
-    if (page.items.length) {
-      await withActor(actor, (db) =>
-        db.query(
+    await withActor(actor, async (db) => {
+      if (page.items.length) {
+        await db.query(
           `update crm.mail_messages m set focused = x.focused
            from jsonb_to_recordset($2::jsonb) as x(id text, focused boolean)
            where m.source_id = $1 and m.provider_message_id = x.id`,
           [source.id, JSON.stringify(page.items)],
-        ),
+        );
+      }
+      await db.query(
+        `update crm.mail_folders set classify_link = $2, classified_at = case when $2::text is null then now() else classified_at end where id = $1`,
+        [folder.id, page.next],
       );
-    }
+    });
     url = page.next;
   }
-  if (!url) await withActor(actor, (db) => db.query("update crm.mail_folders set classified_at = now() where id = $1", [folder.id]));
 }
 
 function throttled(error: unknown) {
@@ -834,7 +891,6 @@ async function classifyFolderSafely(actor: UserActor, source: Source, folder: Fo
     await classifyFolder(actor, source, folder, token, deadline, fetchImpl);
   } catch (error) {
     if (error instanceof GraphOutOfTime) return;
-    if (await stopsSource(actor, source, error)) throw error;
     console.error("Sorting Focused mail failed", source.email, problemText(error));
   }
 }
@@ -866,7 +922,7 @@ function syncedWithin(value: Date | string | null, ms: number) {
 async function loadFolders(actor: UserActor, sourceId: string) {
   return withActor(actor, async (db) => {
     const result = await db.query<FolderRow>(
-      `select id, provider_folder_id, name, role, sync_state, sync_link, classified_at, last_synced_at, failures, retry_at
+      `select id, provider_folder_id, name, role, sync_state, sync_link, classified_at, last_synced_at, failures, retry_at, walk_started_at, walk_was_live, classify_link
        from crm.mail_folders where source_id = $1`,
       [sourceId],
     );
@@ -983,7 +1039,7 @@ async function targetFolders(
         return { walk: live, all: true };
       }
       known = await loadFolders(actor, source.id);
-      places.folders = new Map(known.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id]));
+      Object.assign(places, placesOf(known));
     }
     const folder = places.folders.get(parent);
     if (folder) wanted.add(folder);
@@ -1093,6 +1149,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
     announcedWork = work;
     await signalSynced(actor.userId, "mail");
   };
+  const unclassified: { source: Source; folder: FolderRow; token: string }[] = [];
   for (const [index, source] of due.entries()) {
     if (Date.now() >= deadline) break;
     if (waitingUntil(source.retry_at)) {
@@ -1120,7 +1177,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
     const failedFolders = new Set<string>();
     try {
       const token = await currentToken(source.tokens, fetchImpl);
-      await withActor(actor, (db) => saveToken(db, source, token));
+      if (token.expiresAt !== source.tokens.accessTokenExpiresAt) await withActor(actor, (db) => saveToken(db, source, token));
       await keepSubscription(actor, source, token.accessToken, fetchImpl, sourceDeadline).catch((error) =>
         console.error("Mail subscription failed", error instanceof Error ? error.message : error),
       );
@@ -1129,12 +1186,12 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
       const mailScope = grantsMailWrite((await withActor(actor, (db) => readReconnectSource(db, actor, source.id)).catch(() => null))?.scopes);
       const shares = await ownsShares(actor);
       const ready = (folder: FolderRow) => options.ignoreFolderWaits === true || !waitingUntil(folder.retry_at);
-      const places: Places = { folders: new Map(), refreshed, mailScope };
+      const places: Places = { folders: new Map(), skipped: new Set(), refreshed, mailScope };
       for (let pass = 1; ; pass += 1) {
         report.passes += 1;
         const folders = await loadFolders(actor, source.id);
         const { live, backfill } = folderOrder(folders);
-        places.folders = new Map(folders.filter((folder) => folder.sync_state !== "skipped").map((folder) => [folder.provider_folder_id, folder.id]));
+        Object.assign(places, placesOf(folders));
         const work = await takeWork(actor, source.id);
         const plan = options.targeted
           ? await targetFolders(actor, source, folders, work, token.accessToken, places, { fetchImpl, deadline: sourceDeadline }, report)
@@ -1153,8 +1210,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
         else if (plan.all) walkedAll = true;
         if (pass === 1) {
           for (const folder of live.filter((item) => item.role === "inbox" && !item.classified_at)) {
-            if (Date.now() >= sourceDeadline) break;
-            await classifyFolderSafely(actor, source, folder, token.accessToken, sourceDeadline, fetchImpl);
+            unclassified.push({ source, folder, token: token.accessToken });
           }
           if (backfillWanted) {
             const backfillDeadline = sourceDeadline - AGAIN_MIN_MS;
@@ -1196,9 +1252,6 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
       console.error("Filing mail on contacts failed", error);
       return 0;
     });
-  if (deadline - Date.now() > 10_000) {
-    await classifyEmailTones(actor, { deadline, fetchImpl: options.fetchImpl }).catch((error) => console.error("Reading email tone failed", error));
-  }
   if (report.arrived.length) {
     const fresh = report.arrived.filter((id) => !routed.includes(id));
     if (fresh.length) await notifyNewMail(actor, fresh, { send: options.push }).catch((error) => console.error("Mail notification failed", error));
@@ -1206,6 +1259,13 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
       console.error("Queueing mail workflows failed", error);
       return 0;
     });
+  }
+  if (deadline - Date.now() > 10_000) {
+    await classifyEmailTones(actor, { deadline, fetchImpl: options.fetchImpl }).catch((error) => console.error("Reading email tone failed", error));
+  }
+  for (const item of unclassified) {
+    if (Date.now() >= deadline) break;
+    await classifyFolderSafely(actor, item.source, item.folder, item.token, deadline, fetchImpl);
   }
   await announce();
   return report;

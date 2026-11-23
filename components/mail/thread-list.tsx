@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { tagBase } from "@/components/beautifui/record-marks";
 import { followUpDay, mailFullWhen, mailListWhen, personName, recipientList, snippetCore } from "@/lib/mail/format";
 import { laterDetail } from "@/lib/mail/later";
@@ -42,7 +42,7 @@ const COLLAPSE_MS = 220;
 const LEAVE_MS = COLLAPSE_MS + 60;
 export const SWIPE_SETTLE_MS = OUT_MS + COLLAPSE_MS + 1000;
 
-function Row({
+const Row = memo(function Row({
   thread,
   active,
   outgoing,
@@ -62,15 +62,15 @@ function Row({
   focusable: boolean;
   selecting: boolean;
   selected: boolean;
-  onToggle: () => void;
+  onToggle: (key: string) => void;
   thread: ThreadSummary;
   active: boolean;
   outgoing: boolean;
   showAccount: boolean;
   own: string[];
   now: number;
-  onOpen: () => void;
-  onHover: () => void;
+  onOpen: (key: string) => void;
+  onHover: (key: string) => void;
   swipe: SwipeActions | null;
 }) {
   const [offset, setOffset] = useState(0);
@@ -211,7 +211,7 @@ function Row({
               pressed.current = true;
               swallowNextClick();
               navigator.vibrate?.(10);
-              onToggle();
+              onToggle(thread.key);
             }, LONG_PRESS_MS),
           };
         }}
@@ -239,15 +239,15 @@ function Row({
             return;
           }
           if (swiped.current) return;
-          if (selecting || event.metaKey || event.ctrlKey || event.shiftKey) onToggle();
-          else onOpen();
+          if (selecting || event.metaKey || event.ctrlKey || event.shiftKey) onToggle(thread.key);
+          else onOpen(thread.key);
         }}
         role="option"
         aria-selected={selected}
         tabIndex={focusable ? 0 : -1}
         ref={button}
-        onMouseEnter={onHover}
-        onFocus={onHover}
+        onMouseEnter={() => onHover(thread.key)}
+        onFocus={() => onHover(thread.key)}
         data-mail-row={thread.key}
         aria-current={active ? "true" : undefined}
         className={cn(
@@ -336,9 +336,9 @@ function Row({
       </button>
     </li>
   );
-}
+});
 
-export default function ThreadList({
+function ThreadList({
   threads,
   scope,
   cursor,
@@ -458,12 +458,12 @@ export default function ThreadList({
             showAccount={showAccount}
             own={own}
             now={now}
-            onOpen={() => onOpen(thread.key)}
-            onHover={() => onHover(thread.key)}
+            onOpen={onOpen}
+            onHover={onHover}
             swipe={swipe}
             selecting={selected.size > 0}
             selected={!leaving && selected.has(thread.key)}
-            onToggle={() => onToggle(thread.key)}
+            onToggle={onToggle}
             leaving={leaving}
             focusable={!leaving && thread.key === focusKey}
           />
@@ -479,3 +479,5 @@ export default function ThreadList({
     </div>
   );
 }
+
+export default memo(ThreadList);

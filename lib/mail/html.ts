@@ -2,10 +2,11 @@ import { formatSpans, headingMarker, type FormatSpan } from "@/lib/mail/inline-f
 import { textParts } from "@/lib/text-links";
 
 const BLOCKED_BLOCKS = /<(script|iframe|object|frameset|applet|noscript)\b[\s\S]*?<\/\1\s*>/gi;
-const BLOCKED_TAGS = /<\/?(script|iframe|object|embed|form|frameset|frame|applet|base|link|noscript)\b[^>]*>/gi;
+const BLOCKED_TAGS = /<\/?(script|iframe|object|embed|form|frameset|frame|applet|base|link|noscript|animate|animatemotion|animatetransform|set|discard)\b(?:"[^"]*"|'[^']*'|[^>])*(?:>|$)/gi;
+const META_TAGS = /<\/?meta\b(?:"[^"]*"|'[^']*'|[^>])*(?:>|$)/gi;
 const EVENT_ATTRIBUTES = /\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
-const SCRIPT_URLS = /\s(href|src|action|formaction|xlink:href)\s*=\s*("\s*(javascript|vbscript|data:text\/html)[^"]*"|'\s*(javascript|vbscript|data:text\/html)[^']*'|(javascript|vbscript):[^\s>]*)/gi;
-const REFRESH = /<meta[^>]+http-equiv\s*=\s*["']?refresh[^>]*>/gi;
+const URL_ATTRIBUTES = /\s(href|src|action|formaction|xlink:href)\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi;
+const NAMED_ENTITIES: Record<string, string> = { colon: ":", tab: "", newline: "", nbsp: "", lpar: "(", rpar: ")" };
 const CID_IMAGES = /<img\b[^>]*\bsrc\s*=\s*["']?cid:[^>]*>/gi;
 const TRACKERS = /<img\b[^>]*\/api\/mail\/open\/[^>]*>/gi;
 const TRACKING_ID = /\/api\/mail\/open\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
@@ -24,14 +25,54 @@ export function trackingIdIn(html: string | null | undefined) {
   return html?.match(TRACKING_ID)?.[1]?.toLowerCase() ?? null;
 }
 
+const LINK_TAGS = /<(a|area)\b((?:"[^"]*"|'[^']*'|[^>])*)(?:>|$)/gi;
+const ATTRIBUTE = /\s+([^\s"'<>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+))?/g;
+
+export function openLinksInNewTab(html: string) {
+  return html.replace(LINK_TAGS, (_tag, name: string, attributes: string) => {
+    const kept = [...attributes.matchAll(ATTRIBUTE)].filter((match) => match[1].toLowerCase() !== "target").map((match) => match[0]);
+    return `<${name}${kept.join("")} target="_blank">`;
+  });
+}
+
+function decodedUrl(value: string) {
+  const bare = value.replace(/^["']|["']$/g, "");
+  return bare
+    .replace(/&#x([0-9a-f]+);?/gi, (_all, code: string) => String.fromCodePoint(Math.min(parseInt(code, 16), 0x10ffff)))
+    .replace(/&#(\d+);?/g, (_all, code: string) => String.fromCodePoint(Math.min(Number(code), 0x10ffff)))
+    .replace(/&([a-z]+);?/gi, (all, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? all)
+    .replace(/[\u0000-\u0020\u007f-\u009f]/g, "")
+    .toLowerCase();
+}
+
+function stripScriptUrls(html: string) {
+  return html.replace(URL_ATTRIBUTES, (attribute: string, _name: string, value: string) =>
+    /^(javascript|vbscript|data:text\/html)/.test(decodedUrl(value)) ? "" : attribute,
+  );
+}
+
+function cleanOnce(html: string) {
+  return openLinksInNewTab(
+    stripScriptUrls(
+      stripTrackers(html)
+        .replace(BLOCKED_BLOCKS, "")
+        .replace(BLOCKED_TAGS, "")
+        .replace(META_TAGS, "")
+        .replace(EVENT_ATTRIBUTES, ""),
+    ).replace(CID_IMAGES, ""),
+  );
+}
+
+const MAX_CLEAN_PASSES = 8;
+
 export function cleanEmailHtml(html: string) {
-  return stripTrackers(html)
-    .replace(BLOCKED_BLOCKS, "")
-    .replace(BLOCKED_TAGS, "")
-    .replace(REFRESH, "")
-    .replace(EVENT_ATTRIBUTES, "")
-    .replace(SCRIPT_URLS, "")
-    .replace(CID_IMAGES, "");
+  let current = html;
+  for (let pass = 0; pass < MAX_CLEAN_PASSES; pass += 1) {
+    const next = cleanOnce(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return current.replace(/</g, "&lt;");
 }
 
 export function richEmail(html: string) {

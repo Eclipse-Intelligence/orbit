@@ -1,10 +1,13 @@
 export const CALENDAR_SUBJECT =
   "^(accepted|declined|tentative|tentatively accepted|invitation|updated invitation|canceled|cancelled|new time proposed|meeting forward notification|invitation updated)\\M";
 export const CALENDAR_SENDER = "^(calendar-notification|calendar|noreply-calendar|invites?)@";
-export const AUTOMATED_SENDER =
-  "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team)([._+-][^@]*)?@";
+const STRICT_LOCALS = "no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot";
+const ROLE_LOCALS = "billing|receipts?|invoices?|info|hello|team";
+export const STRICT_AUTOMATED_SENDER = `^(${STRICT_LOCALS})([._+-][^@]*)?@`;
+export const ROLE_SENDER = `^(${ROLE_LOCALS})([._+-][^@]*)?@`;
+export const AUTOMATED_SENDER = `^(${STRICT_LOCALS}|${ROLE_LOCALS})([._+-][^@]*)?@`;
 export const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
-export const AUTOMATED_DOMAIN = "@(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)\\.";
+const AUTOMATED_LABELS = "(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)";
 
 export const FREE_MAIL_DOMAINS = new Set([
   "gmail.com",
@@ -88,3 +91,9 @@ export const FREE_MAIL_DOMAINS = new Set([
   "163.com",
   "hushmail.com",
 ]);
+
+const FREE_MAIL_WITH_AUTOMATED_LABEL = [...FREE_MAIL_DOMAINS].filter((domain) => new RegExp(`^${AUTOMATED_LABELS}\\.`).test(domain));
+
+export const AUTOMATED_DOMAIN = `@${
+  FREE_MAIL_WITH_AUTOMATED_LABEL.length ? `(?!(?:${FREE_MAIL_WITH_AUTOMATED_LABEL.map((domain) => domain.replace(/\./g, "\\.")).join("|")})$)` : ""
+}${AUTOMATED_LABELS}\\.`;

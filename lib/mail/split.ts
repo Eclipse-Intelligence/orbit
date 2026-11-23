@@ -36,6 +36,14 @@ export function splitCase(alias: string) {
   end`;
 }
 
+export function captureSplitSql(alias: string) {
+  return `case
+    when rule.split is not null then rule.split = 'important'
+    when coalesce(${alias}.subject, '') ~* '${CALENDAR_SUBJECT}' or coalesce(${alias}.from_email, '') ~* '${CALENDAR_SENDER}' then false
+    else true
+  end`;
+}
+
 export type CrmParams = { workspaces: string; free: string; own: string };
 
 export type CrmValues = { workspaceIds: string[]; free: string[]; own: string[] };

@@ -159,6 +159,58 @@ describe("attachments as AI context", () => {
     assert.deepEqual(again.downloads, []);
   });
 
+  it("caps what a zip may unpack to, and stops once it has the text it needs", async () => {
+    const padding = " ".repeat(15_000_000);
+    const slide = (name: string) => strToU8(`<p:sld><a:p><a:r><a:t>${name}</a:t></a:r></a:p>${padding}</p:sld>`);
+    const deck = zipSync({ "ppt/slides/slide1.xml": slide("First slide"), "ppt/slides/slide2.xml": slide("Second slide"), "ppt/slides/slide3.xml": slide("Third slide") });
+    const text = (await readAttachmentText(deck, "big.pptx", null, 200_000))!;
+    assert.match(text, /First slide/);
+    assert.match(text, /Second slide/);
+    assert.doesNotMatch(text, /Third slide/);
+    const huge = zipSync({ "word/document.xml": strToU8(`<w:document><w:p><w:r><w:t>Hidden</w:t></w:r></w:p>${" ".repeat(21_000_000)}</w:document>`) });
+    assert.equal(await readAttachmentText(huge, "huge.docx", null), null);
+    const rows = Array.from({ length: 5_000 }, (_, index) => `<row r="${index + 1}"><c r="A${index + 1}" t="inlineStr"><is><t>Row ${index + 1}</t></is></c></row>`).join("");
+    const sheet = zipSync({ "xl/worksheets/sheet1.xml": strToU8(`<worksheet><sheetData>${rows}</sheetData></worksheet>`) });
+    const cut = (await readAttachmentText(sheet, "rows.xlsx", null, 300))!;
+    assert.equal(cut.length, 300);
+    const slides = zipSync(Object.fromEntries(Array.from({ length: 300 }, (_, index) => [`ppt/slides/slide${index + 1}.xml`, strToU8(`<p:sld><a:p><a:r><a:t>Slide body ${index + 1}</a:t></a:r></a:p></p:sld>`)])));
+    const short = (await readAttachmentText(slides, "many.pptx", null, 200))!;
+    assert.equal(short.length, 200);
+    assert.doesNotMatch(short, /Slide body 300/);
+  });
+
+  it("gives up on a PDF that takes too long to read", async () => {
+    await assert.rejects(readAttachmentText(PDF, "slow.pdf", "application/pdf", 30_000, { timeoutMs: -1 }), /took too long/);
+    assert.match((await readAttachmentText(PDF, "fine.pdf", "application/pdf", 30_000, { timeoutMs: 20_000 }))!, /Fee: GBP 12,000 a year/);
+  });
+
+  it("marks an attachment before reading it, so one that crashes the reader isn't tried again for ever", async () => {
+    const admin = getAdminPool();
+    await admin.query("delete from crm.mail_attachment_texts where message_id = $1", [messageId]);
+    const graph = outlook();
+    let during: string[] = [];
+    const watching: typeof fetch = async (input, init) => {
+      if (String(input).includes("/attachments/a-pdf/$value")) {
+        during = (await admin.query<{ state: string }>("select state from crm.mail_attachment_texts where message_id = $1 and attachment_id = 'a-pdf'", [messageId])).rows.map((row) => row.state);
+      }
+      return graph.fetchImpl(input, init);
+    };
+    await attachmentNotes(owner, [messageId], { budget: 8_000, fetchImpl: watching });
+    assert.deepEqual(during, ["failed"]);
+    assert.equal((await admin.query<{ state: string }>("select state from crm.mail_attachment_texts where attachment_id = 'a-pdf'")).rows[0].state, "read");
+
+    await admin.query("delete from crm.mail_attachment_texts where message_id = $1", [messageId]);
+    await admin.query(
+      "insert into crm.mail_attachment_texts (workspace_id, user_id, message_id, attachment_id, name, content_type, size, state) values ($1, $2, $3, 'a-pdf', 'Acme MSA.pdf', 'application/pdf', 100, 'failed')",
+      [owner.workspaceId, owner.userId, messageId],
+    );
+    const retry = outlook();
+    await attachmentNotes(owner, [messageId], { budget: 8_000, fetchImpl: retry.fetchImpl });
+    assert.deepEqual(retry.downloads, []);
+    await admin.query("delete from crm.mail_attachment_texts where message_id = $1", [messageId]);
+    await attachmentNotes(owner, [messageId], { budget: 8_000, fetchImpl: outlook().fetchImpl });
+  });
+
   it("reads one attachment for the assistant without adding it to Knowledge", async () => {
     const files = await readEmailAttachment(owner, messageId, "acme msa.pdf", { fetchImpl: outlook().fetchImpl });
     assert.equal(files.length, 1);

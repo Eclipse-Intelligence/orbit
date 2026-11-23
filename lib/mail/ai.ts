@@ -69,13 +69,13 @@ export async function threadText(db: Db, actor: UserActor, sourceId: string, key
     `select m.id, m.from_email, m.from_name, m.to_recipients, m.cc_recipients, coalesce(m.received_at, m.sent_at, m.created_at) as at,
        m.body_text, m.snippet, m.is_draft, m.subject
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-     where m.user_id = $1 and m.source_id = $2 and ${THREAD_KEY} = $3 and f.role not in ('junk', 'outbox')
-     order by at asc, m.id asc
+     where m.user_id = $1 and m.source_id = $2 and ${THREAD_KEY} = $3 and f.role not in ('junk', 'outbox') and not m.is_draft
+     order by at desc, m.id desc
      limit 200`,
     [actor.userId, sourceId, key],
   );
+  result.rows.reverse();
   const messages: ThreadText[] = result.rows
-    .filter((row) => !row.is_draft)
     .map((row) => ({
       id: row.id,
       from: row.from_email ? { name: row.from_name, address: row.from_email } : null,

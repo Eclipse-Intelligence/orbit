@@ -82,6 +82,7 @@ async function readMessage(actor: UserActor, message: MessageRow, deadline: numb
     }
     if (deadline - Date.now() < STEP_MS) return false;
     try {
+      await store(actor, message.id, item, "failed", null);
       const response = await fetchMicrosoftAttachment(token, message.provider_message_id, item.id, fetchImpl);
       const bytes = await bytesOf(response, SIZE_MAX);
       const text = bytes ? await readAttachmentText(bytes, item.name, item.contentType, TEXT_MAX) : null;

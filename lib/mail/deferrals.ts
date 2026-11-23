@@ -100,7 +100,7 @@ export async function deferralEligible(actor: UserActor, messageId: string, from
   });
 }
 
-async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
+async function candidates(db: Db, actor: UserActor, workspaceIds: string[], exclude: string[] = []) {
   const result = await db.query<Candidate>(
     `select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.from_name, m.body_text, m.snippet,
        coalesce(m.received_at, m.sent_at, m.created_at) as at
@@ -108,6 +108,7 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
      where m.user_id = $1 and not m.is_draft and f.role not in ('sent', 'drafts', 'junk', 'outbox', 'trash')
        and nullif(m.from_email, '') is not null
        and coalesce(m.received_at, m.created_at) > now() - make_interval(hours => $3)
+       and m.id <> all($7::uuid[])
        and lower(m.from_email) <> all ${ownAddresses("$1", "$4")}
        and not exists (
          select 1 from crm.mail_deferral_checks d
@@ -125,7 +126,7 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[]) {
        )
      order by at desc
      limit $6`,
-    [actor.userId, workspaceIds, LOOKBACK_HOURS, actor.email, [...FREE_MAIL_DOMAINS], CANDIDATES_PER_RUN],
+    [actor.userId, workspaceIds, LOOKBACK_HOURS, actor.email, [...FREE_MAIL_DOMAINS], CANDIDATES_PER_RUN, exclude],
   );
   return result.rows;
 }
@@ -514,9 +515,9 @@ async function askEach(actor: UserActor, batch: Candidate[], options: { deadline
   return recorded;
 }
 
-export async function checkDeferrals(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number }) {
+export async function checkDeferrals(actor: UserActor, options: { deadline: number; fetchImpl?: typeof fetch; now?: number; exclude?: string[] }) {
   const workspaceIds = await workspaceIdsOf(actor);
-  const list = await withActor(actor, (db) => candidates(db, actor, workspaceIds));
+  const list = await withActor(actor, (db) => candidates(db, actor, workspaceIds, options.exclude));
   let recorded = 0;
   for (const batch of deferralBatches(list)) {
     if (options.deadline - Date.now() < STEP_MS) break;
@@ -525,16 +526,20 @@ export async function checkDeferrals(actor: UserActor, options: { deadline: numb
   return recorded;
 }
 
-export async function threadDeferral(db: Db, actor: UserActor, sourceId: string, key: string, now = Date.now()): Promise<DeferredFollowUp | null> {
-  const result = await db.query<{ id: string; due_at: Date | string; deferred_message_id: string | null; task_id: string | null }>(
-    `select id, due_at, deferred_message_id, task_id from crm.mail_reminders
+export const THREAD_DEFERRAL_SQL = `select id, due_at, deferred_message_id, task_id from crm.mail_reminders
      where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and deferral
-     order by created_at desc limit 1`,
-    [actor.userId, sourceId, key],
-  );
-  const row = result.rows[0];
+     order by created_at desc limit 1`;
+
+export type DeferralSummaryRow = { id: string; due_at: Date | string; deferred_message_id: string | null; task_id: string | null };
+
+export function toThreadDeferral(row: DeferralSummaryRow | null | undefined, now = Date.now()): DeferredFollowUp | null {
   if (!row) return null;
   return { id: row.id, messageId: row.deferred_message_id ?? "", at: iso(row.due_at)!, taskId: row.task_id, options: deferralOptions(now) };
+}
+
+export async function threadDeferral(db: Db, actor: UserActor, sourceId: string, key: string, now = Date.now()): Promise<DeferredFollowUp | null> {
+  const result = await db.query<DeferralSummaryRow>(THREAD_DEFERRAL_SQL, [actor.userId, sourceId, key]);
+  return toThreadDeferral(result.rows[0], now);
 }
 
 async function lockDeferral(db: Db, actor: UserActor, id: string) {

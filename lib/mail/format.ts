@@ -10,16 +10,44 @@ export function personName(address: MailAddress | null | undefined) {
   return address.name?.trim() || address.address;
 }
 
+const SHAPES = {
+  time: { hour: "2-digit", minute: "2-digit" },
+  year: { year: "numeric" },
+  dayMonth: { day: "numeric", month: "short" },
+  dayMonthYear: { day: "numeric", month: "short", year: "numeric" },
+  weekdayDayMonth: { weekday: "short", day: "numeric", month: "short" },
+  full: { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" },
+} as const satisfies Record<string, Intl.DateTimeFormatOptions>;
+
+export type MailDateShape = keyof typeof SHAPES;
+
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+export function mailFormatter(shape: MailDateShape, timeZone: string) {
+  const key = `${shape}|${timeZone}`;
+  let formatter = formatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-GB", { ...SHAPES[shape], timeZone });
+    formatters.set(key, formatter);
+  }
+  return formatter;
+}
+
+export function mailFormatterCount() {
+  return formatters.size;
+}
+
+function dayMonth(at: Date, now: number, timeZone: string) {
+  const sameYear = mailFormatter("year", timeZone).format(at) === mailFormatter("year", timeZone).format(now);
+  return mailFormatter(sameYear ? "dayMonth" : "dayMonthYear", timeZone).format(at);
+}
+
 export function mailListWhen(iso: string | null, now: number) {
   if (!iso) return "";
   const at = new Date(iso);
   const timeZone = appTimeZone();
-  if (dateKey(at, timeZone) === dateKey(now, timeZone)) {
-    return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone }).format(at);
-  }
-  const sameYear = new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(at) ===
-    new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(now);
-  return new Intl.DateTimeFormat("en-GB", sameYear ? { day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }).format(at);
+  if (dateKey(at, timeZone) === dateKey(now, timeZone)) return mailFormatter("time", timeZone).format(at);
+  return dayMonth(at, now, timeZone);
 }
 
 export function mailShortWhen(iso: string | null, now: number) {
@@ -31,31 +59,21 @@ export function mailShortWhen(iso: string | null, now: number) {
   if (today && gone < 60_000 && gone > -60_000) return "Now";
   if (today && gone >= 0) return gone < 3_600_000 ? `${Math.floor(gone / 60_000)}m` : `${Math.floor(gone / 3_600_000)}h`;
   if (dateKey(at, timeZone) === dateKey(now - 86_400_000, timeZone)) return "Yesterday";
-  const sameYear = new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(at) ===
-    new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone }).format(now);
-  return new Intl.DateTimeFormat("en-GB", sameYear ? { day: "numeric", month: "short", timeZone } : { day: "numeric", month: "short", year: "numeric", timeZone }).format(at);
+  return dayMonth(at, now, timeZone);
 }
 
 export function mailDayWhen(iso: string, now: number) {
   const at = new Date(iso);
   const timeZone = appTimeZone();
-  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone }).format(at);
+  const time = mailFormatter("time", timeZone).format(at);
   if (dateKey(at, timeZone) === dateKey(now, timeZone)) return `Today ${time}`;
   if (dateKey(at, timeZone) === dateKey(now - 86_400_000, timeZone)) return `Yesterday ${time}`;
-  return `${new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone }).format(at)} ${time}`;
+  return `${mailFormatter("dayMonth", timeZone).format(at)} ${time}`;
 }
 
 export function mailFullWhen(iso: string | null) {
   if (!iso) return "";
-  return new Intl.DateTimeFormat("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: appTimeZone(),
-  }).format(new Date(iso));
+  return mailFormatter("full", appTimeZone()).format(new Date(iso));
 }
 
 export function firstName(address: MailAddress | null | undefined) {
@@ -75,11 +93,11 @@ export function firstNames(list: MailAddress[]) {
 }
 
 export function followUpDay(iso: string) {
-  return new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: appTimeZone() }).format(new Date(iso));
+  return mailFormatter("weekdayDayMonth", appTimeZone()).format(new Date(iso));
 }
 
 export function followUpWhen(iso: string) {
-  const time = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: appTimeZone() }).format(new Date(iso));
+  const time = mailFormatter("time", appTimeZone()).format(new Date(iso));
   return `${followUpDay(iso)} at ${time}`;
 }
 

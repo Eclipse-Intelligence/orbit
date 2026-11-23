@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { after } from "next/server";
 import { createEmailActivityOnce } from "@/lib/crm/activities";
 import { withActor } from "@/lib/crm/context";
 import { attachmentSummary, discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
@@ -11,12 +12,14 @@ import type { Db } from "@/lib/db/pool";
 import { composeEmailHtml, imageMarkers, trackingPixelUrl } from "@/lib/mail/html";
 import {
   createMicrosoftDraft,
+  deleteDraftFile,
   deleteMicrosoftDraft,
   exportMicrosoftMime,
   fetchDraftState,
   fetchInternetMessageId,
   findSentCopy,
   GraphMailError,
+  listDraftFiles,
   saveMicrosoftSentCopy,
   sendMicrosoftDraft,
   sendOutcomeUnknown,
@@ -42,7 +45,7 @@ import {
   type SentSaver,
   type SmtpSender,
 } from "@/lib/mail/identities";
-import { attachToDraft } from "@/lib/microsoft/oauth";
+import { attachToDraft, type MailAttachment } from "@/lib/microsoft/oauth";
 import { followUpDueAt, readFollowUpBody, readFollowUpDays } from "@/lib/mail/follow-up-rules";
 import { SHARED_DRAFT_CHANGED } from "@/lib/mail/share-view";
 import { announceDraftChange, sharedDraftClosed, SHARED_TEXT_LOCKED, type ClosedShare } from "@/lib/mail/shared-drafts";
@@ -100,8 +103,12 @@ type DraftRow = {
   follow_up_body: string | null;
   send_attempted_at: Date | string | null;
   sent_internet_id: string | null;
+  outlook_files: OutlookFiles | null;
   share_id?: string | null;
 };
+
+type OutlookFile = { name: string; size: number; cid: string | null; outlookId: string | null };
+type OutlookFiles = Record<string, OutlookFile>;
 
 type Target = { id: string | null; source_id: string; provider_message_id: string | null; thread_key: string | null; email: string; main: boolean; scopes: string | null };
 
@@ -189,7 +196,7 @@ const DRAFT_SHARE = shareOf("mail_drafts");
 
 const DRAFT_BASE = `id, source_id, provider_draft_id, mode, reply_to, thread_key, quote_html, to_recipients, cc_recipients,
   bcc_recipients, subject, body, tracking_id, updated_at, send_at, send_error, content_hash, identity_id, attachments,
-  remind_hours, follow_up_days, follow_up_body, send_attempted_at, sent_internet_id`;
+  remind_hours, follow_up_days, follow_up_body, send_attempted_at, sent_internet_id, outlook_files`;
 
 const DRAFT_COLUMNS = `${DRAFT_BASE}, ${DRAFT_SHARE} as share_id`;
 
@@ -402,13 +409,12 @@ async function storeDraft(actor: UserActor, asked: DraftInput, options: DraftWri
         : await loadSourceTarget(db, actor, (found?.source_id ?? input.sourceId)!);
     return { found, moved, target, signature: input.signature ? await signatureFor(db, actor, await senderEmail(db, actor, input, target.email)) : null };
   });
-  const movedShared = first.found && first.moved && first.found.share_id ? first.found : null;
-  if (first.found && first.moved && !movedShared) await discardMailDraft(actor, first.found.id, options.fetchImpl);
+  const movedFrom = first.found && first.moved ? first.found : null;
   const existing = first.moved ? null : first.found;
   const { target, signature } = first.target ? { target: first.target, signature: first.signature } : await readDraftContext(actor, input, null);
   const token = await mailSourceToken(actor, target.source_id, options.fetchImpl);
-  let row: DraftRow = existing ?? (await createDraft(actor, input, target, token, movedShared ? { ...options, previous: movedShared.id } : options));
-  if (movedShared) await retireMovedDraft(actor, movedShared, options.fetchImpl);
+  let row: DraftRow = existing ?? (await createDraft(actor, input, target, token, movedFrom ? { ...options, previous: movedFrom.id } : options));
+  if (movedFrom) await retireMovedDraft(actor, movedFrom, options.fetchImpl);
   let created = !existing;
   const html = () =>
     composeEmailHtml({ body: input.body, signature, pixel: trackingPixelUrl(options.origin, row.tracking_id), quote: row.quote_html, inline: options.inline });
@@ -416,18 +422,21 @@ async function storeDraft(actor: UserActor, asked: DraftInput, options: DraftWri
   const inlineKey = Object.entries(options.inline ?? {}).map(([name, cid]) => `${name}=${cid}`).join("|");
   const hash = contentHash(input, signature, inlineKey ? `${subject}\u0000${inlineKey}` : subject);
   const files = mergeIds(options.attachments ?? first.found?.attachments);
-  if (existing && existing.content_hash === hash && sameIds(existing.attachments ?? [], files)) return { row: existing, target, token, created };
+  if (existing && existing.content_hash === hash && sameIds(existing.attachments ?? [], files)) return { row: existing, target, token, created, internetId: null };
+  let internetId: string | null = null;
   try {
     try {
-      await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl);
+      internetId = (await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl)).internetMessageId;
     } catch (error) {
       if (!(error instanceof GraphMailError && error.status === 404 && existing)) graphProblem(error, target);
       if (existing.send_attempted_at) throw maybeSent();
       row = await createDraft(actor, input, target, token, { ...options, previous: existing.id });
       created = true;
-      await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl).catch((retry) =>
-        graphProblem(retry, target),
-      );
+      internetId = (
+        await updateMicrosoftDraft(token, row.provider_draft_id, { subject, html: html(), to: input.to, cc: input.cc, bcc: input.bcc }, options.fetchImpl).catch((retry) =>
+          graphProblem(retry, target),
+        )
+      ).internetMessageId;
     }
   } catch (error) {
     throw asked.id && row.id !== asked.id ? withDraftId(error, row.id) : error;
@@ -445,7 +454,7 @@ async function storeDraft(actor: UserActor, asked: DraftInput, options: DraftWri
     return result.rows[0];
   });
   if (saved?.share_id) announceDraftChange(actor.userId, saved.id);
-  return { row: saved, target, token, created };
+  return { row: saved, target, token, created, internetId };
 }
 
 function sharedText(row: { subject: string | null; body: string }) {
@@ -1193,10 +1202,87 @@ async function finishEarlierSend(actor: UserActor, input: DraftInput, row: Draft
   return { ...result, warning: result.warning ?? ALREADY_SENT_WARNING };
 }
 
+function afterResponse(work: () => Promise<unknown>) {
+  try {
+    after(work);
+    return Promise.resolve();
+  } catch {
+    return work();
+  }
+}
+
+async function recordOutlookFile(actor: UserActor, draftId: string, orbitId: string, file: OutlookFile) {
+  await withActor(actor, (db) =>
+    db.query("update crm.mail_drafts set outlook_files = outlook_files || jsonb_build_object($2::text, $3::jsonb) where id = $1 and user_id = $4", [
+      draftId,
+      orbitId,
+      JSON.stringify(file),
+      actor.userId,
+    ]),
+  );
+}
+
+async function forgetOutlookFiles(actor: UserActor, draftId: string, orbitIds: string[]) {
+  await withActor(actor, (db) => db.query("update crm.mail_drafts set outlook_files = outlook_files - $2::text[] where id = $1 and user_id = $3", [draftId, orbitIds, actor.userId]));
+}
+
+async function syncOutlookFiles(
+  actor: UserActor,
+  token: string,
+  draft: DraftRow,
+  files: (MailAttachment & { id: string })[],
+  inline: Record<string, string>,
+  fetchImpl: typeof fetch,
+) {
+  const known = draft.outlook_files ?? {};
+  const present = Object.keys(known).length ? await listDraftFiles(token, draft.provider_draft_id, fetchImpl) : [];
+  const taken = new Set(Object.values(known).flatMap((file) => (file.outlookId ? [file.outlookId] : [])));
+  const onOutlook = (file: OutlookFile) => {
+    if (file.outlookId) return present.find((item) => item.id === file.outlookId) ?? null;
+    const named = present.filter((item) => item.name === file.name && !taken.has(item.id));
+    const found = named.sort((left, right) => Math.abs(left.size - file.size) - Math.abs(right.size - file.size))[0] ?? null;
+    if (found) taken.add(found.id);
+    return found;
+  };
+  const wanted = new Map(files.map((file) => [file.id, file]));
+  const kept = new Set<string>();
+  const forgotten: string[] = [];
+  for (const [orbitId, file] of Object.entries(known)) {
+    const found = onOutlook(file);
+    const asked = wanted.get(orbitId);
+    if (asked && found && file.cid === (inline[asked.name] ?? null)) {
+      kept.add(orbitId);
+      continue;
+    }
+    if (found) await deleteDraftFile(token, draft.provider_draft_id, found.id, fetchImpl);
+    forgotten.push(orbitId);
+  }
+  if (forgotten.length) await forgetOutlookFiles(actor, draft.id, forgotten);
+  const missing = files.filter((file) => !kept.has(file.id));
+  if (missing.length === 0) return;
+  const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.provider_draft_id)}`;
+  await attachToDraft(
+    token,
+    draftUrl,
+    missing.map((file) => (inline[file.name] ? { ...file, contentId: inline[file.name] } : file)),
+    fetchImpl,
+    (item, outlookId) => recordOutlookFile(actor, draft.id, item.id!, { name: item.name, size: item.bytes.byteLength, cid: item.contentId ?? null, outlookId }),
+  );
+}
+
+async function storedForDelivery(actor: UserActor, id: string | null | undefined) {
+  if (!id || !isUuid(id)) return null;
+  return withActor(actor, async (db) => {
+    const result = await db.query<DraftRow>(`select ${DRAFT_COLUMNS} from crm.mail_drafts where id = $1 and user_id = $2`, [id, actor.userId]);
+    return result.rows[0] ?? null;
+  });
+}
+
 async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?: string[] }, options: SendOptions): Promise<SendOutcome> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const ids = await draftFileList(actor, input, options.storedFiles);
-  const earlier = input.id ? await attemptedDraft(actor, input.id) : null;
+  const stored = await storedForDelivery(actor, input.id);
+  const ids = options.storedFiles === "replace" ? mergeIds(input.attachments) : mergeIds(input.attachments, stored?.attachments);
+  const earlier = stored?.send_attempted_at ? stored : null;
   if (earlier && options.force) await clearAttempt(actor, earlier.id);
   else if (earlier && (await settleEarlierSend(actor, earlier, fetchImpl)) === "sent") return finishEarlierSend(actor, input, earlier, ids, options);
   const inline = await inlineImages(actor, input.body, ids);
@@ -1216,16 +1302,18 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
     throw new CrmError("invalid_input", `${identity.email} sends through a different mailbox. Choose it again in From.`, 400);
   }
   let originalId: string | null = null;
+  let confirmedId = written.internetId;
   const deliver = async (draft: DraftRow) => {
-    const draftUrl = `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(draft.provider_draft_id)}`;
-    if (attached.files.length) {
-      await attachToDraft(token, draftUrl, attached.files.map((file) => (inline[file.name] ? { ...file, contentId: inline[file.name] } : file)), fetchImpl);
+    if (attached.files.length || Object.keys(draft.outlook_files ?? {}).length) {
+      await syncOutlookFiles(actor, token, draft, attached.files, inline, fetchImpl);
     }
     if (!identity) {
-      originalId = await fetchInternetMessageId(token, draft.provider_draft_id, fetchImpl).catch((error) => {
-        if (error instanceof GraphMailError && error.status === 404) throw error;
-        return null;
-      });
+      originalId =
+        confirmedId ??
+        (await fetchInternetMessageId(token, draft.provider_draft_id, fetchImpl).catch((error) => {
+          if (error instanceof GraphMailError && error.status === 404) throw error;
+          return null;
+        }));
       await sendOnce(actor, draft.id, originalId, () => sendMicrosoftDraft(token, draft.provider_draft_id, fetchImpl));
       return;
     }
@@ -1245,12 +1333,14 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
       throw new CrmError("upstream_error", `${identity.email} couldn't send: ${reason.slice(0, 200)}`, 502);
     }
     await noteIdentityError(actor, identity.id, null).catch(() => undefined);
-    await Promise.all([
-      saveMicrosoftSentCopy(token, raw, fetchImpl)
-        .then(() => deleteMicrosoftDraft(token, draft.provider_draft_id, fetchImpl))
-        .catch((error) => console.error("Sent copy failed", error)),
-      (options.saveSent ?? defaultSentSaver)(identity, raw).catch((error) => console.error("Saving to Sent failed", error)),
-    ]);
+    await afterResponse(() =>
+      Promise.all([
+        saveMicrosoftSentCopy(token, raw, fetchImpl)
+          .then(() => deleteMicrosoftDraft(token, draft.provider_draft_id, fetchImpl))
+          .catch((error) => console.error("Sent copy failed", error)),
+        (options.saveSent ?? defaultSentSaver)(identity, raw).catch((error) => console.error("Saving to Sent failed", error)),
+      ]),
+    );
   };
   const unsettled = async (error: SendUnsettled, draft: DraftRow) => {
     if (error.kind === "unconfirmed") throw new CrmError("upstream_error", SEND_UNCONFIRMED, 502);
@@ -1263,7 +1353,9 @@ async function deliverDraft(actor: UserActor, input: DraftInput & { attachments?
   } catch (error) {
     if (error instanceof SendUnsettled) return unsettled(error, row);
     if (!(error instanceof GraphMailError && error.status === 404)) graphProblem(error, target);
-    row = (await writeDraft(actor, { ...input, id: null }, { origin: options.origin, fetchImpl, inline, attachments: ids, sending: true, previous: row.id, onDraftRow: options.onDraftRow })).row;
+    const rewritten = await writeDraft(actor, { ...input, id: null }, { origin: options.origin, fetchImpl, inline, attachments: ids, sending: true, previous: row.id, onDraftRow: options.onDraftRow });
+    row = rewritten.row;
+    confirmedId = rewritten.internetId;
     await options.onDraftRow?.(row.id);
     try {
       await deliver(row);
@@ -1744,6 +1836,7 @@ export async function saveDraftForAgent(actor: UserActor, input: ToolDraftInput,
     : null;
   if (replying && !thread) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   const accounts = await composeAccounts(actor);
+  if (thread && chosen) refuseOtherMailbox(accounts, thread.source_id, chosen.sourceId);
   const account = chosen ?? (thread ? receivingIdentity(accounts, thread.source_id, [...(thread.to_recipients ?? []), ...(thread.cc_recipients ?? [])]) : null);
   if (!replying && !input.subject?.trim()) throw new CrmError("invalid_input", "Enter a subject.", 400, { field: "subject" });
   const mode: DraftMode = replying ? (input.replyAll ? "reply_all" : "reply") : "new";
@@ -1882,6 +1975,7 @@ export async function sendForAgent(
     : null;
   if (replying && !original) throw new CrmError("not_found", "That email isn't in Mail. Search for it again.", 404);
   if (original && !account) account = receivingIdentity(accounts, original.source_id, [...(original.to_recipients ?? []), ...(original.cc_recipients ?? [])]);
+  if (original && account) refuseOtherMailbox(accounts, original.source_id, account.sourceId);
   const subject = input.subject?.trim() || stored?.subject?.trim() || "";
   if (!replying && !subject) throw new CrmError("invalid_input", "Enter a subject.", 400, { field: "subject" });
   const mode: DraftMode = stored?.mode === "forward" && !input.replyTo ? "forward" : replying ? (input.replyAll ? "reply_all" : "reply") : "new";
@@ -2100,6 +2194,18 @@ async function originalMessage(actor: UserActor, id: string) {
   });
 }
 
+function refuseOtherMailbox(accounts: ComposeAccount[], conversationSourceId: string, senderSourceId: string | null | undefined) {
+  if (!senderSourceId || senderSourceId === conversationSourceId) return;
+  const mailbox = accounts.find((item) => item.id === conversationSourceId)?.email ?? "the mailbox it came to";
+  const choices = accounts.filter((item) => (item.sourceId ?? item.id) === conversationSourceId).map((item) => item.email);
+  throw new CrmError(
+    "invalid_input",
+    `Replies and forwards go out from the mailbox the conversation is in, ${mailbox}. Leave out from, or use ${choices.join(" or ") || mailbox}.`,
+    400,
+    { field: "from" },
+  );
+}
+
 async function composedInput(actor: UserActor, request: MailSendRequest, accounts: ComposeAccount[]) {
   const mode = request.mode ?? "new";
   const messageId = mode === "new" ? null : (request.messageId ?? null);
@@ -2111,16 +2217,7 @@ async function composedInput(actor: UserActor, request: MailSendRequest, account
     : original
       ? (receivingIdentity(accounts, original.source_id, [...(original.to_recipients ?? []), ...(original.cc_recipients ?? [])]) ?? { sourceId: original.source_id, identityId: null })
       : await resolveSendAccount(actor, null);
-  if (original && sender.sourceId !== original.source_id) {
-    const mailbox = accounts.find((item) => item.id === original.source_id)?.email ?? "the mailbox it came to";
-    const choices = accounts.filter((item) => (item.sourceId ?? item.id) === original.source_id).map((item) => item.email);
-    throw new CrmError(
-      "invalid_input",
-      `Replies and forwards go out from the mailbox the conversation is in, ${mailbox}. Leave out from, or use ${choices.join(" or ") || mailbox}.`,
-      400,
-      { field: "from" },
-    );
-  }
+  if (original) refuseOtherMailbox(accounts, original.source_id, sender.sourceId);
   const input = readDraftInput({
     mode,
     messageId,

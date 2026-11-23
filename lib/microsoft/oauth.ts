@@ -444,7 +444,7 @@ function inboxUrl(since: Date, order: boolean) {
   return url.toString();
 }
 
-export type MailAttachment = { name: string; contentType: string; bytes: Uint8Array; contentId?: string };
+export type MailAttachment = { name: string; contentType: string; bytes: Uint8Array; contentId?: string; id?: string };
 
 const INLINE_ATTACHMENT_LIMIT = 3 * 1024 * 1024;
 const UPLOAD_CHUNK = 320 * 1024 * 10;
@@ -513,6 +513,7 @@ export async function attachToDraft(
   draftUrl: string,
   attachments: MailAttachment[],
   fetchImpl: typeof fetch = fetch,
+  onAttached?: (item: MailAttachment, outlookId: string | null) => void | Promise<void>,
 ) {
   const auth = { authorization: `Bearer ${accessToken}` };
   for (const item of attachments) {
@@ -530,6 +531,8 @@ export async function attachToDraft(
         signal: AbortSignal.timeout(60_000),
       });
       if (!added.ok) throw await sendFailure(added);
+      const created = (await added.json().catch(() => null)) as { id?: unknown } | null;
+      await onAttached?.(item, typeof created?.id === "string" ? created.id : null);
       continue;
     }
     const session = await fetchImpl(`${draftUrl}/attachments/createUploadSession`, {
@@ -542,6 +545,7 @@ export async function attachToDraft(
     });
     if (!session.ok) throw await sendFailure(session);
     const { uploadUrl } = (await session.json()) as { uploadUrl: string };
+    let located: string | null = null;
     for (let start = 0; start < item.bytes.byteLength; start += UPLOAD_CHUNK) {
       const chunk = item.bytes.slice(start, Math.min(start + UPLOAD_CHUNK, item.bytes.byteLength));
       const put = await fetchImpl(uploadUrl, {
@@ -558,7 +562,9 @@ export async function attachToDraft(
         logMicrosoft("Attachment upload", await put.text().catch(() => ""));
         throw new MicrosoftError(`Couldn't upload ${item.name}. Try again.`);
       }
+      located = /Attachments\('([^']+)'\)/.exec(put.headers.get("location") ?? "")?.[1] ?? located;
     }
+    await onAttached?.(item, located);
   }
 }
 

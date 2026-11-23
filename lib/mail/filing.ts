@@ -20,7 +20,8 @@ import {
   ensureContactInDb,
   filingDomain,
   homesJson,
-  NOT_AUTOMATED,
+  KNOWN_ADDRESS,
+  NOT_STRICTLY_AUTOMATED,
   parseRouteKey,
   setDomainRule,
   teamDomainsInDb,
@@ -29,8 +30,8 @@ import {
   upsertRoute,
 } from "@/lib/mail/routing";
 import { hiddenSubscriptionSql } from "@/lib/mail/subscriptions";
-import { UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
-import { splitCase, splitJoin } from "@/lib/mail/split";
+import { ROLE_SENDER, UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
+import { captureSplitSql, splitJoin } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
 import { captureCutoff, ownAddressesSql } from "@/lib/mail/waiting";
@@ -38,6 +39,50 @@ import { markSenderThreadsBusiness, neverAskLabel, recordFiledInDb, ruleTarget, 
 import type { ThreadFiling } from "@/lib/mail/view";
 
 const CAPTURE_SCAN = 300;
+
+const CERTAIN_ENGINES_SQL = "'listed', 'headers', 'rule', 'filed', 'shown'";
+
+const ALREADY_SKIPPED = (alias: string, userParam: string, freeParam: string) => {
+  const domain = `split_part(${alias}.from_email, '@', 2)`;
+  const own = `${alias}.capture_workspace_id`;
+  return `(
+  exists (
+    select 1 from crm.mail_sender_relevance er
+    where er.user_id = ${userParam} and er.workspace_id = ${own} and er.rule and er.category = 'muted' and er.sender = ${alias}.from_email
+  )
+  or (
+    not exists (
+      select 1 from crm.mail_sender_relevance er
+      where er.user_id = ${userParam} and er.workspace_id = ${own} and er.rule and er.sender = ${alias}.from_email
+    )
+    and not ${KNOWN_ADDRESS(userParam, `${alias}.from_email`)}
+    and case
+      when ${domain} <> all(${freeParam}::text[]) and exists (
+        select 1 from crm.mail_sender_relevance dr
+        where dr.user_id = ${userParam} and dr.workspace_id = ${own} and dr.rule and dr.sender = '@' || ${domain}
+      ) then exists (
+        select 1 from crm.mail_sender_relevance dr
+        where dr.user_id = ${userParam} and dr.workspace_id = ${own} and dr.rule and dr.category = 'muted' and dr.sender = '@' || ${domain}
+      )
+      else exists (
+        select 1 from crm.mail_thread_relevance tr
+        where tr.user_id = ${userParam} and tr.source_id = ${alias}.source_id and tr.thread_key = ${alias}.tk
+          and tr.workspace_id = ${own} and tr.sender = ${alias}.from_email
+          and (case when tr.message_id is not null then tr.message_id = ${alias}.id else tr.decided_at >= ${alias}.at end)
+          and tr.engine <> 'history' and tr.category is not null and tr.category <> 'business'
+          and (tr.category = 'muted' or tr.engine in (${CERTAIN_ENGINES_SQL}) or coalesce(tr.confidence, 0) >= 0.8)
+          and (
+            tr.engine <> 'listed' or ${domain} = any(${freeParam}::text[])
+            or not exists (
+              select 1 from crm.mail_known_addresses lk
+              where lk.user_id = ${userParam} and lk.domain = ${domain} and lk.sent_count > 0
+            )
+          )
+      )
+    end
+  )
+)`;
+};
 
 export type UnknownEmail = {
   key: string;
@@ -50,6 +95,7 @@ export type UnknownEmail = {
   at: string;
   workspaceId: string;
   neverAsk: string;
+  signals?: string[];
 };
 
 type ThreadInfo = {
@@ -72,10 +118,11 @@ async function threadInfo(db: Db, actor: UserActor, sourceId: string, key: strin
     `select m.id, m.from_email, m.from_name, m.to_recipients, m.cc_recipients
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
      where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and not m.is_draft and f.role <> 'outbox'
-     order by coalesce(m.received_at, m.sent_at, m.created_at) asc, m.id asc
+     order by coalesce(m.received_at, m.sent_at, m.created_at) desc, m.id desc
      limit 200`,
     [actor.userId, sourceId, key],
   );
+  result.rows.reverse();
   if (result.rows.length === 0) throw new CrmError("not_found", "Conversation not found.", 404);
   const own = await ownAddresses(db, actor);
   const people = new Map<string, string | null>();
@@ -279,6 +326,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
       at: Date;
       received_by: string;
       capture_workspace_id: string;
+      signals: string[];
     }>(
       `with own as (
          ${ownAddressesSql("$1", "$2")}
@@ -315,7 +363,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
          join crm.mail_sources s on s.id = l.source_id
          left join crm.mail_thread_routes rt on rt.user_id = $1 and rt.source_id = l.source_id and rt.thread_key = l.tk
          where rt.ignored_at is null and rt.filed_in is null and rt.contact_id is null
-           and ${NOT_AUTOMATED("lower(m.from_email)")}
+           and (${KNOWN_ADDRESS("$1", "lower(m.from_email)")} or ${NOT_STRICTLY_AUTOMATED("lower(m.from_email)")})
            and split_part(lower(m.from_email), '@', 2) not in (select domain from own_domains)
            and not exists (
              select 1 from crm.contacts c
@@ -338,19 +386,30 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
              where o.source_id = l.source_id and o.thread_key = l.tk and ofo.role = 'sent' and coalesce(o.sent_at, o.created_at) > l.at
            )
        )
-       select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at,
-         ${capture.received} as received_by, ${capture.workspace} as capture_workspace_id
+       select r.id, r.source_id, r.tk, r.subject, r.snippet, r.from_email, r.from_name, r.at, r.received_by, r.capture_workspace_id,
+         array_remove(array[
+           case when r.from_email ~* '${ROLE_SENDER}' and split_part(r.from_email, '@', 2) <> all($4::text[]) then 'the address is a role address such as info@ or billing@' end,
+           case when r.focused is false then 'the mail app put it in Other, not Focused' end,
+           case when exists (
+             select 1 from crm.mail_messages b where b.id = r.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
+           ) then 'the end of the email mentions unsubscribing or opting out' end
+         ], null) as signals
        from (
-         select n.* from candidates n
-         ${splitJoin("n", "$1")}
-         where ${splitCase("n")} = 'important'
-         order by n.at desc
-         offset 0
-       ) n
-       where not exists (
-         select 1 from crm.mail_messages b where b.id = n.id and right(coalesce(b.body_text, ''), 4000) ~* '${UNSUBSCRIBE_TEXT}'
-       )
-       limit ${CAPTURE_SCAN}`,
+         select w.id, w.source_id, w.tk, w.subject, w.snippet, w.from_email, w.from_name, w.at, w.focused, w.received_by, w.capture_workspace_id
+         from (
+           select n.id, n.source_id, n.tk, n.subject, n.snippet, n.from_email, n.from_name, n.at, n.focused,
+             ${capture.received} as received_by, ${capture.workspace} as capture_workspace_id
+           from (
+             select n.* from candidates n
+             ${splitJoin("n", "$1")}
+             where ${captureSplitSql("n")}
+             order by n.at desc
+             offset 0
+           ) n
+         ) w
+         order by ${ALREADY_SKIPPED("w", "$1", "$4")}, w.at desc
+         limit ${CAPTURE_SCAN}
+       ) r`,
       [actor.userId, actor.email, workspaceIds, [...FREE_MAIL_DOMAINS], captureCutoff(now), homesJson(homes)],
     );
     const rows = result.rows.sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime());
@@ -365,6 +424,7 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
       at: new Date(row.at).toISOString(),
       workspaceId: workspaceIds.includes(row.capture_workspace_id) ? row.capture_workspace_id : workspaceIds[0],
       neverAsk: neverAskLabel(row.from_email),
+      signals: row.signals,
     }));
   });
 }

@@ -910,6 +910,6 @@ export function hiddenSubscriptionSql(userExpr: string, emailExpr: string) {
   return `exists (
     select 1 from crm.mail_subscriptions ms
     where ms.user_id = ${userExpr} and (ms.sender = ${emailExpr} or ms.sender = '@' || split_part(${emailExpr}, '@', 2))
-      and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null or ms.list_unsubscribe is not null)
+      and (ms.status <> 'subscribed' or ms.cold_pitch_at is not null)
   )`;
 }

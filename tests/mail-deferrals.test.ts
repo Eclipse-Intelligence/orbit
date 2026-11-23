@@ -69,12 +69,13 @@ function mailbox(state: { inbox: unknown[]; sent: unknown[] }): typeof fetch {
   };
 }
 
-function model(replies: unknown[]) {
+function model(replies: unknown[], byPrompt?: (user: string) => unknown) {
   const prompts: { system: string; user: string }[] = [];
   const fetchImpl: typeof fetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as { messages: { content: string }[] };
     prompts.push({ system: body.messages[0].content, user: body.messages[1].content });
-    return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify(replies.shift()) }, finish_reason: "stop" }] });
+    const reply = byPrompt ? byPrompt(body.messages[1].content) : replies.shift();
+    return Response.json({ model: "test-model", choices: [{ message: { content: JSON.stringify(reply) }, finish_reason: "stop" }] });
   };
   return { fetchImpl, prompts };
 }
@@ -294,16 +295,17 @@ describe("not now replies", () => {
       budgetMs: 30_000,
       fetchImpl: mailbox({ inbox: [message("m-next-year", "Not the right time for us. Try me next year.", { conversationId: "conv-next-year", subject: "Renewal" })], sent: [] }),
     });
-    const { fetchImpl, prompts } = model([
-      { needsReply: true, body: "Hi Jane, will do. Mark", defer: { note: "Asked to try again next year.", precision: "month", date: when } },
-      { needsReply: false, body: null },
-      { needsReply: false, body: null },
-    ]);
+    const { fetchImpl, prompts } = model([], (user) =>
+      user.includes("Try me next year")
+        ? { needsReply: true, body: "Hi Jane, will do. Mark", defer: { note: "Asked to try again next year.", precision: "month", date: when } }
+        : { needsReply: false, body: null },
+    );
     const report = await prepareMail(owner, { deadline: soon(), fetchImpl });
     assert.equal(prompts.length, 3, "one reply call for each waiting email");
-    assert.match(prompts[0].user, /Try me next year/);
-    assert.match(prompts[0].system, /defer is set when the latest email is a deferral/);
-    assert.ok(prompts.slice(1).every((prompt) => !/defer is set/.test(prompt.system)), "emails already checked aren't asked again");
+    const deferred = prompts.filter((prompt) => /Try me next year/.test(prompt.user));
+    assert.equal(deferred.length, 1);
+    assert.match(deferred[0].system, /defer is set when the latest email is a deferral/);
+    assert.ok(prompts.filter((prompt) => prompt !== deferred[0]).every((prompt) => !/defer is set/.test(prompt.system)), "emails already checked aren't asked again");
     assert.ok(prompts.every((prompt) => !/put the conversation off until later/.test(prompt.system)), "no separate deferral call");
     assert.equal(report.deferrals, 0, "found by the reply call, not the batch");
     const rows = await getAdminPool().query<{ defer_note: string }>(
