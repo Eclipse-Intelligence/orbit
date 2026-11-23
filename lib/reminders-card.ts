@@ -10,7 +10,7 @@ import { REMINDER_LINK_LABEL, reminderOrbitPath } from "@/lib/crm/reminder-link"
 
 export { REMINDER_LINK_LABEL };
 
-export type HeldTick = { snapshot: Reminder; doneId: string | null };
+export type HeldTick = { snapshot: Reminder; doneId: string | null; settled?: boolean };
 
 export type ReminderRow = { key: string; reminder: Reminder; ticked: boolean; overdue: boolean };
 
@@ -39,7 +39,8 @@ function stillWaiting(reminder: Reminder, held: HeldTick | undefined) {
   return Boolean(held && reminder.dueOn === held.snapshot.dueOn && reminder.dueAt === held.snapshot.dueAt);
 }
 
-export function groupReminders(reminders: Reminder[], held: Record<string, HeldTick>, today: string): ReminderGroups {
+export function groupReminders(reminders: Reminder[], allHeld: Record<string, HeldTick>, today: string): ReminderGroups {
+  const held = Object.fromEntries(Object.entries(allHeld).filter(([, tick]) => !tick.settled));
   const heldDone = new Set(Object.values(held).flatMap((tick) => [tick.doneId, tick.snapshot.id]));
   const rows: ReminderRow[] = [];
   for (const reminder of reminders) {

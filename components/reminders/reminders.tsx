@@ -46,6 +46,7 @@ const WIDE = "(min-width: 64rem)";
 const CARD_WIDTH = 340;
 const POSITION_KEY = "orbit-reminders-card";
 const TOAST_MS = 5_000;
+const SETTLE_MS = 1_200;
 const CARD_MAX_HEIGHT = 640;
 const CARD_MAX_SHARE = 0.6;
 
@@ -280,6 +281,9 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
         setHeld((current) => (current[reminder.id] ? { ...current, [reminder.id]: { ...current[reminder.id], doneId } } : current));
         setReminders((list) => replaced(list, result.reminder));
         touch("card");
+        window.setTimeout(() => {
+          setHeld((current) => (current[reminder.id]?.doneId === doneId ? { ...current, [reminder.id]: { ...current[reminder.id], settled: true } } : current));
+        }, SETTLE_MS);
         return doneId;
       });
     ticking.current.set(reminder.id, pending);
@@ -298,6 +302,13 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
       if (!doneId) return;
       target = doneId;
       setReminders((list) => replaced(list?.filter((item) => item.id === reminder.id || item.id !== doneId) ?? null, reminder));
+    } else {
+      const owner = Object.keys(held).find((id) => id === reminder.id || held[id].doneId === reminder.id);
+      if (owner) {
+        ticking.current.delete(owner);
+        setHeld((current) => withoutKey(current, owner));
+        setToast((current) => (current?.kind === "done" && current.reminderId === owner ? null : current));
+      }
     }
     const result = await undoReminderAction(target).catch(() => null);
     if (!result || "error" in result) {
