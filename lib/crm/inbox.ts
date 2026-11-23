@@ -1227,16 +1227,18 @@ export async function currentToken(
   return refreshMicrosoftToken(refreshToken, fetchImpl);
 }
 
-export async function storeToken(db: Db, connectionId: string, token: MicrosoftToken) {
+export async function storeToken(db: Db, connectionId: string, token: MicrosoftToken, loaded?: string | null) {
+  const guarded = loaded !== undefined;
   await db.query(
     `update crm.mailbox_connections
      set refresh_token = $2, access_token = $3, access_token_expires_at = $4
-     where id = $1`,
+     where id = $1${guarded ? " and status = 'connected' and refresh_token is not distinct from $5" : ""}`,
     [
       connectionId,
       encryptSecret(token.refreshToken),
       encryptSecret(token.accessToken),
       token.expiresAt,
+      ...(guarded ? [loaded] : []),
     ],
   );
 }

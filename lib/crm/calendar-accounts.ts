@@ -119,12 +119,13 @@ export async function readAccounts(db: Db, actor: UserActor): Promise<StoredAcco
   return result.rows.map(mapAccount);
 }
 
-export async function storeAccountToken(db: Db, accountId: string, token: MicrosoftToken) {
+export async function storeAccountToken(db: Db, accountId: string, token: MicrosoftToken, loaded?: string | null) {
+  const guarded = loaded !== undefined;
   await db.query(
     `update crm.calendar_accounts
      set refresh_token = $2, access_token = $3, access_token_expires_at = $4, calendar_write = coalesce($5::boolean, calendar_write),
          granted_scopes = coalesce($6, granted_scopes)
-     where id = $1`,
+     where id = $1${guarded ? " and status = 'connected' and refresh_token is not distinct from $7" : ""}`,
     [
       accountId,
       encryptSecret(token.refreshToken),
@@ -132,6 +133,7 @@ export async function storeAccountToken(db: Db, accountId: string, token: Micros
       token.expiresAt,
       grantsCalendarWrite(token.scope),
       token.scope ? token.scope.replace(/\s+/g, " ").trim().slice(0, 2000) : null,
+      ...(guarded ? [loaded] : []),
     ],
   );
 }
