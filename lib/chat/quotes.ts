@@ -41,6 +41,12 @@ export function subscribeQuotes(listener: () => void) {
   };
 }
 
+export function forgetQuotes() {
+  for (const id of inflight.keys()) supersede(id);
+  entries.clear();
+  changed();
+}
+
 export function cachedQuote(id: string): ChatQuote | null | undefined {
   const entry = entries.get(id);
   return entry ? entry.quote : undefined;

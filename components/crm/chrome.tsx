@@ -1,9 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import CommandMenu from "@/components/companies/command-menu/command-menu";
 import Profile from "@/components/companies/profile/profile";
 import { AttentionProvider } from "@/components/crm/attention";
+import { bindSessionCaches } from "@/components/crm/session-caches";
 import QuickAdd, { QuickAddProvider } from "@/components/crm/quick-add";
 import TaskReminders from "@/components/crm/task-reminders";
 import Reminders from "@/components/reminders/reminders";
@@ -31,6 +32,15 @@ export default function CrmChrome({
   brief?: UnreadBrief | null;
   children: ReactNode;
 }) {
+  const [boundTo, setBoundTo] = useState(() => {
+    bindSessionCaches(viewer.id);
+    return viewer.id;
+  });
+  if (boundTo !== viewer.id) {
+    bindSessionCaches(viewer.id);
+    setBoundTo(viewer.id);
+  }
+
   return (
     <AttentionProvider notifications={notifications} teamUnread={teamUnread}>
       <QuickAddProvider>
