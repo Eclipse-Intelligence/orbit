@@ -281,6 +281,51 @@ describe("mail threads and mailbox actions", () => {
       assert.ok((await reminderKeys()).includes(thread("ret-failed")));
     });
 
+    it("never lifts a returned snooze whose thread was replied to and then deleted, or an old snooze with no flag", async () => {
+      const inboxKeys = async () => (await listThreads(owner, { view: { role: "inbox" }, limit: 100 })).threads.map((item) => item.key);
+      await seed({ thread: "ret-deleted", folder: "inbox", at: new Date(Date.now() - 2 * DAY), provider: "ret-deleted-1" });
+      await applyMailAction(owner, { thread: thread("ret-deleted"), action: "snooze", view: { role: "inbox" }, until: until() }, outlook().fetchImpl);
+      await admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where thread_key = 'ret-deleted' and state = 'waiting'");
+      await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: null });
+      await seed({ thread: "ret-deleted", folder: "sent", at: new Date(Date.now() - 1000), provider: "ret-deleted-reply", from: "mark@eclipse.test", read: true });
+      assert.ok((await inboxKeys()).includes(thread("ret-deleted")));
+      await admin().query("update crm.mail_messages set folder_id = $1 where provider_message_id = 'ret-deleted-1'", [await folderId("trash")]);
+      assert.ok(!(await inboxKeys()).includes(thread("ret-deleted")), "deleted outside Orbit, the sent reply does not bring it back");
+      const junk = (
+        await admin().query<{ id: string }>(
+          "insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role) values ($1, $2, $3, 'f-junk', 'Junk', 'junk') returning id",
+          [owner.workspaceId, owner.userId, sourceId],
+        )
+      ).rows[0].id;
+      await admin().query("update crm.mail_messages set folder_id = $1 where provider_message_id = 'ret-deleted-1'", [junk]);
+      assert.ok(!(await inboxKeys()).includes(thread("ret-deleted")));
+
+      await seed({ thread: "ret-unflagged", folder: "sent", at: new Date(Date.now() - 20 * DAY), provider: "ret-unflagged-1", from: "mark@eclipse.test", read: true });
+      await admin().query(
+        `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject, state, surfaced_at)
+         values ($1, $2, $3, 'ret-unflagged', 'snooze', now() - interval '20 days', 'Old', 'due', now() - interval '20 days')`,
+        [owner.workspaceId, owner.userId, sourceId],
+      );
+      assert.ok(!(await inboxKeys()).includes(thread("ret-unflagged")), "a due snooze made before the flag existed is never lifted");
+    });
+
+    it("closes a returning snooze quietly when its thread has been moved out of sight", async () => {
+      const pushed = async (key: string) => (await admin().query<{ id: string }>("select r.id from crm.mail_reminders r join crm.push_log l on l.key = 'snooze:' || r.id where r.thread_key = $1", [key])).rowCount;
+      await seed({ thread: "ret-vanished", folder: "inbox", at: new Date(Date.now() - DAY), provider: "ret-vanished-1" });
+      await seed({ thread: "ret-control", folder: "inbox", at: new Date(Date.now() - DAY), provider: "ret-control-1" });
+      for (const key of ["ret-vanished", "ret-control"]) {
+        await applyMailAction(owner, { thread: thread(key), action: "snooze", view: { role: "inbox" }, until: until() }, outlook().fetchImpl);
+      }
+      await admin().query("update crm.mail_messages set folder_id = $1 where provider_message_id = 'ret-vanished-1'", [await folderId("archive")]);
+      await admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where thread_key in ('ret-vanished', 'ret-control') and state = 'waiting'");
+      const report = await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: null });
+      assert.equal(report.returned, 1, "only the visible one counts as returned");
+      assert.equal((await reminders("ret-vanished"))[0].state, "done");
+      assert.equal(await pushed("ret-vanished"), 0, "no alert for something nobody can see");
+      assert.equal((await reminders("ret-control"))[0].state, "due");
+      assert.equal(await pushed("ret-control"), 1);
+    });
+
     it("says so, and sets no reminder, when the thread is only in Trash", async () => {
       await seed({ thread: "snz-trash", folder: "trash", at: new Date(Date.now() - DAY), provider: "snz-trash-1" });
       const box = outlook();

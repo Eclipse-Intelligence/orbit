@@ -84,11 +84,11 @@ function targets(rows: Row[], action: MailAction, view: MailView | null) {
 
 function snoozePlan(rows: Row[], view: MailView | null) {
   const chosen = targets(rows, "snooze", view);
-  if (chosen.length > 0) return { chosen, remind: true };
-  if (rows.some((row) => row.role === "snoozed")) return { chosen: [], remind: true };
+  if (chosen.length > 0) return { chosen, remind: true, unfiled: false };
+  if (rows.some((row) => row.role === "snoozed")) return { chosen: [], remind: true, unfiled: false };
   const elsewhere = rows.filter((row) => SNOOZE_FALLBACK.includes(row.role));
-  if (elsewhere.length > 0) return { chosen: elsewhere, remind: true };
-  if (rows.some((row) => row.role === "sent" || row.role === "drafts")) return { chosen: [], remind: true };
+  if (elsewhere.length > 0) return { chosen: elsewhere, remind: true, unfiled: false };
+  if (rows.some((row) => row.role === "sent" || row.role === "drafts")) return { chosen: [], remind: true, unfiled: true };
   throw new CrmError("conflict", "Couldn't set a reminder. Move the conversation out of Trash or Junk first.", 409);
 }
 
@@ -159,6 +159,7 @@ async function settleReminders(
   until: Date | null,
   subject: string | null,
   complete = true,
+  withoutFolder = false,
 ) {
   if (action === "archive" || action === "trash") {
     await db.query(
@@ -175,9 +176,9 @@ async function settleReminders(
   }
   if (action === "snooze" && until) {
     await db.query(
-      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject)
-       values ($1, $2, $3, $4, 'snooze', $5, $6)`,
-      [actor.workspaceId, actor.userId, sourceId, key, until.toISOString(), subject],
+      `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject, without_folder)
+       values ($1, $2, $3, $4, 'snooze', $5, $6, $7)`,
+      [actor.workspaceId, actor.userId, sourceId, key, until.toISOString(), subject, withoutFolder],
     );
   }
 }
@@ -292,12 +293,12 @@ export async function applyMailAction(
   });
   if (rows.length === 0) throw new CrmError("not_found", "Conversation not found.", 404);
   const snoozing = input.action === "snooze";
-  const plan = snoozing ? snoozePlan(rows, view) : { chosen: targets(rows, input.action, view), remind: false };
+  const plan = snoozing ? snoozePlan(rows, view) : { chosen: targets(rows, input.action, view), remind: false, unfiled: false };
   const chosen = [...plan.chosen].reverse();
   const subject = rows[rows.length - 1].subject?.slice(0, 2000) ?? null;
   if (chosen.length === 0) {
     if (plan.remind) {
-      await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, until, subject));
+      await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, until, subject, true, plan.unfiled));
       announceMailChange(actor, options.origin);
     } else {
       await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, null, subject));

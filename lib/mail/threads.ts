@@ -70,7 +70,7 @@ const SCOPED_COLUMNS = `m.id, m.source_id, m.thread_key as tk, m.subject, m.snip
 
 function snoozeThreads(state: "waiting" | "due", absentRoles: string[]) {
   return `select rm.source_id, rm.thread_key from crm.mail_reminders rm
-    where rm.user_id = $1 and rm.state = '${state}' and rm.kind = 'snooze'
+    where rm.user_id = $1 and rm.state = '${state}' and rm.kind = 'snooze' and rm.without_folder
       and not exists (
         select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
         where o.user_id = $1 and o.source_id = rm.source_id and o.thread_key = rm.thread_key
@@ -79,7 +79,7 @@ function snoozeThreads(state: "waiting" | "due", absentRoles: string[]) {
 }
 
 const REMINDED_WITHOUT_FOLDER = `(m.source_id, m.thread_key) in (${snoozeThreads("waiting", ["snoozed"])})`;
-const SNOOZE_RETURNED_UNFILED = `(m.source_id, m.thread_key) in (${snoozeThreads("due", ["snoozed", "inbox", "other", "archive"])})`;
+const SNOOZE_RETURNED_UNFILED = `(m.source_id, m.thread_key) in (${snoozeThreads("due", ["snoozed", "inbox", "other", "archive", "trash", "junk"])})`;
 const DUE_FOLLOW_UP = `select rm.source_id, rm.thread_key from crm.mail_reminders rm where rm.user_id = $1 and rm.state = 'due' and rm.kind = 'follow_up'`;
 
 const WINDOW_DAYS = [7, 56, 448];
@@ -647,7 +647,7 @@ async function readNav(actor: UserActor): Promise<MailNav> {
            where rm.user_id = $1 and rm.kind = 'snooze' and rm.state = 'waiting'
              and exists (
                select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-               where o.user_id = $1 and o.source_id = rm.source_id and o.thread_key = rm.thread_key and ofo.role in ('snoozed', 'sent', 'drafts')
+               where o.user_id = $1 and o.source_id = rm.source_id and o.thread_key = rm.thread_key and (ofo.role = 'snoozed' or (rm.without_folder and ofo.role in ('sent', 'drafts')))
              )
            group by rm.source_id, rm.thread_key
          ) waiting) as snoozed,

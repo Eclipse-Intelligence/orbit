@@ -16,7 +16,7 @@ import { firstReply, FOLLOW_UP_ROW_COLUMNS, hasStuckFollowUps, recoverStuckFollo
 
 type DueReport = { sent: number; failed: number; returned: number; followUps: number; followUpsSent: number; stuck: number; reminderErrors: number };
 
-type ReminderRow = SendFollowUpRow & { kind: "snooze" | "follow_up"; action: "remind" | "send"; automatic: boolean; deferral: boolean };
+type ReminderRow = SendFollowUpRow & { kind: "snooze" | "follow_up"; action: "remind" | "send"; automatic: boolean; deferral: boolean; without_folder: boolean };
 
 const DRAFTS_PER_RUN = 5;
 const REMINDERS_PER_RUN = 20;
@@ -45,7 +45,7 @@ async function claimReminders(actor: UserActor, limit: number) {
        )
        update crm.mail_reminders r set state = 'due', surfaced_at = now()
        from picked where r.id = picked.id
-       returning ${FOLLOW_UP_ROW_COLUMNS.split(", ").map((column) => `r.${column}`).join(", ")}, r.kind, r.action, r.automatic, r.deferral`,
+       returning ${FOLLOW_UP_ROW_COLUMNS.split(", ").map((column) => `r.${column}`).join(", ")}, r.kind, r.action, r.automatic, r.deferral, r.without_folder`,
       [actor.userId, limit],
     );
     return result.rows;
@@ -58,21 +58,39 @@ function mailHref(sourceId: string, key: string) {
 
 async function returnSnooze(actor: UserActor, reminder: ReminderRow, fetchImpl: typeof fetch) {
   const thread = threadKey(reminder.source_id, reminder.thread_key);
-  await everyEmailChanged(applyMailAction(actor, { thread, action: "inbox", view: { role: "snoozed" } }, fetchImpl));
-  const inInbox = await withActor(actor, async (db) => {
-    const result = await db.query<{ found: boolean }>(
-      `select exists (
-         select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-         where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role = 'inbox'
-       ) as found`,
-      [actor.userId, reminder.source_id, reminder.thread_key],
+  const settled = (state: "due" | "done") =>
+    withActor(actor, (db) =>
+      db.query(`update crm.mail_reminders set state = $2, surfaced_at = case when $2 = 'due' then now() else surfaced_at end where id = $1`, [reminder.id, state]),
     );
-    return Boolean(result.rows[0]?.found);
+  await everyEmailChanged(applyMailAction(actor, { thread, action: "inbox", view: { role: "snoozed" } }, fetchImpl));
+  const where = await withActor(actor, async (db) => {
+    const result = await db.query<{ in_inbox: boolean; lifts: boolean }>(
+      `select
+         exists (
+           select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+           where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role = 'inbox'
+         ) as in_inbox,
+         ($4::boolean
+           and exists (
+             select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+             where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role in ('sent', 'drafts')
+           )
+           and not exists (
+             select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+             where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role in ('snoozed', 'inbox', 'other', 'archive', 'trash', 'junk')
+           )
+         ) as lifts`,
+      [actor.userId, reminder.source_id, reminder.thread_key, reminder.without_folder],
+    );
+    return result.rows[0];
   });
-  if (inInbox) await applyMailAction(actor, { thread, action: "unread", view: { role: "inbox" } }, fetchImpl).catch(() => undefined);
-  await withActor(actor, (db) =>
-    db.query("update crm.mail_reminders set state = 'due', surfaced_at = now() where id = $1", [reminder.id]),
-  );
+  if (!where?.in_inbox && !where?.lifts) {
+    await settled("done");
+    return false;
+  }
+  if (where.in_inbox) await applyMailAction(actor, { thread, action: "unread", view: { role: "inbox" } }, fetchImpl).catch(() => undefined);
+  await settled("due");
+  return true;
 }
 
 async function checkInNudge(actor: UserActor, reminder: ReminderRow, deadline: number) {
@@ -155,9 +173,9 @@ export async function processDueMail(
     if (!reminder) break;
     try {
       if (reminder.kind === "snooze") {
-        await returnSnooze(actor, reminder, fetchImpl);
-        report.returned += 1;
-        if ((await mailNotifyLevel(actor)) !== "none") {
+        const shown = await returnSnooze(actor, reminder, fetchImpl);
+        if (shown) report.returned += 1;
+        if (shown && (await mailNotifyLevel(actor)) !== "none") {
           await sendAlert(
             actor,
             {
