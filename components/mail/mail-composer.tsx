@@ -58,6 +58,7 @@ export type SendPayload = {
   replaces?: string | null;
   identityId?: string | null;
   sendKey?: string | null;
+  createKey?: string | null;
   force?: boolean;
   shareId?: string | null;
   shareBase?: SharedBase | null;
@@ -65,7 +66,7 @@ export type SendPayload = {
 
 export type SharedBase = { text: DraftText; version: number };
 
-export type ComposerDraft = MailDraft & { shareBase?: SharedBase | null; sendKey?: string | null; sendProblem?: string | null; replaces?: string | null; unsaved?: boolean };
+export type ComposerDraft = MailDraft & { shareBase?: SharedBase | null; sendKey?: string | null; sendProblem?: string | null; replaces?: string | null; unsaved?: boolean; createKey?: string | null };
 
 export type SendTracker = () => { undone: () => void; delivered: () => void };
 
@@ -186,6 +187,7 @@ export default function MailComposer({
   const heldNow = useRef(false);
   const heldExtras = useRef({ email: fromAccount?.email ?? null, files: attachments.files });
   const sendKey = useRef<string | null>(draft?.sendKey ?? null);
+  const createKey = useRef<string>(draft?.createKey ?? newSendKey());
   const queued = useRef(false);
   const [sendProblem, setSendProblem] = useState(draft?.sendProblem ?? null);
   const editor = useRef<BodyEditorHandle>(null);
@@ -313,7 +315,7 @@ export default function MailComposer({
   function saveNow(force = false) {
     const run = chain.current.then(async () => {
       if (discarded.current || !(force || unsaved())) return;
-      const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current };
+      const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current, createKey: createKey.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       unsavedSince.current = null;
       saving.current = true;
@@ -368,6 +370,7 @@ export default function MailComposer({
         sendError: null,
         identityId: current.identityId,
         replaces: current.replaces,
+        createKey: createKey.current,
         attachments: heldExtras.current.files,
         remindHours: current.remindHours,
         followUpDays: current.followUpDays,
@@ -501,7 +504,7 @@ export default function MailComposer({
 
   function flushDraft() {
     if (discarded.current || shared.current.id || !unsaved()) return;
-    const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current };
+    const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current, createKey: createKey.current };
     if (!snapshot.id && !snapshot.body.trim() && !snapshot.subject.trim()) return;
     keepHeld();
     hiddenUnsaved.current = true;
@@ -570,7 +573,7 @@ export default function MailComposer({
         .catch(() => null)
         .then(() => {
           if (discarded.current || !hasUnsaved(snapshot, savedAs.current)) return;
-          return postJson<MailDraft>("/api/mail/drafts", { ...snapshot, id: draftId.current, sendKey: sendKey.current }, true).then(() => releaseDraft(heldKey.current));
+          return postJson<MailDraft>("/api/mail/drafts", { ...snapshot, id: draftId.current, sendKey: sendKey.current, createKey: createKey.current }, true).then(() => releaseDraft(heldKey.current));
         })
         .catch(() => {
           if (!discarded.current) keepRef.current();
@@ -668,6 +671,7 @@ export default function MailComposer({
       ...snapshot,
       id: draftId.current,
       sendKey: sendKey.current,
+      createKey: createKey.current,
       shareId: shared.current.id,
       shareBase: shared.current.base ?? { text: shared.current.opened, version: -1 },
       ...(force ? { force } : {}),

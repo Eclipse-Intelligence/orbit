@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, sameAccounts, saveDelay, type DraftFields } from "@/lib/mail/composer-state";
+import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, heldIsStale, sameAccounts, saveDelay, type DraftFields } from "@/lib/mail/composer-state";
 import { parseAddress, recipientsError, settleRecipients } from "@/lib/mail/recipient-text";
 
 const fields: DraftFields = {
@@ -138,5 +138,25 @@ describe("compose accounts", () => {
   it("sees a change in length or content", () => {
     assert.equal(sameAccounts(accounts, accounts.slice(0, 1)), false);
     assert.equal(sameAccounts(accounts, [accounts[0], { ...accounts[1], signature: "Mark R" }]), false);
+  });
+});
+
+describe("held copies on reopen", () => {
+  const held = { at: Date.parse("2027-01-10T10:00:00.000Z"), draft: { id: "draft-1" } };
+
+  it("drops a held copy the server has since saved over", () => {
+    assert.equal(heldIsStale(held, "2027-01-10T10:00:00.000Z"), true);
+    assert.equal(heldIsStale(held, "2027-01-10T18:30:00.000Z"), true);
+  });
+
+  it("keeps a held copy that is newer than the server's draft", () => {
+    assert.equal(heldIsStale(held, "2027-01-10T09:59:59.000Z"), false);
+  });
+
+  it("keeps the held copy when it has no draft yet, the draft is gone or the server couldn't be asked", () => {
+    assert.equal(heldIsStale({ ...held, draft: { id: "" } }, "2027-01-11T10:00:00.000Z"), false);
+    assert.equal(heldIsStale(held, null), false);
+    assert.equal(heldIsStale(held, undefined), false);
+    assert.equal(heldIsStale(held, "not a date"), false);
   });
 });

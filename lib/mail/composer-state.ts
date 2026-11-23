@@ -59,6 +59,12 @@ export function fitsKeepalive(text: string) {
   return new TextEncoder().encode(text).length < KEEPALIVE_LIMIT_BYTES;
 }
 
+export function heldIsStale(held: { at: number; draft: { id: string } }, serverSavedAt: string | null | undefined) {
+  if (!held.draft.id || typeof serverSavedAt !== "string") return false;
+  const saved = Date.parse(serverSavedAt);
+  return Number.isFinite(saved) && saved >= held.at;
+}
+
 export function sameAccounts(left: ComposeAccount[], right: ComposeAccount[]) {
   return left.length === right.length && left.every((item, index) => JSON.stringify(item) === JSON.stringify(right[index]));
 }

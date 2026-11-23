@@ -7,8 +7,8 @@ import type { LaterRequest } from "@/components/mail/later-picker";
 import type { ComposerDraft, ComposerStart, SendPayload, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
 import { handOverPayload } from "@/components/mail/hand-over";
-import { fitsKeepalive, sameAccounts } from "@/lib/mail/composer-state";
-import { heldDrafts } from "@/components/mail/held-drafts";
+import { fitsKeepalive, heldIsStale, sameAccounts } from "@/lib/mail/composer-state";
+import { heldDrafts, releaseDraft, type HeldDraft } from "@/components/mail/held-drafts";
 import { flagReconnect, hasReconnectHost, reconnectOf } from "@/components/mail/reconnect-store";
 import { MODE_LABEL } from "@/lib/mail/format";
 import { emailRecipientAction } from "@/app/(crm)/quick-add";
@@ -85,6 +85,7 @@ function payloadDraft(payload: SendPayload, failure?: SendFailure): ComposerDraf
   return {
     id: failure?.detail?.draftId ?? payload.id ?? "",
     sendKey: payload.sendKey ?? null,
+    createKey: payload.createKey ?? null,
     sendProblem: failure?.detail?.maybeSent ? failure.message : null,
     sourceId: payload.sourceId,
     replaces: payload.replaces ?? null,
@@ -144,6 +145,13 @@ async function loadAccounts(): Promise<ComposeAccount[]> {
   if (!response.ok) throw new Error("Mail accounts didn't load.");
   const body = (await response.json()) as { accounts: ComposeAccount[] };
   return body.accounts;
+}
+
+async function draftSavedAt(id: string): Promise<string | null | undefined> {
+  const response = await fetch(`/api/mail/drafts?id=${encodeURIComponent(id)}`, { cache: "no-store" }).catch(() => null);
+  if (!response?.ok) return undefined;
+  const body = (await response.json().catch(() => null)) as { savedAt?: string | null } | null;
+  return body ? (body.savedAt ?? null) : undefined;
 }
 
 const ComposeCard = memo(function ComposeCard({
@@ -422,7 +430,14 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
   }, [refreshAccounts, focusDraft]);
 
   useEffect(() => {
-    for (const held of heldDrafts().slice(0, MAX_CARDS)) openComposer({ draft: held.draft, heldKey: held.key, fromEmail: held.fromEmail });
+    const reopen = async (held: HeldDraft) => {
+      if (held.draft.id && heldIsStale(held, await draftSavedAt(held.draft.id))) {
+        releaseDraft(held.key);
+        return;
+      }
+      openComposer({ draft: held.draft, heldKey: held.key, fromEmail: held.fromEmail });
+    };
+    for (const held of heldDrafts().slice(0, MAX_CARDS)) void reopen(held);
   }, [openComposer]);
 
   const dismiss = useCallback((id: number) => {

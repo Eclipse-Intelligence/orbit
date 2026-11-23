@@ -1,5 +1,5 @@
 import { mailResponse } from "@/app/api/mail/respond";
-import { discardMailDraft, readAttachmentIds, readDraftInput, saveMailDraft } from "@/lib/mail/compose";
+import { discardMailDraft, draftSavedAt, readAttachmentIds, readDraftInput, saveMailDraft } from "@/lib/mail/compose";
 import { mailOrigin } from "@/lib/mail/origin";
 
 export const dynamic = "force-dynamic";
@@ -10,6 +10,11 @@ export async function POST(request: Request) {
   return mailResponse((actor) =>
     saveMailDraft(actor, { ...readDraftInput(body), attachments: readAttachmentIds(body.attachments) }, { origin: mailOrigin(request), storedFiles: "replace" }),
   );
+}
+
+export async function GET(request: Request) {
+  const id = new URL(request.url).searchParams.get("id") ?? "";
+  return mailResponse(async (actor) => ({ savedAt: await draftSavedAt(actor, id) }));
 }
 
 export async function DELETE(request: Request) {

@@ -143,6 +143,7 @@ export default function RecipientField({
       setActive(event.key === "Home" ? 0 : shown.length - 1);
       return;
     }
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) return;
     if (event.key === "Escape" && open) {
       event.preventDefault();
       event.stopPropagation();

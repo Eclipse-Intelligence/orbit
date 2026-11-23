@@ -678,6 +678,10 @@ export default function ThreadReader({
 
   async function takePrepared(item: PreparedReply, auto = false) {
     if (!target) return;
+    if (active?.draft?.id && cardHas(active.draft.id)) {
+      focusDraft(active.draft.id);
+      return;
+    }
     const everyone = target.to.length + target.cc.length > 1;
     const fresh = item.times ? await preparedAction(item.id, "use") : null;
     startReply(everyone ? "reply_all" : "reply", fresh?.body ?? item.body, auto);
@@ -733,7 +737,8 @@ export default function ThreadReader({
   function startReply(mode: Exclude<DraftMode, "new">, body?: string, auto = false) {
     if (!detail || !target) return false;
     if (active) {
-      document.querySelector<HTMLElement>("[data-reader-composer] [data-composer-body]")?.focus();
+      if (active.draft?.id && cardHas(active.draft.id)) focusDraft(active.draft.id);
+      else document.querySelector<HTMLElement>("[data-reader-composer] [data-composer-body]")?.focus();
       return;
     }
     const defaults = replyDefaults(mode, target, detail.subject, own);
