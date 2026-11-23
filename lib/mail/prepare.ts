@@ -40,6 +40,10 @@ const REPLY_MAX_FAILURES = 3;
 const REPLY_RETRY_MINUTES = 60;
 const REPLY_MAX_SLOW = 6;
 const REPLY_SLOW_RETRY_MINUTES = 180;
+const REPLY_ATTEMPT_MS = 20_000;
+const REPLY_ATTEMPTS = 2;
+const REPLY_MARGIN_MS = 2_000;
+const SLOW_AFTER_FAILURES = 2;
 const PREPARE_CLAIM_SECONDS = 150;
 
 type PreparedKind = "reply" | "nudge";
@@ -356,7 +360,15 @@ async function checkPitches(actor: UserActor, workspaceIds: string[], mode: Cold
   return count;
 }
 
-async function prepareReply(home: UserActor, target: ThreadWorkspace, candidate: ReplyCandidate, deadline: number, pitchMode: ColdPitchMode, fetchImpl?: typeof fetch) {
+async function prepareReply(
+  home: UserActor,
+  target: ThreadWorkspace,
+  candidate: ReplyCandidate,
+  deadline: number,
+  pitchMode: ColdPitchMode,
+  fetchImpl?: typeof fetch,
+  timing?: { left: number | null },
+) {
   const actor = target.actor;
   const askPitch = candidate.pitch && pitchMode !== "off";
   const context = await withActor(actor, (db) => draftContext(db, actor, candidate.source_id, candidate.tk));
@@ -401,6 +413,7 @@ async function prepareReply(home: UserActor, target: ThreadWorkspace, candidate:
     deadline,
     fetchImpl,
   };
+  if (timing) timing.left = deadline - Date.now();
   let result = await completeJson(request);
   const spelled = result.data.needsReply && result.data.body ? spelledFigures(result.data.body, stripQuoted(candidate.body_text ?? candidate.snippet ?? "")) : [];
   if (spelled.length) {
@@ -703,25 +716,33 @@ async function prepareReplies(
   let next = 0;
   let halted = false;
   let finished = 0;
+  let consecutive = 0;
+  let outage = false;
   const slow: { candidate: ReplyCandidate; error: unknown }[] = [];
   const lane = async () => {
     while (next < candidates.length && !halted) {
       if (options.deadline - Date.now() < STEP_MS) return;
       const candidate = candidates[next];
       next += 1;
+      const timing: { left: number | null } = { left: null };
       try {
         const target = await threadWorkspace(actor, candidate.source_id, candidate.tk, actors);
-        const outcome = await prepareReply(actor, target, candidate, options.deadline, settings.coldPitches, options.fetchImpl);
+        const outcome = await prepareReply(actor, target, candidate, options.deadline, settings.coldPitches, options.fetchImpl, timing);
         finished += 1;
+        consecutive = 0;
         if (outcome === "prepared") report.prepared += 1;
         if (outcome === "skipped") report.skipped += 1;
         if (outcome === "pitch") report.pitches += 1;
       } catch (error) {
         if (blamesTheEmail(error)) {
           await noteReplyFailure(actor, candidate, "strike", error);
-        } else if (slowForThisEmail(error)) {
+        } else if (slowForThisEmail(error) && timing.left !== null && timing.left >= REPLY_ATTEMPTS * REPLY_ATTEMPT_MS + REPLY_MARGIN_MS) {
           slow.push({ candidate, error });
-          if (finished === 0) halted = true;
+          consecutive += 1;
+          if (finished === 0 || consecutive >= SLOW_AFTER_FAILURES) {
+            halted = true;
+            outage = true;
+          }
         } else {
           halted = true;
           console.error("Preparing replies stopped on a temporary failure", error instanceof Error ? error.message : error);
@@ -731,8 +752,11 @@ async function prepareReplies(
   };
   const lanes = process.env.VERCEL ? REPLY_LANES_SERVERLESS : REPLY_LANES;
   await Promise.all(Array.from({ length: Math.min(lanes, candidates.length) }, lane));
-  if (finished > 0) for (const { candidate, error } of slow) await noteReplyFailure(actor, candidate, "slow", error);
-  else if (slow.length) console.error("Preparing replies stopped on repeated slow answers");
+  if (finished === 0) {
+    if (slow.length) console.error("Preparing replies stopped on repeated slow answers");
+    return;
+  }
+  for (const { candidate, error } of outage ? slow.slice(0, 1) : slow) await noteReplyFailure(actor, candidate, "slow", error);
 }
 
 export async function prepareMail(
