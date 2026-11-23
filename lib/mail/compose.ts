@@ -30,6 +30,7 @@ import { addressHomesInDb } from "@/lib/mail/routing";
 import { graphReconnect, SOURCE_SCOPES } from "@/lib/mail/accounts";
 import { mailSourceToken } from "@/lib/mail/sync";
 import { readStatusesOn } from "@/lib/mail/tracking";
+import type { StoredDraftContent } from "@/lib/mail/composer-state";
 import type { MailAddress } from "@/lib/mail/types";
 import { replyDefaults, type ComposeAccount, type MailDraft } from "@/lib/mail/view";
 import {
@@ -803,26 +804,55 @@ async function linkCreateKey(actor: UserActor, key: string, draftId: string) {
 async function withCreatedDraft<T extends DraftInput>(actor: UserActor, input: T): Promise<T> {
   if (input.id || !input.createKey) return input;
   const found = await withActor(actor, async (db) => {
-    const result = await db.query<{ draft_id: string }>(
-      `select k.draft_id from crm.mail_send_keys k
-       where k.user_id = $1 and k.key = $2 and k.sent_at is null
-         and exists (select 1 from crm.mail_drafts d where d.id = k.draft_id and d.user_id = k.user_id)`,
+    const result = await db.query<{ draft_id: string | null; live: boolean; fresh: boolean }>(
+      `select k.draft_id, k.created_at > now() - ${SENDING_FRESH} as fresh,
+         exists (select 1 from crm.mail_drafts d where d.id = k.draft_id and d.user_id = k.user_id) as live
+       from crm.mail_send_keys k where k.user_id = $1 and k.key = $2 and k.sent_at is null`,
       [actor.userId, input.createKey],
     );
-    return result.rows[0]?.draft_id ?? null;
+    return result.rows[0] ?? null;
   });
-  return found ? { ...input, id: found } : input;
+  if (!found) return input;
+  if (found.draft_id && found.live) return { ...input, id: found.draft_id };
+  if (!found.draft_id && found.fresh) throw stillSaving();
+  return input;
 }
 
 async function dropCreateKey(actor: UserActor, key: string) {
   await withActor(actor, (db) => db.query("delete from crm.mail_send_keys where user_id = $1 and key = $2 and draft_id is null and sent_at is null", [actor.userId, key]));
 }
 
-export async function draftSavedAt(actor: UserActor, id: string): Promise<string | null> {
+export async function draftContent(actor: UserActor, id: string): Promise<StoredDraftContent | null> {
   if (!isUuid(id)) return null;
   return withActor(actor, async (db) => {
-    const result = await db.query<{ updated_at: Date | string }>("select updated_at from crm.mail_drafts where id = $1 and user_id = $2", [id, actor.userId]);
-    return result.rows[0] ? new Date(result.rows[0].updated_at).toISOString() : null;
+    const result = await db.query<{
+      subject: string | null;
+      body: string;
+      to_recipients: MailAddress[] | null;
+      cc_recipients: MailAddress[] | null;
+      bcc_recipients: MailAddress[] | null;
+      remind_hours: number | null;
+      follow_up_days: number | null;
+      follow_up_body: string | null;
+      attachments: string[] | null;
+    }>(
+      `select subject, body, to_recipients, cc_recipients, bcc_recipients, remind_hours, follow_up_days, follow_up_body, attachments
+       from crm.mail_drafts where id = $1 and user_id = $2`,
+      [id, actor.userId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      subject: row.subject ?? "",
+      body: row.body,
+      to: row.to_recipients ?? [],
+      cc: row.cc_recipients ?? [],
+      bcc: row.bcc_recipients ?? [],
+      remindHours: row.remind_hours,
+      followUpDays: row.follow_up_days,
+      followUpBody: row.follow_up_body,
+      attachments: row.attachments ?? [],
+    };
   });
 }
 

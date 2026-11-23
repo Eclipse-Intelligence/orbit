@@ -1,5 +1,5 @@
 import { mailResponse } from "@/app/api/mail/respond";
-import { discardMailDraft, draftSavedAt, readAttachmentIds, readDraftInput, saveMailDraft } from "@/lib/mail/compose";
+import { discardMailDraft, draftContent, readAttachmentIds, readDraftInput, saveMailDraft } from "@/lib/mail/compose";
 import { mailOrigin } from "@/lib/mail/origin";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   const id = new URL(request.url).searchParams.get("id") ?? "";
-  return mailResponse(async (actor) => ({ savedAt: await draftSavedAt(actor, id) }));
+  return mailResponse(async (actor) => ({ draft: await draftContent(actor, id) }));
 }
 
 export async function DELETE(request: Request) {

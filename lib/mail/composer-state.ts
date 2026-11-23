@@ -59,10 +59,73 @@ export function fitsKeepalive(text: string) {
   return new TextEncoder().encode(text).length < KEEPALIVE_LIMIT_BYTES;
 }
 
-export function heldIsStale(held: { at: number; draft: { id: string } }, serverSavedAt: string | null | undefined) {
-  if (!held.draft.id || typeof serverSavedAt !== "string") return false;
-  const saved = Date.parse(serverSavedAt);
-  return Number.isFinite(saved) && saved >= held.at;
+export type StoredDraftContent = {
+  subject: string;
+  body: string;
+  to: MailAddress[];
+  cc: MailAddress[];
+  bcc: MailAddress[];
+  remindHours: number | null;
+  followUpDays: number | null;
+  followUpBody: string | null;
+  attachments: string[];
+};
+
+type HeldContent = {
+  subject: string;
+  body: string;
+  to: MailAddress[];
+  cc: MailAddress[];
+  bcc: MailAddress[];
+  remindHours?: number | null;
+  followUpDays?: number | null;
+  followUpBody?: string | null;
+  attachments?: { id: string }[];
+};
+
+function addresses(list: MailAddress[]) {
+  return [...new Set(list.map((item) => item.address.trim().toLowerCase()))].sort().join(",");
+}
+
+function contentKey(content: {
+  subject: string;
+  body: string;
+  to: MailAddress[];
+  cc: MailAddress[];
+  bcc: MailAddress[];
+  remindHours: number | null;
+  followUpDays: number | null;
+  followUpBody: string | null;
+  attachments: string[];
+}) {
+  return JSON.stringify([
+    content.subject.replace(/\s+/g, " ").trim(),
+    content.body.replace(/\r\n/g, "\n"),
+    addresses(content.to),
+    addresses(content.cc),
+    addresses(content.bcc),
+    content.followUpDays ? null : (content.remindHours ?? null),
+    content.followUpDays ?? null,
+    content.followUpDays ? (content.followUpBody ?? null) : null,
+    [...content.attachments].sort(),
+  ]);
+}
+
+export function heldIsSaved(held: HeldContent, stored: StoredDraftContent | null | undefined) {
+  if (!stored) return false;
+  return (
+    contentKey({
+      subject: held.subject,
+      body: held.body,
+      to: held.to,
+      cc: held.cc,
+      bcc: held.bcc,
+      remindHours: held.remindHours ?? null,
+      followUpDays: held.followUpDays ?? null,
+      followUpBody: held.followUpBody ?? null,
+      attachments: (held.attachments ?? []).map((file) => file.id),
+    }) === contentKey(stored)
+  );
 }
 
 export function sameAccounts(left: ComposeAccount[], right: ComposeAccount[]) {

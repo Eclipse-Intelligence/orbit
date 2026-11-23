@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, heldIsStale, sameAccounts, saveDelay, type DraftFields } from "@/lib/mail/composer-state";
+import { SAVE_DELAY_MS, SAVE_MAX_WAIT_MS, draftSignature, fitsKeepalive, hasUnsaved, heldIsSaved, sameAccounts, saveDelay, type DraftFields, type StoredDraftContent } from "@/lib/mail/composer-state";
+import type { MailAddress } from "@/lib/mail/types";
 import { parseAddress, recipientsError, settleRecipients } from "@/lib/mail/recipient-text";
 
 const fields: DraftFields = {
@@ -142,21 +143,62 @@ describe("compose accounts", () => {
 });
 
 describe("held copies on reopen", () => {
-  const held = { at: Date.parse("2027-01-10T10:00:00.000Z"), draft: { id: "draft-1" } };
+  const held = {
+    id: "draft-1",
+    subject: "Pricing",
+    body: "Hi Bob\n\nS1 and S2",
+    to: [{ address: "bob@y.com", name: "Bob" }],
+    cc: [] as MailAddress[],
+    bcc: [] as MailAddress[],
+    remindHours: null,
+    followUpDays: null,
+    followUpBody: null,
+    attachments: [],
+  };
+  const stored: StoredDraftContent = {
+    subject: "Pricing",
+    body: "Hi Bob\n\nS1 and S2",
+    to: [{ address: "bob@y.com", name: null }],
+    cc: [],
+    bcc: [],
+    remindHours: null,
+    followUpDays: null,
+    followUpBody: null,
+    attachments: [],
+  };
 
-  it("drops a held copy the server has since saved over", () => {
-    assert.equal(heldIsStale(held, "2027-01-10T10:00:00.000Z"), true);
-    assert.equal(heldIsStale(held, "2027-01-10T18:30:00.000Z"), true);
+  it("drops a held copy the server already has word for word", () => {
+    assert.equal(heldIsSaved(held, stored), true);
   });
 
-  it("keeps a held copy that is newer than the server's draft", () => {
-    assert.equal(heldIsStale(held, "2027-01-10T09:59:59.000Z"), false);
+  it("keeps a held copy when an older autosave landed after it was held", () => {
+    assert.equal(heldIsSaved(held, { ...stored, body: "Hi Bob\n\nS1" }), false);
   });
 
-  it("keeps the held copy when it has no draft yet, the draft is gone or the server couldn't be asked", () => {
-    assert.equal(heldIsStale({ ...held, draft: { id: "" } }, "2027-01-11T10:00:00.000Z"), false);
-    assert.equal(heldIsStale(held, null), false);
-    assert.equal(heldIsStale(held, undefined), false);
-    assert.equal(heldIsStale(held, "not a date"), false);
+  it("keeps a held copy whenever the server's draft differs in anything the held one has", () => {
+    const differs: Partial<StoredDraftContent>[] = [
+      { subject: "Pricing v2" },
+      { to: [] },
+      { cc: [{ address: "ann@x.com", name: null }] },
+      { bcc: [{ address: "ann@x.com", name: null }] },
+      { remindHours: 24 },
+      { followUpDays: 3, followUpBody: "Ping" },
+      { attachments: ["file-1"] },
+    ];
+    for (const change of differs) assert.equal(heldIsSaved(held, { ...stored, ...change }), false, JSON.stringify(change));
+  });
+
+  it("ignores how the server tidied the text and the order and case of addresses", () => {
+    assert.equal(heldIsSaved({ ...held, subject: "  Pricing   ", body: "Hi Bob\r\n\r\nS1 and S2", to: [{ address: "BOB@y.com", name: "Bob" }] }, stored), true);
+    assert.equal(heldIsSaved({ ...held, cc: [{ address: "b@x.com", name: null }, { address: "a@x.com", name: null }] }, { ...stored, cc: [{ address: "a@x.com", name: null }, { address: "b@x.com", name: null }] }), true);
+  });
+
+  it("keeps the held copy when the draft is gone or the server couldn't be asked", () => {
+    assert.equal(heldIsSaved(held, null), false);
+    assert.equal(heldIsSaved(held, undefined), false);
+  });
+
+  it("doesn't depend on any clock", () => {
+    assert.equal(heldIsSaved({ ...held, at: 0 } as typeof held, stored), heldIsSaved({ ...held, at: Date.now() + 86_400_000 } as typeof held, stored));
   });
 });

@@ -12,7 +12,7 @@ import {
   MAYBE_SENT,
   SENT_ALREADY,
   STILL_SAVING,
-  draftSavedAt,
+  draftContent,
   SEND_FAILED,
   readDraftInput,
   saveMailDraft,
@@ -462,13 +462,39 @@ describe("mail sending and actions that don't repeat or go quiet", () => {
     assert.equal(box.created(), 1);
   });
 
-  it("tells when a draft was last saved, and nothing for a draft that isn't there", async () => {
+  it("hands back what a draft holds, and nothing for a draft that isn't there", async () => {
     const box = outlook("ok");
-    const { id } = await draftFor(box, "Saved at");
-    const row = await getAdminPool().query<{ updated_at: Date }>("select updated_at from crm.mail_drafts where id = $1", [id]);
-    assert.equal(await draftSavedAt(owner, id), new Date(row.rows[0].updated_at).toISOString());
-    assert.equal(await draftSavedAt(owner, randomUUID()), null);
-    assert.equal(await draftSavedAt(owner, "not-an-id"), null);
+    const { id } = await draftFor(box, "Holds");
+    const content = await draftContent(owner, id);
+    assert.equal(content?.subject, "Holds");
+    assert.equal(content?.body, "Only once, please");
+    assert.deepEqual(content?.to.map((item) => item.address), ["sam@acme.test"]);
+    assert.equal(await draftContent(owner, randomUUID()), null);
+    assert.equal(await draftContent(owner, "not-an-id"), null);
+  });
+
+  it("won't hand back a draft that belongs to someone else", async () => {
+    const box = outlook("ok");
+    const { id } = await draftFor(box, "Private");
+    const other = await createUser("nosy@orbit.test", "Nosy");
+    assert.equal(await draftContent(other, id), null);
+  });
+
+  it("asks a send or schedule to wait while the card's first save is still running, instead of making a second draft", async () => {
+    const box = outlook("ok");
+    const createKey = randomUUID();
+    await getAdminPool().query("insert into crm.mail_send_keys (user_id, workspace_id, key) values ($1, $2, $3)", [owner.userId, owner.workspaceId, createKey]);
+    const input = { ...readDraftInput({ mode: "new", sourceId, to: ["sam@acme.test"], subject: "Still saving", body: "Wait" }), createKey };
+    await assert.rejects(() => sendMailDraft(owner, { ...input, sendKey: randomUUID() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl }), { message: STILL_SAVING });
+    await assert.rejects(
+      () => scheduleMailDraft(owner, { ...input, sendAt: new Date(Date.now() + 3_600_000).toISOString() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl }),
+      { message: STILL_SAVING },
+    );
+    assert.equal(box.created(), 0);
+    assert.equal(box.sends(), 0);
+    await getAdminPool().query("update crm.mail_send_keys set created_at = now() - interval '11 minutes' where user_id = $1 and key = $2", [owner.userId, createKey]);
+    await sendMailDraft(owner, { ...input, sendKey: randomUUID() }, { storedFiles: "replace", origin: ORIGIN, fetchImpl: box.fetchImpl });
+    assert.equal(box.sends(), 1);
   });
 
   it("won't unschedule an email the scheduler is already sending", async () => {

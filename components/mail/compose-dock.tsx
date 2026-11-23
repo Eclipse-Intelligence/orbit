@@ -7,7 +7,7 @@ import type { LaterRequest } from "@/components/mail/later-picker";
 import type { ComposerDraft, ComposerStart, SendPayload, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
 import { handOverPayload } from "@/components/mail/hand-over";
-import { fitsKeepalive, heldIsStale, sameAccounts } from "@/lib/mail/composer-state";
+import { fitsKeepalive, heldIsSaved, sameAccounts, type StoredDraftContent } from "@/lib/mail/composer-state";
 import { heldDrafts, releaseDraft, type HeldDraft } from "@/components/mail/held-drafts";
 import { flagReconnect, hasReconnectHost, reconnectOf } from "@/components/mail/reconnect-store";
 import { MODE_LABEL } from "@/lib/mail/format";
@@ -147,11 +147,11 @@ async function loadAccounts(): Promise<ComposeAccount[]> {
   return body.accounts;
 }
 
-async function draftSavedAt(id: string): Promise<string | null | undefined> {
+async function storedDraft(id: string): Promise<StoredDraftContent | null | undefined> {
   const response = await fetch(`/api/mail/drafts?id=${encodeURIComponent(id)}`, { cache: "no-store" }).catch(() => null);
   if (!response?.ok) return undefined;
-  const body = (await response.json().catch(() => null)) as { savedAt?: string | null } | null;
-  return body ? (body.savedAt ?? null) : undefined;
+  const body = (await response.json().catch(() => null)) as { draft?: StoredDraftContent | null } | null;
+  return body ? (body.draft ?? null) : undefined;
 }
 
 const ComposeCard = memo(function ComposeCard({
@@ -431,7 +431,7 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const reopen = async (held: HeldDraft) => {
-      if (held.draft.id && heldIsStale(held, await draftSavedAt(held.draft.id))) {
+      if (held.draft.id && heldIsSaved(held.draft, await storedDraft(held.draft.id))) {
         releaseDraft(held.key);
         return;
       }
@@ -492,6 +492,11 @@ export function ComposerProvider({ children }: { children: ReactNode }) {
           })
           .catch((error: SendFailure) => {
             item.onUndone?.();
+            if (error.detail?.stillSaving) {
+              openComposer({ draft: payloadDraft(payload, error), track: item.track });
+              showToast({ message: `“${payload.subject || "Your email"}” didn't send. ${error.message}`, tone: "alert", duration: 15_000 });
+              return;
+            }
             const reconnect = reconnectOf(error);
             const covered = reconnect ? flagReconnect(error, { sourceId: payload.sourceId }) && hasReconnectHost() : false;
             showToast({
