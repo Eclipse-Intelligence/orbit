@@ -79,7 +79,7 @@ function snoozeThreads(state: "waiting" | "due", absentRoles: string[]) {
 }
 
 const REMINDED_WITHOUT_FOLDER = `(m.source_id, m.thread_key) in (${snoozeThreads("waiting", ["snoozed"])})`;
-const SNOOZE_RETURNED_UNFILED = `(m.source_id, m.thread_key) in (${snoozeThreads("due", ["snoozed", "inbox", "other", "archive", "trash", "junk"])})`;
+const SNOOZE_RETURNED_UNFILED = `(m.source_id, m.thread_key) in (${snoozeThreads("due", ["snoozed", "inbox", "archive", "trash", "junk"])})`;
 const DUE_FOLLOW_UP = `select rm.source_id, rm.thread_key from crm.mail_reminders rm where rm.user_id = $1 and rm.state = 'due' and rm.kind = 'follow_up'`;
 
 const WINDOW_DAYS = [7, 56, 448];

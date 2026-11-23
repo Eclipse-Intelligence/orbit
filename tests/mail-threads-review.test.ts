@@ -238,12 +238,34 @@ describe("mail threads and mailbox actions", () => {
       assert.equal((await mailNav(owner)).snoozed, listed.length, "the count is what the list shows");
     });
 
+    it("brings a Sent-only reminder back, with its alert, when the reply was filed into a custom folder by a rule", async () => {
+      await admin().query(
+        `insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role) values ($1, $2, $3, 'f-clients', 'Clients', 'other')
+         on conflict (source_id, provider_folder_id) do nothing`,
+        [owner.workspaceId, owner.userId, sourceId],
+      );
+      await seed({ thread: "snz-ruled", folder: "sent", at: new Date(Date.now() - 2 * DAY), provider: "snz-ruled-1", from: "mark@eclipse.test", read: true });
+      await applyMailAction(owner, { thread: thread("snz-ruled"), action: "snooze", until: until() }, outlook().fetchImpl);
+      await seed({ thread: "snz-ruled", folder: "other", at: new Date(Date.now() - 1000), provider: "snz-ruled-2" });
+      const listed = (await listThreads(owner, { view: { role: "snoozed" }, limit: 100 })).threads.map((item) => item.key);
+      assert.ok(listed.includes(thread("snz-ruled")));
+      assert.equal((await mailNav(owner)).snoozed, listed.length, "the count is what the list shows");
+
+      await admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where thread_key = 'snz-ruled' and state = 'waiting'");
+      const report = await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: null });
+      assert.equal(report.returned, 1);
+      const alerts = await admin().query("select 1 from crm.mail_reminders r join crm.push_log l on l.key = 'snooze:' || r.id where r.thread_key = 'snz-ruled'");
+      assert.equal(alerts.rowCount, 1, "it alerts");
+      const inbox = (await listThreads(owner, { view: { role: "inbox" }, limit: 100 })).threads;
+      assert.equal(inbox.find((item) => item.key === thread("snz-ruled"))?.reminder?.kind, "snooze");
+    });
+
     it("never lifts a returned snooze back into the Inbox once the thread has been filed or moved on", async () => {
       const inboxKeys = async () => (await listThreads(owner, { view: { role: "inbox" }, limit: 100 })).threads.map((item) => item.key);
       const reminderKeys = async () => (await listThreads(owner, { view: { role: "snoozed" }, limit: 100 })).threads.map((item) => item.key);
       const makeDue = (key: string) => admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where thread_key = $1 and kind = 'snooze' and state = 'waiting'", [key]);
       await admin().query(
-        "insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role) values ($1, $2, $3, 'f-clients', 'Clients', 'other')",
+        "insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role) values ($1, $2, $3, 'f-clients', 'Clients', 'other') on conflict (source_id, provider_folder_id) do nothing",
         [owner.workspaceId, owner.userId, sourceId],
       );
       const returned = async (key: string, provider: string) => {

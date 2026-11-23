@@ -77,7 +77,7 @@ async function returnSnooze(actor: UserActor, reminder: ReminderRow, fetchImpl: 
            )
            and not exists (
              select 1 from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-             where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role in ('snoozed', 'inbox', 'other', 'archive', 'trash', 'junk')
+             where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and f.role in ('snoozed', 'inbox', 'archive', 'trash', 'junk')
            )
          ) as lifts`,
       [actor.userId, reminder.source_id, reminder.thread_key, reminder.without_folder],
