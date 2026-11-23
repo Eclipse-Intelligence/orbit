@@ -68,15 +68,19 @@ const SCOPED_COLUMNS = `m.id, m.source_id, m.thread_key as tk, m.subject, m.snip
   m.is_read, m.is_flagged, m.has_attachments, (m.is_draft and f.role = 'drafts') as is_draft, coalesce(m.received_at, m.sent_at, m.created_at) as at,
   m.tracking_id, m.focused`;
 
-const REMINDED_WITHOUT_FOLDER = `(m.source_id, m.thread_key) in (
-    select rm.source_id, rm.thread_key from crm.mail_reminders rm
-    where rm.user_id = m.user_id and rm.state = 'waiting' and rm.kind = 'snooze'
-  )
-  and not exists (
-    select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
-    where o.user_id = m.user_id and o.source_id = m.source_id and o.thread_key = m.thread_key
-      and ofo.role in ('snoozed', 'inbox', 'other', 'archive')
-  )`;
+function snoozeThreads(state: "waiting" | "due", absentRoles: string[]) {
+  return `select rm.source_id, rm.thread_key from crm.mail_reminders rm
+    where rm.user_id = $1 and rm.state = '${state}' and rm.kind = 'snooze'
+      and not exists (
+        select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+        where o.user_id = $1 and o.source_id = rm.source_id and o.thread_key = rm.thread_key
+          and ofo.role in (${absentRoles.map((role) => `'${role}'`).join(", ")})
+      )`;
+}
+
+const REMINDED_WITHOUT_FOLDER = `(m.source_id, m.thread_key) in (${snoozeThreads("waiting", ["snoozed"])})`;
+const SNOOZE_RETURNED_UNFILED = `(m.source_id, m.thread_key) in (${snoozeThreads("due", ["snoozed", "inbox", "other", "archive"])})`;
+const DUE_FOLLOW_UP = `select rm.source_id, rm.thread_key from crm.mail_reminders rm where rm.user_id = $1 and rm.state = 'due' and rm.kind = 'follow_up'`;
 
 const WINDOW_DAYS = [7, 56, 448];
 const CURSOR_SLACK_MS = 1000;
@@ -144,15 +148,12 @@ export async function listThreads(
            where ${where.join(" and ")} and f.role = 'inbox'
            union all
            select ${SCOPED_COLUMNS} from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-           where ${where.join(" and ")} and f.role not in ('inbox', 'trash', 'junk', 'outbox')
-             and (m.source_id, m.thread_key) in (
-               select rm.source_id, rm.thread_key from crm.mail_reminders rm
-               where rm.user_id = $1 and rm.state = 'due' and rm.kind in ('follow_up', 'snooze')
-             )
-             and (f.role <> 'drafts' or (m.source_id, m.thread_key) in (
-               select rm.source_id, rm.thread_key from crm.mail_reminders rm
-               where rm.user_id = $1 and rm.state = 'due' and rm.kind = 'snooze'
-             ))`
+           where ${where.join(" and ")} and f.role not in ('inbox', 'trash', 'junk', 'outbox', 'drafts')
+             and (m.source_id, m.thread_key) in (${DUE_FOLLOW_UP})
+           union all
+           select ${SCOPED_COLUMNS} from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+           where ${where.join(" and ")} and f.role in ('sent', 'drafts') and ${SNOOZE_RETURNED_UNFILED}
+             and (f.role = 'drafts' or (m.source_id, m.thread_key) not in (${DUE_FOLLOW_UP}))`
         : windowed
           ? `${base} and (m.source_id, m.thread_key) in (select source_id, thread_key from candidates)`
           : base;
@@ -641,7 +642,15 @@ async function readNav(actor: UserActor): Promise<MailNav> {
     );
     const counts = await db.query<{ snoozed: number; scheduled: number }>(
       `select
-         (select count(distinct (source_id, thread_key))::int from crm.mail_reminders where user_id = $1 and kind = 'snooze' and state = 'waiting') as snoozed,
+         (select count(*)::int from (
+           select rm.source_id, rm.thread_key from crm.mail_reminders rm
+           where rm.user_id = $1 and rm.kind = 'snooze' and rm.state = 'waiting'
+             and exists (
+               select 1 from crm.mail_messages o join crm.mail_folders ofo on ofo.id = o.folder_id
+               where o.user_id = $1 and o.source_id = rm.source_id and o.thread_key = rm.thread_key and ofo.role in ('snoozed', 'sent', 'drafts')
+             )
+           group by rm.source_id, rm.thread_key
+         ) waiting) as snoozed,
          (select count(*)::int from crm.mail_drafts where user_id = $1 and (send_at is not null or send_error is not null)) as scheduled`,
       [actor.userId],
     );

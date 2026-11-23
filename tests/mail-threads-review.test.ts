@@ -4,7 +4,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
-import { applyMailAction } from "@/lib/mail/actions";
+import { applyMailAction, moveMessages } from "@/lib/mail/actions";
 import { processDueMail } from "@/lib/mail/due";
 import { queueMailAction, runPendingMailActions } from "@/lib/mail/pending";
 import { threadText } from "@/lib/mail/ai";
@@ -229,6 +229,58 @@ describe("mail threads and mailbox actions", () => {
       assert.ok(!(await keys({ role: "snoozed" })).some((name) => names.includes(name)), "gone from Reminders once it is back");
     });
 
+    it("keeps a Sent-only reminder in Reminders, and the count, after a reply lands in the Inbox", async () => {
+      await seed({ thread: "snz-reply", folder: "sent", at: new Date(Date.now() - DAY), provider: "snz-reply-1", from: "mark@eclipse.test", read: true });
+      await applyMailAction(owner, { thread: thread("snz-reply"), action: "snooze", until: until() }, outlook().fetchImpl);
+      await seed({ thread: "snz-reply", folder: "inbox", at: new Date(Date.now() - 1000), provider: "snz-reply-2" });
+      const listed = (await listThreads(owner, { view: { role: "snoozed" }, limit: 100 })).threads.map((item) => item.key);
+      assert.ok(listed.includes(thread("snz-reply")));
+      assert.equal((await mailNav(owner)).snoozed, listed.length, "the count is what the list shows");
+    });
+
+    it("never lifts a returned snooze back into the Inbox once the thread has been filed or moved on", async () => {
+      const inboxKeys = async () => (await listThreads(owner, { view: { role: "inbox" }, limit: 100 })).threads.map((item) => item.key);
+      const reminderKeys = async () => (await listThreads(owner, { view: { role: "snoozed" }, limit: 100 })).threads.map((item) => item.key);
+      const makeDue = (key: string) => admin().query("update crm.mail_reminders set due_at = now() - interval '1 minute' where thread_key = $1 and kind = 'snooze' and state = 'waiting'", [key]);
+      await admin().query(
+        "insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role) values ($1, $2, $3, 'f-clients', 'Clients', 'other')",
+        [owner.workspaceId, owner.userId, sourceId],
+      );
+      const returned = async (key: string, provider: string) => {
+        const id = await seed({ thread: key, folder: "inbox", at: new Date(Date.now() - DAY), provider });
+        await applyMailAction(owner, { thread: thread(key), action: "snooze", view: { role: "inbox" }, until: until() }, outlook().fetchImpl);
+        await makeDue(key);
+        await processDueMail(owner, { fetchImpl: outlook().fetchImpl, origin: null });
+        assert.ok((await inboxKeys()).includes(thread(key)), `${key} is back in the Inbox`);
+        assert.deepEqual((await reminders(key)).map((row) => row.state), ["due"]);
+        return id;
+      };
+
+      const filedId = await returned("ret-filed", "ret-filed-1");
+      const moved = await moveMessages(owner, sourceId, [{ id: filedId, providerMessageId: "ret-filed-1", threadKey: "ret-filed" }], { providerFolderId: "f-clients", role: "other" }, outlook().fetchImpl);
+      assert.equal(moved.error, null);
+      assert.equal(await roleOf("ret-filed-1"), "other");
+      assert.ok(!(await inboxKeys()).includes(thread("ret-filed")), "filed into a folder, it stays out of the Inbox");
+
+      await returned("ret-synced", "ret-synced-1");
+      await admin().query("update crm.mail_messages set folder_id = $1 where provider_message_id = 'ret-synced-1'", [await folderId("archive")]);
+      assert.ok(!(await inboxKeys()).includes(thread("ret-synced")), "archived outside Orbit, it stays out of the Inbox");
+
+      await seed({ thread: "ret-old", folder: "archive", at: new Date(Date.now() - 30 * DAY), provider: "ret-old-1" });
+      await admin().query(
+        `insert into crm.mail_reminders (workspace_id, user_id, source_id, thread_key, kind, due_at, subject, state, surfaced_at)
+         values ($1, $2, $3, 'ret-old', 'snooze', now() - interval '20 days', 'Old', 'due', now() - interval '20 days')`,
+        [owner.workspaceId, owner.userId, sourceId],
+      );
+      assert.ok(!(await inboxKeys()).includes(thread("ret-old")), "an old due snooze on a moved thread stays out of the Inbox");
+
+      await seed({ thread: "ret-failed", folder: "inbox", at: new Date(Date.now() - DAY), provider: "ret-failed-1" });
+      await applyMailAction(owner, { thread: thread("ret-failed"), action: "snooze", view: { role: "inbox" }, until: until() }, outlook().fetchImpl);
+      await admin().query("update crm.mail_reminders set state = 'due', surfaced_at = now() where thread_key = 'ret-failed'");
+      assert.ok(!(await inboxKeys()).includes(thread("ret-failed")), "a snooze that could not return is not in both lists");
+      assert.ok((await reminderKeys()).includes(thread("ret-failed")));
+    });
+
     it("says so, and sets no reminder, when the thread is only in Trash", async () => {
       await seed({ thread: "snz-trash", folder: "trash", at: new Date(Date.now() - DAY), provider: "snz-trash-1" });
       const box = outlook();
@@ -351,8 +403,8 @@ describe("mail threads and mailbox actions", () => {
       const whole = await listThreads(owner, { view: { role: "archive" }, limit: 100 });
       assert.equal(whole.next, null);
       assert.ok(whole.threads.length >= 26);
-      assert.equal(whole.threads[0].key, thread("page-bumped"), "a surfaced reminder lifts an old thread to the top");
       const keys = whole.threads.map((item) => item.key);
+      assert.ok(keys.indexOf(thread("page-bumped")) < keys.indexOf(thread("page-0")), "a surfaced reminder lifts an old thread above newer ones");
       assert.ok(keys.indexOf(thread("page-straddle")) < keys.indexOf(thread("page-8")), "a thread sorts by its newest message, not its oldest");
       assert.equal(whole.threads.find((item) => item.key === thread("page-straddle"))!.count, 2);
       assert.equal(whole.threads.find((item) => item.key === thread("page-0"))!.count, 2, "counts cover the whole thread in the folder");
