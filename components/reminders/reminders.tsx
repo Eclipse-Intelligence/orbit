@@ -281,8 +281,12 @@ export default function Reminders({ viewerId }: { viewerId: string }) {
         setHeld((current) => (current[reminder.id] ? { ...current, [reminder.id]: { ...current[reminder.id], doneId } } : current));
         setReminders((list) => replaced(list, result.reminder));
         touch("card");
-        window.setTimeout(() => {
-          setHeld((current) => (current[reminder.id]?.doneId === doneId ? { ...current, [reminder.id]: { ...current[reminder.id], settled: true } } : current));
+        window.setTimeout(async () => {
+          if (doneId !== reminder.id) await load();
+          setHeld((current) => {
+            const entry = current[reminder.id];
+            return entry?.snapshot === reminder && entry.doneId === doneId ? { ...current, [reminder.id]: { ...entry, settled: true } } : current;
+          });
         }, SETTLE_MS);
         return doneId;
       });
