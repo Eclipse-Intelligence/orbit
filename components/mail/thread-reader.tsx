@@ -618,7 +618,7 @@ export default function ThreadReader({
   const [reminderError, setReminderError] = useState<string | null>(null);
   const [invite, setInvite] = useState<{ prefill: InvitePrefill; setup: InviteSetup; at: number } | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
-  const { showToast } = useComposer();
+  const { showToast, cardDraftIds, focusDraft } = useComposer();
   const pendingDeletes = useRef(new Map<string, number>());
   const deleteFailed = useRef<(id: string, problem: string) => void>(() => undefined);
   const replyHint = useShortcutHint("mail-reply");
@@ -628,6 +628,7 @@ export default function ThreadReader({
   const target = detail?.messages.filter((message) => !(message.isDraft && message.folderRole === "drafts")).at(-1) ?? null;
   const sourceId = detail?.key.split("|")[0] ?? "";
   const newDraft = detail?.drafts.find((draft) => draft.mode === "new") ?? null;
+  const cardHas = (id: string | null | undefined) => Boolean(id) && cardDraftIds.includes(id!);
   const restored = !dismissed ? (detail?.drafts.find((draft) => draft.mode !== "new") ?? null) : null;
   const active: ComposerStart | null =
     composer ??
@@ -642,6 +643,11 @@ export default function ThreadReader({
           draft: restored,
         }
       : null);
+
+  const inCard = [active?.draft?.id, !target ? newDraft?.id : null].find((id) => cardHas(id)) ?? null;
+  useEffect(() => {
+    if (inCard) focusDraft(inCard);
+  }, [inCard, focusDraft]);
 
   const outsideDraft =
     !dismissed && !active && target ? (detail?.messages.filter((message) => message.isDraft && message.folderRole === "drafts" && !removedDrafts.has(message.id)).at(-1) ?? null) : null;
@@ -1152,7 +1158,7 @@ export default function ThreadReader({
                   </span>
                 </article>
               )}
-              {active && target ? (
+              {active && target && !cardHas(active.draft?.id) ? (
                 <div data-reader-composer="">
                 <MailComposer
                   key={active.draft?.id ?? active.mode}
@@ -1178,7 +1184,7 @@ export default function ThreadReader({
                   threadPeople={share.state?.people ?? []}
                 />
                 </div>
-              ) : !target && newDraft ? (
+              ) : !target && newDraft && !cardHas(newDraft.id) ? (
                 <div data-reader-composer="">
                   <MailComposer
                     key={newDraft.id}

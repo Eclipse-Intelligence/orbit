@@ -16,10 +16,12 @@ import BodyEditor, { type BodyEditorHandle } from "@/components/mail/body-editor
 import { useComposer } from "@/components/mail/compose-dock";
 import { FollowUpBlock, NoReplyMenu, type NoReplyChoice, type NoReplyThen } from "@/components/mail/follow-up-composer";
 import { holdDraft, releaseDraft } from "@/components/mail/held-drafts";
-import { ComposerReconnect, flagReconnect, reconnectOf } from "@/components/mail/reconnect-notice";
+import { ComposerReconnect, flagReconnect } from "@/components/mail/reconnect-notice";
 import { fromFallback } from "@/lib/mail/mailboxes";
 import { draftQueued, holdQueuedDraft, newSendKey, unscheduleDraft, writeWithAi, type MailRequestError } from "@/components/mail/mail-cache";
 import RecipientField from "@/components/mail/recipient-field";
+import { SAVE_DELAY_MS, draftSignature, fitsKeepalive, hasUnsaved, saveDelay, type DraftFields } from "@/lib/mail/composer-state";
+import { recipientsError, type SettledRecipients } from "@/lib/mail/recipient-text";
 import { useSuppressionCaution } from "@/components/mail/suppression-caution";
 import { laterDetail, laterOptions } from "@/lib/mail/later";
 import { MODE_LABEL } from "@/lib/mail/format";
@@ -34,7 +36,6 @@ import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import ClockIcon from "@/public/assets/images/mail/clock.svg";
 import TrashIcon from "@/public/assets/images/mail/trash.svg";
 
-const SAVE_DELAY_MS = 1500;
 const LIVE_OFFLINE = "Couldn't reach Orbit. Try again.";
 const FILE_LINK_ERROR = "That's a link to a local file. Drag or paste the file itself.";
 
@@ -85,11 +86,12 @@ export type ComposerStart = {
 type SaveState = { kind: "idle" | "saving" | "saved" | "held" | "error"; message?: string };
 
 async function postJson<T>(url: string, body: unknown, keepalive = false): Promise<T> {
+  const text = JSON.stringify(body);
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    keepalive,
+    body: text,
+    keepalive: keepalive && fitsKeepalive(text),
   });
   const json = (await response.json().catch(() => ({}))) as T & { error?: string; reconnect?: unknown };
   if (!response.ok) throw Object.assign(new Error(json.error ?? "Couldn't save the draft. Try again."), { status: response.status, reconnect: json.reconnect ?? null, detail: json });
@@ -111,12 +113,14 @@ export default function MailComposer({
   onScheduled,
   onDiscard,
   onHeld,
+  onDraftId,
   passive = false,
   threadPeople = [],
 }: {
   passive?: boolean;
   threadPeople?: MailSharePerson[];
   onHeld?: (held: boolean) => void;
+  onDraftId?: (id: string | null) => void;
   start: ComposerStart;
   accounts: ComposeAccount[];
   variant: "inline" | "card";
@@ -172,10 +176,11 @@ export default function MailComposer({
   const [error, setError] = useState<string | null>(null);
   const attachments = useEmailAttachments(draft?.attachments);
   const fileKey = attachments.ids.join(",");
-  const savedFiles = useRef(fileKey);
   const draftId = useRef<string | null>(draft?.id || null);
   const chain = useRef<Promise<unknown>>(Promise.resolve());
-  const dirty = useRef(Boolean(start.heldKey || draft?.unsaved));
+  const saving = useRef(false);
+  const hiddenUnsaved = useRef(false);
+  const unsavedSince = useRef<number | null>(null);
   const discarded = useRef(false);
   const heldKey = useRef<string | null>(start.heldKey ?? null);
   const heldNow = useRef(false);
@@ -201,7 +206,7 @@ export default function MailComposer({
   const [live, setLive] = useState<LiveDraft | null>(() => (draft?.shareId ? makeLive(draft.shareId, draft.shareBase?.text.body ?? draft.body ?? "") : null));
   const liveRef = useRef(live);
   const [formats, setFormats] = useState({ bold: false, italic: false });
-  const payload = useRef({
+  const payload = useRef<DraftFields>({
     mode: start.mode,
     messageId: start.messageId,
     sourceId,
@@ -218,6 +223,22 @@ export default function MailComposer({
     followUpDays: noReply.followUpDays,
     followUpBody: noReply.followUpDays ? followUpBody : null,
   });
+  const savedAs = useRef<string | null>(start.heldKey || draft?.unsaved ? null : draftSignature(payload.current));
+  const unsaved = () => !discarded.current && hasUnsaved(payload.current, savedAs.current);
+  const markSaved = (fields: DraftFields = payload.current) => {
+    savedAs.current = draftSignature(fields);
+  };
+  const draftListener = useRef(onDraftId);
+  useEffect(() => {
+    draftListener.current = onDraftId;
+  });
+  const recipientFields = useRef(new Map<string, () => SettledRecipients>());
+  const registerRecipients = useCallback((label: string, flush: () => SettledRecipients) => {
+    recipientFields.current.set(label, flush);
+    return () => {
+      if (recipientFields.current.get(label) === flush) recipientFields.current.delete(label);
+    };
+  }, []);
   const account = fromAccount;
   const showSubject = start.mode === "new" || start.mode === "forward";
   const card = variant === "card";
@@ -255,7 +276,10 @@ export default function MailComposer({
 
   useEffect(() => {
     const retry = () => {
-      if (document.visibilityState === "visible" && heldNow.current) void saveRef.current();
+      if (document.visibilityState !== "visible") return;
+      const hidden = hiddenUnsaved.current;
+      hiddenUnsaved.current = false;
+      if (heldNow.current || (hidden && unsaved())) void saveRef.current();
     };
     window.addEventListener("focus", retry);
     document.addEventListener("visibilitychange", retry);
@@ -264,12 +288,6 @@ export default function MailComposer({
       document.removeEventListener("visibilitychange", retry);
     };
   }, []);
-
-  useEffect(() => {
-    if (savedFiles.current === fileKey) return;
-    savedFiles.current = fileKey;
-    dirty.current = true;
-  }, [fileKey]);
 
   const subjectListener = useRef(onSubject);
   useEffect(() => {
@@ -287,32 +305,40 @@ export default function MailComposer({
     if (!opening.current.recipientsFirst) editor.current?.focus();
   }, []);
 
-  function saveNow() {
+  function adoptDraftId(id: string | null) {
+    draftId.current = id;
+    draftListener.current?.(id);
+  }
+
+  function saveNow(force = false) {
     const run = chain.current.then(async () => {
-      if (!dirty.current || discarded.current) return;
+      if (discarded.current || !(force || unsaved())) return;
       const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
-      dirty.current = false;
+      unsavedSince.current = null;
+      saving.current = true;
       setSave({ kind: "saving" });
       try {
         await mergeSharedText();
         await liveRef.current?.flush();
         const saved = await postJson<MailDraft>("/api/mail/drafts", snapshot);
-        draftId.current = saved.id;
+        adoptDraftId(saved.id);
         savedBody.current = saved.body;
+        markSaved(snapshot);
         releaseDraft(heldKey.current);
         heldKey.current = null;
         lastSaveError.current = null;
         setSave({ kind: "saved" });
       } catch (problem) {
-        dirty.current = true;
         const recreated = (problem as { detail?: { draftId?: unknown } }).detail?.draftId;
-        if (typeof recreated === "string") draftId.current = recreated;
+        if (typeof recreated === "string") adoptDraftId(recreated);
         lastSaveError.current = problem instanceof Error ? problem.message : "Couldn't save the draft. Try again.";
         if (flagReconnect(problem, { sourceId: snapshot.sourceId, email: account?.email ?? null })) {
           keepHeld();
           setSave({ kind: "held" });
         } else setSave({ kind: "error", message: problem instanceof Error ? problem.message : "Couldn't save the draft." });
+      } finally {
+        saving.current = false;
       }
     });
     chain.current = run;
@@ -392,7 +418,9 @@ export default function MailComposer({
     const next = liveRef.current ? { ...merged, body: local.body } : merged;
     shared.current.base = { text: freshText, version: fresh.version };
     if (sameText(next, local)) return;
+    const clean = !unsaved();
     payload.current = { ...payload.current, ...next };
+    if (clean) markSaved();
     setSubject(next.subject);
     setBody(next.body);
   }, []);
@@ -471,8 +499,38 @@ export default function MailComposer({
     flushRef.current = flushSharedText;
   });
 
+  function flushDraft() {
+    if (discarded.current || shared.current.id || !unsaved()) return;
+    const snapshot = { ...payload.current, id: draftId.current, sendKey: sendKey.current };
+    if (!snapshot.id && !snapshot.body.trim() && !snapshot.subject.trim()) return;
+    keepHeld();
+    hiddenUnsaved.current = true;
+    if (saving.current) return;
+    saving.current = true;
+    const request = postJson<MailDraft>("/api/mail/drafts", snapshot, true)
+      .then((saved) => {
+        adoptDraftId(saved.id);
+        markSaved(snapshot);
+        releaseDraft(heldKey.current);
+        heldKey.current = null;
+      })
+      .catch(() => null)
+      .finally(() => {
+        saving.current = false;
+      });
+    chain.current = request;
+  }
+
+  const flushDraftRef = useRef(flushDraft);
   useEffect(() => {
-    const flush = () => flushRef.current();
+    flushDraftRef.current = flushDraft;
+  });
+
+  useEffect(() => {
+    const flush = () => {
+      flushRef.current();
+      flushDraftRef.current();
+    };
     const hidden = () => {
       if (document.visibilityState === "hidden") flush();
     };
@@ -481,35 +539,41 @@ export default function MailComposer({
     return () => {
       window.removeEventListener("pagehide", flush);
       document.removeEventListener("visibilitychange", hidden);
-      void chain.current.catch(() => null).then(flush);
+      void chain.current.catch(() => null).then(() => flushRef.current());
     };
   }, []);
 
   async function ensureSaved(): Promise<{ id: string } | { error: string }> {
     if (!draftId.current && !payload.current.body.trim() && !payload.current.subject.trim()) return { error: "Write something first, then share it." };
-    dirty.current = true;
-    await saveNow();
+    await saveNow(true);
     if (draftId.current) return { id: draftId.current };
     return { error: lastSaveError.current ?? "Couldn't save the draft. Try again." };
   }
 
   useEffect(() => {
-    if (!dirty.current) return;
-    const timer = window.setTimeout(() => void saveRef.current(), SAVE_DELAY_MS);
+    if (!unsaved()) {
+      unsavedSince.current = null;
+      return;
+    }
+    const now = Date.now();
+    unsavedSince.current ??= now;
+    const timer = window.setTimeout(() => void saveRef.current(), saveDelay(now, unsavedSince.current, SAVE_DELAY_MS));
     return () => window.clearTimeout(timer);
   }, [fromId, to, cc, bcc, subject, body, withSignature, fileKey, noReply, followUpBody]);
 
   useEffect(
     () => () => {
-      if (!dirty.current || discarded.current || shared.current.id) return;
+      if (!unsaved() || shared.current.id) return;
       const snapshot = { ...payload.current };
       if (!draftId.current && !snapshot.body.trim() && !snapshot.subject.trim()) return;
       void chain.current
         .catch(() => null)
-        .then(() => postJson("/api/mail/drafts", { ...snapshot, id: draftId.current, sendKey: sendKey.current }, true))
-        .then(() => releaseDraft(heldKey.current))
-        .catch((problem: unknown) => {
-          if (reconnectOf(problem)) keepRef.current();
+        .then(() => {
+          if (discarded.current || !hasUnsaved(snapshot, savedAs.current)) return;
+          return postJson<MailDraft>("/api/mail/drafts", { ...snapshot, id: draftId.current, sendKey: sendKey.current }, true).then(() => releaseDraft(heldKey.current));
+        })
+        .catch(() => {
+          if (!discarded.current) keepRef.current();
         });
     },
     [],
@@ -555,28 +619,39 @@ export default function MailComposer({
     setError(FILE_LINK_ERROR);
   }
 
-  function change<T>(setter: (value: T) => void) {
-    return (value: T) => {
-      dirty.current = true;
-      setter(value);
-    };
+  function settleRecipients() {
+    const settled: Record<string, MailAddress[]> = { To: to, Cc: cc, Bcc: bcc };
+    let failed: string | null = null;
+    for (const [label, flush] of recipientFields.current) {
+      const result = flush();
+      if (result.ok) settled[label] = result.value;
+      else failed ??= label;
+    }
+    if (failed) {
+      setError(recipientsError(failed));
+      return null;
+    }
+    payload.current = { ...payload.current, to: settled.To, cc: settled.Cc, bcc: settled.Bcc };
+    return settled;
   }
 
   function ready() {
-    if (attachments.blocked) return false;
-    if (to.length + cc.length + bcc.length === 0) {
+    if (attachments.blocked) return null;
+    const recipients = settleRecipients();
+    if (!recipients) return null;
+    if (recipients.To.length + recipients.Cc.length + recipients.Bcc.length === 0) {
       setError("Add a recipient.");
-      return false;
+      return null;
     }
     if (start.mode === "new" && !subject.trim()) {
       setError("Enter a subject.");
-      return false;
+      return null;
     }
     if (!body.trim() && start.mode !== "forward") {
       setError("Add a message.");
-      return false;
+      return null;
     }
-    return true;
+    return recipients;
   }
 
   function handOver(force = false, sending = false): Promise<SendPayload> {
@@ -585,7 +660,7 @@ export default function MailComposer({
     const shownLive = liveDraft ? (liveDraft.text() ?? payload.current.body) : null;
     const shownSubject = payload.current.subject;
     const snapshot = { ...payload.current, ...(shownLive !== null ? { body: shownLive } : {}), attachments: attachments.ids, files: attachments.files };
-    dirty.current = false;
+    markSaved();
     releaseDraft(heldKey.current);
     heldKey.current = null;
     const pending = chain.current.catch(() => null);
@@ -648,9 +723,11 @@ export default function MailComposer({
 
   function send(event?: FormEvent, force = false) {
     event?.preventDefault();
-    if (queued.current || !ready()) return;
+    if (queued.current) return;
+    const recipients = ready();
+    if (!recipients) return;
     if (draftQueued(draftId.current, start.replaces)) {
-      dirty.current = false;
+      markSaved();
       showToast({ message: "This email is already sending. Undo it to make changes." });
       (onAlreadySending ?? onClose)();
       return;
@@ -680,7 +757,7 @@ export default function MailComposer({
         tracked?.undone();
       },
     });
-    onSent(body, [...to, ...cc]);
+    onSent(body, [...recipients.To, ...recipients.Cc]);
   }
 
   function sendLater() {
@@ -716,7 +793,6 @@ export default function MailComposer({
 
   async function discard() {
     discarded.current = true;
-    dirty.current = false;
     releaseDraft(heldKey.current);
     heldKey.current = null;
     await chain.current.catch(() => null);
@@ -731,11 +807,16 @@ export default function MailComposer({
     if (aiBusy) return;
     setAiBusy(true);
     setAiError(null);
+    const requested = payload.current.body;
     try {
       const result = await writeWithAi({ mode: start.mode, messageId: start.messageId, to: [...to, ...cc], subject, instruction: aiText, current: body });
+      if (payload.current.body !== requested) {
+        setAiError("The email changed while it was being written. Try again.");
+        return;
+      }
       setAiUndo(body);
       if (liveRef.current) editor.current?.setText(result.body);
-      else change(setBody)(result.body);
+      else setBody(result.body);
       setAiOpen(false);
       setAiText("");
       window.setTimeout(() => editor.current?.focus(), 0);
@@ -800,7 +881,7 @@ export default function MailComposer({
             <select
               id={`${id}-from`}
               value={fromAccount?.id ?? fromId}
-              onChange={(event) => change(setFromId)(event.target.value)}
+              onChange={(event) => setFromId(event.target.value)}
               className="text-foreground h-7 min-w-0 cursor-pointer appearance-none truncate rounded-full bg-transparent pr-6 pl-0 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
             >
               {fromChoices.map((item) => (
@@ -815,8 +896,9 @@ export default function MailComposer({
       )}
       <RecipientField
         label="To"
+        register={registerRecipients}
         value={to}
-        onChange={change(setTo)}
+        onChange={setTo}
         autoFocus={!draft && (start.mode === "forward" || (start.mode === "new" && start.to.length === 0))}
         trailing={
           !showCopies && (
@@ -828,8 +910,8 @@ export default function MailComposer({
       />
       {showCopies && (
         <>
-          <RecipientField label="Cc" value={cc} onChange={change(setCc)} />
-          <RecipientField label="Bcc" value={bcc} onChange={change(setBcc)} />
+          <RecipientField label="Cc" register={registerRecipients} value={cc} onChange={setCc} />
+          <RecipientField label="Bcc" register={registerRecipients} value={bcc} onChange={setBcc} />
         </>
       )}
       {showSubject && (
@@ -840,7 +922,7 @@ export default function MailComposer({
           <input
             id={`${id}-subject`}
             value={subject}
-            onChange={(event) => change(setSubject)(event.target.value)}
+            onChange={(event) => setSubject(event.target.value)}
             placeholder="Subject"
             className={cn(
               "text-foreground placeholder:text-subtle h-8 min-w-0 flex-1 bg-transparent outline-none",
@@ -897,7 +979,7 @@ export default function MailComposer({
             size="none"
             onClick={() => {
               if (liveRef.current) editor.current?.setText(aiUndo);
-              else change(setBody)(aiUndo);
+              else setBody(aiUndo);
               setAiUndo(null);
             }}
             className="font-normal"
@@ -909,7 +991,13 @@ export default function MailComposer({
       <BodyEditor
         ref={editor}
         value={body}
-        onChange={(value, remote) => (remote ? setBody(value) : change(setBody)(value))}
+        onChange={(value, remote) => {
+          if (!remote) return setBody(value);
+          const clean = !unsaved();
+          payload.current = { ...payload.current, body: value };
+          if (clean) markSaved();
+          setBody(value);
+        }}
         onFiles={editorFiles}
         onFileLink={fileLinkDropped}
         onFormats={(next) => setFormats((current) => (current.bold === next.bold && current.italic === next.italic ? current : next))}
@@ -923,7 +1011,7 @@ export default function MailComposer({
           <p className={cn("caption-style min-w-0 flex-1 whitespace-pre-wrap", withSignature ? "text-subtle" : "text-faint line-through")}>
             {account.signature}
           </p>
-          <Button variant="ghost" size="sm" onClick={() => change(setWithSignature)(!withSignature)} className="-my-1 font-normal">
+          <Button variant="ghost" size="sm" onClick={() => setWithSignature(!withSignature)} className="-my-1 font-normal">
             {withSignature ? "Remove signature" : "Add signature"}
           </Button>
         </div>
@@ -933,9 +1021,8 @@ export default function MailComposer({
         <FollowUpBlock
           days={noReply.followUpDays}
           body={followUpBody}
-          onBody={change(setFollowUpBody)}
+          onBody={setFollowUpBody}
           onRemove={() => {
-            dirty.current = true;
             setNoReply({ remindHours: null, followUpDays: null });
             setFollowUpBody("");
           }}
@@ -1001,7 +1088,6 @@ export default function MailComposer({
           choice={noReply}
           then={noReplyThen}
           onChange={(choice, then) => {
-            dirty.current = true;
             setNoReply(choice);
             setNoReplyThen(then);
           }}
