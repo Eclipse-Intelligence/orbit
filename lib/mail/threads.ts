@@ -152,7 +152,7 @@ export async function listThreads(
              and (m.source_id, m.thread_key) in (${DUE_FOLLOW_UP})
            union all
            select ${SCOPED_COLUMNS} from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-           where ${where.join(" and ")} and f.role in ('sent', 'drafts') and ${SNOOZE_RETURNED_UNFILED}
+           where ${where.join(" and ")} and f.role in ('sent', 'drafts', 'other') and ${SNOOZE_RETURNED_UNFILED}
              and (f.role = 'drafts' or (m.source_id, m.thread_key) not in (${DUE_FOLLOW_UP}))`
         : windowed
           ? `${base} and (m.source_id, m.thread_key) in (select source_id, thread_key from candidates)`

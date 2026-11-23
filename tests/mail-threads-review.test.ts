@@ -246,7 +246,7 @@ describe("mail threads and mailbox actions", () => {
       );
       await seed({ thread: "snz-ruled", folder: "sent", at: new Date(Date.now() - 2 * DAY), provider: "snz-ruled-1", from: "mark@eclipse.test", read: true });
       await applyMailAction(owner, { thread: thread("snz-ruled"), action: "snooze", until: until() }, outlook().fetchImpl);
-      await seed({ thread: "snz-ruled", folder: "other", at: new Date(Date.now() - 1000), provider: "snz-ruled-2" });
+      const replyId = await seed({ thread: "snz-ruled", folder: "other", at: new Date(Date.now() - 1000), provider: "snz-ruled-2" });
       const listed = (await listThreads(owner, { view: { role: "snoozed" }, limit: 100 })).threads.map((item) => item.key);
       assert.ok(listed.includes(thread("snz-ruled")));
       assert.equal((await mailNav(owner)).snoozed, listed.length, "the count is what the list shows");
@@ -257,7 +257,13 @@ describe("mail threads and mailbox actions", () => {
       const alerts = await admin().query("select 1 from crm.mail_reminders r join crm.push_log l on l.key = 'snooze:' || r.id where r.thread_key = 'snz-ruled'");
       assert.equal(alerts.rowCount, 1, "it alerts");
       const inbox = (await listThreads(owner, { view: { role: "inbox" }, limit: 100 })).threads;
-      assert.equal(inbox.find((item) => item.key === thread("snz-ruled"))?.reminder?.kind, "snooze");
+      const row = inbox.find((item) => item.key === thread("snz-ruled"));
+      assert.equal(row?.reminder?.kind, "snooze");
+      assert.equal(inbox.filter((item) => item.key === thread("snz-ruled")).length, 1, "one row");
+      assert.equal(row?.latestId, replyId, "the row shows the reply");
+      assert.equal(row?.from?.address, "jane@acme.test");
+      assert.equal(row?.count, 2);
+      assert.equal(row?.unread, true, "and it is unread");
     });
 
     it("never lifts a returned snooze back into the Inbox once the thread has been filed or moved on", async () => {
