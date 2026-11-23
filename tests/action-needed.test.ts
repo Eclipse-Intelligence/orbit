@@ -612,7 +612,7 @@ describe("Capture after review", () => {
          values ($1, $2, $3, $4, $5, case when $6 then now() end)`,
         [mark.workspaceId, mark.userId, sender, status, link, pitched],
       );
-    await subscription("editor@letters-review.test", "subscribed", "https://letters-review.test/u", false);
+    await subscription("editor@letters-review.test", "unsubscribed", "https://letters-review.test/u", false);
     await subscription("@blocked-review.test", "blocked", null, false);
     await subscription("growth@pitch-review.test", "subscribed", null, true);
     const letter = await message(mark, box, { from: "editor@letters-review.test", to: [mark.email], at: ago(9) });

@@ -33,6 +33,10 @@ const STEP_MS = 20_000;
 const BODY_MAX = 20_000;
 const REPLY_CHECK_MS = 10_000;
 const REPLY_CHECK_MAX_MS = 25_000;
+const REPLY_LANES = 3;
+const REPLY_MAX_FAILURES = 3;
+const REPLY_RETRY_MINUTES = 60;
+const PREPARE_CLAIM_SECONDS = 150;
 
 type PreparedKind = "reply" | "nudge";
 
@@ -216,7 +220,7 @@ function pitchEligible(alias: string, userParam: string, workspacesParam: string
     ))`;
 }
 
-async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[], limit: number, pitches: { check: boolean; only?: boolean } = { check: false }) {
+async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[], limit: number, pitches: { check: boolean; only?: boolean; exclude?: string[] } = { check: false }) {
   const crm = await crmValues(db, actor, workspaceIds);
   const result = await db.query<ReplyCandidate>(
     `select n.id, n.source_id, n.tk, n.provider_message_id, n.from_email, n.from_name, n.subject, n.body_text, n.snippet,
@@ -230,6 +234,12 @@ async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[],
          and coalesce(m.received_at, m.created_at) > now() - make_interval(hours => $3)
          and lower(coalesce(m.from_email, '')) <> all ${ownMailAddresses("$1", "$4")}
          and not exists (select 1 from crm.mail_prepared p where p.message_id = m.id and p.kind = case when $7 then 'pitch' else 'reply' end)
+         and m.id <> all($10::uuid[])
+         and ($7 or not exists (
+           select 1 from crm.mail_prepared rf
+           where rf.message_id = m.id and rf.kind = 'reply_failed'
+             and (rf.misses >= ${REPLY_MAX_FAILURES} or rf.updated_at > now() - make_interval(mins => ${REPLY_RETRY_MINUTES}))
+         ))
          and not ($7 and exists (
            select 1 from crm.mail_pitch_failures pf
            where pf.message_id = m.id and (pf.failures >= ${PITCH_MAX_FAILURES} or pf.last_failed_at > now() - make_interval(hours => ${PITCH_RETRY_HOURS}))
@@ -249,7 +259,7 @@ async function replyCandidates(db: Db, actor: UserActor, workspaceIds: string[],
      where ${replyableSplit("n", { workspaces: "$2", free: "$8", own: "$9" })} and (not $7 or ${pitchEligible("n", "$1", "$2")})
      order by n.at desc
      limit $5`,
-    [actor.userId, crm.workspaceIds, LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only), crm.free, crm.own],
+    [actor.userId, crm.workspaceIds, LOOKBACK_HOURS, actor.email, limit, pitches.check, Boolean(pitches.only), crm.free, crm.own, pitches.exclude ?? []],
   );
   return result.rows;
 }
@@ -298,8 +308,8 @@ async function handlePitch(actor: UserActor, candidate: ReplyCandidate, mode: Co
   return true;
 }
 
-async function checkPitches(actor: UserActor, workspaceIds: string[], mode: ColdPitchMode, deadline: number, fetchImpl?: typeof fetch) {
-  const candidates = await withActor(actor, (db) => replyCandidates(db, actor, workspaceIds, CHECKS_PER_RUN, { check: true, only: true }));
+async function checkPitches(actor: UserActor, workspaceIds: string[], mode: ColdPitchMode, deadline: number, exclude: string[], fetchImpl?: typeof fetch) {
+  const candidates = await withActor(actor, (db) => replyCandidates(db, actor, workspaceIds, CHECKS_PER_RUN, { check: true, only: true, exclude }));
   if (candidates.length === 0) return 0;
   const name = actor.fullName || actor.email;
   const listed = candidates
@@ -631,63 +641,120 @@ async function checkSentMail(actor: UserActor, days: number, deadline: number, f
   return { checked: candidates.length, reminders };
 }
 
+async function claimPrepare(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ started_at: string }>(
+      `insert into crm.mail_prepare_runs (user_id, started_at, running_until) values ($1, now(), now() + make_interval(secs => $2))
+       on conflict (user_id) do update set started_at = now(), running_until = excluded.running_until
+       where crm.mail_prepare_runs.running_until <= now()
+       returning started_at::text`,
+      [actor.userId, PREPARE_CLAIM_SECONDS],
+    );
+    return result.rows[0]?.started_at ?? null;
+  });
+}
+
+async function releasePrepare(actor: UserActor, startedAt: string) {
+  await withActor(actor, (db) =>
+    db.query("update crm.mail_prepare_runs set running_until = now() where user_id = $1 and started_at = $2::timestamptz", [actor.userId, startedAt]),
+  ).catch(() => undefined);
+}
+
+async function noteReplyFailure(actor: UserActor, candidate: ReplyCandidate, error: unknown) {
+  console.error("Preparing a reply failed", error instanceof Error ? error.message : error);
+  await withActor(actor, (db) =>
+    db.query(
+      `insert into crm.mail_prepared (workspace_id, user_id, source_id, thread_key, message_id, kind, state, misses)
+       values ($1, $2, $3, $4, $5, 'reply_failed', 'scheduled', 1)
+       on conflict (message_id, kind) do update set misses = least(crm.mail_prepared.misses + 1, 10), updated_at = now()`,
+      [actor.workspaceId, actor.userId, candidate.source_id, candidate.tk, candidate.id],
+    ),
+  ).catch((failure) => console.error("Couldn't record a reply failure", failure instanceof Error ? failure.message : failure));
+}
+
+async function prepareReplies(
+  actor: UserActor,
+  actors: UserActor[],
+  candidates: ReplyCandidate[],
+  settings: MailHelpSettings,
+  report: PrepareReport,
+  options: { deadline: number; fetchImpl?: typeof fetch },
+) {
+  let next = 0;
+  const lane = async () => {
+    while (next < candidates.length) {
+      if (options.deadline - Date.now() < STEP_MS) return;
+      const candidate = candidates[next];
+      next += 1;
+      try {
+        const target = await threadWorkspace(actor, candidate.source_id, candidate.tk, actors);
+        const outcome = await prepareReply(actor, target, candidate, options.deadline, settings.coldPitches, options.fetchImpl);
+        if (outcome === "prepared") report.prepared += 1;
+        if (outcome === "skipped") report.skipped += 1;
+        if (outcome === "pitch") report.pitches += 1;
+      } catch (error) {
+        await noteReplyFailure(actor, candidate, error);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(REPLY_LANES, candidates.length) }, lane));
+}
+
 export async function prepareMail(
   actor: UserActor,
   options: { deadline: number; fetchImpl?: typeof fetch },
 ): Promise<PrepareReport> {
   const report: PrepareReport = { prepared: 0, skipped: 0, reminders: 0, checked: 0, pitches: 0, deferrals: 0 };
   if (!process.env.LLM_API_KEY?.trim()) return report;
-  const checkDeadline = Math.min(options.deadline, Date.now() + Math.min(REPLY_CHECK_MAX_MS, Math.max(REPLY_CHECK_MS, (options.deadline - Date.now()) / 3)));
-  await checkCrmReplies(actor, { deadline: checkDeadline, fetchImpl: options.fetchImpl }).catch((error) =>
-    console.error("Checking CRM mail for replies failed", error instanceof Error ? error.message : error),
-  );
-  const settings = await mailHelpSettings(actor);
-  if (settings.autoRemindDays && options.deadline - Date.now() > STEP_MS) {
-    try {
-      const checked = await checkSentMail(actor, settings.autoRemindDays, options.deadline, options.fetchImpl);
-      report.checked += checked.checked;
-      report.reminders += checked.reminders;
-    } catch (error) {
-      console.error("Follow-up check failed", error instanceof Error ? error.message : error);
-    }
+  const claimed = await claimPrepare(actor).catch(() => null);
+  if (!claimed) return report;
+  try {
+    const checkDeadline = Math.min(options.deadline, Date.now() + Math.min(REPLY_CHECK_MAX_MS, Math.max(REPLY_CHECK_MS, (options.deadline - Date.now()) / 3)));
+    await checkCrmReplies(actor, { deadline: checkDeadline, fetchImpl: options.fetchImpl }).catch((error) =>
+      console.error("Checking CRM mail for replies failed", error instanceof Error ? error.message : error),
+    );
+    const settings = await mailHelpSettings(actor);
+    const pitchCheck = settings.coldPitches !== "off";
+    const actors = await workspaceActors(actor).catch(() => [actor]);
+    const workspaceIds = actors.map((item) => item.workspaceId);
+    const candidates = settings.prepareReplies
+      ? await withActor(actor, async (db) => {
+          const room = DAILY_LIMIT - (await usedToday(db, actor));
+          return room > 0 ? replyCandidates(db, actor, workspaceIds, Math.min(room, REPLIES_PER_RUN), { check: pitchCheck }) : [];
+        })
+      : [];
+    const handled = candidates.map((candidate) => candidate.id);
+    const sentMail = async () => {
+      if (!settings.autoRemindDays || options.deadline - Date.now() <= STEP_MS) return;
+      try {
+        const checked = await checkSentMail(actor, settings.autoRemindDays, options.deadline, options.fetchImpl);
+        report.checked += checked.checked;
+        report.reminders += checked.reminders;
+      } catch (error) {
+        console.error("Follow-up check failed", error instanceof Error ? error.message : error);
+      }
+    };
+    const pitches = async () => {
+      if (!pitchCheck || options.deadline - Date.now() <= STEP_MS) return;
+      try {
+        report.pitches += await checkPitches(actor, workspaceIds, settings.coldPitches, options.deadline, handled, options.fetchImpl);
+      } catch (error) {
+        console.error("Cold pitch check failed", error instanceof Error ? error.message : error);
+      }
+    };
+    const deferrals = async () => {
+      if (options.deadline - Date.now() <= STEP_MS) return;
+      try {
+        report.deferrals += await checkDeferrals(actor, { deadline: options.deadline, fetchImpl: options.fetchImpl, exclude: handled });
+      } catch (error) {
+        console.error("Deferral check failed", error instanceof Error ? error.message : error);
+      }
+    };
+    await Promise.all([prepareReplies(actor, actors, candidates, settings, report, options), sentMail(), pitches(), deferrals()]);
+    return report;
+  } finally {
+    await releasePrepare(actor, claimed);
   }
-  const pitchCheck = settings.coldPitches !== "off";
-  const actors = await workspaceActors(actor).catch(() => [actor]);
-  const workspaceIds = actors.map((item) => item.workspaceId);
-  const candidates = settings.prepareReplies
-    ? await withActor(actor, async (db) => {
-        const room = DAILY_LIMIT - (await usedToday(db, actor));
-        return room > 0 ? replyCandidates(db, actor, workspaceIds, Math.min(room, REPLIES_PER_RUN), { check: pitchCheck }) : [];
-      })
-    : [];
-  for (const candidate of candidates) {
-    if (options.deadline - Date.now() < STEP_MS) break;
-    try {
-      const target = await threadWorkspace(actor, candidate.source_id, candidate.tk, actors);
-      const outcome = await prepareReply(actor, target, candidate, options.deadline, settings.coldPitches, options.fetchImpl);
-      if (outcome === "prepared") report.prepared += 1;
-      if (outcome === "skipped") report.skipped += 1;
-      if (outcome === "pitch") report.pitches += 1;
-    } catch (error) {
-      console.error("Preparing a reply failed", error instanceof Error ? error.message : error);
-      break;
-    }
-  }
-  if (pitchCheck && options.deadline - Date.now() > STEP_MS) {
-    try {
-      report.pitches += await checkPitches(actor, workspaceIds, settings.coldPitches, options.deadline, options.fetchImpl);
-    } catch (error) {
-      console.error("Cold pitch check failed", error instanceof Error ? error.message : error);
-    }
-  }
-  if (options.deadline - Date.now() > STEP_MS) {
-    try {
-      report.deferrals += await checkDeferrals(actor, { deadline: options.deadline, fetchImpl: options.fetchImpl });
-    } catch (error) {
-      console.error("Deferral check failed", error instanceof Error ? error.message : error);
-    }
-  }
-  return report;
 }
 
 type PreparedRow = { id: string; kind: PreparedKind; message_id: string; body: string; template: string | null; slots: (Date | string)[] | null };

@@ -1,6 +1,11 @@
 import { strFromU8, unzipSync } from "fflate";
 
 const TEXT_MAX = 30_000;
+const PDF_TIMEOUT_MS = 20_000;
+const FILE_MAX_BYTES = 20_000_000;
+const UNZIPPED_MAX_BYTES = 40_000_000;
+const ZIP_FILES_MAX = 2_000;
+const SLACK = 2;
 
 const OFFICE_TYPES: Record<string, "docx" | "xlsx" | "pptx"> = {
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -78,28 +83,42 @@ function numbered(prefix: string, files: Record<string, Uint8Array>) {
     .sort((a, b) => a.number - b.number);
 }
 
-function pptxText(files: Record<string, Uint8Array>) {
-  return numbered("ppt/slides/slide", files)
-    .map(({ path, number }) => {
-      const xml = strFromU8(files[path]);
-      const runs = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>|<\/a:p>/g)].map((match) => (match[1] === undefined ? "\n" : decodeEntities(match[1])));
-      return `Slide ${number}:\n${runs.join("")}`;
-    })
-    .join("\n\n");
+function untilEnough(parts: Iterable<string>, limit: number) {
+  const kept: string[] = [];
+  let length = 0;
+  for (const part of parts) {
+    kept.push(part);
+    length += part.length;
+    if (length >= limit * SLACK) break;
+  }
+  return kept;
 }
 
-function xlsxText(files: Record<string, Uint8Array>) {
+function pptxText(files: Record<string, Uint8Array>, limit: number) {
+  const slides = function* () {
+    for (const { path, number } of numbered("ppt/slides/slide", files)) {
+      const xml = strFromU8(files[path]);
+      const runs = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>|<\/a:p>/g)].map((match) => (match[1] === undefined ? "\n" : decodeEntities(match[1])));
+      yield `Slide ${number}:\n${runs.join("")}`;
+    }
+  };
+  return untilEnough(slides(), limit).join("\n\n");
+}
+
+function xlsxText(files: Record<string, Uint8Array>, limit: number) {
   const shared = files["xl/sharedStrings.xml"]
     ? [...strFromU8(files["xl/sharedStrings.xml"]).matchAll(/<si>([\s\S]*?)<\/si>/g)].map((match) =>
         decodeEntities([...match[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((part) => part[1]).join("")),
       )
     : [];
   const names = files["xl/workbook.xml"] ? [...strFromU8(files["xl/workbook.xml"]).matchAll(/<sheet [^>]*name="([^"]*)"/g)].map((match) => decodeEntities(match[1])) : [];
-  return numbered("xl/worksheets/sheet", files)
-    .map(({ path, number }, index) => {
+  const sheets = function* () {
+    for (const [index, { path, number }] of numbered("xl/worksheets/sheet", files).entries()) {
       const xml = strFromU8(files[path]);
-      const rows = [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map((row) =>
-        [...row[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)]
+      const lines: string[] = [];
+      let length = 0;
+      for (const row of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+        const line = [...row[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)]
           .map((cell) => {
             const type = cell[1].match(/\bt="(\w+)"/)?.[1];
             const body = cell[2] ?? "";
@@ -109,30 +128,77 @@ function xlsxText(files: Record<string, Uint8Array>) {
             return decodeEntities(inline ?? value ?? "");
           })
           .join("\t")
-          .replace(/\t+$/, ""),
-      );
-      return `Sheet ${names[index] ?? number}:\n${rows.filter(Boolean).join("\n")}`;
-    })
-    .join("\n\n");
+          .replace(/\t+$/, "");
+        if (!line) continue;
+        lines.push(line);
+        length += line.length;
+        if (length >= limit * SLACK) break;
+      }
+      yield `Sheet ${names[index] ?? number}:\n${lines.join("\n")}`;
+    }
+  };
+  return untilEnough(sheets(), limit).join("\n\n");
 }
 
-async function pdfText(bytes: Uint8Array) {
-  const { extractText, getDocumentProxy } = await import("unpdf");
+function neededInZip(kind: "docx" | "xlsx" | "pptx") {
+  const wanted =
+    kind === "docx"
+      ? /^word\/document\.xml$/
+      : kind === "pptx"
+        ? /^ppt\/slides\/slide\d+\.xml$/
+        : /^xl\/(sharedStrings|workbook)\.xml$|^xl\/worksheets\/sheet\d+\.xml$/;
+  let files = 0;
+  let total = 0;
+  return (file: { name: string; originalSize: number }) => {
+    if (!wanted.test(file.name) || file.originalSize >= FILE_MAX_BYTES) return false;
+    files += 1;
+    total += file.originalSize;
+    return files <= ZIP_FILES_MAX && total <= UNZIPPED_MAX_BYTES;
+  };
+}
+
+async function pdfText(bytes: Uint8Array, limit: number, timeoutMs: number) {
+  const { getDocumentProxy } = await import("unpdf");
   const document = await getDocumentProxy(bytes.slice());
-  const { text } = await extractText(document, { mergePages: false });
-  return (Array.isArray(text) ? text : [text]).map((page, index) => `Page ${index + 1}:\n${page}`).join("\n\n");
+  const stopAt = Date.now() + timeoutMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("Reading the PDF took too long.")), timeoutMs);
+  });
+  const read = async () => {
+    const pages: string[] = [];
+    let length = 0;
+    for (let number = 1; number <= document.numPages; number += 1) {
+      if (Date.now() > stopAt) throw new Error("Reading the PDF took too long.");
+      const content = await (await document.getPage(number)).getTextContent();
+      const page = content.items
+        .filter((item) => "str" in item && item.str != null)
+        .map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : "") : ""))
+        .join("");
+      pages.push(`Page ${number}:\n${page}`);
+      length += page.length;
+      if (length >= limit * SLACK) break;
+    }
+    return pages.join("\n\n");
+  };
+  try {
+    return await Promise.race([read(), timedOut]);
+  } finally {
+    clearTimeout(timer);
+    await document.loadingTask.destroy().catch(() => undefined);
+  }
 }
 
-export async function readAttachmentText(bytes: Uint8Array, name: string, contentType: string | null, limit = TEXT_MAX): Promise<string | null> {
+export async function readAttachmentText(bytes: Uint8Array, name: string, contentType: string | null, limit = TEXT_MAX, options: { timeoutMs?: number } = {}): Promise<string | null> {
   const kind = attachmentKind(name, contentType);
   if (!kind) return null;
   let text = "";
-  if (kind === "pdf") text = await pdfText(bytes);
+  if (kind === "pdf") text = await pdfText(bytes, limit, options.timeoutMs ?? PDF_TIMEOUT_MS);
   else if (kind === "text") text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   else if (kind === "html") text = htmlText(new TextDecoder("utf-8", { fatal: false }).decode(bytes));
   else {
-    const files = unzipSync(bytes, { filter: (file) => file.name.endsWith(".xml") && file.originalSize < 20_000_000 });
-    text = kind === "docx" ? docxText(files) : kind === "pptx" ? pptxText(files) : xlsxText(files);
+    const files = unzipSync(bytes, { filter: neededInZip(kind) });
+    text = kind === "docx" ? docxText(files) : kind === "pptx" ? pptxText(files, limit) : xlsxText(files, limit);
   }
   const cleaned = tidy(text, limit);
   return cleaned.replace(/(Page|Slide|Sheet) [^\n]*:\n?/g, "").trim() ? cleaned : null;

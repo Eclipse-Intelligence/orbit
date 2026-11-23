@@ -32,39 +32,43 @@ export default async function CapturePage() {
   if (!user) redirect("/login");
   const openedAt = requestTime();
 
-  const mailbox = await getMailbox(user);
-  const live = mailbox?.status === "connected";
-  const context = await captureContext(user, openedAt.getTime(), { inline: true });
-  const failed = new Set<CaptureSection>(context.failed);
-  const [items, status, calls, granola, transcripts, calendar, followUps, unknown, dismissed] = await Promise.all([
+  const failed = new Set<CaptureSection>();
+  const mailboxLoad = getMailbox(user);
+  const contextLoad = captureContext(user, openedAt.getTime(), { inline: true });
+  const [mailbox, context, items, calls, granola, transcripts, calendar, followUps, status, unknown, dismissed, refusals, rules] = await Promise.all([
+    mailboxLoad,
+    contextLoad,
     listToFile(user, openedAt.getTime()).catch((error) => {
       failed.add("toFile");
       return logged("Reading what's waiting to file failed", { unfiled: [], people: [] })(error);
     }),
-    captureStatus(user, openedAt.getTime(), context).catch(logged("Counting Capture failed", null)),
-    mailbox ? getCallSync(user) : Promise.resolve(null),
+    mailboxLoad.then((mailbox) => (mailbox ? getCallSync(user) : null)),
     getGranolaStatus(user),
-    live ? getTeamsTranscriptStatus(user) : Promise.resolve(null),
-    live ? getCalendarStatus(user) : Promise.resolve(null),
+    mailboxLoad.then((mailbox) => (mailbox?.status === "connected" ? getTeamsTranscriptStatus(user) : null)),
+    mailboxLoad.then((mailbox) => (mailbox?.status === "connected" ? getCalendarStatus(user) : null)),
     listFollowUps(user).catch((error) => {
       failed.add("followUps");
       return logged("Reading call follow-ups failed", [])(error);
     }),
-    listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown, skipped: context.skipped, pending: context.held }).catch((error) => {
-      failed.add("toFile");
-      return logged("Reading email from new people failed", {
-        emails: [],
-        total: 0,
-        notShown: [],
-        notShownTotal: 0,
-        sorting: 0,
-        workspaces: [{ id: user.workspaceId, name: user.workspaceName }],
-      })(error);
-    }),
+    contextLoad.then((context) => captureStatus(user, openedAt.getTime(), context).catch(logged("Counting Capture failed", null))),
+    contextLoad.then((context) =>
+      listUnknownMail(user, openedAt.getTime(), { actors: context.actors, emails: context.unknown, skipped: context.skipped, pending: context.held }).catch((error) => {
+        failed.add("toFile");
+        return logged("Reading email from new people failed", {
+          emails: [],
+          total: 0,
+          notShown: [],
+          notShownTotal: 0,
+          sorting: 0,
+          workspaces: [{ id: user.workspaceId, name: user.workspaceName }],
+        })(error);
+      }),
+    ),
     listDismissedImports(user).catch(logged("Reading dismissed calls failed", { items: [], total: 0 })),
+    takeMailRefusals(user).catch(() => []),
+    listSenderRules(user).catch(logged("Reading Capture rules failed", [])),
   ]);
-  const refusals = await takeMailRefusals(user).catch(() => []);
-  const rules = await listSenderRules(user).catch(logged("Reading Capture rules failed", []));
+  for (const section of context.failed) failed.add(section);
   after(async () => {
     try {
       await markCaptureSeen(user, openedAt);
