@@ -1,11 +1,8 @@
 export const CALENDAR_SUBJECT =
   "^(accepted|declined|tentative|tentatively accepted|invitation|updated invitation|canceled|cancelled|new time proposed|meeting forward notification|invitation updated)\\M";
 export const CALENDAR_SENDER = "^(calendar-notification|calendar|noreply-calendar|invites?)@";
-const STRICT_LOCALS = "no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot";
-const ROLE_LOCALS = "billing|receipts?|invoices?|info|hello|team";
-export const STRICT_AUTOMATED_SENDER = `^(${STRICT_LOCALS})([._+-][^@]*)?@`;
-export const ROLE_SENDER = `^(${ROLE_LOCALS})([._+-][^@]*)?@`;
-export const AUTOMATED_SENDER = `^(${STRICT_LOCALS}|${ROLE_LOCALS})([._+-][^@]*)?@`;
+export const AUTOMATED_SENDER =
+  "^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|newsletters?|news|updates?|marketing|mailer|mailer-daemon|digest|alerts?|bounces?|automated|robot|billing|receipts?|invoices?|info|hello|team)([._+-][^@]*)?@";
 export const UNSUBSCRIBE_TEXT = "(unsubscribe|opt[ -]?out|manage (your )?(email |subscription )?preferences|email preferences)";
 const AUTOMATED_LABELS = "(e|em|email|mail|mailer|mg|news|newsletter|marketing|notifications?|alerts?|updates?|bounce|post)";
 

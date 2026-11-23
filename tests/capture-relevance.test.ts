@@ -18,7 +18,7 @@ import { classifyCapture, listSenderRules, listUnknownMail } from "@/lib/mail/ca
 import { createAndFileUnknown, unknownMail } from "@/lib/mail/filing";
 import { recordFiledInDb, verdictFor } from "@/lib/mail/relevance";
 import { setAddressHome } from "@/lib/mail/routing";
-import { AUTOMATED_DOMAIN, FREE_MAIL_DOMAINS, ROLE_SENDER, STRICT_AUTOMATED_SENDER } from "@/lib/mail/patterns";
+import { AUTOMATED_DOMAIN, AUTOMATED_SENDER, FREE_MAIL_DOMAINS } from "@/lib/mail/patterns";
 import { bulkHeaderCategory, isMeetingNoise, listedSender } from "@/lib/mail/senders";
 import { z } from "zod";
 import { createUser, queryAsUser, resetDatabase } from "./helpers";
@@ -31,7 +31,7 @@ type State = {
   business: { name: string; whatItSells: string; idealCustomer: string; formerNames?: string[] };
   person: { name: string; role: string; aboutYou?: string };
   history: { mailWithSender: string; mailWithDomain: string; userHasWrittenToSender: boolean; userHasWrittenToDomain: boolean; meetings: number };
-  email: { fromName: string | null; fromAddress: string; receivedBy: string; subject: string | null; snippet: string | null; body?: string; senderDomainIs?: string; signals?: string[] };
+  email: { fromName: string | null; fromAddress: string; receivedBy: string; subject: string | null; snippet: string | null; body?: string; senderDomainIs?: string };
 };
 type Answer = { category: string; confidence?: number | null; reason?: string } | "fail" | "garbage";
 type JevBody = { state: State; questions: Record<string, { type: string; criteria: unknown }> };
@@ -292,15 +292,14 @@ describe("Capture relevance", () => {
     await addMessage(primary, { id: "tom", from: "tom@ebay-partners.test", to: ["mark@geteclipse.co"], subject: "Spring sale for partners" });
     await classify(fake.fetchImpl);
     const asked = fake.haiku.map((call) => call.state.email.fromAddress).sort();
-    assert.deepEqual(asked, ["accounts.payable@trust.nhs.uk", "accounts@paypal.com", "clinic@gp.nhs.uk", "kate@arrowglobal.net", "otto@quiet.test", "priya.shah@google.com"]);
-    assert.deepEqual(fake.haiku.find((call) => call.state.email.fromAddress === "otto@quiet.test")!.state.email.signals, ["the mail app put it in Other, not Focused"]);
+    assert.deepEqual(asked, ["accounts.payable@trust.nhs.uk", "accounts@paypal.com", "clinic@gp.nhs.uk", "kate@arrowglobal.net", "priya.shah@google.com"]);
     assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "accounts.payable@trust.nhs.uk")!.state.email.senderDomainIs ?? "", /public sector/);
     assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "clinic@gp.nhs.uk")!.state.email.senderDomainIs ?? "", /public sector/);
     assert.match(fake.haiku.find((call) => call.state.email.fromAddress === "priya.shah@google.com")!.state.email.senderDomainIs ?? "", /platform/);
     assert.equal(fake.haiku.find((call) => call.state.email.fromAddress === "kate@arrowglobal.net")!.state.email.senderDomainIs, undefined);
     const left = await skipped(eclipse);
     assert.deepEqual(left, { "statements@paypal.com": "supplier", "accounts@paypal.com": "supplier", "agent@lowell.co.uk": "collections", "clinic@gp.nhs.uk": "personal" });
-    assert.deepEqual(await shown(eclipse), ["accounts.payable@trust.nhs.uk", "kate@arrowglobal.net", "otto@quiet.test", "priya.shah@google.com", "tom@ebay-partners.test"]);
+    assert.deepEqual(await shown(eclipse), ["accounts.payable@trust.nhs.uk", "kate@arrowglobal.net", "priya.shah@google.com", "tom@ebay-partners.test"]);
     assert.equal((await threadRow(`${primary.sourceId}|paypal`))?.engine, "listed");
     assert.equal((await threadRow(`${primary.sourceId}|nhs`))?.engine, "haiku");
     assert.equal((await threadRow(`${primary.sourceId}|tom`))?.engine, "history");
@@ -627,23 +626,22 @@ describe("Capture relevance", () => {
     assert.ok((await shown(eclipse)).includes("boss@vendorly.test"));
   });
 
-  it("never treats a free mail address as automated, but still spots sending subdomains and strict senders", async () => {
+  it("never treats a free mail address as automated, but still spots sending subdomains, automated senders and role addresses", async () => {
     const domain = new RegExp(AUTOMATED_DOMAIN, "i");
     for (const free of FREE_MAIL_DOMAINS) assert.equal(domain.test(`jane@${free}`), false, free);
     for (const sending of ["jane@mail.acme.test", "jane@email.acme.test", "jane@news.acme.co.uk", "jane@em.acme.test"]) assert.equal(domain.test(sending), true, sending);
     const inDb = await getAdminPool().query<{ free: string }>(
-      "select d as free from unnest($1::text[]) d where ('jane@' || d) ~* $2 or ('jane@' || d) ~* $3",
-      [[...FREE_MAIL_DOMAINS], AUTOMATED_DOMAIN, STRICT_AUTOMATED_SENDER],
+      "select d as free from unnest($1::text[]) d where ('jane@' || d) ~* $2",
+      [[...FREE_MAIL_DOMAINS], AUTOMATED_DOMAIN],
     );
     assert.deepEqual(inDb.rows, []);
     const sending = await getAdminPool().query<{ hit: boolean }>("select 'jane@email.acme.test' ~* $1 as hit", [AUTOMATED_DOMAIN]);
     assert.equal(sending.rows[0].hit, true);
-    for (const strict of ["noreply@acme.test", "no-reply@acme.test", "notifications@acme.test", "newsletter@acme.test", "mailer-daemon@acme.test"]) {
-      assert.match(strict, new RegExp(STRICT_AUTOMATED_SENDER, "i"));
+    for (const automated of ["noreply@acme.test", "no-reply@acme.test", "notifications@acme.test", "newsletter@acme.test", "info@acme.test", "hello@acme.test", "billing@acme.test", "team@acme.test", "invoices.uk@acme.test"]) {
+      assert.match(automated, new RegExp(AUTOMATED_SENDER, "i"));
     }
-    for (const role of ["info@acme.test", "hello@acme.test", "billing@acme.test", "team@acme.test", "invoices.uk@acme.test"]) {
-      assert.match(role, new RegExp(ROLE_SENDER, "i"));
-      assert.doesNotMatch(role, new RegExp(STRICT_AUTOMATED_SENDER, "i"));
+    for (const person of ["jane@acme.test", "ruth@mail.com", "info.smith@gmail.com"]) {
+      assert.doesNotMatch(person, new RegExp(AUTOMATED_DOMAIN, "i"));
     }
   });
 
@@ -673,29 +671,66 @@ describe("Capture relevance", () => {
     await getAdminPool().query("delete from crm.mail_messages where provider_message_id like 'kr-%'");
   });
 
-  it("hides only strictly automated senders without asking, and gives the AI role addresses, the Other tab and unsubscribe footers as hints", async () => {
+  it("hides role addresses, the Other tab and unsubscribe footers from unknown senders without asking the AI, and shows the same from people written to or met", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: () => ({ category: "business" }) });
-    await addMessage(primary, { id: "kh-role", from: "info@roleco-new.test", to: ["mark@geteclipse.co"], subject: "Hint check role" });
-    await addMessage(primary, { id: "kh-other", from: "otto@other-new.test", to: ["mark@geteclipse.co"], subject: "Hint check other", focused: false });
-    await addMessage(primary, { id: "kh-footer", from: "ann@footer-new.test", to: ["mark@geteclipse.co"], subject: "Hint check footer", body: "Can we talk?\n\nTo unsubscribe from these emails click here." });
-    await addMessage(primary, { id: "kh-free", from: "ruth@mail.com", to: ["mark@geteclipse.co"], subject: "Hint check free" });
-    await addMessage(primary, { id: "kh-bot", from: "noreply@bulk-new.test", to: ["mark@geteclipse.co"], subject: "Hint check bot" });
-    await addMessage(primary, { id: "kh-sub", from: "sales@mail.sub-new.test", to: ["mark@geteclipse.co"], subject: "Hint check subdomain" });
+    const admin = getAdminPool();
+    const hidden = [
+      { id: "kh-info", from: "info@roleco-new.test" },
+      { id: "kh-hello", from: "hello@roleco-new.test" },
+      { id: "kh-other", from: "otto@other-new.test", focused: false },
+      { id: "kh-footer", from: "ann@footer-new.test", body: "Can we talk?\n\nTo unsubscribe from these emails click here." },
+      { id: "kh-bot", from: "noreply@bulk-new.test" },
+      { id: "kh-sub", from: "sales@mail.sub-new.test" },
+    ];
+    const known = [
+      { id: "kh-k-info", from: "info@roleco-known.test" },
+      { id: "kh-k-hello", from: "hello@roleco-known.test" },
+      { id: "kh-k-other", from: "otto@other-known.test", focused: false },
+      { id: "kh-k-footer", from: "ann@footer-known.test", body: "Can we talk?\n\nTo unsubscribe from these emails click here." },
+    ];
+    for (const person of known.slice(0, 3)) {
+      await addMessage(primary, { id: `${person.id}-sent`, from: "mark@geteclipse.co", to: [person.from], subject: "Earlier", sent: true, at: minutesAgo(60 * 24 * 3) });
+    }
+    await admin.query("insert into crm.mail_known_addresses (user_id, address, domain, met_first) values ($1, 'ann@footer-known.test', 'footer-known.test', now() - interval '2 days')", [eclipse.userId]);
+    for (const person of [...hidden, ...known]) {
+      await addMessage(primary, { id: person.id, from: person.from, to: ["mark@geteclipse.co"], subject: "Filter check", body: "body" in person ? person.body : undefined, focused: "focused" in person ? person.focused : undefined });
+    }
+    await addMessage(primary, { id: "kh-free", from: "ruth@mail.com", to: ["mark@geteclipse.co"], subject: "Filter check" });
     await classify(fake.fetchImpl);
-    const signals = new Map(fake.haiku.filter((call) => call.state.email.subject?.startsWith("Hint check")).map((call) => [call.state.email.fromAddress, call.state.email.signals]));
-    assert.deepEqual(signals.get("info@roleco-new.test"), ["the address is a role address such as info@ or billing@"]);
-    assert.deepEqual(signals.get("otto@other-new.test"), ["the mail app put it in Other, not Focused"]);
-    assert.deepEqual(signals.get("ann@footer-new.test"), ["the end of the email mentions unsubscribing or opting out"]);
-    assert.equal(signals.has("ruth@mail.com"), true);
-    assert.equal(signals.get("ruth@mail.com"), undefined);
-    assert.equal(signals.has("noreply@bulk-new.test"), false);
-    assert.equal(signals.has("sales@mail.sub-new.test"), false);
     const list = await capture(eclipse);
     const everyone = [...list.emails, ...list.notShown].map((email) => email.email);
-    assert.ok(!everyone.includes("noreply@bulk-new.test") && !everyone.includes("sales@mail.sub-new.test"));
-    for (const address of ["info@roleco-new.test", "otto@other-new.test", "ann@footer-new.test", "ruth@mail.com"]) assert.ok(list.emails.some((email) => email.email === address), address);
-    await getAdminPool().query("delete from crm.mail_messages where provider_message_id like 'kh-%'");
+    for (const person of hidden) assert.ok(!everyone.includes(person.from), `${person.from} stays hidden`);
+    for (const person of known) assert.ok(list.emails.some((email) => email.email === person.from), `${person.from} is shown`);
+    assert.ok(list.emails.some((email) => email.email === "ruth@mail.com"), "a free mail address isn't treated as automated");
+    const asked = fake.haiku.filter((call) => call.state.email.subject === "Filter check").map((call) => call.state.email.fromAddress);
+    for (const person of hidden) assert.ok(!asked.includes(person.from), `${person.from} isn't put to the AI`);
+    await admin.query("delete from crm.mail_messages where provider_message_id like 'kh-%'");
+  });
+
+  it("lets a Mail sender rule and the calendar check hide a known sender, and lets only Outlook's Other tab pass for them", async () => {
+    const admin = getAdminPool();
+    const people = [
+      { id: "kn-news", from: "nora@ruled-news.test", subject: "Plain note" },
+      { id: "kn-cal", from: "cal@ruled-cal.test", subject: "Accepted: Intro call" },
+      { id: "kn-plain", from: "pam@ruled-plain.test", subject: "Plain note", focused: false },
+      { id: "kn-rule-ok", from: "rita@ruled-ok.test", subject: "Plain note", focused: false },
+    ];
+    for (const person of people) {
+      await addMessage(primary, { id: `${person.id}-sent`, from: "mark@geteclipse.co", to: [person.from], subject: "Earlier", sent: true, at: minutesAgo(60 * 24 * 3) });
+      await addMessage(primary, { id: person.id, from: person.from, to: ["mark@geteclipse.co"], subject: person.subject, focused: person.focused });
+    }
+    await admin.query("insert into crm.mail_sender_rules (workspace_id, user_id, sender, split) values ($1, $2, 'nora@ruled-news.test', 'news'), ($1, $2, 'rita@ruled-ok.test', 'important')", [
+      eclipse.workspaceId,
+      eclipse.userId,
+    ]);
+    const scanned = (await unknownMail(eclipse, [eclipse])).map((email) => email.email);
+    assert.ok(!scanned.includes("nora@ruled-news.test"), "a News rule still hides someone you have written to");
+    assert.ok(!scanned.includes("cal@ruled-cal.test"), "a calendar reply still hides them");
+    assert.ok(scanned.includes("pam@ruled-plain.test"), "Outlook's Other tab doesn't hide them");
+    assert.ok(scanned.includes("rita@ruled-ok.test"), "an Important rule shows them");
+    await admin.query("delete from crm.mail_sender_rules where sender in ('nora@ruled-news.test', 'rita@ruled-ok.test')");
+    await admin.query("delete from crm.mail_messages where provider_message_id like 'kn-%'");
   });
 
   it("applies an address rule first, then history, then a domain rule", async () => {
@@ -751,9 +786,9 @@ describe("Capture relevance", () => {
     await admin.query(
       `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet, body_text,
          from_email, from_name, to_recipients, cc_recipients, sent_at, received_at, focused)
-       select $1, $2, $3, $4, 'kb-bulk-' || i, '<kb-bulk-' || i || '@mail.test>', 'kb-bulk-' || i, 'Our spring offer', 'Offer', 'Offer. Unsubscribe here.',
-         'hello@bulk' || i || '.test', null, '[{"name": "", "address": "mark@geteclipse.co"}]'::jsonb, '[]'::jsonb,
-         now() - make_interval(mins => 5 + i), now() - make_interval(mins => 5 + i), false
+       select $1, $2, $3, $4, 'kb-bulk-' || i, '<kb-bulk-' || i || '@mail.test>', 'kb-bulk-' || i, 'Our spring offer', 'Offer', 'Offer.',
+         'promo@bulk' || i || '.test', null, '[{"name": "", "address": "mark@geteclipse.co"}]'::jsonb, '[]'::jsonb,
+         now() - make_interval(mins => 5 + i), now() - make_interval(mins => 5 + i), null
        from generate_series(1, 320) i`,
       [eclipse.workspaceId, eclipse.userId, primary.sourceId, primary.inbox],
     );
@@ -779,9 +814,9 @@ describe("Capture relevance", () => {
     await admin.query(
       `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet, body_text,
          from_email, from_name, to_recipients, cc_recipients, sent_at, received_at, focused)
-       select $1, $2, $3, $4, 'kb-bulk-' || i, '<kb-bulk-' || i || '@mail.test>', 'kb-bulk-' || i, 'Our spring offer', 'Offer', 'Offer. Unsubscribe here.',
-         'hello@bulk' || i || '.test', null, '[{"name": "", "address": "mark@geteclipse.co"}]'::jsonb, '[]'::jsonb,
-         now() - make_interval(mins => 5 + i), now() - make_interval(mins => 5 + i), false
+       select $1, $2, $3, $4, 'kb-bulk-' || i, '<kb-bulk-' || i || '@mail.test>', 'kb-bulk-' || i, 'Our spring offer', 'Offer', 'Offer.',
+         'promo@bulk' || i || '.test', null, '[{"name": "", "address": "mark@geteclipse.co"}]'::jsonb, '[]'::jsonb,
+         now() - make_interval(mins => 5 + i), now() - make_interval(mins => 5 + i), null
        from generate_series(1, 320) i`,
       [eclipse.workspaceId, eclipse.userId, primary.sourceId, primary.inbox],
     );

@@ -196,7 +196,6 @@ export async function classifyItems(actor: UserActor, actors: UserActor[], work:
               snippet: item.snippet,
               body: emailBodyText(bodies.get(item.messageId) ?? null),
               listedAs: hint,
-              signals: item.signals,
             },
             history.get(item.email),
           );
