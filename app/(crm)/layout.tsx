@@ -9,6 +9,7 @@ import DocsProvider from "@/components/docs/docs-provider";
 import ChatLive from "@/components/chat/chat-live";
 import SyncSignals from "@/components/crm/sync-signals";
 import MailUnread from "@/components/mail/mail-unread";
+import CaptureStatus from "@/components/capture/capture-status";
 import CampaignsWaiting from "@/components/campaigns/campaigns-waiting";
 import { ShortcutsProvider } from "@/components/shortcuts/shortcuts-provider";
 import { getHomeActor, getUserActor, getWorkspaceChoices } from "@/lib/auth/user";
@@ -16,61 +17,45 @@ import { syncClickUp } from "@/lib/crm/clickup";
 import { listBoards } from "@/lib/crm/boards";
 import { countCompanies } from "@/lib/crm/companies";
 import { syncGranolaOnVisit } from "@/lib/crm/granola";
-import { runWorkflowTick } from "@/lib/workflows/engine";
 import { teamUnreadCount } from "@/lib/mail/notify";
 import { BELL_LIMIT, listNotifications } from "@/lib/workflows/store";
 import { countOpenTasks } from "@/lib/crm/tasks";
-import { captureStatuses } from "@/lib/crm/capture";
 import { unreadBrief } from "@/lib/learning/nightly";
-import { processDueMail } from "@/lib/mail/due";
-import { classifyCapture } from "@/lib/mail/capture-filter";
 import { noteViewerAddress } from "@/lib/mail/tracking";
 import { clickupToken } from "@/lib/clickup";
-import { microsoftConfigured } from "@/lib/microsoft/oauth";
 import { docsSeed, emptyDocsNav } from "@/lib/docs/server";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
+import { visitDue } from "@/lib/visit-throttle";
 
 export const dynamic = "force-dynamic";
+
+const VISIT_SYNC_GAP_MS = 5 * 60 * 1000;
+const VIEWER_GAP_MS = 60 * 60 * 1000;
 
 export default async function CrmLayout({ children }: { children: React.ReactNode }) {
   const [user, home, workspaces] = await Promise.all([getUserActor(), getHomeActor(), getWorkspaceChoices()]);
   if (!user || !home) redirect("/login");
-  if (microsoftConfigured()) {
+  const viewerAddress = (await headers()).get("x-forwarded-for");
+  if (viewerAddress && visitDue(`viewer:${user.userId}:${viewerAddress}`, VIEWER_GAP_MS)) {
     after(async () => {
       try {
-        await processDueMail(home);
-        await classifyCapture(home, { budgetMs: 20_000, gapSeconds: 60 }).catch((error) =>
-          console.error("Sorting Capture email failed", error instanceof Error ? error.message : error),
-        );
+        await noteViewerAddress(home, viewerAddress);
       } catch (error) {
-        console.error("Due mail failed", error);
+        console.error("Viewer address failed", error);
       }
     });
   }
-  const viewerAddress = (await headers()).get("x-forwarded-for");
-  after(async () => {
-    try {
-      await noteViewerAddress(home, viewerAddress);
-    } catch (error) {
-      console.error("Viewer address failed", error);
-    }
-  });
-  after(async () => {
-    try {
-      await runWorkflowTick({ budgetMs: 20_000 });
-    } catch (error) {
-      console.error("Workflow tick failed", error);
-    }
-  });
-  after(async () => {
-    try {
-      const result = await syncGranolaOnVisit(user);
-      if (result?.ran && result.error) console.error("Granola sync failed", result.error);
-    } catch (error) {
-      console.error("Granola sync failed", error);
-    }
-  });
-  if (clickupToken()) {
+  if (visitDue(`granola:${user.userId}`, VISIT_SYNC_GAP_MS)) {
+    after(async () => {
+      try {
+        const result = await syncGranolaOnVisit(user);
+        if (result?.ran && result.error) console.error("Granola sync failed", result.error);
+      } catch (error) {
+        console.error("Granola sync failed", error);
+      }
+    });
+  }
+  if (clickupToken() && visitDue(`clickup:${user.workspaceId}`, VISIT_SYNC_GAP_MS)) {
     after(async () => {
       try {
         const result = await syncClickUp({ actor: user });
@@ -80,19 +65,16 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
       }
     });
   }
-  const [companyCount, openActionCount, boards, notifications, captures, brief, teamUnread] = await Promise.all([
+  const [companyCount, openActionCount, boards, notifications, brief, teamUnread] = await Promise.all([
     countCompanies(user),
     countOpenTasks(user, { mine: true }),
     listBoards(user),
     listNotifications(user, BELL_LIMIT),
-    captureStatuses(user).catch(() => null),
     unreadBrief(user).catch(() => null),
     teamUnreadCount(user).catch(() => 0),
   ]);
 
-  const capture = captures?.get(user.workspaceId) ?? null;
   const enrichment = enrichmentAvailability();
-  const choices = workspaces.map((item) => ({ ...item, waiting: item.id !== user.workspaceId && (captures?.get(item.id)?.fresh ?? 0) > 0 }));
 
   return (
     <ShortcutsProvider>
@@ -101,6 +83,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
           <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
             <KeepPageInPlace />
             <MailUnread />
+            <CaptureStatus />
             <CampaignsWaiting />
             <ChatLive />
             <SyncSignals />
@@ -108,12 +91,11 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
               boards={boards}
               companyCount={companyCount}
               openActionCount={openActionCount}
-              capture={capture}
               workspace={{
                 id: user.workspaceId,
                 name: user.workspaceName,
                 viewerName: user.fullName || "",
-                choices,
+                choices: workspaces,
               }}
             />
             <CrmChrome

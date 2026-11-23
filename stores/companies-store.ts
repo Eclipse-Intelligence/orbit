@@ -11,6 +11,22 @@ export type CaptureBadge = { waiting: number; fresh: number; newestAt: string | 
 
 export const NO_CAPTURE_COUNTS: CaptureCounts = { approvals: 0, followUps: 0, replies: 0, toFile: 0 };
 
+export function captureBadgeFrom(
+  status: { fresh: number; newestAt: string | null; sections: CaptureCounts; failed: CaptureSectionId[] },
+  known: CaptureBadge | null,
+): CaptureBadge {
+  const unread = new Set(status.failed);
+  const sections = Object.fromEntries(
+    CAPTURE_SECTIONS.map((id) => [id, unread.has(id) ? (known?.sections[id] ?? 0) : status.sections[id]]),
+  ) as CaptureCounts;
+  return {
+    waiting: CAPTURE_SECTIONS.reduce((sum, id) => sum + sections[id], 0),
+    fresh: status.fresh,
+    newestAt: status.newestAt,
+    sections,
+  };
+}
+
 type CompaniesState = {
   profileOpen: boolean;
   sidebarOpen: boolean;
@@ -20,6 +36,7 @@ type CompaniesState = {
   capture: CaptureBadge | null;
   captureCleared: CaptureCounts;
   captureLive: boolean;
+  captureWaiting: string[];
   captureSeen: string | null;
   remindersOpen: boolean;
   remindersAsked: number;
@@ -41,6 +58,7 @@ type CompaniesState = {
   setCapture: (capture: CaptureBadge | null) => void;
   setCaptureCleared: (cleared: CaptureCounts) => void;
   setCaptureLive: (live: boolean) => void;
+  setCaptureWaiting: (workspaceIds: string[]) => void;
   setCaptureSeen: (newestAt: string | null) => void;
 };
 
@@ -65,6 +83,7 @@ export const useCompaniesStore = create<CompaniesState>((set) => ({
   capture: null,
   captureCleared: NO_CAPTURE_COUNTS,
   captureLive: false,
+  captureWaiting: [],
   captureSeen: null,
   remindersOpen: false,
   remindersAsked: 0,
@@ -86,5 +105,6 @@ export const useCompaniesStore = create<CompaniesState>((set) => ({
   setCapture: (capture) => set((state) => (state.captureLive ? { capture } : { capture, captureCleared: NO_CAPTURE_COUNTS })),
   setCaptureCleared: (captureCleared) => set({ captureCleared }),
   setCaptureLive: (captureLive) => set({ captureLive }),
+  setCaptureWaiting: (captureWaiting) => set({ captureWaiting }),
   setCaptureSeen: (captureSeen) => set({ captureSeen: captureSeen ?? new Date().toISOString() }),
 }));

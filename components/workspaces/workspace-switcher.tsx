@@ -13,9 +13,10 @@ import {
 } from "@/components/_ui/dropdown-menu";
 import NewWorkspaceDialog from "@/components/workspaces/new-workspace-dialog";
 import WorkspaceTile from "@/components/workspaces/workspace-tile";
-import { switchWorkspaceAction } from "@/app/(crm)/workspaces";
 import type { WorkspaceChoice } from "@/lib/auth/user";
+import { openLink } from "@/lib/open-link";
 import { sectionIndex } from "@/lib/workspace-paths";
+import { useCompaniesStore } from "@/stores/companies-store";
 import CheckIcon from "@/public/assets/images/assistant/check.svg";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import Logo from "@/public/assets/images/_common/logo.svg";
@@ -37,21 +38,15 @@ export default function WorkspaceSwitcher({
   const [touchOpen, setTouchOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const canCreate = workspaces.some((item) => item.role === "owner");
-  const waiting = workspaces.filter((item) => item.waiting && item.id !== currentId);
+  const waitingIds = useCompaniesStore((state) => state.captureWaiting);
+  const isWaiting = (id: string) => id !== currentId && waitingIds.includes(id);
+  const waiting = workspaces.filter((item) => isWaiting(item.id));
 
-  async function choose(id: string) {
+  function choose(id: string) {
     if (id === currentId || pending) return;
     setPending(true);
-    setError(null);
-    const result = await switchWorkspaceAction(id);
-    if (result.error) {
-      setPending(false);
-      setError(result.error);
-      return;
-    }
-    window.location.assign(sectionIndex(pathname));
+    window.location.assign(openLink(id, sectionIndex(pathname)));
   }
 
   return (
@@ -95,11 +90,11 @@ export default function WorkspaceSwitcher({
                 key={item.id}
                 aria-current={selected ? "true" : undefined}
                 className="max-lg:py-2.5"
-                onSelect={() => void choose(item.id)}
+                onSelect={() => choose(item.id)}
               >
                 <WorkspaceTile id={item.id} name={item.name} />
                 <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                {item.waiting && !selected && (
+                {isWaiting(item.id) && (
                   <span className="bg-primary size-1.5 shrink-0 rounded-full">
                     <span className="sr-only">New in Capture</span>
                   </span>
@@ -126,11 +121,6 @@ export default function WorkspaceSwitcher({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      {error && (
-        <p role="alert" className="caption-style text-danger mt-2">
-          {error}
-        </p>
-      )}
       {canCreate && (
         <NewWorkspaceDialog
           open={creating}

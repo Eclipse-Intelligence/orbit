@@ -188,6 +188,16 @@ export async function captureStatuses(actor: UserActor, now = Date.now()) {
   return new Map(others.map((item, index) => [item.workspaceId, statuses[index]]));
 }
 
+export type CaptureBadges = { status: CaptureStatus | null; waiting: string[] };
+
+export async function captureBadges(actor: UserActor, now = Date.now()): Promise<CaptureBadges> {
+  const statuses = await captureStatuses(actor, now);
+  return {
+    status: statuses.get(actor.workspaceId) ?? null,
+    waiting: [...statuses].filter(([id, status]) => id !== actor.workspaceId && (status?.fresh ?? 0) > 0).map(([id]) => id),
+  };
+}
+
 function arrivals(items: { arrivedAt: string }[], now: number, seenAt: string | null) {
   const arrived = items.map((item) => item.arrivedAt).filter((at) => new Date(at).getTime() <= now);
   return {

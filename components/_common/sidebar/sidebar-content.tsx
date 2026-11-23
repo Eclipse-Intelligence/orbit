@@ -12,7 +12,6 @@ import SidebarShortcuts from "./sidebar-shortcuts";
 import { CollapseSidebarButton } from "./sidebar-toggle";
 import { captureHasNew, captureLeft, useCompaniesStore } from "@/stores/companies-store";
 import { sidebarBadge } from "@/lib/chat/timeline";
-import type { CaptureStatus } from "@/lib/crm/capture";
 import { TASKS_PATH } from "@/lib/crm/task-views";
 import { SETTINGS_ROOT } from "@/lib/settings-nav";
 import type { BoardSummary } from "@/lib/crm/types";
@@ -39,7 +38,6 @@ type SidebarContentProps = {
   boards: BoardSummary[];
   companyCount: number;
   openActionCount: number;
-  capture: CaptureStatus | null;
   workspace: SidebarWorkspace;
   settingsHref?: string;
 };
@@ -48,7 +46,6 @@ export default function SidebarContent({
   boards,
   companyCount,
   openActionCount,
-  capture,
   workspace,
   settingsHref = SETTINGS_ROOT,
 }: SidebarContentProps) {
@@ -58,10 +55,9 @@ export default function SidebarContent({
   const unreadMail = liveMailUnread ?? 0;
   const campaignsWaiting = useCompaniesStore((state) => state.campaignsWaiting) ?? 0;
   const chat = sidebarBadge(useCompaniesStore((state) => state.chat));
-  const liveCapture = useCompaniesStore((state) => state.capture);
+  const waiting = useCompaniesStore((state) => state.capture);
   const captureCleared = useCompaniesStore((state) => state.captureCleared);
   const captureSeen = useCompaniesStore((state) => state.captureSeen);
-  const waiting = liveCapture ?? capture;
   const waitingCount = captureLeft(waiting, captureCleared).total;
   const [boardsOpen, setBoardsOpen] = useState(true);
   const reminders = useRemindersToggle();

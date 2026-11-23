@@ -13,7 +13,7 @@ const COMPANY = "/companies/0b7b6f0e-6a55-4f7e-8d1b-1f2a3b4c5d6e";
 
 describe("open links", () => {
   it("only opens Orbit pages, never another site", () => {
-    for (const path of [COMPANY, "/contacts/abc", "/mail?thread=a%7Cb", "/mail?view=scheduled", "/capture", "/calendar", "/tasks", "/workflows?approve=1", "/workflows/1?run=2", "/proposals/1", "/opportunities?deal=1", "/?chat=1", "/"]) {
+    for (const path of [COMPANY, "/contacts/abc", "/mail?thread=a%7Cb", "/mail?view=scheduled", "/capture", "/calendar", "/chat", "/chat/room", "/tasks", "/workflows?approve=1", "/workflows/1?run=2", "/proposals/1", "/opportunities?deal=1", "/?chat=1", "/"]) {
       assert.equal(safeOpenTarget(path), path, path);
     }
     assert.equal(safeOpenTarget("/mail/../companies/1"), "/companies/1");
