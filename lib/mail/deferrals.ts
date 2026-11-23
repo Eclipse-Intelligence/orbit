@@ -525,16 +525,20 @@ export async function checkDeferrals(actor: UserActor, options: { deadline: numb
   return recorded;
 }
 
-export async function threadDeferral(db: Db, actor: UserActor, sourceId: string, key: string, now = Date.now()): Promise<DeferredFollowUp | null> {
-  const result = await db.query<{ id: string; due_at: Date | string; deferred_message_id: string | null; task_id: string | null }>(
-    `select id, due_at, deferred_message_id, task_id from crm.mail_reminders
+export const THREAD_DEFERRAL_SQL = `select id, due_at, deferred_message_id, task_id from crm.mail_reminders
      where user_id = $1 and source_id = $2 and thread_key = $3 and kind = 'follow_up' and state = 'waiting' and deferral
-     order by created_at desc limit 1`,
-    [actor.userId, sourceId, key],
-  );
-  const row = result.rows[0];
+     order by created_at desc limit 1`;
+
+export type DeferralSummaryRow = { id: string; due_at: Date | string; deferred_message_id: string | null; task_id: string | null };
+
+export function toThreadDeferral(row: DeferralSummaryRow | null | undefined, now = Date.now()): DeferredFollowUp | null {
   if (!row) return null;
   return { id: row.id, messageId: row.deferred_message_id ?? "", at: iso(row.due_at)!, taskId: row.task_id, options: deferralOptions(now) };
+}
+
+export async function threadDeferral(db: Db, actor: UserActor, sourceId: string, key: string, now = Date.now()): Promise<DeferredFollowUp | null> {
+  const result = await db.query<DeferralSummaryRow>(THREAD_DEFERRAL_SQL, [actor.userId, sourceId, key]);
+  return toThreadDeferral(result.rows[0], now);
 }
 
 async function lockDeferral(db: Db, actor: UserActor, id: string) {

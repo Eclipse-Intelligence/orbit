@@ -72,10 +72,11 @@ async function threadInfo(db: Db, actor: UserActor, sourceId: string, key: strin
     `select m.id, m.from_email, m.from_name, m.to_recipients, m.cc_recipients
      from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
      where m.user_id = $1 and m.source_id = $2 and m.thread_key = $3 and not m.is_draft and f.role <> 'outbox'
-     order by coalesce(m.received_at, m.sent_at, m.created_at) asc, m.id asc
+     order by coalesce(m.received_at, m.sent_at, m.created_at) desc, m.id desc
      limit 200`,
     [actor.userId, sourceId, key],
   );
+  result.rows.reverse();
   if (result.rows.length === 0) throw new CrmError("not_found", "Conversation not found.", 404);
   const own = await ownAddresses(db, actor);
   const people = new Map<string, string | null>();

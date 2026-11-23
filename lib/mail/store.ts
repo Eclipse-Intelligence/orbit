@@ -146,11 +146,11 @@ export async function getMailThread(actor: UserActor, messageId: string): Promis
     const result = await db.query<Row>(
       `select ${SUMMARY_COLUMNS}, m.cc_recipients, m.sent_at, m.body_text, m.web_link, ${opensSql("m")} as opens ${FROM}
        where m.user_id = $1 and ${found.thread_key ? "m.source_id = $2 and m.thread_key = $3" : "m.id = $2"}
-       order by coalesce(m.received_at, m.sent_at) asc
+       order by coalesce(m.received_at, m.sent_at) desc nulls first, m.id desc
        limit 100`,
       found.thread_key ? [actor.userId, found.source_id, found.thread_key] : [actor.userId, messageId],
     );
-    return result.rows.map((row) => ({
+    return result.rows.reverse().map((row) => ({
       ...summary(row),
       cc: row.cc_recipients ?? [],
       sentAt: iso(row.sent_at),

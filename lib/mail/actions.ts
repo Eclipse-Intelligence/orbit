@@ -36,7 +36,8 @@ const SNOOZE_MIN_MS = 60_000;
 const SNOOZE_MAX_MS = 366 * 24 * 60 * 60 * 1000;
 
 const PARALLEL = 4;
-const MESSAGE_LIMIT = 100;
+const MESSAGE_LIMIT = 2000;
+const SNOOZE_FALLBACK: MailRole[] = ["inbox", "other", "archive"];
 export const ACTION_BUDGET_MS = 40_000;
 
 type Row = {
@@ -71,10 +72,24 @@ function targets(rows: Row[], action: MailAction, view: MailView | null) {
     default: {
       const move = MOVES[action]!;
       return rows.filter(
-        (row) => row.role !== move.role && (row.role !== "drafts" || action === "trash") && inView(row, view, move.anywhere),
+        (row) =>
+          row.role !== move.role &&
+          (row.role !== "drafts" || action === "trash") &&
+          (row.role !== "sent" || action !== "snooze") &&
+          inView(row, view, move.anywhere),
       );
     }
   }
+}
+
+function snoozePlan(rows: Row[], view: MailView | null) {
+  const chosen = targets(rows, "snooze", view);
+  if (chosen.length > 0) return { chosen, remind: true };
+  if (rows.some((row) => row.role === "snoozed")) return { chosen: [], remind: true };
+  const elsewhere = rows.filter((row) => SNOOZE_FALLBACK.includes(row.role));
+  if (elsewhere.length > 0) return { chosen: elsewhere, remind: true };
+  if (rows.some((row) => row.role === "sent" || row.role === "drafts")) return { chosen: [], remind: true };
+  throw new CrmError("conflict", "Couldn't set a reminder. Move the conversation out of Trash or Junk first.", 409);
 }
 
 async function eachLimited<T>(items: T[], run: (item: T) => Promise<void>) {
@@ -269,17 +284,24 @@ export async function applyMailAction(
            where o.user_id = m.user_id and o.source_id = m.source_id and o.thread_key = $3
              and ofo.role not in ('junk', 'outbox')
          ))
-       order by at asc, m.id asc
+       order by at desc, m.id desc
        limit $4`,
       [actor.userId, sourceId, key, MESSAGE_LIMIT],
     );
-    return result.rows;
+    return result.rows.reverse();
   });
   if (rows.length === 0) throw new CrmError("not_found", "Conversation not found.", 404);
-  const chosen = targets(rows, input.action, view);
+  const snoozing = input.action === "snooze";
+  const plan = snoozing ? snoozePlan(rows, view) : { chosen: targets(rows, input.action, view), remind: false };
+  const chosen = [...plan.chosen].reverse();
   const subject = rows[rows.length - 1].subject?.slice(0, 2000) ?? null;
   if (chosen.length === 0) {
-    if (input.action !== "snooze") await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, null, subject));
+    if (plan.remind) {
+      await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, until, subject));
+      announceMailChange(actor, options.origin);
+    } else {
+      await withActor(actor, (db) => settleReminders(db, actor, sourceId, key, input.action, null, subject));
+    }
     return { changed: 0, failed: 0, problem: null };
   }
   const token = await mailSourceToken(actor, sourceId, fetchImpl);
