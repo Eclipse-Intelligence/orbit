@@ -708,6 +708,31 @@ describe("Capture relevance", () => {
     await admin.query("delete from crm.mail_messages where provider_message_id like 'kh-%'");
   });
 
+  it("lets a Mail sender rule and the calendar check hide a known sender, and lets only Outlook's Other tab pass for them", async () => {
+    const admin = getAdminPool();
+    const people = [
+      { id: "kn-news", from: "nora@ruled-news.test", subject: "Plain note" },
+      { id: "kn-cal", from: "cal@ruled-cal.test", subject: "Accepted: Intro call" },
+      { id: "kn-plain", from: "pam@ruled-plain.test", subject: "Plain note", focused: false },
+      { id: "kn-rule-ok", from: "rita@ruled-ok.test", subject: "Plain note", focused: false },
+    ];
+    for (const person of people) {
+      await addMessage(primary, { id: `${person.id}-sent`, from: "mark@geteclipse.co", to: [person.from], subject: "Earlier", sent: true, at: minutesAgo(60 * 24 * 3) });
+      await addMessage(primary, { id: person.id, from: person.from, to: ["mark@geteclipse.co"], subject: person.subject, focused: person.focused });
+    }
+    await admin.query("insert into crm.mail_sender_rules (workspace_id, user_id, sender, split) values ($1, $2, 'nora@ruled-news.test', 'news'), ($1, $2, 'rita@ruled-ok.test', 'important')", [
+      eclipse.workspaceId,
+      eclipse.userId,
+    ]);
+    const scanned = (await unknownMail(eclipse, [eclipse])).map((email) => email.email);
+    assert.ok(!scanned.includes("nora@ruled-news.test"), "a News rule still hides someone you have written to");
+    assert.ok(!scanned.includes("cal@ruled-cal.test"), "a calendar reply still hides them");
+    assert.ok(scanned.includes("pam@ruled-plain.test"), "Outlook's Other tab doesn't hide them");
+    assert.ok(scanned.includes("rita@ruled-ok.test"), "an Important rule shows them");
+    await admin.query("delete from crm.mail_sender_rules where sender in ('nora@ruled-news.test', 'rita@ruled-ok.test')");
+    await admin.query("delete from crm.mail_messages where provider_message_id like 'kn-%'");
+  });
+
   it("applies an address rule first, then history, then a domain rule", async () => {
     process.env.LLM_API_KEY = "test-key";
     const fake = gateway({ haiku: () => ({ category: "business" }) });

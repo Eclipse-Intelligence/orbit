@@ -30,7 +30,7 @@ import {
   upsertRoute,
 } from "@/lib/mail/routing";
 import { hiddenSubscriptionSql } from "@/lib/mail/subscriptions";
-import { UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
+import { CALENDAR_SENDER, CALENDAR_SUBJECT, UNSUBSCRIBE_TEXT } from "@/lib/mail/patterns";
 import { splitCase, splitJoin } from "@/lib/mail/split";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
 import { USER_WAIT_TITLE_MS } from "@/lib/mail/follow-up-title";
@@ -391,7 +391,12 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
          from (
            select n.* from candidates n
            ${splitJoin("n", "$1")}
-           where (${KNOWN_ADDRESS("$1", "n.from_email")} or ${splitCase("n")} = 'important')
+           where case
+               when rule.split is not null then rule.split = 'important'
+               when coalesce(n.subject, '') ~* '${CALENDAR_SUBJECT}' or coalesce(n.from_email, '') ~* '${CALENDAR_SENDER}' then false
+               when ${KNOWN_ADDRESS("$1", "n.from_email")} then true
+               else ${splitCase("n")} = 'important'
+             end
              and (
                ${KNOWN_ADDRESS("$1", "n.from_email")}
                or not exists (
