@@ -1,10 +1,9 @@
 "use client";
 
-import { Suspense, use, useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { Suspense, use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import Button from "@/components/_ui/button";
 import FilterChip from "@/components/_ui/filter-chip";
-import { Kbd } from "@/components/_ui/command";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +23,7 @@ import {
   cachedThread,
   dwellReadDue,
   fetchList,
+  listKey,
   announceRefusals,
   fetchNav,
   listenForRefusals,
@@ -53,6 +53,7 @@ import {
 } from "@/components/mail/mail-cache";
 import AskPanel, { type AskState } from "@/components/mail/ask-panel";
 import ScheduledList from "@/components/mail/scheduled-list";
+import SearchBox, { createSearchText } from "@/components/mail/mail-search";
 import { setBadge } from "@/components/push/push-client";
 import { useTeamUnread } from "@/components/crm/attention";
 import PushPrompt from "@/components/push/push-prompt";
@@ -60,17 +61,18 @@ import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
 import ThreadList, { SWIPE_SETTLE_MS } from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
-import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
+import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeMode, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
 import { useComposer } from "@/components/mail/compose-dock";
+import type { SendTracker } from "@/components/mail/mail-composer";
 import { watchEdgeSwipe, type EdgeHandlers } from "@/components/mail/swipe";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { laterOptions } from "@/lib/mail/later";
+import { THREAD_CACHE_LIMIT, trimRecord } from "@/lib/mail/lru";
+import { bareSummary, summaryFromDetail } from "@/lib/mail/thread-summary";
 import { MAIL_SPLITS, refusalMessage, SPLIT_LABELS, type MailSplit, type ComposeAccount, type ComposeIntent, type MailDraft, type MailNav, type ThreadDetail, type ThreadSummary } from "@/lib/mail/view";
 import { cn } from "@/lib/utils";
 import { useCompaniesStore } from "@/stores/companies-store";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
-import SearchIcon from "@/public/assets/images/_common/search.svg";
-import SparkleIcon from "@/public/assets/images/mail/sparkle.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
 import RefreshIcon from "@/public/assets/images/mail/refresh.svg";
 import ArchiveIcon from "@/public/assets/images/mail/archive.svg";
@@ -163,6 +165,30 @@ function ComposeButton({ onCompose }: { onCompose: () => void }) {
   );
 }
 
+type PendingHide = { saved: () => void; failed: () => void };
+
+type ListActions = {
+  select: (key: string | null, show?: boolean) => void;
+  more: () => void;
+  startMove: (key: string) => void;
+  act: (key: string, action: ReaderAction) => void;
+  primaryMove: () => "inbox" | "archive";
+  snooze: (keys: string[]) => void;
+};
+
+type ReaderActions = {
+  onAction: (action: ReaderAction) => void;
+  onBack: () => void;
+  onNext: (swiped?: boolean) => void;
+  onPrevious: () => void;
+  onSplit: (sender: string, split: MailSplit) => void;
+  onUnsubscribe: (mode: UnsubscribeMode) => void;
+  onBlock: () => void;
+  onSent: () => void;
+  onSending: (draftOnly: boolean, others: boolean) => ReturnType<SendTracker>;
+  onLeave: () => void;
+};
+
 type OutgoingThread = { thread: ThreadSummary | null; origin: ListQuery; left: boolean; cleared: boolean };
 
 const UNTRACKED = { undone: () => undefined, delivered: () => undefined };
@@ -171,6 +197,13 @@ function insertByDate(threads: ThreadSummary[], thread: ThreadSummary) {
   if (threads.some((item) => item.key === thread.key)) return threads;
   const index = threads.findIndex((item) => (item.latestAt ?? "") < (thread.latestAt ?? ""));
   return index === -1 ? [...threads, thread] : [...threads.slice(0, index), thread, ...threads.slice(index)];
+}
+
+function withDetail(existing: Record<string, ThreadDetail>, key: string, value: ThreadDetail, keep: (string | null)[]) {
+  const next = { ...existing };
+  delete next[key];
+  next[key] = value;
+  return trimRecord(next, THREAD_CACHE_LIMIT, [key, ...keep]);
 }
 
 function patchDetail(detail: ThreadDetail, action: ReaderAction): ThreadDetail {
@@ -259,7 +292,7 @@ export default function MailScreen({
   const [seenLink, setSeenLink] = useState(linkedShare);
   const [details, setDetails] = useState<Record<string, ThreadDetail>>(initialThread ? { [initialThread.key]: initialThread } : {});
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
-  const [search, setSearch] = useState(initialQuery.query);
+  const [searchText] = useState(() => createSearchText(initialQuery.query));
   const [now, setNow] = useState(initialNow);
   const [syncing, setSyncing] = useState(false);
   const [entered, setEntered] = useState<string | null>(null);
@@ -269,6 +302,7 @@ export default function MailScreen({
   const request = useRef(0);
   const removing = useRef(new Set<string>());
   const early = useRef(new Map<string, Promise<MailActionReply>>());
+  const earlyHides = useRef(new Map<string, PendingHide>());
   const [pendingMarks] = useState(createPendingMarks);
   const sendingThreads = useRef(new Map<string, OutgoingThread[]>());
   const keptUnread = useRef(new Set<string>());
@@ -346,8 +380,13 @@ export default function MailScreen({
   const current = threads.find((thread) => thread.key === cursor) ?? null;
   const currentIndex = current ? threads.indexOf(current) : -1;
   const detail = cursor ? (details[cursor] ?? null) : null;
+  const viewed = current ?? (cursor && detail && !inShared ? summaryFromDetail(detail) : null);
   const viewParam = query.query ? "search" : query.view;
-  const own = nav.accounts.map((account) => account.email).concat(viewer.email, ...accounts.map((account) => account.email));
+  const own = useMemo(
+    () => nav.accounts.map((account) => account.email).concat(viewer.email, ...accounts.map((account) => account.email)),
+    [nav.accounts, viewer.email, accounts],
+  );
+  const readerViewer = useMemo(() => ({ id: viewer.id, name: viewer.name }), [viewer.id, viewer.name]);
   const folders = nav.folders.filter((folder) => folder.role === "other" && (!query.account || folder.sourceId === query.account));
   const activeFolder = query.view.startsWith("folder:") ? nav.folders.find((folder) => `folder:${folder.id}` === query.view) : null;
   const moreLabel = query.query ? null : (MORE_VIEWS.find((view) => view.id === query.view)?.label ?? activeFolder?.name ?? null);
@@ -383,14 +422,14 @@ export default function MailScreen({
 
   function pull(key: string) {
     const hit = cachedThread(key);
-    if (hit) setDetails((existing) => (existing[key] === hit ? existing : { ...existing, [key]: hit }));
+    if (hit) setDetails((existing) => (existing[key] === hit ? existing : withDetail(existing, key, hit, [latest.current.cursor])));
     return hit;
   }
 
   function fetchDetail(key: string, fresh = false) {
     loadThread(key, fresh)
       .then((loaded) => {
-        setDetails((existing) => ({ ...existing, [key]: loaded }));
+        setDetails((existing) => withDetail(existing, key, loaded, [latest.current.cursor]));
         setDetailErrors((existing) => {
           if (!(key in existing)) return existing;
           const next = { ...existing };
@@ -489,7 +528,8 @@ export default function MailScreen({
     const target = latest.current.query;
     const token = request.current;
     loadShared();
-    if (sharedView(target)) {
+    const scheduledOnly = target.view === "scheduled" && !target.query;
+    if (sharedView(target) || scheduledOnly) {
       setSyncing(true);
       let failures: string[] = [];
       return (sync
@@ -503,7 +543,10 @@ export default function MailScreen({
           )
         : Promise.resolve()
       )
-        .then(() => fetchNav().then(setNav))
+        .then(() => {
+          if (scheduledOnly) loadScheduled();
+          return fetchNav().then(setNav);
+        })
         .catch(() => null)
         .finally(() => {
           setSyncing(false);
@@ -578,16 +621,19 @@ export default function MailScreen({
     loadingMore.current = true;
     const token = request.current;
     setLoading(true);
+    const reading = pendingMarks.reading();
     fetchList(target, currentPage.next)
       .then((older) => {
         if (token !== request.current) return;
+        const fresh = settleSending(older.threads, reading.startedAt);
         setPage((existing) => ({
-          threads: [...(existing?.threads ?? []), ...older.threads.filter((thread) => !existing?.threads.some((item) => item.key === thread.key))],
+          threads: [...(existing?.threads ?? []), ...fresh.filter((thread) => !existing?.threads.some((item) => item.key === thread.key))],
           next: older.next,
         }));
       })
       .catch((error: Error) => showToast({ message: error.message, tone: "alert" }))
       .finally(() => {
+        reading.done();
         loadingMore.current = false;
         if (token === request.current) setLoading(false);
       });
@@ -668,14 +714,14 @@ export default function MailScreen({
     window.setTimeout(() => refreshRef.current(false), 1500);
   }
 
-  function toggleSelect(key: string) {
+  const toggleSelect = useCallback((key: string) => {
     setSelected((existing) => {
       const next = new Set(existing);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-  }
+  }, []);
 
   function actMany(keys: string[], action: ReaderAction, until?: string, detail?: string) {
     const { page: currentPage, query: target } = latest.current;
@@ -689,6 +735,7 @@ export default function MailScreen({
     const from = target.query ? "search" : target.view;
     const chosenKeys = new Set(chosen.map((thread) => thread.key));
     chosen.forEach((thread) => removing.current.add(thread.key));
+    const hides = new Map(chosen.map((thread) => [thread.key, pendingMarks.hide(thread.key)]));
     setPage({ ...currentPage!, threads: currentPage!.threads.filter((thread) => !chosenKeys.has(thread.key)) });
     const unread = chosen.filter((thread) => thread.unread);
     if (inInbox(from)) setNav((existing) => unread.reduce((shifted, thread) => shiftUnread(shifted, thread, -1), existing));
@@ -697,6 +744,7 @@ export default function MailScreen({
     const putBack = (thread: ThreadSummary) => {
       if (restored.has(thread.key)) return;
       restored.add(thread.key);
+      hides.get(thread.key)?.failed();
       restore(thread, target);
     };
     if (latest.current.cursor && chosenKeys.has(latest.current.cursor)) {
@@ -764,16 +812,21 @@ export default function MailScreen({
         else if (missed) showToast({ message: partlyMoved(missed, missedProblem, count), tone: "alert" });
         settleNav();
       })
-      .finally(() => chosen.forEach((thread) => removing.current.delete(thread.key)));
+      .finally(() => {
+        hides.forEach((hidden) => hidden.saved());
+        chosen.forEach((thread) => removing.current.delete(thread.key));
+      });
   }
 
   function startMove(key: string) {
     const { query: target } = latest.current;
     if (early.current.has(key)) return;
     removing.current.add(key);
+    const hidden = pendingMarks.hide(key);
+    earlyHides.current.set(key, hidden);
     const action = primaryMove();
     const started = postMove(key, action, target.query ? "search" : target.view);
-    started.catch(() => undefined);
+    started.then(() => hidden.saved(), () => hidden.failed());
     early.current.set(key, started);
     window.setTimeout(() => {
       if (early.current.get(key) !== started) return;
@@ -784,6 +837,7 @@ export default function MailScreen({
           if (!flagReconnect(error, {})) showToast({ message: error.message, tone: "alert" });
         })
         .finally(() => {
+          if (earlyHides.current.get(key) === hidden) earlyHides.current.delete(key);
           removing.current.delete(key);
           settleNav();
         });
@@ -792,27 +846,37 @@ export default function MailScreen({
 
   function act(key: string, action: ReaderAction, until?: string, detail?: string, silent = false) {
     const { page: currentPage, query: target } = latest.current;
-    const thread = currentPage?.threads.find((item) => item.key === key);
-    if (!thread) {
-      if (!early.current.has(key)) return;
-      early.current.delete(key);
-      removing.current.delete(key);
-      return;
+    const listed = currentPage?.threads.find((item) => item.key === key);
+    if (!listed) {
+      if (early.current.has(key)) {
+        early.current.delete(key);
+        earlyHides.current.delete(key);
+        removing.current.delete(key);
+        return;
+      }
+      if (key !== latest.current.cursor || sharedView(target)) return;
     }
+    const opened = details[key] ?? cachedThread(key);
+    const thread = listed ?? (opened ? summaryFromDetail(opened) : bareSummary(key));
     const from = target.query ? "search" : target.view;
     if (MOVES.has(action)) {
-      const list = currentPage!.threads;
+      const list = currentPage?.threads ?? [];
       const index = list.findIndex((item) => item.key === key);
       const remaining = list.filter((item) => item.key !== key);
       removing.current.add(key);
-      setPage({ ...currentPage!, threads: remaining });
-      if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, -1));
-      else if (thread.unread && action === "inbox") setNav((existing) => shiftUnread(existing, thread, 1));
+      const hidden = earlyHides.current.get(key) ?? pendingMarks.hide(key);
+      earlyHides.current.delete(key);
+      if (listed) {
+        setPage({ ...currentPage!, threads: remaining });
+        if (thread.unread && inInbox(from)) setNav((existing) => shiftUnread(existing, thread, -1));
+        else if (thread.unread && action === "inbox") setNav((existing) => shiftUnread(existing, thread, 1));
+      }
       let restored = false;
       const putBack = () => {
         if (restored) return;
         restored = true;
-        restore(thread, target);
+        hidden.failed();
+        if (listed) restore(thread, target);
       };
       if (latest.current.cursor === key) {
         const next = remaining[index] ?? remaining[index - 1] ?? null;
@@ -853,6 +917,7 @@ export default function MailScreen({
           else showToast({ message: error.message, tone: "alert" });
         })
         .finally(() => {
+          hidden.saved();
           removing.current.delete(key);
           settleNav();
         });
@@ -862,7 +927,7 @@ export default function MailScreen({
       keptUnread.current.add(key);
       forgetDwellRead(key);
     }
-    const change = action === "read" && thread.unread ? -1 : action === "unread" && !thread.unread ? 1 : 0;
+    const change = listed ? (action === "read" && thread.unread ? -1 : action === "unread" && !thread.unread ? 1 : 0) : 0;
     setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, action) : item)) } : existing));
     setDetails((existing) => (existing[key] ? { ...existing, [key]: patchDetail(existing[key], action) } : existing));
     const cached = cachedThread(key);
@@ -872,6 +937,7 @@ export default function MailScreen({
     const mark = pendingMarks.hold(key, action as MarkAction);
     postAction(key, action, from)
       .then((result) => {
+        if (!listed) settleNav();
         if (!result.failed) return mark.saved();
         mark.failed();
         forgetThread(key);
@@ -883,7 +949,7 @@ export default function MailScreen({
         setPage((existing) => (existing ? { ...existing, threads: existing.threads.map((item) => (item.key === key ? patchSummary(item, undoAction) : item)) } : existing));
         forgetThread(key);
         fetchDetail(key, true);
-        if (change && inInbox(from)) settleNav();
+        if ((change && inInbox(from)) || !listed) settleNav();
         const handled = flagReconnect(error, { sourceId: thread.sourceId });
         if (!silent && !handled) showToast({ message: error.message, tone: "alert" });
       });
@@ -974,15 +1040,15 @@ export default function MailScreen({
   usePullToRefresh(listScroller, listBody, pullMark, pullRefresh);
 
   useEffect(() => {
-    if (!cursor || !current?.unread || keptUnread.current.has(cursor) || !dwellReadDue(cursor, current.latestId)) return;
+    if (!cursor || !viewed?.unread || keptUnread.current.has(cursor) || !dwellReadDue(cursor, viewed.latestId)) return;
     const key = cursor;
-    const latestId = current.latestId;
+    const latestId = viewed.latestId;
     const timer = window.setTimeout(() => {
       noteDwellRead(key, latestId);
       actRef.current(key, "read", undefined, undefined, true);
     }, READ_DWELL_MS);
     return () => window.clearTimeout(timer);
-  }, [cursor, current?.unread, current?.latestId]);
+  }, [cursor, viewed?.unread, viewed?.latestId]);
 
   useEffect(() => {
     const onOpen = (event: Event) => {
@@ -1019,6 +1085,22 @@ export default function MailScreen({
     }
     selectRef.current(target, true);
   }, [linkedShare, initialShared, initialThread]);
+
+  const seenInitial = useRef({ thread: initialThread?.key ?? null, list: listKey(initialQuery) });
+  useEffect(() => {
+    const key = initialThread?.key ?? null;
+    const list = listKey(initialQuery);
+    const seen = seenInitial.current;
+    seenInitial.current = { thread: key ?? seen.thread, list };
+    if (linkedShare) return;
+    const { query: shown, cursor: at, open: reading } = latest.current;
+    if (list !== seen.list && list !== listKey(shown)) showRef.current(initialQuery);
+    if (initialThread && initialThread.key !== seen.thread && (initialThread.key !== at || (!reading && narrow()))) {
+      storeThread(initialThread);
+      if (sharedView(latest.current.query)) showRef.current({ view: HOME_VIEW, account: null, query: "" });
+      selectRef.current(initialThread.key, true);
+    }
+  }, [initialThread, initialQuery, linkedShare]);
 
   const readerPane = useRef<HTMLDivElement>(null);
   const backSwiped = useRef(false);
@@ -1256,14 +1338,14 @@ export default function MailScreen({
   useShortcut("mail-read", () => {
     if (inShared) return false;
     if (selectedThreads.length) return bulk("read");
-    if (!current) return false;
-    act(current.key, current.unread ? "read" : "unread");
+    if (!viewed) return false;
+    act(viewed.key, viewed.unread ? "read" : "unread");
   });
   useShortcut("mail-flag", () => {
     if (inShared) return false;
     if (selectedThreads.length) return bulk("flag");
-    if (!current) return false;
-    act(current.key, current.flagged ? "unflag" : "flag");
+    if (!viewed) return false;
+    act(viewed.key, viewed.flagged ? "unflag" : "flag");
   });
   useShortcut("mail-unsubscribe", () => {
     if (inShared) return false;
@@ -1323,71 +1405,114 @@ export default function MailScreen({
     visibleSearch()?.blur();
   }
 
-  function submitSearch(event: FormEvent) {
-    event.preventDefault();
-    searchAndAsk(search.trim());
-  }
-
   function clearSearch() {
-    setSearch("");
+    searchText.set("");
     askToken.current += 1;
     setAsk(null);
-    if (query.query) show({ ...query, query: "" });
+    if (latest.current.query.query) show({ ...latest.current.query, query: "" });
   }
+
+  const searchActions = useRef({ submit: searchAndAsk, clear: clearSearch, ask: runAsk });
+  useEffect(() => {
+    searchActions.current = { submit: searchAndAsk, clear: clearSearch, ask: runAsk };
+  });
+  const submitSearch = useCallback((text: string) => searchActions.current.submit(text), []);
+  const clearSearchBox = useCallback(() => searchActions.current.clear(), []);
+  const askSearchBox = useCallback((text: string) => searchActions.current.ask(text), []);
+  const asking = Boolean(ask);
 
   function searchForm(place: "header" | "list") {
     return (
-    <form role="search" onSubmit={submitSearch} className={cn("relative", place === "header" && "w-full max-w-[26rem]")}>
-      <label htmlFor={`mail-search-${place}`} className="sr-only">
-        Search mail
-      </label>
-      <SearchIcon aria-hidden className="text-subtle pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
-      <input
-        ref={place === "header" ? searchInput : searchInputList}
-        id={`mail-search-${place}`}
-        type="search"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && (search || ask)) {
-            event.preventDefault();
-            clearSearch();
-          }
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && search.trim()) {
-            event.preventDefault();
-            event.stopPropagation();
-            searchAndAsk(search.trim());
-          }
-        }}
-        placeholder="Search, or ask a question"
-        autoComplete="off"
-        className={cn("placeholder:text-subtle text-foreground ease-power3-out bg-surface-field focus:bg-surface-raised w-full rounded-xl pr-24 pl-9 text-[14px] transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-search-cancel-button]:hidden", place === "header" ? "h-8" : "h-9")}
+      <SearchBox
+        place={place}
+        text={searchText}
+        asking={asking}
+        inputRef={place === "header" ? searchInput : searchInputList}
+        onSubmit={submitSearch}
+        onClear={clearSearchBox}
+        onAsk={askSearchBox}
       />
-      {search ? (
-        <>
-        <Button
-          variant="ghost"
-          size="none"
-          onClick={() => runAsk(search.trim())}
-          aria-label="Ask AI about your email"
-          title="Ask AI"
-          className="text-primary-foreground hover:text-primary-foreground absolute top-1/2 right-9 h-6 -translate-y-1/2 gap-1 bg-[color-mix(in_srgb,var(--primary)_22%,transparent)] px-2 text-[12px] font-normal hover:bg-[color-mix(in_srgb,var(--primary)_32%,transparent)]"
-        >
-          <SparkleIcon aria-hidden className="size-3" />
-          Ask
-        </Button>
-        <Button variant="ghost" size="icon-sm" onClick={clearSearch} aria-label="Clear search" className="absolute top-1/2 right-2 -translate-y-1/2">
-          <CloseIcon aria-hidden className="size-2.5" />
-        </Button>
-        </>
-      ) : (
-        <Kbd aria-hidden className="absolute top-1/2 right-2 -translate-y-1/2">
-          /
-        </Kbd>
-      )}
-    </form>
     );
   }
+
+  const listActions = useRef<ListActions | null>(null);
+  useEffect(() => {
+    listActions.current = { select, more, startMove, act, primaryMove, snooze };
+  });
+  const openRow = useCallback((key: string) => listActions.current?.select(key, true), []);
+  const hoverRow = useCallback((key: string) => prefetchThreads([key]), []);
+  const loadMore = useCallback(() => listActions.current?.more(), []);
+  const inboxMove = (query.view === "archive" || query.view === "snoozed" || query.view === "junk") && !query.query;
+  const inDrafts = !query.query && query.view === "drafts";
+  const inSnoozed = query.view === "snoozed" && !query.query;
+  const swipe = useMemo(
+    () =>
+      inDrafts
+        ? null
+        : {
+            leftLabel: inboxMove ? "Move to Inbox" : "Archive",
+            restore: inboxMove,
+            onLeftStart: (key: string) => listActions.current?.startMove(key),
+            onLeft: (key: string) => listActions.current?.act(key, listActions.current.primaryMove()),
+            rightLabel: inSnoozed ? null : "Remind me",
+            onRight: (key: string) => {
+              if (!inSnoozed) listActions.current?.snooze([key]);
+            },
+          },
+    [inDrafts, inboxMove, inSnoozed],
+  );
+
+  const readerActions = useRef<ReaderActions | null>(null);
+  useEffect(() => {
+    readerActions.current = {
+      onAction: (action: ReaderAction) => {
+        if (!cursor) return;
+        if (action === "snooze") snooze([cursor]);
+        else act(cursor, action);
+      },
+      onBack: () => closeReader(),
+      onNext: (swiped?: boolean) => {
+        const upcoming = threads[currentIndex + 1];
+        setEntered(upcoming && !swiped ? upcoming.key : null);
+        step(1);
+      },
+      onPrevious: () => {
+        setEntered(null);
+        step(-1);
+      },
+      onSplit: (sender: string, split: MailSplit) => {
+        if (cursor) moveSender(cursor, sender, split);
+      },
+      onUnsubscribe: (mode: UnsubscribeMode) => {
+        if (cursor) setUnsubscribing({ thread: cursor, mode });
+      },
+      onBlock: () => {
+        if (cursor) setUnsubscribing({ thread: cursor, mode: "block" });
+      },
+      onSent: () => {
+        if (cursor) sent(cursor, 2500);
+      },
+      onSending: (draftOnly: boolean, others: boolean) => (cursor ? sending(cursor, draftOnly, others) : UNTRACKED),
+      onLeave: () => {
+        if (cursor) leave(cursor);
+      },
+    };
+  });
+  const readerHandlers = useMemo(
+    () => ({
+      onAction: (action: ReaderAction) => readerActions.current?.onAction(action),
+      onBack: () => readerActions.current?.onBack(),
+      onNext: (swiped?: boolean) => readerActions.current?.onNext(swiped),
+      onPrevious: () => readerActions.current?.onPrevious(),
+      onSplit: (sender: string, split: MailSplit) => readerActions.current?.onSplit(sender, split),
+      onUnsubscribe: (mode: UnsubscribeMode) => readerActions.current?.onUnsubscribe(mode),
+      onBlock: () => readerActions.current?.onBlock(),
+      onSent: () => readerActions.current?.onSent(),
+      onSending: (draftOnly: boolean, others: boolean) => readerActions.current?.onSending(draftOnly, others) ?? UNTRACKED,
+      onLeave: () => readerActions.current?.onLeave(),
+    }),
+    [],
+  );
 
   const empty = query.query
     ? `No emails match “${query.query}”.`
@@ -1690,25 +1815,12 @@ export default function MailScreen({
                 loading={loading}
                 more={Boolean(page?.next)}
                 empty={empty}
-                onOpen={(key) => select(key, true)}
-                onHover={(key) => prefetchThreads([key])}
-                onMore={more}
+                onOpen={openRow}
+                onHover={hoverRow}
+                onMore={loadMore}
                 selected={selected}
                 onToggle={toggleSelect}
-                swipe={
-                  !query.query && query.view === "drafts"
-                    ? null
-                    : {
-                        leftLabel: primaryMove() === "inbox" ? "Move to Inbox" : "Archive",
-                        restore: primaryMove() === "inbox",
-                        onLeftStart: startMove,
-                        onLeft: (key) => act(key, primaryMove()),
-                        rightLabel: query.view === "snoozed" && !query.query ? null : "Remind me",
-                        onRight: (key) => {
-                          if (query.view !== "snoozed" || query.query) snooze([key]);
-                        },
-                      }
-                }
+                swipe={swipe}
               />
             )}
             </div>
@@ -1749,7 +1861,7 @@ export default function MailScreen({
           ) : (
           <ThreadReader
             key={cursor ?? "none"}
-            viewer={{ id: viewer.id, name: viewer.name }}
+            viewer={readerViewer}
             notes={notesAsked && cursor === initialThread?.key}
             summary={current}
             detail={detail}
@@ -1759,30 +1871,19 @@ export default function MailScreen({
             view={viewParam}
             accounts={accounts}
             compose={initialCompose && cursor === initialThread?.key ? initialCompose : null}
-            onAction={(action) => {
-              if (!cursor) return;
-              if (action === "snooze") snooze([cursor]);
-              else act(cursor, action);
-            }}
-            onBack={() => closeReader()}
-            onNext={(swiped) => {
-              const next = threads[currentIndex + 1];
-              setEntered(next && !swiped ? next.key : null);
-              step(1);
-            }}
-            onPrevious={() => {
-              setEntered(null);
-              step(-1);
-            }}
+            onAction={readerHandlers.onAction}
+            onBack={readerHandlers.onBack}
+            onNext={readerHandlers.onNext}
+            onPrevious={readerHandlers.onPrevious}
             previous={currentIndex > 0 ? threads[currentIndex - 1] : null}
             next={currentIndex !== -1 && currentIndex < threads.length - 1 ? threads[currentIndex + 1] : null}
             entered={entered !== null && entered === cursor}
-            onSplit={(sender, split) => cursor && moveSender(cursor, sender, split)}
-            onUnsubscribe={(mode) => cursor && setUnsubscribing({ thread: cursor, mode })}
-            onBlock={() => cursor && setUnsubscribing({ thread: cursor, mode: "block" })}
-            onSent={() => cursor && sent(cursor, 2500)}
-            onSending={(draftOnly, others) => (cursor ? sending(cursor, draftOnly, others) : UNTRACKED)}
-            onLeave={() => cursor && leave(cursor)}
+            onSplit={readerHandlers.onSplit}
+            onUnsubscribe={readerHandlers.onUnsubscribe}
+            onBlock={readerHandlers.onBlock}
+            onSent={readerHandlers.onSent}
+            onSending={readerHandlers.onSending}
+            onLeave={readerHandlers.onLeave}
           />
           )}
         </div>

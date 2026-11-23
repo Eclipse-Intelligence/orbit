@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { FollowUpBanner, FollowUpCancelledNote } from "@/components/mail/follow-up-banner";
 import DeferralNotice from "@/components/mail/deferral-notice";
 import MessageAttachments from "@/components/mail/message-attachments";
 import ReadStatus from "@/components/mail/read-status";
 import ThreadPeople from "@/components/mail/thread-people";
-import { cancelReminder, loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
+import { cancelReminder, forgetThread, loadSummary, type ThreadSummaryText } from "@/components/mail/mail-cache";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
 import type { ComposerDraft, ComposerStart, SendTracker } from "@/components/mail/mail-composer";
 import { ComposerLoading } from "@/components/mail/composer-loading";
@@ -69,6 +69,49 @@ async function sendDraftDelete(id: string, keepalive: boolean) {
   if (response?.ok) return null;
   const body = (await response?.json().catch(() => ({}))) as { error?: string } | undefined;
   return body?.error ?? DRAFT_DELETE_FAILED;
+}
+
+type PendingDraftDelete = { timer: number; thread: string; failed: (id: string, problem: string) => void };
+
+const pendingDraftDeletes = new Map<string, PendingDraftDelete>();
+let flushWatched = false;
+
+function runDraftDelete(id: string, keepalive: boolean) {
+  const entry = pendingDraftDeletes.get(id);
+  if (!entry) return;
+  window.clearTimeout(entry.timer);
+  pendingDraftDeletes.delete(id);
+  void sendDraftDelete(id, keepalive).then((problem) => {
+    if (problem) entry.failed(id, problem);
+    else forgetThread(entry.thread);
+  });
+}
+
+function flushDraftDeletes() {
+  for (const id of [...pendingDraftDeletes.keys()]) runDraftDelete(id, true);
+}
+
+function watchDraftFlush() {
+  if (flushWatched) return;
+  flushWatched = true;
+  window.addEventListener("pagehide", flushDraftDeletes);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushDraftDeletes();
+  });
+}
+
+function scheduleDraftDelete(id: string, thread: string, failed: PendingDraftDelete["failed"]) {
+  watchDraftFlush();
+  const timer = window.setTimeout(() => runDraftDelete(id, false), UNDO_DELETE_MS);
+  pendingDraftDeletes.set(id, { timer, thread, failed });
+}
+
+function cancelDraftDelete(id: string) {
+  const entry = pendingDraftDeletes.get(id);
+  if (!entry) return false;
+  window.clearTimeout(entry.timer);
+  pendingDraftDeletes.delete(id);
+  return true;
 }
 
 function minuteNow() {
@@ -215,7 +258,7 @@ function AddressDetails({ id, message }: { id: string; message: ThreadMessage })
   );
 }
 
-function Message({
+const Message = memo(function Message({
   message,
   companies,
   workspaceName,
@@ -239,7 +282,7 @@ function Message({
   expanded: boolean;
   collapsible: boolean;
   hideQuotes: boolean;
-  onToggle: () => void;
+  onToggle: (id: string) => void;
   swipe: () => SwipeHandlers;
 }) {
   const [details, setDetails] = useState(false);
@@ -275,7 +318,7 @@ function Message({
         <Button
           variant="item"
           size="none"
-          onClick={expanded ? () => setDetails((open) => !open) : onToggle}
+          onClick={expanded ? () => setDetails((open) => !open) : () => onToggle(message.id)}
           aria-expanded={expanded ? details : false}
           aria-controls={showingDetails ? detailsId : undefined}
           aria-label={expanded ? `${details ? "Hide" : "Show"} the addresses on ${sender}'s email` : `Open ${sender}'s email`}
@@ -307,7 +350,7 @@ function Message({
           </span>
         </Button>
         {expanded && collapsible && (
-          <Button variant="ghost" size="icon" aria-label={`Collapse ${sender}'s email`} title="Collapse" onClick={onToggle} className="mt-2 mr-2 shrink-0 pointer-coarse:mt-0.5 pointer-coarse:mr-0.5 pointer-coarse:size-11">
+          <Button variant="ghost" size="icon" aria-label={`Collapse ${sender}'s email`} title="Collapse" onClick={() => onToggle(message.id)} className="mt-2 mr-2 shrink-0 pointer-coarse:mt-0.5 pointer-coarse:mr-0.5 pointer-coarse:size-11">
             <ChevronDownIcon aria-hidden className="size-4 rotate-180" />
           </Button>
         )}
@@ -333,7 +376,7 @@ function Message({
       {!expanded && footer && <div className="px-4 pb-3 sm:pl-14">{footer}</div>}
     </article>
   );
-}
+});
 
 function SummaryLine({ threadKey, latestId, messages }: { threadKey: string; latestId: string; messages: number }) {
   const id = `${threadKey}|${latestId}`;
@@ -401,7 +444,7 @@ function PreparedCard({ prepared, onUse, onDismiss }: { prepared: PreparedReply;
   );
 }
 
-function Thread({
+const Thread = memo(function Thread({
   detail,
   own,
   workspaceName,
@@ -430,6 +473,18 @@ function Thread({
     return [...seen].map(([id, name]) => ({ id, name }));
   }, [detail.people]);
   const visible = showAll ? detail.messages : [detail.messages[0], ...detail.messages.slice(-2)];
+  const deferralNote = useMemo(
+    () => (detail.deferral ? <DeferralNotice key={`${detail.deferral.id}:${detail.deferral.at}`} deferral={detail.deferral} /> : null),
+    [detail.deferral],
+  );
+  const toggle = useCallback((id: string) => {
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -444,18 +499,11 @@ function Thread({
             swipe={swipe}
             onEditDraft={onEditDraft}
             onDeleteDraft={onDeleteDraft}
-            footer={detail.deferral?.messageId === message.id ? <DeferralNotice key={`${detail.deferral.id}:${detail.deferral.at}`} deferral={detail.deferral} /> : null}
+            footer={detail.deferral?.messageId === message.id ? deferralNote : null}
             expanded={open.has(message.id)}
             collapsible={detail.messages.length > 1}
             hideQuotes={message.id !== detail.messages[0].id}
-            onToggle={() =>
-              setOpen((current) => {
-                const next = new Set(current);
-                if (next.has(message.id)) next.delete(message.id);
-                else next.add(message.id);
-                return next;
-              })
-            }
+            onToggle={toggle}
           />
           {!showAll && index === 0 && hidden > 0 && (
             <Button variant="chip" size="chip" onClick={() => setShowAll(true)} className="mx-4 self-start pointer-coarse:h-11">
@@ -466,7 +514,7 @@ function Thread({
       ))}
     </div>
   );
-}
+});
 
 const REPLIES: { mode: Exclude<DraftMode, "new">; label: string; shortcut: string; icon: typeof ReplyIcon }[] = [
   { mode: "reply", label: "Reply", shortcut: "mail-reply", icon: ReplyIcon },
@@ -551,7 +599,7 @@ function SenderNotice({
   );
 }
 
-export default function ThreadReader({
+function ThreadReader({
   summary,
   detail,
   error,
@@ -619,7 +667,6 @@ export default function ThreadReader({
   const [invite, setInvite] = useState<{ prefill: InvitePrefill; setup: InviteSetup; at: number } | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const { showToast } = useComposer();
-  const pendingDeletes = useRef(new Map<string, number>());
   const deleteFailed = useRef<(id: string, problem: string) => void>(() => undefined);
   const replyHint = useShortcutHint("mail-reply");
   const replyAllHint = useShortcutHint("mail-reply-all");
@@ -779,23 +826,14 @@ export default function ThreadReader({
     setDraftError(null);
     setRemovedDrafts((existing) => new Set(existing).add(message.id));
     const id = message.id;
-    const pending = pendingDeletes.current;
-    const timer = window.setTimeout(() => {
-      if (!pending.delete(id)) return;
-      void sendDraftDelete(id, false).then((problem) => problem && deleteFailed.current(id, problem));
-    }, UNDO_DELETE_MS);
-    pending.set(id, timer);
+    scheduleDraftDelete(id, detail?.key ?? "", (draftId, problem) => deleteFailed.current(draftId, problem));
     showToast({
       message: "Draft discarded.",
       duration: UNDO_DELETE_MS - 500,
       action: {
         label: "Undo",
         run: () => {
-          const waiting = pending.get(id);
-          if (waiting === undefined) return;
-          window.clearTimeout(waiting);
-          pending.delete(id);
-          restoreDraft(id);
+          if (cancelDraftDelete(id)) restoreDraft(id);
         },
       },
     });
@@ -902,28 +940,6 @@ export default function ThreadReader({
     };
   });
 
-  useEffect(() => {
-    const pending = pendingDeletes.current;
-    const failed = deleteFailed;
-    const flush = () => {
-      for (const [id, timer] of pending) {
-        window.clearTimeout(timer);
-        pending.delete(id);
-        void sendDraftDelete(id, true).then((problem) => problem && failed.current(id, problem));
-      }
-    };
-    const hidden = () => {
-      if (document.visibilityState === "hidden") flush();
-    };
-    window.addEventListener("pagehide", flush);
-    document.addEventListener("visibilitychange", hidden);
-    return () => {
-      window.removeEventListener("pagehide", flush);
-      document.removeEventListener("visibilitychange", hidden);
-      flush();
-    };
-  }, []);
-
   const composeStarted = useRef(false);
   useEffect(() => {
     if (!compose || !detail || !target || composeStarted.current) return;
@@ -968,6 +984,23 @@ export default function ThreadReader({
   const flagHint = useShortcutHint("mail-flag");
   const snoozeHint = useShortcutHint("mail-snooze");
   const unsubscribeHint = useShortcutHint("mail-unsubscribe");
+
+  const draftActions = useRef({ edit: editOutsideDraft, remove: deleteOutsideDraft });
+  useEffect(() => {
+    draftActions.current = { edit: editOutsideDraft, remove: deleteOutsideDraft };
+  });
+  const editDraft = useCallback((message: ThreadMessage) => draftActions.current.edit(message), []);
+  const deleteDraft = useCallback((message: ThreadMessage) => draftActions.current.remove(message), []);
+  const replacing = active?.replaces ?? null;
+  const shownDetail = useMemo(
+    () => (detail ? { ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id) && message.id !== replacing) } : null),
+    [detail, removedDrafts, replacing],
+  );
+  const repliedFollowUp = detail?.followUpReplied ?? null;
+  const followUpNote = useMemo(
+    () => (repliedFollowUp ? { id: repliedFollowUp.messageId, node: <FollowUpCancelledNote replied={repliedFollowUp} /> } : null),
+    [repliedFollowUp],
+  );
 
   if (!summary && !detail) {
     return (
@@ -1126,13 +1159,13 @@ export default function ThreadReader({
             <>
               <Thread
                 key={detail.key + detail.messages.length}
-                detail={{ ...detail, messages: detail.messages.filter((message) => !removedDrafts.has(message.id) && message.id !== active?.replaces) }}
+                detail={shownDetail ?? detail}
                 workspaceName={workspaceName}
                 own={own}
                 swipe={swipe}
-                onEditDraft={(message) => editOutsideDraft(message)}
-                onDeleteDraft={deleteOutsideDraft}
-                before={detail.followUpReplied ? { id: detail.followUpReplied.messageId, node: <FollowUpCancelledNote replied={detail.followUpReplied} /> } : null}
+                onEditDraft={editDraft}
+                onDeleteDraft={deleteDraft}
+                before={followUpNote}
               />
               {draftError && (
                 <p role="alert" className="text-danger px-4 text-[13px]">
@@ -1281,3 +1314,5 @@ export default function ThreadReader({
     </div>
   );
 }
+
+export default memo(ThreadReader);

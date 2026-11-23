@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { watchSwipe, type SwipeHandlers } from "@/components/mail/swipe";
+import { forwardedKey } from "@/lib/mail/frame-keys";
 import Button from "@/components/_ui/button";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,7 @@ type FrameMessage =
   | { type: "quotes"; found: boolean }
   | { type: "zoom"; zoomed: boolean }
   | { type: "pan"; dy: number }
+  | { type: "key"; key: string; code: string; shiftKey: boolean; repeat: boolean }
   | { type: "touch"; phase: "touchstart" | "touchmove" | "touchend" | "touchcancel"; touches: FrameTouch[]; changed: FrameTouch[] };
 
 type FrameTouch = { identifier: number; clientX: number; clientY: number };
@@ -198,6 +200,14 @@ function frameScript(hideQuotes: boolean) {
       zoomTo(zoom * Math.exp(-event.deltaY / 200), event.clientX, event.clientY);
     }, { passive: false });
     document.addEventListener("dblclick", function () { if (zoom > 1) zoomTo(1, 0); });
+    document.addEventListener("keydown", function (event) {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing || event.defaultPrevented) return;
+      var target = event.target;
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/i.test(target.tagName || ""))) return;
+      var key = event.key;
+      if (key !== "Escape" && key !== "ArrowUp" && key !== "ArrowDown" && (key.length !== 1 || key === " ")) return;
+      post({ type: "key", key: key, code: event.code || "", shiftKey: event.shiftKey, repeat: event.repeat });
+    });
     document.addEventListener("load", fit, true);
     window.addEventListener("load", report);
     if (typeof ResizeObserver === "undefined") window.addEventListener("resize", fit);
@@ -303,6 +313,9 @@ export default function EmailFrame({
         if (scroller) scroller.scrollTop -= message.dy;
       } else if (message.type === "touch" && Array.isArray(message.touches) && Array.isArray(message.changed)) {
         proxy.dispatchEvent(touchEvent(message));
+      } else if (message.type === "key") {
+        const forwarded = forwardedKey(message);
+        if (forwarded) window.dispatchEvent(new KeyboardEvent("keydown", { ...forwarded, bubbles: true, cancelable: true }));
       }
     };
     window.addEventListener("message", listen);

@@ -56,3 +56,37 @@ describe("pending mail marks", () => {
     assert.equal(marks.keep(list), list);
   });
 });
+
+describe("pending mail moves", () => {
+  it("keeps a moved thread out of a list read that started before the move was saved", () => {
+    const marks = createPendingMarks();
+    const stale = marks.reading();
+    const moved = marks.hide("a");
+    assert.deepEqual(marks.keep([thread("a", true), thread("b", true)], stale.startedAt).map((item) => item.key), ["b"]);
+    moved.saved();
+    assert.deepEqual(marks.keep([thread("a", true), thread("b", true)], stale.startedAt).map((item) => item.key), ["b"]);
+    const fresh = marks.reading();
+    assert.deepEqual(marks.keep([thread("a", true), thread("b", true)], fresh.startedAt).map((item) => item.key), ["a", "b"]);
+    stale.done();
+    fresh.done();
+    assert.deepEqual(marks.keep([thread("a", true)]).map((item) => item.key), ["a"]);
+  });
+
+  it("shows the thread again when the move fails or is undone", () => {
+    const marks = createPendingMarks();
+    const moved = marks.hide("a");
+    assert.equal(marks.keep([thread("a", true)]).length, 0);
+    moved.failed();
+    assert.equal(marks.keep([thread("a", true)]).length, 1);
+  });
+
+  it("still applies marks to the threads that stay", () => {
+    const marks = createPendingMarks();
+    marks.hide("a");
+    const read = marks.hold("b", "read");
+    const [kept] = marks.keep([thread("a", true), thread("b", true)]);
+    assert.equal(kept.key, "b");
+    assert.equal(kept.unread, false);
+    read.failed();
+  });
+});

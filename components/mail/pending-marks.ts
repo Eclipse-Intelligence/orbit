@@ -7,7 +7,7 @@ export function markSummary(thread: ThreadSummary, action: MarkAction): ThreadSu
   return { ...thread, flagged: action === "flag" };
 }
 
-type Mark = { action: MarkAction; savedAt: number | null };
+type Mark = { action: MarkAction | "hide"; savedAt: number | null };
 
 export function createPendingMarks() {
   const marks = new Map<string, Mark[]>();
@@ -29,20 +29,27 @@ export function createPendingMarks() {
     else marks.delete(key);
   }
 
+  function place(key: string, action: Mark["action"]) {
+    const mark: Mark = { action, savedAt: null };
+    marks.set(key, [...(marks.get(key) ?? []), mark]);
+    return {
+      saved() {
+        if (mark.savedAt !== null) return;
+        mark.savedAt = ++clock;
+        prune();
+      },
+      failed() {
+        drop(key, mark);
+      },
+    };
+  }
+
   return {
     hold(key: string, action: MarkAction) {
-      const mark: Mark = { action, savedAt: null };
-      marks.set(key, [...(marks.get(key) ?? []), mark]);
-      return {
-        saved() {
-          if (mark.savedAt !== null) return;
-          mark.savedAt = ++clock;
-          prune();
-        },
-        failed() {
-          drop(key, mark);
-        },
-      };
+      return place(key, action);
+    },
+    hide(key: string) {
+      return place(key, "hide");
     },
     reading() {
       const startedAt = ++clock;
@@ -57,11 +64,11 @@ export function createPendingMarks() {
     },
     keep(threads: ThreadSummary[], startedAt = Infinity) {
       if (marks.size === 0) return threads;
-      return threads.map((thread) =>
-        (marks.get(thread.key) ?? [])
-          .filter((mark) => mark.savedAt === null || mark.savedAt > startedAt)
-          .reduce((kept, mark) => markSummary(kept, mark.action), thread),
-      );
+      return threads.flatMap((thread) => {
+        const live = (marks.get(thread.key) ?? []).filter((mark) => mark.savedAt === null || mark.savedAt > startedAt);
+        if (live.some((mark) => mark.action === "hide")) return [];
+        return [live.reduce((kept, mark) => (mark.action === "hide" ? kept : markSummary(kept, mark.action)), thread)];
+      });
     },
   };
 }

@@ -35,6 +35,12 @@ const known = new Map<string, MailSharePeople>();
 const asking = new Map<string, { request: Promise<MailSharePeople>; controller: AbortController; waiting: number }>();
 const SHARE_FAILED = "Couldn't load who can see this thread. Try again.";
 
+export function forgetSharePeople() {
+  for (const entry of asking.values()) entry.controller.abort();
+  asking.clear();
+  known.clear();
+}
+
 export function cachedSharePeople(threadKey: string) {
   return known.get(threadKey) ?? null;
 }

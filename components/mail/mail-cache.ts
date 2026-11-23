@@ -13,6 +13,7 @@ import type {
   UnsubscribeResult,
 } from "@/lib/mail/view";
 import { SYNC_RETRYING } from "@/lib/mail/view";
+import { ATTACHMENT_CACHE_LIMIT, DWELL_READ_LIMIT, GENERATION_LIMIT, LIST_CACHE_LIMIT, refresh, SUMMARY_CACHE_LIMIT, THREAD_CACHE_LIMIT, trimOldest } from "@/lib/mail/lru";
 import { SYNC_ORIGIN_HEADER, syncOrigin } from "@/lib/sync-origin";
 
 export type ThreadPage = { threads: ThreadSummary[]; next: ThreadCursor | null };
@@ -25,11 +26,13 @@ const pending = new Map<string, { generation: number; request: Promise<ThreadDet
 const summaries = new Map<string, Promise<ThreadSummaryText>>();
 const attachmentRequests = new Map<string, Promise<MailAttachmentMeta[]>>();
 const attachmentLists = new Map<string, MailAttachmentMeta[]>();
+let generationClock = 0;
+let cacheOwner: string | null = null;
 
 export type ThreadSummaryText = { summary: string | null; todo: string | null };
 export type AskResult = { answer: string; sources: { key: string; subject: string | null; from: string; at: string | null }[] };
 
-function listKey(query: ListQuery) {
+export function listKey(query: ListQuery) {
   return `${query.query ? "search" : query.view}|${query.account ?? ""}|${query.query}`;
 }
 
@@ -81,6 +84,11 @@ export function dwellReadDue(key: string, latestId: string | null | undefined) {
 
 export function noteDwellRead(key: string, latestId: string | null | undefined) {
   dwellReads.add(`${key}|${latestId ?? ""}`);
+  while (dwellReads.size > DWELL_READ_LIMIT) {
+    const oldest = dwellReads.values().next();
+    if (oldest.done) break;
+    dwellReads.delete(oldest.value);
+  }
 }
 
 export function forgetDwellRead(key: string) {
@@ -96,6 +104,34 @@ export function restoreToList(origin: ListQuery, thread: ThreadSummary) {
 }
 
 const queuedDrafts = new Map<string, Set<string>>();
+
+export function bindMailCache(userId: string) {
+  if (cacheOwner === userId) return false;
+  cacheOwner = userId;
+  lists.clear();
+  details.clear();
+  generations.clear();
+  pending.clear();
+  summaries.clear();
+  attachmentRequests.clear();
+  attachmentLists.clear();
+  dwellReads.clear();
+  queuedDrafts.clear();
+  heldRefusals = [];
+  shownProblem = null;
+  return true;
+}
+
+export function mailCacheSizes() {
+  return {
+    lists: lists.size,
+    details: details.size,
+    generations: generations.size,
+    summaries: summaries.size,
+    attachmentRequests: attachmentRequests.size,
+    attachmentLists: attachmentLists.size,
+  };
+}
 
 function withoutQueued(detail: ThreadDetail) {
   const hidden = [...(detail.drafts ?? []), ...(detail.messages ?? [])].filter((item) => queuedDrafts.has(item.id));
@@ -169,7 +205,8 @@ export function cachedList(query: ListQuery) {
 }
 
 export function storeList(query: ListQuery, page: ThreadPage) {
-  lists.set(listKey(query), page);
+  refresh(lists, listKey(query), page);
+  trimOldest(lists, LIST_CACHE_LIMIT);
 }
 
 export function forgetOtherLists(keep: ListQuery) {
@@ -187,35 +224,54 @@ export async function fetchList(query: ListQuery, before?: ThreadCursor | null) 
 }
 
 export function cachedThread(key: string) {
-  return details.get(key) ?? null;
+  const hit = details.get(key);
+  if (!hit) return null;
+  refresh(details, key, hit);
+  return hit;
 }
 
 function generation(key: string) {
   return generations.get(key) ?? 0;
 }
 
+function stamp(key: string) {
+  const next = ++generationClock;
+  refresh(generations, key, next);
+  trimOldest(generations, GENERATION_LIMIT);
+  return next;
+}
+
 function primeSummary(detail: ThreadDetail) {
   const cached = detail.cachedSummary;
-  if (cached && !summaries.has(`${detail.key}|${cached.latestId}`)) {
-    summaries.set(`${detail.key}|${cached.latestId}`, Promise.resolve({ summary: cached.summary, todo: cached.todo }));
-  }
+  if (!cached) return;
+  const key = `${detail.key}|${cached.latestId}`;
+  if (summaries.has(key)) return;
+  summaries.set(key, Promise.resolve({ summary: cached.summary, todo: cached.todo }));
+  trimOldest(summaries, SUMMARY_CACHE_LIMIT);
+}
+
+function keepDetail(detail: ThreadDetail) {
+  refresh(details, detail.key, detail);
+  trimOldest(details, THREAD_CACHE_LIMIT, (evicted) => {
+    if (!pending.has(evicted)) generations.delete(evicted);
+  });
 }
 
 export function storeThread(loaded: ThreadDetail) {
   const detail = withoutQueued(loaded);
-  generations.set(detail.key, generation(detail.key) + 1);
-  details.set(detail.key, detail);
+  stamp(detail.key);
+  keepDetail(detail);
   primeSummary(detail);
   return detail;
 }
 
 export function forgetThread(key: string) {
-  generations.set(key, generation(key) + 1);
+  stamp(key);
   details.delete(key);
 }
 
 function requestThread(key: string) {
-  const started = generation(key);
+  const started = generation(key) || stamp(key);
   const request = getJson<ThreadDetail>(`/api/mail/thread?key=${encodeURIComponent(key)}`)
     .then((loaded) => {
       if (generation(key) !== started) return details.get(key) ?? withoutQueued(loaded);
@@ -230,7 +286,10 @@ function requestThread(key: string) {
 
 export function loadThread(key: string, fresh = false) {
   const hit = details.get(key);
-  if (hit && !fresh) return Promise.resolve(hit);
+  if (hit && !fresh) {
+    refresh(details, key, hit);
+    return Promise.resolve(hit);
+  }
   const inflight = pending.get(key);
   if (inflight && inflight.generation === generation(key)) return inflight.request;
   return requestThread(key);
@@ -244,10 +303,18 @@ export function cachedAttachments(messageId: string, shareId: string | null = nu
   return attachmentLists.get(attachmentKey(messageId, shareId)) ?? null;
 }
 
+function rememberAttachments(key: string, items: MailAttachmentMeta[]) {
+  refresh(attachmentLists, key, items);
+  trimOldest(attachmentLists, ATTACHMENT_CACHE_LIMIT);
+}
+
 export function loadAttachments(messageId: string, shareId: string | null = null) {
   const key = attachmentKey(messageId, shareId);
   const hit = attachmentRequests.get(key);
-  if (hit) return hit;
+  if (hit) {
+    refresh(attachmentRequests, key, hit);
+    return hit;
+  }
   const url = shareId
     ? `/api/mail/shared/${encodeURIComponent(shareId)}/attachments?message=${encodeURIComponent(messageId)}`
     : `/api/mail/attachments?message=${encodeURIComponent(messageId)}`;
@@ -256,14 +323,15 @@ export function loadAttachments(messageId: string, shareId: string | null = null
       const body = (await response.json().catch(() => ({}))) as { attachments?: MailAttachmentMeta[]; error?: string };
       if (!response.ok) throw new Error(body.error ?? "Attachments didn't load.");
       const items = body.attachments ?? [];
-      attachmentLists.set(key, items);
+      rememberAttachments(key, items);
       return items;
     })
     .catch((error: unknown) => {
       attachmentRequests.delete(key);
       throw error;
     });
-  attachmentRequests.set(key, request);
+  refresh(attachmentRequests, key, request);
+  trimOldest(attachmentRequests, ATTACHMENT_CACHE_LIMIT);
   return request;
 }
 
@@ -374,12 +442,16 @@ export function syncNow(manual = false) {
 export function loadSummary(key: string, latestId: string) {
   const cacheKey = `${key}|${latestId}`;
   const hit = summaries.get(cacheKey);
-  if (hit) return hit;
+  if (hit) {
+    refresh(summaries, cacheKey, hit);
+    return hit;
+  }
   const request = getJson<ThreadSummaryText>(`/api/mail/summary?key=${encodeURIComponent(key)}`).catch((error) => {
     summaries.delete(cacheKey);
     throw error;
   });
-  summaries.set(cacheKey, request);
+  refresh(summaries, cacheKey, request);
+  trimOldest(summaries, SUMMARY_CACHE_LIMIT);
   return request;
 }
 
