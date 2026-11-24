@@ -24,13 +24,17 @@ function connectionUrl(connectionString: string) {
 
 function createPool(connectionString: string) {
   const serverless = Boolean(process.env.VERCEL);
-  return new Pool({
+  const pool = new Pool({
     connectionString: connectionUrl(connectionString),
     max: serverless ? 2 : 10,
     idleTimeoutMillis: serverless ? 60_000 : 10_000,
     connectionTimeoutMillis: 5_000,
     allowExitOnIdle: serverless,
   });
+  pool.on("error", (error) => {
+    console.error("Database pool connection failed", error.message);
+  });
+  return pool;
 }
 
 function databaseUrl() {

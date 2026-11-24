@@ -4,6 +4,7 @@ import { withActor } from "@/lib/crm/context";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { hiddenByPending } from "@/lib/mail/pending-sql";
+import { splitCase, splitJoin } from "@/lib/mail/split";
 import { mailNav, mailUnreadCount } from "@/lib/mail/threads";
 import { createUser, resetDatabase, useServerlessPool } from "./helpers";
 
@@ -13,15 +14,24 @@ type Box = { sourceId: string; folders: Record<Role, string> };
 
 let counter = 0;
 
-async function mailbox(actor: UserActor): Promise<Box> {
+async function mailbox(actor: UserActor, address = actor.email, additional = false): Promise<Box> {
   const admin = getAdminPool();
-  const connection = await admin.query<{ id: string }>(
-    "insert into crm.mailbox_connections (workspace_id, user_id, provider, email, status, refresh_token) values ($1, $2, 'microsoft', $3, 'connected', 'cipher') returning id",
-    [actor.workspaceId, actor.userId, actor.email],
-  );
+  const owner = additional
+    ? (
+        await admin.query<{ id: string }>(
+          "insert into crm.calendar_accounts (workspace_id, user_id, provider, email, status, refresh_token, access_token, access_token_expires_at, can_send) values ($1, $2, 'microsoft', $3, 'connected', 'cipher', 'cipher', now() + interval '1 hour', true) returning id",
+          [actor.workspaceId, actor.userId, address],
+        )
+      ).rows[0].id
+    : (
+        await admin.query<{ id: string }>(
+          "insert into crm.mailbox_connections (workspace_id, user_id, provider, email, status, refresh_token) values ($1, $2, 'microsoft', $3, 'connected', 'cipher') returning id",
+          [actor.workspaceId, actor.userId, address],
+        )
+      ).rows[0].id;
   const source = await admin.query<{ id: string }>(
-    "insert into crm.mail_sources (workspace_id, user_id, connection_id, email) values ($1, $2, $3, $4) returning id",
-    [actor.workspaceId, actor.userId, connection.rows[0].id, actor.email],
+    `insert into crm.mail_sources (workspace_id, user_id, ${additional ? "account_id" : "connection_id"}, email) values ($1, $2, $3, $4) returning id`,
+    [actor.workspaceId, actor.userId, owner, address],
   );
   const sourceId = source.rows[0].id;
   const folders = {} as Record<Role, string>;
@@ -35,13 +45,13 @@ async function mailbox(actor: UserActor): Promise<Box> {
   return { sourceId, folders };
 }
 
-async function message(actor: UserActor, box: Box, thread: string, role: Role, isRead = false) {
+async function message(actor: UserActor, box: Box, thread: string | null, role: Role, isRead = false, from = "jane@acme.test") {
   counter += 1;
   await getAdminPool().query(
     `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, thread_key, subject, snippet, body_text,
        from_email, to_recipients, cc_recipients, sent_at, received_at, is_read)
-     values ($1, $2, $3, $4, $5, $6, $7, 'Subject', 'Snippet', 'Body', 'jane@acme.test', '[]'::jsonb, '[]'::jsonb, now(), now(), $8)`,
-    [actor.workspaceId, actor.userId, box.sourceId, box.folders[role], `m-${counter}`, `<m-${counter}@mail.test>`, thread, isRead],
+     values ($1, $2, $3, $4, $5, $6, $7, 'Subject', 'Snippet', 'Body', $9, '[]'::jsonb, '[]'::jsonb, now(), now(), $8)`,
+    [actor.workspaceId, actor.userId, box.sourceId, box.folders[role], `m-${counter}`, `<m-${counter}@mail.test>`, thread, isRead, from],
   );
 }
 
@@ -73,6 +83,34 @@ async function previousInboxThreads(actor: UserActor) {
       [actor.userId],
     );
     return result.rows[0].threads;
+  });
+}
+
+async function ownerBadgeFor(actor: UserActor) {
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ unread: number }>(
+      `with scoped as (
+         select m.source_id, m.thread_key as tk, m.subject, m.from_email, m.focused, m.is_read, m.id,
+           coalesce(m.received_at, m.sent_at, m.created_at) as at
+         from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+         where m.user_id = $1 and f.role = 'inbox' and ${hiddenByPending("m", "f")}
+           and (m.source_id, m.thread_key) in (
+             select m.source_id, m.thread_key from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+             where m.user_id = $1 and f.role = 'inbox' and not m.is_read
+           )
+       ),
+       ranked as (
+         select s.*, row_number() over (partition by s.source_id, s.tk order by s.at desc, s.id desc) as rn,
+           bool_or(not s.is_read) over (partition by s.source_id, s.tk) as unread
+         from scoped s
+       ),
+       listed as (
+         select r.unread, ${splitCase("r")} as split from ranked r ${splitJoin("r", "$1")} where r.rn = 1
+       )
+       select count(*) filter (where unread and split = 'important')::int as unread from listed`,
+      [actor.userId],
+    );
+    return result.rows[0].unread;
   });
 }
 
@@ -202,6 +240,107 @@ describe("mail nav counts", () => {
     const nav = await mailNav(owner);
     const total = nav.splits.reduce((sum, row) => sum + row.total, 0);
     assert.equal(total, await previousInboxThreads(owner));
-    assert.ok((await mailUnreadCount(owner)) <= nav.unread);
+    assert.equal(await mailUnreadCount(owner), await ownerBadgeFor(owner));
+  });
+
+  describe("against the nested check", () => {
+    let person: UserActor;
+    let first: Box;
+    let second: Box;
+
+    const previousSplits = async (unreadOnly: boolean) =>
+      withActor(person, async (db) => {
+        const inbox = "m.user_id = $1 and f.role = 'inbox'";
+        const result = await db.query<{ source_id: string; split: string; total: number; unread: number }>(
+          `with scoped as (
+             select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.focused, m.is_read,
+               coalesce(m.received_at, m.sent_at, m.created_at) as at
+             from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+             where ${inbox} and ${hiddenByPending("m", "f")}
+               ${
+                 unreadOnly
+                   ? `and (m.source_id, m.thread_key) in (
+                        select m.source_id, m.thread_key from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+                        where ${inbox} and not m.is_read
+                      )`
+                   : ""
+               }
+           ),
+           ranked as (
+             select s.*, row_number() over (partition by s.source_id, s.tk order by s.at desc, s.id desc) as rn,
+               bool_or(not s.is_read) over (partition by s.source_id, s.tk) as unread
+             from scoped s
+           ),
+           listed as (
+             select r.source_id, r.unread, ${splitCase("r")} as split
+             from ranked r
+             ${splitJoin("r", "$1")}
+             where r.rn = 1
+           )
+           select source_id, split, count(*)::int as total, count(*) filter (where unread)::int as unread
+           from listed group by source_id, split order by source_id, split`,
+          [person.userId],
+        );
+        return result.rows.map((row) => ({ sourceId: row.source_id, split: row.split, total: row.total, unread: row.unread }));
+      });
+
+    before(async () => {
+      person = await createUser("edge@nav.test", "Edge");
+      first = await mailbox(person, "edge@nav.test");
+      second = await mailbox(person, "edge-two@nav.test", true);
+
+      for (const role of ROLES) await message(person, first, "hidden-mixed", role);
+      for (const role of ROLES) await message(person, first, "hidden-mixed", role, true);
+      await message(person, first, "hidden-read", "inbox", true);
+      await message(person, first, "hidden-read", "inbox", true);
+      await pending(person, first, "hidden-read", "archive", 30);
+      await pending(person, first, "hidden-mixed", "trash", 30);
+
+      for (const role of ROLES) await message(person, first, "shared-key", role);
+      for (const role of ROLES) await message(person, second, "shared-key", role);
+      await pending(person, first, "shared-key", "archive", 30);
+      await pending(person, second, "shared-key", "inbox", 30);
+
+      for (const role of ROLES) await message(person, first, null, role);
+      for (const role of ROLES) await message(person, second, null, role);
+      await message(person, second, null, "inbox", false, "newsletter@mail.acme.test");
+      await message(person, first, "from-bot", "inbox", false, "no-reply@acme.test");
+      await message(person, first, "from-bot", "inbox", true, "no-reply@acme.test");
+      await message(person, second, "second-only", "inbox");
+      await pending(person, second, "second-only", "snooze", 10);
+    });
+
+    it("counts the same folders as the nested check with read messages, shared keys and no keys", async () => {
+      const nav = await mailNav(person);
+      const expected = await previousUnread(person);
+      assert.equal(nav.folders.length, ROLES.length * 2);
+      for (const folder of nav.folders) assert.equal(folder.unread, expected.get(folder.id), `${folder.role} folder`);
+    });
+
+    it("hides a thread's unread messages without losing other threads with the same key in another source", async () => {
+      assert.equal(await unread("inbox", person, first), (await previousUnread(person)).get(first.folders.inbox));
+      assert.equal(await unread("inbox", person, second), (await previousUnread(person)).get(second.folders.inbox));
+      assert.equal(await unread("archive", person, first), (await previousUnread(person)).get(first.folders.archive));
+      const nav = await mailNav(person);
+      const inboxFirst = nav.folders.find((folder) => folder.id === first.folders.inbox)!.unread;
+      const inboxSecond = nav.folders.find((folder) => folder.id === second.folders.inbox)!.unread;
+      assert.equal(inboxFirst, 2, "from-bot and the message saved without a key (it gets its own thread) count; shared-key and hidden-mixed are hidden and hidden-read is all read");
+      assert.equal(inboxSecond, 3, "shared-key stays visible with inbox pending, two keyless messages count, and second-only is snoozed away");
+    });
+
+    it("matches the nested check for the inbox splits, with and without read threads", async () => {
+      const nav = await mailNav(person);
+      const sort = (rows: { sourceId: string; split: string; total: number; unread: number }[]) =>
+        [...rows].sort((a, b) => (a.sourceId + a.split).localeCompare(b.sourceId + b.split));
+      assert.deepEqual(sort(nav.splits), await previousSplits(false));
+      assert.ok(nav.splits.length > 0);
+    });
+
+    it("matches the nested check for the badge count", async () => {
+      const rows = await previousSplits(true);
+      const expected = rows.filter((row) => row.split === "important").reduce((sum, row) => sum + row.unread, 0);
+      assert.equal(await mailUnreadCount(person), expected);
+      assert.equal(await mailUnreadCount(owner), (await ownerBadgeFor(owner)), "and for the first fixture");
+    });
   });
 });
