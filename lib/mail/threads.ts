@@ -15,7 +15,7 @@ import { firstName } from "@/lib/mail/format";
 import { replyAfterSql } from "@/lib/mail/follow-up-rules";
 import { THREAD_DEFERRAL_SQL, toThreadDeferral, type DeferralSummaryRow } from "@/lib/mail/deferrals";
 import type { CachedSummary, MailNav, MailSplit, MailView, ThreadCursor, ThreadDetail, ThreadPerson, ThreadSummary } from "@/lib/mail/view";
-import { hiddenByPending } from "@/lib/mail/pending-sql";
+import { hiddenByPending, latestPendingActions, leavesFolder } from "@/lib/mail/pending-sql";
 import { takeMailRefusals } from "@/lib/mail/refusals";
 import { workspaceActors } from "@/lib/crm/workspaces";
 import { threadFilingInDb } from "@/lib/mail/routing";
@@ -573,11 +573,14 @@ async function readerSummary(
 async function splitCounts(db: Db, actor: UserActor, unreadOnly = false) {
   const inbox = "m.user_id = $1 and f.role = 'inbox'";
   const result = await db.query<{ source_id: string; split: MailSplit; total: number; unread: number }>(
-    `with scoped as (
+    `with latest as materialized (${latestPendingActions("$1")}),
+     scoped as (
        select m.id, m.source_id, m.thread_key as tk, m.subject, m.from_email, m.focused, m.is_read,
          coalesce(m.received_at, m.sent_at, m.created_at) as at
-       from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
-       where ${inbox} and ${hiddenByPending("m", "f")}
+       from crm.mail_messages m
+       join crm.mail_folders f on f.id = m.folder_id
+       left join latest l on l.source_id = m.source_id and l.thread_key = m.thread_key
+       where ${inbox} and not ${leavesFolder("l", "f")}
          ${
            unreadOnly
              ? `and (m.source_id, m.thread_key) in (
@@ -633,9 +636,25 @@ async function readNav(actor: UserActor): Promise<MailNav> {
       [actor.userId],
     );
     const folders = await db.query<{ id: string; source_id: string; name: string; role: MailRole; unread: number }>(
-      `select f.id, f.source_id, f.name, f.role,
-         (select count(distinct m.thread_key)::int from crm.mail_messages m where m.folder_id = f.id and not m.is_read and ${hiddenByPending("m", "f")}) as unread
+      `with latest as materialized (${latestPendingActions("$1")}),
+       unread as materialized (
+         select m.folder_id, count(distinct m.thread_key)::int as threads
+         from crm.mail_messages m
+         where m.user_id = $1 and not m.is_read
+         group by m.folder_id
+       ),
+       hidden as materialized (
+         select m.folder_id, count(distinct m.thread_key)::int as threads
+         from latest l
+         join crm.mail_messages m on m.user_id = $1 and m.source_id = l.source_id and m.thread_key = l.thread_key and not m.is_read
+         join crm.mail_folders f on f.id = m.folder_id
+         where ${leavesFolder("l", "f")}
+         group by m.folder_id
+       )
+       select f.id, f.source_id, f.name, f.role, greatest(coalesce(u.threads, 0) - coalesce(h.threads, 0), 0)::int as unread
        from crm.mail_folders f
+       left join unread u on u.folder_id = f.id
+       left join hidden h on h.folder_id = f.id
        where f.user_id = $1 and f.sync_state <> 'skipped'
        order by f.name`,
       [actor.userId],
