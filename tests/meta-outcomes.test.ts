@@ -8,6 +8,7 @@ import { createOpportunity, listPipeline, updateOpportunity } from "@/lib/crm/op
 import { handleCronRequest } from "@/lib/crm/scheduler";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
+import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { graphFailure, graphOrigin, hashEmail, hashPhone, metaGraphVersion, MetaError, metaSignature } from "@/lib/meta";
 import { createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
@@ -28,6 +29,7 @@ type SentEvent = {
 };
 
 type Behaviour = {
+  datasets?: string[];
   reject?: (event: SentEvent) => { code: number; subcode?: number; message: string } | null;
   fail?: (events: SentEvent[]) => Response | null;
   delay?: number;
@@ -38,7 +40,7 @@ function sql<T extends Record<string, unknown> = Record<string, unknown>>(text: 
 }
 
 function metaFake(behaviour: Behaviour = {}) {
-  const requests: { url: URL; raw: string; events: SentEvent[]; body: Record<string, unknown> }[] = [];
+  const requests: { url: URL; dataset: string; raw: string; events: SentEvent[]; body: Record<string, unknown> }[] = [];
   const violations: string[] = [];
   let checks = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -46,12 +48,13 @@ function metaFake(behaviour: Behaviour = {}) {
     if (url.origin !== graphOrigin()) violations.push(`origin ${url.origin}`);
     if (url.searchParams.has("access_token")) violations.push("token in the URL");
     if (init?.method === "POST") {
-      if (url.pathname !== `/${metaGraphVersion()}/${DATASET}/events`) violations.push(`path ${url.pathname}`);
+      const dataset = url.pathname.match(new RegExp(`^/${metaGraphVersion()}/(\\d+)/events$`))?.[1] ?? "";
+      if (!(behaviour.datasets ?? [DATASET]).includes(dataset)) violations.push(`path ${url.pathname}`);
       const raw = String(init.body);
       const body = JSON.parse(raw.replace(/("lead_id":)(\d+)/g, '$1"$2"')) as { data: SentEvent[]; access_token: string };
       if (body.access_token !== TOKEN) violations.push("wrong token");
       const events = body.data.map((event) => ({ ...event, user_data: { ...event.user_data, lead_id: Number(event.user_data.lead_id) } }));
-      requests.push({ url, raw, events, body });
+      requests.push({ url, dataset, raw, events, body });
       if (behaviour.delay) await new Promise((resolve) => setTimeout(resolve, behaviour.delay));
       const failure = behaviour.fail?.(events);
       if (failure) return failure;
@@ -98,16 +101,17 @@ const realFetch = globalThis.fetch;
 
 type Scenario = { leadId: string; leadgen: string; contactId: string; companyId: string };
 
-async function scenario(options: { filedMinutesAgo?: number; leadgen?: string; email?: string | null; phone?: string | null; companyOnly?: boolean } = {}): Promise<Scenario> {
+async function scenario(options: { filedMinutesAgo?: number; leadgen?: string; email?: string | null; phone?: string | null; companyOnly?: boolean; actor?: UserActor } = {}): Promise<Scenario> {
   counter += 1;
-  const company = (await createCompany(owner, { name: `Lead Co ${counter}`, domain: `lead-co-${counter}.test` })).body.company;
-  const contact = (await createContact(owner, { firstName: "Lead", lastName: `Person ${counter}`, email: `lead${counter}@lead-co-${counter}.test`, companyId: company.id })).body.contact;
+  const actor = options.actor ?? owner;
+  const company = (await createCompany(actor, { name: `Lead Co ${counter}`, domain: `lead-co-${counter}.test` })).body.company;
+  const contact = (await createContact(actor, { firstName: "Lead", lastName: `Person ${counter}`, email: `lead${counter}@lead-co-${counter}.test`, companyId: company.id })).body.contact;
   const leadgen = options.leadgen ?? String(2597163074137000 + counter);
   const email = options.email === undefined ? `lead${counter}@lead-co-${counter}.test` : options.email;
   const rows = await sql<{ id: string }>(
     `insert into crm.meta_leads (leadgen_id, page_id, workspace_id, contact_id, company_id, fetched_at, filed_at, email_hash, phone_hash)
      values ($1, '1111111111', $2, $3, $4, now(), now() - make_interval(mins => $5), $6, $7) returning id`,
-    [leadgen, owner.workspaceId, options.companyOnly ? null : contact.id, company.id, options.filedMinutesAgo ?? 2 * DAY, hashEmail(email), hashPhone(options.phone ?? null)],
+    [leadgen, actor.workspaceId, options.companyOnly ? null : contact.id, company.id, options.filedMinutesAgo ?? 2 * DAY, hashEmail(email), hashPhone(options.phone ?? null)],
   );
   return { leadId: rows[0].id, leadgen, contactId: contact.id, companyId: company.id };
 }
@@ -195,7 +199,7 @@ describe("Meta outcomes", () => {
     await sql("delete from crm.notifications");
     await sql("delete from crm.pipelines where workspace_id = $1 and id <> $2", [owner.workspaceId, salesPipeline]);
     for (const [id, name] of Object.entries(stageNames)) await sql("update crm.pipeline_stages set name = $2 where id = $1", [id, name]);
-    await sql("update crm.meta_outcome_settings set enabled = true, dataset_id = $2, pipeline_id = null, last_error = null, last_error_at = null, alerted_at = null where workspace_id = $1", [owner.workspaceId, DATASET]);
+    await sql("update crm.meta_outcome_settings set enabled = true, dataset_id = $2, pipeline_id = null, last_error = null, last_error_at = null, alerted_at = null, last_sent_at = null where workspace_id = $1", [owner.workspaceId, DATASET]);
   });
 
   after(async () => {
@@ -564,17 +568,51 @@ describe("Meta outcomes", () => {
       assert.equal((await statuses(stale.leadId)).Lead, "skipped");
     });
 
-    it("fails a stage still unsent at 6.5 days after the workspace never took it, and alerts the owner once", async () => {
+    it("says nothing after the first failure, alerts the owner once after 24 hours, and again only after a new streak", async () => {
+      await scenario();
+      let working = false;
+      const fake = metaFake({ fail: () => (working ? null : Response.json({ error: { message: "Invalid OAuth access token.", type: "OAuthException", code: 190 } }, { status: 401 })) });
+      const alerts = () => sql<{ title: string; body: string }>("select title, body from crm.notifications where source = 'meta_outcomes'");
+      await run(fake);
+      assert.equal((await alerts()).length, 0);
+      await sql("update crm.meta_lead_outcomes set next_attempt_at = null");
+      await run(fake);
+      assert.equal((await alerts()).length, 0);
+      await sql("update crm.meta_outcome_settings set last_error_at = now() - interval '23 hours' where workspace_id = $1", [owner.workspaceId]);
+      await sql("update crm.meta_lead_outcomes set next_attempt_at = null");
+      await run(fake);
+      assert.equal((await alerts()).length, 0);
+      await sql("update crm.meta_outcome_settings set last_error_at = now() - interval '25 hours' where workspace_id = $1", [owner.workspaceId]);
+      await sql("update crm.meta_lead_outcomes set next_attempt_at = null");
+      await run(fake);
+      await run(fake);
+      const first = await alerts();
+      assert.equal(first.length, 1);
+      assert.equal(first[0].title, "Meta outcomes aren't sending");
+      assert.match(first[0].body, /rejected the access token/);
+
+      working = true;
+      await sql("update crm.meta_lead_outcomes set next_attempt_at = null");
+      await run(fake);
+      assert.equal((await sql<{ last_error: string | null; alerted_at: Date | null }>("select last_error, alerted_at from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].alerted_at, null);
+
+      working = false;
+      await scenario();
+      await run(fake);
+      assert.equal((await alerts()).length, 1);
+      await sql("update crm.meta_outcome_settings set last_error_at = now() - interval '25 hours' where workspace_id = $1", [owner.workspaceId]);
+      await run(fake);
+      await run(fake);
+      assert.equal((await alerts()).length, 2);
+    });
+
+    it("fails a stage still unsent at 6.5 days, without a second alert", async () => {
       const lead = await scenario();
       const fake = metaFake({ fail: () => Response.json({ error: { message: "Invalid OAuth access token.", type: "OAuthException", code: 190 } }, { status: 401 }) });
       await run(fake);
       assert.equal((await outcomes(lead.leadId))[0].status, "pending");
       await sql("update crm.meta_outcome_settings set last_error_at = now() - interval '25 hours' where workspace_id = $1", [owner.workspaceId]);
       await run(fake);
-      await run(fake);
-      const alerts = await sql<{ title: string; source: string }>("select title, source from crm.notifications where source = 'meta_outcomes'");
-      assert.equal(alerts.length, 1);
-      assert.equal(alerts[0].title, "Meta outcomes aren't sending");
       await sql("update crm.meta_lead_outcomes set occurred_at = now() - interval '7 days', next_attempt_at = null where lead_id = $1", [lead.leadId]);
       await run(fake);
       const [row] = await outcomes(lead.leadId);
@@ -716,16 +754,19 @@ describe("Meta outcomes", () => {
       assert.equal(report.failed, 0);
       assert.equal((await statuses(first.leadId)).Lead, "pending");
       assert.equal((await statuses(second.leadId)).Lead, "pending");
-      assert.match((await sql<{ last_error: string }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, /rejected every event/);
+      assert.match((await sql<{ last_error: string }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, /nothing has been accepted lately/);
     });
 
     it("lets a stage that Meta rejects on its own stay failed rather than retrying it forever", async () => {
       const lead = await scenario({ leadgen: "555000000000003" });
+      const good = await scenario();
       const fake = metaFake({ reject: (event) => (event.user_data.lead_id === 555000000000003 ? { code: 100, message: "Nope." } : null) });
       await run(fake);
+      const requests = fake.requests.length;
       await run(fake);
-      assert.equal(fake.requests.length, 1);
+      assert.equal(fake.requests.length, requests);
       assert.equal((await outcomes(lead.leadId))[0].status, "failed");
+      assert.equal((await statuses(good.leadId)).Lead, "sent");
     });
 
     it("stops starting new requests when time runs short and leaves the rest claimable", async () => {
@@ -746,6 +787,232 @@ describe("Meta outcomes", () => {
       assert.equal((await sql("select * from private.meta_lead_outcomes_claim(10)")).length, 0);
       await sql("update crm.meta_lead_outcomes set claimed_until = now() - interval '1 second' where lead_id = $1", [lead.leadId]);
       assert.equal((await sql("select * from private.meta_lead_outcomes_claim(10)")).length, 1);
+    });
+
+    it("won't blame one event for a rejection when nothing else has been accepted lately, even on a targeted pass", async () => {
+      const lead = await scenario({ leadgen: "555000000000010" });
+      const fake = metaFake({ reject: () => ({ code: 100, message: "Invalid parameter." }) });
+      const report = await runMetaOutcomes({ fetchImpl: fake.fetchImpl, deadline: Date.now() + 20_000, leadIds: [lead.leadId] });
+      assert.equal(report.failed, 0);
+      assert.equal(report.sent, 0);
+      const [row] = await outcomes(lead.leadId);
+      assert.equal(row.status, "pending");
+      assert.equal(row.attempts, 1);
+      const [settings] = await sql<{ last_error: string; last_error_at: Date }>("select last_error, last_error_at from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]);
+      assert.match(settings.last_error, /nothing has been accepted lately/);
+      assert.ok(settings.last_error_at);
+
+      const good = await scenario();
+      await retryNow(lead.leadId);
+      const second = metaFake({ reject: (event) => (event.user_data.lead_id === 555000000000010 ? { code: 100, message: "Invalid parameter: lead_id." } : null) });
+      const again = await run(second);
+      assert.equal(again.failed, 1);
+      assert.equal((await statuses(good.leadId)).Lead, "sent");
+      const [after] = await outcomes(lead.leadId);
+      assert.equal(after.status, "failed");
+      assert.equal(after.error, "Invalid parameter: lead_id.");
+      assert.equal((await sql<{ last_error: string | null }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, null);
+    });
+
+    it("blames a lone rejected event when the dataset accepted something in the last day, and not once the dataset changes", async () => {
+      await scenario();
+      await run(metaFake());
+      const lead = await scenario({ leadgen: "555000000000011" });
+      const fake = metaFake({ reject: (event) => (event.user_data.lead_id === 555000000000011 ? { code: 100, message: "Bad lead." } : null) });
+      const report = await run(fake);
+      assert.equal(report.failed, 1);
+      assert.equal((await outcomes(lead.leadId))[0].status, "failed");
+      assert.equal((await sql<{ last_error: string | null }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, null);
+
+      await sql("update crm.meta_outcome_settings set last_sent_at = now() - interval '2 days' where workspace_id = $1", [owner.workspaceId]);
+      const stale = await scenario({ leadgen: "555000000000012" });
+      const staleFake = metaFake({ reject: (event) => (event.user_data.lead_id === 555000000000012 ? { code: 100, message: "Bad lead." } : null) });
+      await run(staleFake);
+      assert.equal((await outcomes(stale.leadId))[0].status, "pending");
+
+      await sql("update crm.meta_outcome_settings set last_sent_at = now() where workspace_id = $1", [owner.workspaceId]);
+      await saveMetaOutcomes(owner, { datasetId: "222" }, { fetchImpl: async () => Response.json({ id: "222" }) });
+      assert.equal((await sql<{ last_sent_at: Date | null }>("select last_sent_at from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_sent_at, null);
+    });
+
+    it("shows admins how many stages failed for good, and members nothing of it", async () => {
+      await scenario();
+      const bad = await scenario({ leadgen: "555000000000013" });
+      const fake = metaFake({ reject: (event) => (event.user_data.lead_id === 555000000000013 ? { code: 100, message: "Bad lead." } : null) });
+      await run(fake);
+      assert.equal((await outcomes(bad.leadId))[0].status, "failed");
+      assert.equal((await getMetaOutcomesView(admin)).failed, 1);
+      assert.equal((await getMetaOutcomesView(owner)).failed, 1);
+      assert.equal((await getMetaOutcomesView(member)).failed, 0);
+    });
+
+    it("puts the rows of a rejected batch the deadline cut short on retry, then sends them one at a time", async () => {
+      const bad = await scenario({ leadgen: "555000000000014" });
+      const others = [await scenario(), await scenario(), await scenario()];
+      const slow = metaFake({ delay: 2_800, reject: () => ({ code: 100, message: "Invalid parameter." }) });
+      await runMetaOutcomes({ fetchImpl: slow.fetchImpl, deadline: Date.now() + 4_000 });
+      assert.equal(slow.requests.length, 1);
+      const rows = await sql<{ status: string; attempts: number; isolate: boolean; claimed_until: Date | null; next_attempt_at: Date | null }>(
+        "select status, attempts, isolate, claimed_until, next_attempt_at from crm.meta_lead_outcomes",
+      );
+      assert.equal(rows.length, 4);
+      for (const row of rows) {
+        assert.equal(row.status, "pending");
+        assert.equal(row.attempts, 1);
+        assert.equal(row.isolate, true);
+        assert.equal(row.claimed_until, null);
+        assert.ok(row.next_attempt_at && row.next_attempt_at.getTime() > Date.now() + 4 * 60_000);
+      }
+      assert.equal((await sql<{ last_error: string | null }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, null);
+
+      await sql("update crm.meta_lead_outcomes set next_attempt_at = null");
+      const fake = metaFake({ reject: (event) => (event.user_data.lead_id === 555000000000014 ? { code: 100, message: "Invalid parameter: lead_id." } : null) });
+      const report = await run(fake);
+      assert.ok(fake.requests.every((request) => request.events.length === 1));
+      assert.equal(fake.requests.length, 4);
+      assert.equal(report.sent, 3);
+      assert.equal(report.failed, 1);
+      assert.equal((await outcomes(bad.leadId))[0].status, "failed");
+      for (const other of others) assert.equal((await statuses(other.leadId)).Lead, "sent");
+      assert.equal((await sql("select 1 from crm.meta_lead_outcomes where isolate")).length, 0);
+    });
+
+    it("isn't blocked by leads stuck behind a failed earlier stage, however many there are", async () => {
+      const stuck = [];
+      for (let index = 0; index < 3; index += 1) stuck.push(await scenario({ filedMinutesAgo: 5 * DAY + index }));
+      const open = await scenario({ filedMinutesAgo: DAY });
+      const insert = (leadId: string, name: string, position: number, status: string) =>
+        sql(
+          `insert into crm.meta_lead_outcomes (workspace_id, lead_id, stage_name, "position", occurred_at, status)
+           values ($1, $2, $3, $4, now() - interval '1 hour', $5)`,
+          [owner.workspaceId, leadId, name, position, status],
+        );
+      for (const lead of stuck) {
+        await insert(lead.leadId, "Lead", 0, "sent");
+        await insert(lead.leadId, "Working", 1, "failed");
+        await insert(lead.leadId, "Proposal", 2, "pending");
+      }
+      await insert(open.leadId, "Lead", 0, "pending");
+      const claimed = await sql<{ leadgen_id: string; stage_name: string }>("select leadgen_id, stage_name from private.meta_lead_outcomes_claim(2)");
+      assert.deepEqual(claimed.map((row) => [row.leadgen_id, row.stage_name]), [[open.leadgen, "Lead"]]);
+      for (const lead of stuck) assert.equal((await statuses(lead.leadId)).Proposal, "pending");
+      assert.equal((await sql("select 1 from crm.meta_lead_outcomes where claimed_until is not null and stage_name = 'Proposal'")).length, 0);
+    });
+
+    it("sends only a lead's own workspace's dataset, in a full run and a targeted pass, and nothing for a workspace with outcomes off", async () => {
+      const second = "2222222222222222";
+      const third = "3333333333333333";
+      const ridgeon = await createWorkspace(owner, { name: "Dataset Two" });
+      const quiet = await createWorkspace(owner, { name: "Dataset Three" });
+      const actorFor = (id: string, name: string): UserActor => ({ ...owner, workspaceId: id, workspaceName: name, role: "owner", scopes: scopesForRole("owner") });
+      const two = actorFor(ridgeon.id, "Dataset Two");
+      const three = actorFor(quiet.id, "Dataset Three");
+      try {
+        await sql("insert into crm.meta_outcome_settings (workspace_id, dataset_id, enabled) values ($1, $2, true), ($3, $4, false)", [two.workspaceId, second, three.workspaceId, third]);
+        const twoStages = Object.fromEntries((await listPipeline(two)).stages.map((item) => [item.name, item.id]));
+        const inLaterStage = async (actor: UserActor, lead: Scenario, stages: Record<string, string>, name: string) => {
+          const id = (await createOpportunity(actor, { companyId: lead.companyId, primaryContactId: lead.contactId, name: `Later ${counter}`, stageId: stages[name] })).body.opportunity.id;
+          await sql("update crm.opportunity_stage_entries set entered_at = now() - interval '1 hour' where opportunity_id = $1", [id]);
+        };
+        const a1 = await scenario();
+        const a2 = await scenario();
+        await inLaterStage(owner, a1, stage, "Working");
+        const b1 = await scenario({ actor: two });
+        await inLaterStage(two, b1, twoStages, "Proposal");
+        const c1 = await scenario({ actor: three });
+
+        const fake = metaFake({ datasets: [DATASET, second] });
+        await run(fake);
+        const idsFor = (dataset: string) => fake.requests.filter((request) => request.dataset === dataset).flatMap((request) => request.events.map((event) => String(event.user_data.lead_id)));
+        assert.deepEqual(new Set(idsFor(DATASET)), new Set([a1.leadgen, a2.leadgen]));
+        assert.deepEqual(new Set(idsFor(second)), new Set([b1.leadgen]));
+        assert.deepEqual(fake.requests.filter((request) => request.dataset === second).flatMap((request) => request.events.map((event) => event.event_name)), ["Lead", "Working", "Proposal"]);
+        assert.deepEqual(fake.requests.filter((request) => request.dataset === DATASET).flatMap((request) => request.events.filter((event) => String(event.user_data.lead_id) === a1.leadgen).map((event) => event.event_name)), ["Lead", "Working"]);
+        assert.equal((await outcomes(c1.leadId)).length, 0);
+        assert.deepEqual(fake.violations, []);
+
+        const a3 = await scenario();
+        const b2 = await scenario({ actor: two });
+        const before = fake.requests.length;
+        await runMetaOutcomes({ fetchImpl: fake.fetchImpl, deadline: Date.now() + 20_000, leadIds: [b2.leadId, c1.leadId] });
+        const targeted = fake.requests.slice(before);
+        assert.deepEqual(targeted.map((request) => request.dataset), [second]);
+        assert.deepEqual(targeted[0].events.map((event) => String(event.user_data.lead_id)), [b2.leadgen]);
+        assert.equal((await outcomes(a3.leadId)).length, 0);
+        assert.equal((await outcomes(c1.leadId)).length, 0);
+
+        const rest = fake.requests.length;
+        await run(fake);
+        const later = fake.requests.slice(rest);
+        assert.deepEqual(later.map((request) => [request.dataset, request.events.map((event) => String(event.user_data.lead_id))]), [[DATASET, [a3.leadgen]]]);
+        assert.deepEqual(fake.violations, []);
+      } finally {
+        await sql("delete from crm.meta_outcome_settings where workspace_id = any($1)", [[two.workspaceId, three.workspaceId]]);
+      }
+    });
+
+    it("sends Lead but nothing else while two sales pipelines are unchosen, says so, and alerts after 24 hours", async () => {
+      const extra = (await sql<{ id: string }>("insert into crm.pipelines (workspace_id, name, kind) values ($1, 'Partners', 'sales') returning id", [owner.workspaceId]))[0].id;
+      await sql("insert into crm.pipeline_stages (workspace_id, pipeline_id, name, position) values ($1, $2, 'Intro', 0), ($1, $2, 'Signed', 1)", [owner.workspaceId, extra]);
+      const message = "Choose a pipeline in Settings › Tools.";
+      const lead = await scenario();
+      const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await moveTo(id, "Working", 60);
+      const fake = metaFake();
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead"]);
+      assert.deepEqual(await statuses(lead.leadId), { Lead: "sent" });
+      const [settings] = await sql<{ last_error: string; last_error_at: Date }>("select last_error, last_error_at from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]);
+      assert.equal(settings.last_error, message);
+      assert.ok(settings.last_error_at);
+      assert.equal((await getMetaOutcomesView(admin)).lastError, message);
+      assert.equal((await getMetaOutcomesView(member)).lastError, null);
+
+      await scenario();
+      await sql("update crm.meta_outcome_settings set last_error_at = now() - interval '25 hours' where workspace_id = $1", [owner.workspaceId]);
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Lead"]);
+      const alerts = await sql<{ body: string }>("select body from crm.notifications where source = 'meta_outcomes'");
+      assert.deepEqual(alerts.map((row) => row.body), [message]);
+      await run(fake);
+      assert.equal((await sql("select 1 from crm.notifications where source = 'meta_outcomes'")).length, 1);
+
+      await saveMetaOutcomes(owner, { pipelineId: salesPipeline }, { fetchImpl: metaFake().fetchImpl });
+      assert.equal((await sql<{ last_error: string | null }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, null);
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Lead", "Working"]);
+      assert.equal((await sql<{ last_error: string | null }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, null);
+    });
+
+    it("clears the pipeline error when a second sales pipeline goes away", async () => {
+      const extra = (await sql<{ id: string }>("insert into crm.pipelines (workspace_id, name, kind) values ($1, 'Partners', 'sales') returning id", [owner.workspaceId]))[0].id;
+      await run(metaFake());
+      assert.match((await sql<{ last_error: string }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, /Choose a pipeline/);
+      await sql("delete from crm.pipelines where id = $1", [extra]);
+      await run(metaFake());
+      assert.equal((await sql<{ last_error: string | null }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error, null);
+    });
+
+    it("returns within its slice when Meta never answers", async () => {
+      const lead = await scenario();
+      const fetchImpl: typeof fetch = (_input, init) =>
+        new Promise((_resolve, reject) => {
+          const keepAlive = setInterval(() => undefined, 60_000);
+          init?.signal?.addEventListener("abort", () => {
+            clearInterval(keepAlive);
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        });
+      const started = Date.now();
+      const report = await runMetaOutcomes({ fetchImpl, deadline: started + 3_500 });
+      const took = Date.now() - started;
+      assert.ok(took < 3_500 + 1_000, `took ${took}ms`);
+      assert.equal(report.sent, 0);
+      const [row] = await outcomes(lead.leadId);
+      assert.equal(row.status, "pending");
+      assert.equal(row.attempts, 1);
+      assert.equal((await sql<{ claimed_until: Date | null }>("select claimed_until from crm.meta_lead_outcomes where lead_id = $1", [lead.leadId]))[0].claimed_until, null);
+      assert.ok((await sql<{ last_error: string | null }>("select last_error from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]))[0].last_error);
     });
   });
 
@@ -789,6 +1056,51 @@ describe("Meta outcomes", () => {
         assert.deepEqual(events.names(), ["Lead"]);
         assert.equal(events.events()[0].user_data.lead_id, Number(leadgen));
         assert.deepEqual(events.events()[0].user_data.em, [row.email_hash]);
+      } finally {
+        delete process.env.META_ACCESS_TOKEN;
+        await sql("delete from crm.meta_lead_pages");
+      }
+    });
+
+    it("sends one outcomes pass for everything a run filed, not one per lead", async () => {
+      process.env.META_ACCESS_TOKEN = "page-system-token";
+      try {
+        await linkMetaPage(owner, "1111111111", { schedule: () => undefined });
+        const leadgens = ["444000000000011", "444000000000012", "444000000000013"];
+        const events = metaFake();
+        const fetchImpl: typeof fetch = async (input, init) => {
+          const url = new URL(String(input));
+          const index = leadgens.findIndex((id) => url.pathname === `/v27.0/${id}`);
+          if (index >= 0) {
+            return Response.json({
+              id: leadgens[index],
+              created_time: new Date(Date.now() - 600_000).toISOString(),
+              form_id: "6666",
+              field_data: [
+                { name: "full_name", values: [`Batch Person ${index}`] },
+                { name: "email", values: [`batch${index}@batch-co-${index}.test`] },
+                { name: "company_name", values: [`Batch Co ${index}`] },
+              ],
+            });
+          }
+          if (url.pathname === "/v27.0/6666") return Response.json({ id: "6666", name: "Form" });
+          return events.fetchImpl(input, init);
+        };
+        const raw = JSON.stringify({
+          object: "page",
+          entry: [{ id: "1111111111", time: 1, changes: leadgens.map((leadgen_id) => ({ field: "leadgen", value: { leadgen_id, page_id: "1111111111", form_id: "6666" } })) }],
+        });
+        const jobs: Promise<void>[] = [];
+        const response = await handleMetaLeadsWebhook(
+          new Request("https://orbit.test/api/webhooks/meta-leads", { method: "POST", body: raw, headers: { "x-hub-signature-256": metaSignature(raw, APP_SECRET) } }),
+          { fetchImpl, rateLimit: false, schedule: (work) => jobs.push(work()), send: async () => ({ ok: true }) },
+        );
+        assert.equal(response.status, 200);
+        await Promise.all(jobs);
+        assert.equal((await sql("select 1 from crm.meta_leads where filed_at is not null")).length, 3);
+        assert.equal(events.requests.length, 1);
+        assert.deepEqual(events.requests[0].events.map((event) => String(event.user_data.lead_id)).sort(), leadgens);
+        assert.deepEqual(events.names(), ["Lead", "Lead", "Lead"]);
       } finally {
         delete process.env.META_ACCESS_TOKEN;
         await sql("delete from crm.meta_lead_pages");
@@ -873,6 +1185,8 @@ describe("Meta outcomes", () => {
   describe("settings", () => {
     it("lets owners and admins save and switch on, and checks the dataset with the token", async () => {
       await sql("delete from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]);
+      const auditCount = async () => (await sql("select 1 from crm.audit_events where event_type = 'integration.updated' and workspace_id = $1", [owner.workspaceId])).length;
+      const audited = await auditCount();
       const fake = metaFake();
       await saveMetaOutcomes(admin, { datasetId: ` ${DATASET} ` }, { fetchImpl: fake.fetchImpl });
       assert.equal(fake.checks, 1);
@@ -884,20 +1198,23 @@ describe("Meta outcomes", () => {
       assert.equal(view.enabled, true);
       assert.deepEqual(view.stages.map((item) => item.name), ["Lead", "Working", "Proposal", "Won"]);
       assert.deepEqual(view.pipelines, []);
-      const audits = await sql<{ event_type: string }>("select event_type from crm.audit_events where event_type = 'integration.updated' and workspace_id = $1", [owner.workspaceId]);
-      assert.equal(audits.length, 2);
+      assert.equal((await auditCount()) - audited, 2);
     });
 
-    it("refuses members, and keeps the dataset ID and errors from them", async () => {
+    it("refuses members any change to the settings and hides the errors from them, while they can see the dataset ID", async () => {
       await assert.rejects(saveMetaOutcomes(member, { datasetId: "123" }, { fetchImpl: metaFake().fetchImpl }), /Only owners and admins/);
+      await assert.rejects(saveMetaOutcomes(member, { enabled: false }, { fetchImpl: metaFake().fetchImpl }), /Only owners and admins/);
       await sql("update crm.meta_outcome_settings set last_error = 'Token rejected.' where workspace_id = $1", [owner.workspaceId]);
-      assert.equal((await getMetaOutcomesView(member)).lastError, null);
+      const seen = await getMetaOutcomesView(member);
+      assert.equal(seen.datasetId, DATASET);
+      assert.equal(seen.lastError, null);
       assert.equal((await getMetaOutcomesView(admin)).lastError, "Token rejected.");
       assert.deepEqual(
-        await queryAsUser(member.userId, "update crm.meta_outcome_settings set enabled = false where workspace_id = $1 returning workspace_id", [owner.workspaceId]),
+        await queryAsUser(member.userId, "update crm.meta_outcome_settings set enabled = false, dataset_id = '1' where workspace_id = $1 returning workspace_id", [owner.workspaceId]),
         [],
       );
       await assert.rejects(queryAsUser(member.userId, "insert into crm.meta_outcome_settings (workspace_id, dataset_id) values ($1, '1')", [outsider.workspaceId]));
+      assert.deepEqual(await sql("select enabled, dataset_id from crm.meta_outcome_settings where workspace_id = $1", [owner.workspaceId]), [{ enabled: true, dataset_id: DATASET }]);
       assert.equal((await sql("select 1 from crm.meta_outcome_settings where enabled")).length, 1);
     });
 
@@ -930,15 +1247,6 @@ describe("Meta outcomes", () => {
       await assert.rejects(saveMetaOutcomes(owner, { pipelineId: "00000000-0000-0000-0000-000000000000" }, { fetchImpl: metaFake().fetchImpl }), /Choose a sales pipeline/);
       await sql("update crm.meta_outcome_settings set pipeline_id = null where workspace_id = $1", [owner.workspaceId]);
       await sql("delete from crm.pipeline_stages where pipeline_id = $1", [extra]);
-      await sql("delete from crm.pipelines where id = $1", [extra]);
-    });
-
-    it("sends nothing while a workspace with two sales pipelines hasn't chosen one", async () => {
-      const extra = (await sql<{ id: string }>("insert into crm.pipelines (workspace_id, name, kind) values ($1, 'Partners', 'sales') returning id", [owner.workspaceId]))[0].id;
-      await scenario();
-      const fake = metaFake();
-      await run(fake);
-      assert.equal(fake.requests.length, 0);
       await sql("delete from crm.pipelines where id = $1", [extra]);
     });
 
@@ -983,7 +1291,6 @@ describe("Meta outcomes", () => {
       assert.deepEqual(await queryAsUser(outsider.userId, "select 1 from crm.meta_lead_outcomes where lead_id = $1", [lead.leadId]), []);
       await assert.rejects(queryAsUser(member.userId, "select error from crm.meta_lead_outcomes"), /permission denied/);
       await assert.rejects(queryAsUser(member.userId, "select opportunity_id from crm.meta_lead_outcomes"), /permission denied/);
-      await assert.rejects(queryAsUser(member.userId, "select * from crm.meta_leads"), /./).catch(() => undefined);
       assert.deepEqual(await queryAsUser(member.userId, "select id from crm.meta_leads"), []);
     });
 

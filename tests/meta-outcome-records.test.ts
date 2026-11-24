@@ -12,6 +12,8 @@ import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { graphOrigin, metaGraphVersion } from "@/lib/meta";
+import { runMetaOutcomes } from "@/lib/crm/meta-outcomes";
 import { createUser, queryAsUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const PROVENANCE = { operation: "outcome_test", source: "test" };
@@ -184,6 +186,32 @@ describe("opportunity stage entries and Meta lead records", () => {
       await assert.rejects(queryAsUser(member.userId, "delete from crm.opportunity_stage_entries"), /permission denied/);
     });
 
+    it("never lets a member read a stage entry for an opportunity outside their workspaces", async () => {
+      const acme = await company(eclipse);
+      const item = await deal(acme.id, "Working");
+      await updateOpportunity(eclipse, item.id, { stageId: stage.Proposal }, { provenance: PROVENANCE });
+      const rae = await createUser("rae@records.test", "Rae Ridgeon");
+      await sql("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [ridgeon.workspaceId, rae.userId]);
+      const target = await listPipeline(ridgeon);
+      await moveRecordsToWorkspace(eclipse, { companyIds: [acme.id], workspaceId: ridgeon.workspaceId, pipelineId: target.id, stageId: target.stages[1].id }, PROVENANCE);
+      const rows = await entries(item.id);
+      assert.ok(rows.length >= 3);
+      assert.deepEqual([...new Set(rows.map((row) => row.workspace_id))], [ridgeon.workspaceId]);
+      assert.deepEqual(await queryAsUser(member.userId, "select 1 from crm.opportunity_stage_entries where opportunity_id = $1", [item.id]), []);
+      assert.equal((await queryAsUser(rae.userId, "select 1 from crm.opportunity_stage_entries where opportunity_id = $1", [item.id])).length, rows.length);
+
+      await sql("update crm.opportunity_stage_entries set workspace_id = $2 where opportunity_id = $1", [item.id, eclipse.workspaceId]);
+      assert.deepEqual(await queryAsUser(member.userId, "select 1 from crm.opportunity_stage_entries where opportunity_id = $1", [item.id]), []);
+      assert.deepEqual(await queryAsUser(rae.userId, "select 1 from crm.opportunity_stage_entries where opportunity_id = $1", [item.id]), []);
+
+      const orphans = await queryAsUser<{ count: number }>(
+        member.userId,
+        "select count(*)::int as count from crm.opportunity_stage_entries e where not exists (select 1 from crm.opportunities o where o.id = e.opportunity_id)",
+      );
+      assert.equal(orphans[0].count, 0);
+      await sql("update crm.opportunity_stage_entries set workspace_id = $2 where opportunity_id = $1", [item.id, ridgeon.workspaceId]);
+    });
+
     it("is backfilled from audit events, once", async () => {
       const acme = await company(eclipse);
       const item = await deal(acme.id, "New");
@@ -294,7 +322,7 @@ describe("opportunity stage entries and Meta lead records", () => {
       await assert.rejects(sql("update crm.meta_leads set contact_id = $2 where id = $1", [id, person.id]), /contact belongs to another workspace/);
     });
 
-    it("keeps working for a lead whose opportunity moved: it stays in its own workspace's pipeline", async () => {
+    it("never counts a moved opportunity's stages in the other workspace's pipeline for a lead", async () => {
       process.env.META_DATASET_TOKEN = "records-token";
       try {
         await sql("insert into crm.meta_outcome_settings (workspace_id, dataset_id, enabled) values ($1, '1608701054328072', true) on conflict (workspace_id) do update set enabled = true", [eclipse.workspaceId]);
@@ -302,15 +330,59 @@ describe("opportunity stage entries and Meta lead records", () => {
         const person = (await createContact(eclipse, { firstName: "Pat", lastName: "Pipeline", companyId: acme.id }, { provenance: PROVENANCE })).body.contact;
         const id = await lead(person.id, acme.id);
         const item = await deal(acme.id, "New", { primaryContactId: person.id });
-        await moveRecordsToWorkspace(eclipse, { companyIds: [acme.id], workspaceId: ridgeon.workspaceId }, PROVENANCE);
-        await sql("update crm.opportunity_stage_entries set entered_at = now() - interval '1 hour' where opportunity_id = $1", [item.id]);
-        const due = await sql<{ stage_name: string }>("select stage_name from private.meta_lead_outcomes_due(10, $1, $2)", [person.id, acme.id]);
-        assert.deepEqual(due.map((row) => row.stage_name), ["Lead"]);
+        await updateOpportunity(eclipse, item.id, { stageId: stage.Working }, { provenance: PROVENANCE });
+        await sql("update crm.opportunity_stage_entries set entered_at = now() - interval '2 hours' where opportunity_id = $1 and stage_id = $2", [item.id, stage.New]);
+        await sql("update crm.opportunity_stage_entries set entered_at = now() - interval '1 hour' where opportunity_id = $1 and stage_id = $2", [item.id, stage.Working]);
+        const dueNames = async () => (await sql<{ stage_name: string }>("select stage_name from private.meta_lead_outcomes_due(10, $1, $2)", [person.id, acme.id])).map((row) => row.stage_name);
+        assert.deepEqual(await dueNames(), ["Lead", "Working"]);
+
+        const target = await listPipeline(ridgeon);
+        await moveRecordsToWorkspace(eclipse, { companyIds: [acme.id], workspaceId: ridgeon.workspaceId, pipelineId: target.id, stageId: target.stages[2].id }, PROVENANCE);
+        assert.equal((await sql<{ workspace_id: string }>("select workspace_id from crm.opportunities where id = $1", [item.id]))[0].workspace_id, ridgeon.workspaceId);
+        await sql("update crm.opportunity_stage_entries set entered_at = now() - interval '1 hour' where opportunity_id = $1 and stage_id = $2", [item.id, target.stages[2].id]);
+        assert.deepEqual(await dueNames(), ["Lead"]);
+        await sql("update crm.meta_outcome_settings set pipeline_id = $2 where workspace_id = $1", [eclipse.workspaceId, target.id]);
+        assert.deepEqual(await dueNames(), ["Lead"]);
+        await sql("update crm.meta_outcome_settings set pipeline_id = null where workspace_id = $1", [eclipse.workspaceId]);
+        assert.deepEqual((await sql<{ stage_name: string }>("select stage_name from private.meta_lead_outcomes_due(10)")).map((row) => row.stage_name).filter((name) => name !== "Lead"), []);
+
+        await sql("delete from crm.meta_leads where id <> $1", [id]);
+        const sent: string[] = [];
+        const fetchImpl: typeof fetch = async (input, init) => {
+          const url = new URL(String(input));
+          if (init?.method === "POST" && url.origin === graphOrigin() && url.pathname === `/${metaGraphVersion()}/1608701054328072/events`) {
+            const body = JSON.parse(String(init.body).replace(/("lead_id":)(\d+)/g, '$1"$2"')) as { data: { event_name: string }[] };
+            sent.push(...body.data.map((event) => event.event_name));
+            return Response.json({ events_received: body.data.length });
+          }
+          throw new Error(`Unexpected request ${url.pathname}`);
+        };
+        await runMetaOutcomes({ fetchImpl, deadline: Date.now() + 20_000 });
+        assert.deepEqual(sent, ["Lead"]);
+        assert.equal((await sql("select 1 from crm.meta_lead_outcomes where lead_id = $1 and stage_name <> 'Lead'", [id])).length, 0);
         assert.equal((await leadRow(id)).workspace_id, eclipse.workspaceId);
       } finally {
         delete process.env.META_DATASET_TOKEN;
         await sql("delete from crm.meta_outcome_settings where workspace_id = $1", [eclipse.workspaceId]);
       }
+    });
+
+    it("refuses a hand edit that points a lead at another workspace even when the merge flag is set", async () => {
+      const acme = await company(eclipse);
+      const id = await lead(null, acme.id);
+      const elsewhere = await company(ridgeon);
+      const client = await getPool().connect();
+      try {
+        await client.query("begin");
+        await client.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: eclipse.userId, role: "authenticated" })]);
+        await client.query("set local role authenticated");
+        await client.query("select set_config('orbit.merging', 'on', true)");
+        await assert.rejects(client.query("update crm.meta_leads set company_id = $2 where id = $1", [id, elsewhere.id]), /company belongs to another workspace/);
+      } finally {
+        await client.query("rollback").catch(() => undefined);
+        client.release();
+      }
+      assert.equal((await leadRow(id)).company_id, acme.id);
     });
 
     it("refuses a merge across workspaces as before", async () => {

@@ -44,7 +44,7 @@ Mark is scaling Meta lead ads. Orbit sends what happened to each Meta lead back 
 - Unique `(lead_id, stage_name)`.
 - RLS forced. `authenticated` may select `workspace_id`, `lead_id`, `stage_name`, `position`, `occurred_at`, `status`, `attempts`, `sent_at`, `value` and `currency` for their workspaces. `opportunity_id` and `error` are read by `crm_app` only; admins see errors through `last_error` on the settings row. Writes only through `private.*` functions granted to `crm_app`.
 
-**`crm.meta_outcome_settings`**, one row per workspace: `dataset_id`, `pipeline_id` (the sales pipeline that drives the funnel; defaults to the workspace's only sales pipeline, chosen in Settings only when there's more than one), `enabled`, `last_error`, `last_error_at`, `alerted_at`. Owners and admins write, members read.
+**`crm.meta_outcome_settings`**, one row per workspace: `dataset_id`, `pipeline_id` (the sales pipeline that drives the funnel; defaults to the workspace's only sales pipeline, chosen in Settings only when there's more than one), `enabled`, `last_error`, `last_error_at`, `alerted_at`, `last_sent_at`. With more than one sales pipeline and none chosen, `Lead` is still sent, the stages wait, and `last_error` is "Choose a pipeline in Settings › Tools." (so the card and the 24 hour alert show it). Owners and admins write, members read.
 
 **Additions elsewhere:**
 
@@ -76,7 +76,7 @@ Mark is scaling Meta lead ads. Orbit sends what happened to each Meta lead back 
 - `runMetaOutcomes({ deadline, fetchImpl, contactId?, companyId? })` records due stages, claims pending rows (`for update skip locked`, a 2 minute `claimed_until` lease, a lead's rows claimed together), and sends them per workspace in position order.
 - **Stale events never reach Meta.** One event older than 7 days makes Meta reject the whole request, so rows older than 6.5 days are marked `skipped` before a batch is built.
 - **Batches:** up to 100 events.
-  - Errors are classified as `graphFailure` does in `lib/meta.ts`. Only code 100 without subcode 33 is an event error: split down to single events while the deadline allows, mark the bad one `failed` with Meta's message, and leave unfinished rows pending. Its lead's later stages wait.
+  - Errors are classified as `graphFailure` does in `lib/meta.ts`. Only code 100 without subcode 33 is an event error: split down to single events while the deadline allows. A single rejected event is marked `failed` with Meta's message only with proof the dataset works: another event in that run was accepted, or the dataset accepted one in the last day (`last_sent_at`, cleared when the dataset ID changes). Without proof it is a workspace failure. Its lead's later stages wait. Rows of a rejected split the deadline cut short go on retry (attempts + 1, backoff) and are then sent one at a time.
   - Everything else (100/33 unreachable dataset, token, permission, rate limits, 5xx) is a workspace failure: rows stay pending, the workspace backs off and `last_error` is set. If a split ends with every single event rejected, that's a workspace failure too.
 - **Payload,** to `POST {graphOrigin()}/{metaGraphVersion()}/{dataset_id}/events` with `access_token = META_DATASET_TOKEN` (export both helpers from `lib/meta.ts`):
 

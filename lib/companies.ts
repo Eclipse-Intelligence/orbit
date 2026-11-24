@@ -119,6 +119,33 @@ export function formatWhen(iso: string | null) {
   }).format(new Date(iso));
 }
 
+function sameYear(iso: string, now: Date) {
+  const year = (date: Date) => new Intl.DateTimeFormat("en-GB", { year: "numeric", timeZone: appTimeZone() }).format(date);
+  return year(new Date(iso)) === year(now);
+}
+
+export function formatWhenShort(iso: string | null, now = new Date()) {
+  if (!iso) return "No date";
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "short",
+    day: "numeric",
+    ...(sameYear(iso, now) ? {} : { year: "numeric" }),
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: appTimeZone(),
+  }).format(new Date(iso));
+}
+
+export function formatDayShort(iso: string, now = new Date()) {
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "short",
+    day: "numeric",
+    ...(sameYear(iso, now) ? {} : { year: "numeric" }),
+    timeZone: appTimeZone(),
+  }).format(new Date(iso));
+}
+
 export function formatMeetingWhen(iso: string, allDay = false) {
   return new Intl.DateTimeFormat(
     "en-GB",
@@ -142,6 +169,15 @@ export function formatMoney(value: string | null, currency: string) {
   if (!Number.isFinite(amount)) return value;
   try {
     return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
+  } catch {
+    return `${currency} ${value}`;
+  }
+}
+
+export function formatMoneyWhole(value: number, currency: string) {
+  if (!Number.isFinite(value)) return `${value}`;
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency, minimumFractionDigits: Number.isInteger(value) ? 0 : 2 }).format(value);
   } catch {
     return `${currency} ${value}`;
   }

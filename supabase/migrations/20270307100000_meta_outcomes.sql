@@ -1,5 +1,13 @@
 set lock_timeout = '5s';
 
+do $$
+begin
+  if not exists (select 1 from pg_roles r where r.rolname = current_user and (r.rolsuper or r.rolbypassrls)) then
+    raise exception 'Run this as a role that bypasses row-level security: the trigger and private functions write to crm.opportunity_stage_entries, crm.meta_lead_outcomes and crm.meta_outcome_settings, which have no insert policy for them.';
+  end if;
+end;
+$$;
+
 create table if not exists crm.opportunity_stage_entries (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references crm.workspaces (id) on delete cascade,
@@ -17,7 +25,13 @@ alter table crm.opportunity_stage_entries force row level security;
 
 drop policy if exists opportunity_stage_entries_read on crm.opportunity_stage_entries;
 create policy opportunity_stage_entries_read on crm.opportunity_stage_entries for select to authenticated
-  using (workspace_id in (select private.user_workspace_ids()));
+  using (
+    workspace_id in (select private.user_workspace_ids())
+    and exists (
+      select 1 from crm.opportunities o
+      where o.id = opportunity_id and o.workspace_id in (select private.user_workspace_ids())
+    )
+  );
 
 revoke all on crm.opportunity_stage_entries from public, anon, authenticated, crm_agent;
 grant select on crm.opportunity_stage_entries to authenticated;
@@ -87,12 +101,15 @@ create table if not exists crm.meta_outcome_settings (
   last_error text,
   last_error_at timestamptz,
   alerted_at timestamptz,
+  last_sent_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint meta_outcome_settings_dataset check (dataset_id is null or dataset_id ~ '^[0-9]{1,40}$'),
   constraint meta_outcome_settings_enabled check (not enabled or dataset_id is not null),
   constraint meta_outcome_settings_error check (last_error is null or char_length(last_error) <= 500)
 );
+
+alter table crm.meta_outcome_settings add column if not exists last_sent_at timestamptz;
 
 alter table crm.meta_outcome_settings enable row level security;
 alter table crm.meta_outcome_settings force row level security;
@@ -112,6 +129,26 @@ revoke all on crm.meta_outcome_settings from public, anon, authenticated, crm_ag
 grant select on crm.meta_outcome_settings to authenticated;
 grant insert (workspace_id, dataset_id, pipeline_id, enabled) on crm.meta_outcome_settings to authenticated;
 grant update (dataset_id, pipeline_id, enabled, last_error, last_error_at, alerted_at) on crm.meta_outcome_settings to authenticated;
+
+create or replace function private.meta_outcome_settings_dataset_changed()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.dataset_id is distinct from old.dataset_id then
+    new.last_sent_at := null;
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function private.meta_outcome_settings_dataset_changed() from public;
+
+drop trigger if exists meta_outcome_settings_dataset_changed on crm.meta_outcome_settings;
+create trigger meta_outcome_settings_dataset_changed
+  before update on crm.meta_outcome_settings
+  for each row execute function private.meta_outcome_settings_dataset_changed();
 
 drop trigger if exists meta_outcome_settings_set_updated_at on crm.meta_outcome_settings;
 create trigger meta_outcome_settings_set_updated_at
@@ -151,6 +188,7 @@ create table if not exists crm.meta_lead_outcomes (
   attempts integer not null default 0,
   next_attempt_at timestamptz,
   claimed_until timestamptz,
+  isolate boolean not null default false,
   sent_at timestamptz,
   error text,
   created_at timestamptz not null default now(),
@@ -161,6 +199,8 @@ create table if not exists crm.meta_lead_outcomes (
   constraint meta_lead_outcomes_error check (error is null or char_length(error) <= 500),
   constraint meta_lead_outcomes_unique unique (lead_id, stage_name)
 );
+
+alter table crm.meta_lead_outcomes add column if not exists isolate boolean not null default false;
 
 create index if not exists meta_lead_outcomes_pending_idx on crm.meta_lead_outcomes (workspace_id, next_attempt_at) where status = 'pending';
 create index if not exists meta_lead_outcomes_lead_idx on crm.meta_lead_outcomes (lead_id, "position");
@@ -200,6 +240,91 @@ $$;
 revoke all on function private.meta_outcomes_pipeline(uuid, uuid) from public;
 grant execute on function private.meta_outcomes_pipeline(uuid, uuid) to crm_app;
 
+create or replace function private.meta_outcomes_pipeline_unresolved(p_workspace uuid, p_chosen uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select private.meta_outcomes_pipeline(p_workspace, p_chosen) is null
+    and (select count(*) from crm.pipelines p where p.workspace_id = p_workspace and p.kind = 'sales' and p.archived_at is null) > 1;
+$$;
+
+revoke all on function private.meta_outcomes_pipeline_unresolved(uuid, uuid) from public;
+grant execute on function private.meta_outcomes_pipeline_unresolved(uuid, uuid) to crm_app;
+
+create or replace function private.meta_outcomes_sync_pipeline_error(p_workspace uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update crm.meta_outcome_settings s
+  set last_error = 'Choose a pipeline in Settings › Tools.',
+      last_error_at = case when s.last_error = 'Choose a pipeline in Settings › Tools.' then coalesce(s.last_error_at, now()) else now() end,
+      alerted_at = case when s.last_error = 'Choose a pipeline in Settings › Tools.' then s.alerted_at else null end
+  where s.workspace_id = p_workspace and s.enabled and s.dataset_id is not null
+    and private.meta_outcomes_pipeline_unresolved(s.workspace_id, s.pipeline_id)
+    and (s.last_error is null or s.last_error = 'Choose a pipeline in Settings › Tools.');
+  update crm.meta_outcome_settings s
+  set last_error = null, last_error_at = null, alerted_at = null
+  where s.workspace_id = p_workspace
+    and s.last_error = 'Choose a pipeline in Settings › Tools.'
+    and not (s.enabled and s.dataset_id is not null and private.meta_outcomes_pipeline_unresolved(s.workspace_id, s.pipeline_id));
+end;
+$$;
+
+revoke all on function private.meta_outcomes_sync_pipeline_error(uuid) from public;
+
+create or replace function private.meta_outcomes_pipeline_status()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_workspace uuid;
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  for v_workspace in
+    select s.workspace_id from crm.meta_outcome_settings s
+    where s.last_error = 'Choose a pipeline in Settings › Tools.' or (s.enabled and s.dataset_id is not null)
+  loop
+    perform private.meta_outcomes_sync_pipeline_error(v_workspace);
+  end loop;
+end;
+$$;
+
+revoke all on function private.meta_outcomes_pipeline_status() from public;
+grant execute on function private.meta_outcomes_pipeline_status() to crm_app;
+
+create or replace function private.meta_outcomes_proven(p_workspace uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if current_user not in ('crm_app', 'postgres') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  return exists (
+    select 1 from crm.meta_outcome_settings s
+    where s.workspace_id = p_workspace
+      and s.last_sent_at > now() - interval '1 day'
+      and (s.last_error is null or s.last_error = 'Choose a pipeline in Settings › Tools.')
+  );
+end;
+$$;
+
+revoke all on function private.meta_outcomes_proven(uuid) from public;
+grant execute on function private.meta_outcomes_proven(uuid) to crm_app;
+
 create or replace function private.meta_outcomes_work_due()
 returns boolean
 language plpgsql
@@ -221,11 +346,10 @@ grant execute on function private.meta_outcomes_work_due() to crm_app;
 create or replace function private.meta_lead_same_workspace()
 returns trigger
 language plpgsql
-security definer
 set search_path = ''
 as $$
 begin
-  if coalesce(current_setting('orbit.merging', true), '') = 'on' then
+  if current_setting('orbit.merging', true) = 'on' and current_user not in ('authenticated', 'crm_agent', 'crm_app') then
     return new;
   end if;
   if new.contact_id is not null and new.contact_id is distinct from old.contact_id and not exists (
@@ -292,7 +416,9 @@ $$;
 revoke all on function private.meta_lead_hashes_set(uuid, text, text) from public;
 grant execute on function private.meta_lead_hashes_set(uuid, text, text) to crm_app;
 
-create or replace function private.meta_lead_outcomes_due(p_limit integer, p_contact uuid default null, p_company uuid default null)
+drop function if exists private.meta_lead_outcomes_due(integer, uuid, uuid);
+
+create or replace function private.meta_lead_outcomes_due(p_limit integer, p_contact uuid default null, p_company uuid default null, p_leads uuid[] default null)
 returns table (
   lead_id uuid,
   workspace_id uuid,
@@ -321,9 +447,9 @@ begin
     from crm.meta_leads l
     join crm.meta_outcome_settings s on s.workspace_id = l.workspace_id and s.enabled and s.dataset_id is not null
     where l.filed_at is not null
-      and private.meta_outcomes_pipeline(l.workspace_id, s.pipeline_id) is not null
       and (
         case
+          when p_leads is not null then l.id = any(p_leads)
           when p_contact is null and p_company is null then l.filed_at > now() - interval '90 days'
           else l.contact_id = p_contact or l.company_id = p_company
         end
@@ -419,8 +545,8 @@ begin
 end;
 $$;
 
-revoke all on function private.meta_lead_outcomes_due(integer, uuid, uuid) from public;
-grant execute on function private.meta_lead_outcomes_due(integer, uuid, uuid) to crm_app;
+revoke all on function private.meta_lead_outcomes_due(integer, uuid, uuid, uuid[]) from public;
+grant execute on function private.meta_lead_outcomes_due(integer, uuid, uuid, uuid[]) to crm_app;
 
 create or replace function private.meta_lead_outcomes_record(p_rows jsonb)
 returns integer
@@ -457,6 +583,7 @@ begin
           attempts = 0,
           next_attempt_at = null,
           claimed_until = null,
+          isolate = false,
           error = excluded.error
       where o.status in ('skipped', 'failed')
     returning 1
@@ -468,6 +595,8 @@ $$;
 
 revoke all on function private.meta_lead_outcomes_record(jsonb) from public;
 grant execute on function private.meta_lead_outcomes_record(jsonb) to crm_app;
+
+drop function if exists private.meta_lead_outcomes_claim(integer);
 
 create or replace function private.meta_lead_outcomes_claim(p_limit integer)
 returns table (
@@ -482,7 +611,8 @@ returns table (
   currency text,
   email_hash text,
   phone_hash text,
-  attempts integer
+  attempts integer,
+  isolate boolean
 )
 language plpgsql
 security definer
@@ -495,7 +625,7 @@ begin
   end if;
 
   update crm.meta_lead_outcomes o
-  set occurred_at = f.fresh_time, status = 'pending', attempts = 0, next_attempt_at = null, claimed_until = null, error = null
+  set occurred_at = f.fresh_time, status = 'pending', attempts = 0, next_attempt_at = null, claimed_until = null, isolate = false, error = null
   from (
     select u.id, (
       select min(x.occurred_at) from crm.meta_lead_outcomes x
@@ -518,13 +648,23 @@ begin
     and (o.claimed_until is null or o.claimed_until <= now());
 
   return query
-  with eligible as (
+  with ready as (
     select o.id, o.lead_id
     from crm.meta_lead_outcomes o
     join crm.meta_outcome_settings s on s.workspace_id = o.workspace_id and s.enabled and s.dataset_id is not null
     where o.status = 'pending'
       and (o.next_attempt_at is null or o.next_attempt_at <= now())
       and (o.claimed_until is null or o.claimed_until <= now())
+  ),
+  eligible as (
+    select r.id, r.lead_id
+    from ready r
+    join crm.meta_lead_outcomes o on o.id = r.id
+    where not exists (
+      select 1 from crm.meta_lead_outcomes b
+      where b.lead_id = o.lead_id and b."position" < o."position" and b.status <> 'sent'
+        and b.id not in (select x.id from ready x)
+    )
   ),
   picked as (
     select l.id
@@ -545,12 +685,12 @@ begin
       and not exists (
         select 1 from crm.meta_lead_outcomes b
         where b.lead_id = o.lead_id and b."position" < o."position" and b.status <> 'sent'
-          and b.id not in (select e.id from eligible e)
+          and b.id not in (select x.id from ready x)
       )
-    returning o.id, o.workspace_id, o.lead_id, o.stage_name, o."position", o.occurred_at, o.value, o.currency, o.attempts
+    returning o.id, o.workspace_id, o.lead_id, o.stage_name, o."position", o.occurred_at, o.value, o.currency, o.attempts, o.isolate
   )
   select c.id, c.workspace_id, s.dataset_id, l.leadgen_id, c.stage_name, c."position", c.occurred_at, c.value, c.currency,
-    l.email_hash, l.phone_hash, c.attempts
+    l.email_hash, l.phone_hash, c.attempts, c.isolate
   from claimed c
   join crm.meta_leads l on l.id = c.lead_id
   join crm.meta_outcome_settings s on s.workspace_id = c.workspace_id;
@@ -560,7 +700,16 @@ $$;
 revoke all on function private.meta_lead_outcomes_claim(integer) from public;
 grant execute on function private.meta_lead_outcomes_claim(integer) to crm_app;
 
-create or replace function private.meta_lead_outcomes_finish(p_sent uuid[], p_failed jsonb, p_retry uuid[], p_release uuid[], p_error text)
+drop function if exists private.meta_lead_outcomes_finish(uuid[], jsonb, uuid[], uuid[], text);
+
+create or replace function private.meta_lead_outcomes_finish(
+  p_sent uuid[],
+  p_failed jsonb,
+  p_retry uuid[],
+  p_release uuid[],
+  p_error text,
+  p_split uuid[] default '{}'
+)
 returns void
 language plpgsql
 security definer
@@ -571,10 +720,13 @@ begin
     raise exception 'forbidden' using errcode = '42501';
   end if;
   update crm.meta_lead_outcomes o
-  set status = 'sent', sent_at = now(), claimed_until = null, next_attempt_at = null, error = null
+  set status = 'sent', sent_at = now(), claimed_until = null, next_attempt_at = null, isolate = false, error = null
   where o.id = any(coalesce(p_sent, '{}'));
+  update crm.meta_outcome_settings s
+  set last_sent_at = now()
+  where s.workspace_id in (select o.workspace_id from crm.meta_lead_outcomes o where o.id = any(coalesce(p_sent, '{}')));
   update crm.meta_lead_outcomes o
-  set status = 'failed', claimed_until = null, next_attempt_at = null, error = left(f.error, 500)
+  set status = 'failed', claimed_until = null, next_attempt_at = null, isolate = false, error = left(f.error, 500)
   from jsonb_to_recordset(coalesce(p_failed, '[]'::jsonb)) as f (id uuid, error text)
   where o.id = f.id;
   update crm.meta_lead_outcomes o
@@ -584,13 +736,19 @@ begin
       error = left(p_error, 500)
   where o.id = any(coalesce(p_retry, '{}'));
   update crm.meta_lead_outcomes o
+  set attempts = o.attempts + 1,
+      claimed_until = null,
+      isolate = true,
+      next_attempt_at = now() + least(interval '6 hours', interval '5 minutes' * power(2, least(o.attempts, 10)))
+  where o.id = any(coalesce(p_split, '{}'));
+  update crm.meta_lead_outcomes o
   set claimed_until = null
   where o.id = any(coalesce(p_release, '{}'));
 end;
 $$;
 
-revoke all on function private.meta_lead_outcomes_finish(uuid[], jsonb, uuid[], uuid[], text) from public;
-grant execute on function private.meta_lead_outcomes_finish(uuid[], jsonb, uuid[], uuid[], text) to crm_app;
+revoke all on function private.meta_lead_outcomes_finish(uuid[], jsonb, uuid[], uuid[], text, uuid[]) from public;
+grant execute on function private.meta_lead_outcomes_finish(uuid[], jsonb, uuid[], uuid[], text, uuid[]) to crm_app;
 
 create or replace function private.meta_outcomes_workspace_result(p_workspace uuid, p_error text)
 returns void
@@ -605,7 +763,10 @@ begin
   if p_error is null then
     update crm.meta_outcome_settings s
     set last_error = null, last_error_at = null, alerted_at = null
-    where s.workspace_id = p_workspace and (s.last_error is not null or s.last_error_at is not null or s.alerted_at is not null);
+    where s.workspace_id = p_workspace
+      and s.last_error is distinct from 'Choose a pipeline in Settings › Tools.'
+      and (s.last_error is not null or s.last_error_at is not null or s.alerted_at is not null);
+    perform private.meta_outcomes_sync_pipeline_error(p_workspace);
   else
     update crm.meta_outcome_settings s
     set last_error = left(p_error, 500),
@@ -1613,6 +1774,11 @@ begin
     from pg_temp.orbit_move_map m
     join crm.pipeline_stages s on s.id = m.stage_id
     where m.kind = 'deal' and m.old_id = o.id;
+
+    update crm.opportunity_stage_entries e
+    set workspace_id = p_target
+    from pg_temp.orbit_move_map m
+    where m.kind = 'deal' and m.old_id = e.opportunity_id and e.workspace_id is distinct from p_target;
   else
     insert into crm.opportunities (
       id, workspace_id, company_id, primary_contact_id, pipeline_id, stage_id, name, value, currency,

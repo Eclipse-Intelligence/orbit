@@ -10,7 +10,7 @@ import { NativeSelect } from "@/components/_ui/native-select";
 import Switch from "@/components/_ui/switch";
 import { SettingsCard } from "@/components/crm/settings-ui";
 import { addHeldLeadsAction, linkMetaPageAction, saveMetaOutcomesAction, unlinkMetaPageAction, type MetaLeadActionState } from "@/app/(crm)/settings/actions";
-import { formatWhen } from "@/lib/companies";
+import { formatWhen, formatWhenShort } from "@/lib/companies";
 import type { MetaLeadSettingsView } from "@/lib/crm/meta-leads";
 import type { MetaOutcomesView } from "@/lib/crm/meta-outcomes";
 import { cn, GENERIC_ERROR } from "@/lib/utils";
@@ -24,6 +24,31 @@ function Status({ on, bad = false, children }: { on: boolean; bad?: boolean; chi
   );
 }
 
+type Section = "pages" | "outcomes" | "held";
+
+function sectionOf(kind: string): Section {
+  if (kind === "dataset" || kind === "enabled" || kind === "pipeline") return "outcomes";
+  if (kind.startsWith("held:") || kind.startsWith("link:")) return "held";
+  return "pages";
+}
+
+function Message({ state }: { state: MetaLeadActionState }) {
+  return (
+    <>
+      {state.error && (
+        <p role="alert" className="caption-style text-danger">
+          {state.error}
+        </p>
+      )}
+      {state.message && (
+        <p role="status" className="caption-style text-soft">
+          {state.message}
+        </p>
+      )}
+    </>
+  );
+}
+
 function leadCount(count: number) {
   return count === 1 ? "1 lead" : `${count.toLocaleString("en-GB")} leads`;
 }
@@ -32,16 +57,17 @@ export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: 
   const router = useRouter();
   const [pageId, setPageId] = useState("");
   const [pending, setPending] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState<MetaLeadActionState>({});
+  const [outcome, setOutcome] = useState<{ section: Section; state: MetaLeadActionState } | null>(null);
   const [datasetId, setDatasetId] = useState(outcomes.datasetId);
   const input = useRef<HTMLInputElement>(null);
 
   async function run(kind: string, action: () => Promise<MetaLeadActionState>) {
+    const section = sectionOf(kind);
     setPending(kind);
-    setOutcome({});
+    setOutcome(null);
     const result = await action().catch((): MetaLeadActionState => ({ error: GENERIC_ERROR }));
     setPending(null);
-    setOutcome(result);
+    setOutcome({ section, state: result });
     if (!result.error) {
       if (kind === "add") {
         setPageId("");
@@ -63,7 +89,15 @@ export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: 
   }
 
   const ready = outcomes.tokenSet && Boolean(outcomes.datasetId);
-  const sentLine = ["Token set", `${outcomes.sent.toLocaleString("en-GB")} sent`, outcomes.lastSentAt ? `Last ${formatWhen(outcomes.lastSentAt)}` : null].filter(Boolean).join(" · ");
+  const sentLine = [
+    "Token set",
+    `${outcomes.sent.toLocaleString("en-GB")} sent`,
+    outcomes.failed > 0 ? `${outcomes.failed.toLocaleString("en-GB")} failed` : null,
+    outcomes.lastSentAt ? `Last ${formatWhenShort(outcomes.lastSentAt)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const messageFor = (section: Section) => (outcome?.section === section ? <Message state={outcome.state} /> : null);
 
   return (
     <SettingsCard
@@ -142,21 +176,13 @@ export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: 
         <p className="caption-style text-subtle">Only owners and admins can change Meta lead ads.</p>
       )}
 
-      {outcome.error && (
-        <p role="alert" className="caption-style text-danger">
-          {outcome.error}
-        </p>
-      )}
-      {outcome.message && (
-        <p role="status" className="caption-style text-soft">
-          {outcome.message}
-        </p>
-      )}
+      {messageFor("pages")}
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <h4 className="text-foreground leading-5">Send outcomes to Meta</h4>
           <Switch
+            className="hit"
             label="Send outcomes to Meta"
             checked={outcomes.enabled}
             disabled={!canAdmin || pending !== null || (!outcomes.enabled && !ready)}
@@ -213,6 +239,7 @@ export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: 
             {outcomes.lastError}
           </p>
         )}
+        {messageFor("outcomes")}
       </div>
 
       {outcomes.stages.length > 0 && (
@@ -223,7 +250,7 @@ export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: 
             {outcomes.stages.map((stage, index) => (
               <li key={stage.name} className="ui-style grid grid-cols-[1.25rem_1fr] items-baseline gap-x-2.5 gap-y-0.5 px-3 py-2 sm:grid-cols-[1.25rem_9.5em_1fr]">
                 <span className="text-faint tabular-nums">{index + 1}</span>
-                <span className="text-foreground font-medium wrap-anywhere">{stage.name}</span>
+                <code className="text-foreground font-[family-name:inherit] font-medium wrap-anywhere">{stage.name}</code>
                 <span className="text-subtle col-start-2 sm:col-start-auto">{stage.note}</span>
               </li>
             ))}
@@ -277,6 +304,7 @@ export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: 
           </ul>
         </div>
       )}
+      {messageFor("held")}
     </SettingsCard>
   );
 }

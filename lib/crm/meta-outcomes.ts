@@ -17,13 +17,14 @@ const SEND_RESERVE_MS = 1_500;
 const DEFAULT_BUDGET_MS = 8_000;
 const LEAD_STAGE = "Lead";
 const UNREACHABLE_DATASET = "Meta can't reach the dataset. Check the Dataset ID and that the token can use it.";
-const ALL_REJECTED = "Meta rejected every event. Check the Dataset ID and the token.";
+const NOTHING_ACCEPTED = "Meta rejected everything sent, and nothing has been accepted lately. Check the Dataset ID and the token.";
 
 export type MetaOutcomeOptions = {
   deadline?: number;
   fetchImpl?: typeof fetch;
   contactId?: string | null;
   companyId?: string | null;
+  leadIds?: string[];
   limit?: number;
 };
 
@@ -61,11 +62,24 @@ type ClaimedRow = {
   email_hash: string | null;
   phone_hash: string | null;
   attempts: number;
+  isolate: boolean;
 };
 
-type Tally = { sent: string[]; failed: { id: string; error: string }[]; retry: string[]; release: string[]; error: string | null };
+type Tally = {
+  sent: string[];
+  suspects: { id: string; error: string }[];
+  failed: { id: string; error: string }[];
+  retry: string[];
+  split: string[];
+  release: string[];
+  error: string | null;
+};
 
-type Delivery = { token: string; deadline: number; fetchImpl?: typeof fetch; blocked: Set<string>; stopped: boolean };
+type Delivery = { token: string; deadline: number; fetchImpl?: typeof fetch; blocked: Set<string>; stopped: boolean; accepted: boolean };
+
+function emptyTally(): Tally {
+  return { sent: [], suspects: [], failed: [], retry: [], split: [], release: [], error: null };
+}
 
 function logFailure(context: string, error: unknown) {
   const type = error instanceof CrmError ? `crm ${error.code}` : isPgError(error) ? `pg ${error.code}` : error instanceof Error ? error.name : typeof error;
@@ -93,10 +107,11 @@ async function fillHashes() {
 }
 
 async function recordDue(options: MetaOutcomeOptions) {
-  const due = await query<DueRow>("select * from private.meta_lead_outcomes_due($1, $2, $3)", [
+  const due = await query<DueRow>("select * from private.meta_lead_outcomes_due($1, $2, $3, $4::uuid[])", [
     options.limit ?? SCAN_LEADS,
     options.contactId ?? null,
     options.companyId ?? null,
+    options.leadIds ?? null,
   ]);
   if (due.rows.length === 0) return 0;
   const rows = due.rows.map((row) => ({
@@ -135,7 +150,7 @@ function toEvent(row: ClaimedRow): MetaOutcomeEvent {
   };
 }
 
-async function deliver(datasetId: string, rows: ClaimedRow[], context: Delivery, tally: Tally): Promise<void> {
+async function deliver(datasetId: string, rows: ClaimedRow[], context: Delivery, tally: Tally, splitting = false): Promise<void> {
   const live: ClaimedRow[] = [];
   for (const row of rows) {
     if (context.stopped || context.blocked.has(row.leadgen_id)) tally.release.push(row.id);
@@ -143,12 +158,13 @@ async function deliver(datasetId: string, rows: ClaimedRow[], context: Delivery,
   }
   if (live.length === 0) return;
   if (!timeLeft(context.deadline)) {
-    tally.release.push(...live.map((row) => row.id));
+    (splitting ? tally.split : tally.release).push(...live.map((row) => row.id));
     return;
   }
   try {
     await sendMetaEvents(datasetId, live.map(toEvent), { token: context.token, fetchImpl: context.fetchImpl, deadline: context.deadline });
     tally.sent.push(...live.map((row) => row.id));
+    context.accepted = true;
   } catch (error) {
     if (!isEventError(error)) {
       logFailure("Meta outcomes send failed", error);
@@ -159,45 +175,80 @@ async function deliver(datasetId: string, rows: ClaimedRow[], context: Delivery,
     }
     if (live.length === 1) {
       const detail = error instanceof MetaError ? error.detail : null;
-      tally.failed.push({ id: live[0].id, error: cut(detail ?? "Meta rejected the event.", 500) });
+      tally.suspects.push({ id: live[0].id, error: cut(detail ?? "Meta rejected the event.", 500) });
       context.blocked.add(live[0].leadgen_id);
       return;
     }
     const middle = Math.ceil(live.length / 2);
-    await deliver(datasetId, live.slice(0, middle), context, tally);
-    await deliver(datasetId, live.slice(middle), context, tally);
+    await deliver(datasetId, live.slice(0, middle), context, tally, true);
+    await deliver(datasetId, live.slice(middle), context, tally, true);
   }
+}
+
+async function acceptedLately(workspaceId: string) {
+  try {
+    const result = await query<{ proven: boolean }>("select private.meta_outcomes_proven($1) as proven", [workspaceId]);
+    return Boolean(result.rows[0]?.proven);
+  } catch (error) {
+    logFailure("Meta outcomes proof not read", error);
+    return false;
+  }
+}
+
+async function judgeSuspects(workspaceId: string, context: Delivery, tally: Tally) {
+  if (tally.suspects.length === 0) return;
+  if (context.accepted || (await acceptedLately(workspaceId))) {
+    tally.failed.push(...tally.suspects);
+    return;
+  }
+  tally.retry.push(...tally.suspects.map((item) => item.id));
+  tally.error = NOTHING_ACCEPTED;
+  context.stopped = true;
+}
+
+function chunksOf(ordered: ClaimedRow[]) {
+  const chunks: ClaimedRow[][] = [];
+  let current: ClaimedRow[] = [];
+  for (const row of ordered) {
+    if (row.isolate) {
+      if (current.length > 0) chunks.push(current);
+      chunks.push([row]);
+      current = [];
+    } else {
+      current.push(row);
+      if (current.length >= BATCH_EVENTS) {
+        chunks.push(current);
+        current = [];
+      }
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
 
 async function sendWorkspace(workspaceId: string, datasetId: string, rows: ClaimedRow[], context: Delivery, report: MetaOutcomeReport) {
   const ordered = [...rows].sort((a, b) => (a.leadgen_id === b.leadgen_id ? a.position - b.position : a.leadgen_id < b.leadgen_id ? -1 : 1));
   let failure: string | null = null;
   let succeeded = false;
-  for (let start = 0; start < ordered.length; start += BATCH_EVENTS) {
-    const chunk = ordered.slice(start, start + BATCH_EVENTS);
-    const tally: Tally = { sent: [], failed: [], retry: [], release: [], error: null };
+  for (const chunk of chunksOf(ordered)) {
+    const tally = emptyTally();
     await deliver(datasetId, chunk, context, tally);
-    const attempted = chunk.length - tally.release.length - tally.retry.length;
-    if (attempted > 1 && tally.sent.length === 0 && tally.failed.length === attempted) {
-      tally.retry.push(...tally.failed.map((item) => item.id));
-      tally.failed = [];
-      tally.error = ALL_REJECTED;
-      context.stopped = true;
-    }
+    await judgeSuspects(workspaceId, context, tally);
     try {
-      await query("select private.meta_lead_outcomes_finish($1::uuid[], $2::jsonb, $3::uuid[], $4::uuid[], $5)", [
+      await query("select private.meta_lead_outcomes_finish($1::uuid[], $2::jsonb, $3::uuid[], $4::uuid[], $5, $6::uuid[])", [
         tally.sent,
         JSON.stringify(tally.failed),
         tally.retry,
         tally.release,
         tally.error,
+        tally.split,
       ]);
     } catch (error) {
       logFailure("Meta outcomes result not saved", error);
     }
     report.sent += tally.sent.length;
     report.failed += tally.failed.length;
-    report.retried += tally.retry.length;
+    report.retried += tally.retry.length + tally.split.length;
     if (tally.sent.length > 0) succeeded = true;
     if (tally.error) failure = tally.error;
   }
@@ -243,12 +294,13 @@ export async function runMetaOutcomes(options: MetaOutcomeOptions = {}): Promise
   const deadline = Math.floor(options.deadline ?? Date.now() + DEFAULT_BUDGET_MS);
   try {
     await fillHashes();
+    await query("select private.meta_outcomes_pipeline_status()");
     report.recorded = await recordDue(options);
   } catch (error) {
     logFailure("Meta outcomes not recorded", error);
     report.errors.push("Couldn't work out the stages.");
   }
-  const context: Delivery = { token, deadline, fetchImpl: options.fetchImpl, blocked: new Set(), stopped: false };
+  const context: Delivery = { token, deadline, fetchImpl: options.fetchImpl, blocked: new Set(), stopped: false, accepted: false };
   while (timeLeft(deadline)) {
     let claimed: ClaimedRow[];
     try {
@@ -262,7 +314,7 @@ export async function runMetaOutcomes(options: MetaOutcomeOptions = {}): Promise
     const byWorkspace = new Map<string, ClaimedRow[]>();
     for (const row of claimed) byWorkspace.set(row.workspace_id, [...(byWorkspace.get(row.workspace_id) ?? []), row]);
     for (const [workspaceId, rows] of byWorkspace) {
-      await sendWorkspace(workspaceId, rows[0].dataset_id, rows, { ...context, blocked: new Set(), stopped: false }, report);
+      await sendWorkspace(workspaceId, rows[0].dataset_id, rows, { ...context, blocked: new Set(), stopped: false, accepted: false }, report);
     }
   }
   try {
@@ -281,6 +333,7 @@ export type MetaOutcomesView = {
   pipelines: { id: string; name: string }[];
   stages: { name: string; note: string }[];
   sent: number;
+  failed: number;
   lastSentAt: string | null;
   lastError: string | null;
 };
@@ -321,11 +374,13 @@ export async function getMetaOutcomesView(actor: Actor): Promise<MetaOutcomesVie
     const pipelineId = chosenPipeline(pipelines, settings?.pipeline_id ?? null);
     const stages = await funnelStages(db, pipelineId);
     const totals = (
-      await db.query<{ sent: number; last: Date | null }>(
-        "select count(*)::integer as sent, max(sent_at) as last from crm.meta_lead_outcomes where workspace_id = $1 and status = 'sent'",
+      await db.query<{ sent: number; failed: number; last: Date | null }>(
+        `select count(*) filter (where status = 'sent')::integer as sent, count(*) filter (where status = 'failed')::integer as failed, max(sent_at) as last
+         from crm.meta_lead_outcomes where workspace_id = $1`,
         [actor.workspaceId],
       )
     ).rows[0];
+    const admin = actor.type === "user" && (actor.role === "owner" || actor.role === "admin");
     return {
       tokenSet: Boolean(metaDatasetToken()),
       enabled: Boolean(settings?.enabled),
@@ -337,8 +392,9 @@ export async function getMetaOutcomesView(actor: Actor): Promise<MetaOutcomesVie
         ...stages.map((stage) => ({ name: stage.name, note: stage.is_won ? "Opportunity won, with value" : `Opportunity reaches ${stage.name}` })),
       ],
       sent: totals?.sent ?? 0,
+      failed: admin ? (totals?.failed ?? 0) : 0,
       lastSentAt: iso(totals?.last ?? null),
-      lastError: actor.type === "user" && (actor.role === "owner" || actor.role === "admin") ? (settings?.last_error ?? null) : null,
+      lastError: admin ? (settings?.last_error ?? null) : null,
     };
   });
 }
@@ -391,9 +447,9 @@ export async function saveMetaOutcomes(actor: UserActor, input: MetaOutcomesInpu
          set dataset_id = excluded.dataset_id,
              pipeline_id = excluded.pipeline_id,
              enabled = excluded.enabled,
-             last_error = case when excluded.dataset_id is distinct from crm.meta_outcome_settings.dataset_id or excluded.enabled then null else crm.meta_outcome_settings.last_error end,
-             last_error_at = case when excluded.dataset_id is distinct from crm.meta_outcome_settings.dataset_id or excluded.enabled then null else crm.meta_outcome_settings.last_error_at end,
-             alerted_at = case when excluded.dataset_id is distinct from crm.meta_outcome_settings.dataset_id or excluded.enabled then null else crm.meta_outcome_settings.alerted_at end`,
+             last_error = case when excluded.dataset_id is distinct from crm.meta_outcome_settings.dataset_id or excluded.enabled or excluded.pipeline_id is distinct from crm.meta_outcome_settings.pipeline_id then null else crm.meta_outcome_settings.last_error end,
+             last_error_at = case when excluded.dataset_id is distinct from crm.meta_outcome_settings.dataset_id or excluded.enabled or excluded.pipeline_id is distinct from crm.meta_outcome_settings.pipeline_id then null else crm.meta_outcome_settings.last_error_at end,
+             alerted_at = case when excluded.dataset_id is distinct from crm.meta_outcome_settings.dataset_id or excluded.enabled or excluded.pipeline_id is distinct from crm.meta_outcome_settings.pipeline_id then null else crm.meta_outcome_settings.alerted_at end`,
       [actor.workspaceId, datasetId, pipelineId, enabled && Boolean(datasetId)],
     );
     await recordAudit(db, actor, "integration.updated", "integration", actor.workspaceId, { operation: "update_meta_outcomes", source: "web" }, {

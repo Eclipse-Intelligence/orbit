@@ -1,18 +1,11 @@
-import { formatMoney } from "@/lib/companies";
+import { formatDayShort, formatMoneyWhole } from "@/lib/companies";
 import type { MetaTrailStep } from "@/lib/crm/meta-outcomes";
-import { appTimeZone } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import CheckIcon from "@/public/assets/images/mail/check.svg";
 
-const DAY = { day: "numeric", month: "short" } as const;
-
-function day(iso: string) {
-  return new Intl.DateTimeFormat("en-GB", { ...DAY, timeZone: appTimeZone() }).format(new Date(iso));
-}
-
 function label(step: MetaTrailStep) {
   if (step.value === null || !step.currency) return step.name;
-  return `${step.name} · ${formatMoney(String(step.value), step.currency)}`;
+  return `${step.name} · ${formatMoneyWhole(step.value, step.currency)}`;
 }
 
 export default function MetaTrail({ steps }: { steps: MetaTrailStep[] }) {
@@ -34,7 +27,7 @@ export default function MetaTrail({ steps }: { steps: MetaTrailStep[] }) {
               {step.state === "sent" && <CheckIcon className="size-2.5" />}
             </span>
             <span className={cn("min-w-0 flex-1 wrap-anywhere", step.state === "waiting" ? "text-subtle" : "text-foreground")}>{label(step)}</span>
-            {step.state === "sent" && step.at && <time dateTime={step.at} className="caption-style text-subtle shrink-0 tabular-nums">{day(step.at)}</time>}
+            {step.state === "sent" && step.at && <time dateTime={step.at} className="caption-style text-subtle shrink-0 tabular-nums">{formatDayShort(step.at)}</time>}
             {step.state === "retrying" && <span className="caption-style text-danger shrink-0">Retrying</span>}
           </li>
         ))}
