@@ -342,11 +342,19 @@ export async function unknownMail(actor: UserActor, actors: UserActor[], now = D
          where b.workspace_id in (select m.workspace_id from crm.workspace_members m where m.user_id = $1)
        ),
        inbound as (
-         select m.id, m.source_id, m.thread_key as tk, coalesce(m.received_at, m.created_at) as at
+         select m.id, m.source_id, m.thread_key as tk, m.received_at as at
          from crm.mail_messages m
          join crm.mail_folders f on f.id = m.folder_id
          where m.user_id = $1 and not m.is_draft and f.role in ('inbox', 'archive', 'snoozed')
-           and (m.received_at >= $5 or (m.received_at is null and m.created_at >= $5))
+           and m.received_at >= $5
+           and nullif(m.from_email, '') is not null
+           and lower(m.from_email) not in (select email from own)
+         union all
+         select m.id, m.source_id, m.thread_key as tk, m.created_at as at
+         from crm.mail_messages m
+         join crm.mail_folders f on f.id = m.folder_id
+         where m.user_id = $1 and not m.is_draft and f.role in ('inbox', 'archive', 'snoozed')
+           and m.received_at is null and m.created_at >= $5
            and nullif(m.from_email, '') is not null
            and lower(m.from_email) not in (select email from own)
        ),
