@@ -6,16 +6,19 @@ import Button from "@/components/_ui/button";
 import CopyButton from "@/components/_ui/copy-button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Input } from "@/components/_ui/input";
+import { NativeSelect } from "@/components/_ui/native-select";
+import Switch from "@/components/_ui/switch";
 import { SettingsCard } from "@/components/crm/settings-ui";
-import { addHeldLeadsAction, linkMetaPageAction, unlinkMetaPageAction, type MetaLeadActionState } from "@/app/(crm)/settings/actions";
+import { addHeldLeadsAction, linkMetaPageAction, saveMetaOutcomesAction, unlinkMetaPageAction, type MetaLeadActionState } from "@/app/(crm)/settings/actions";
 import { formatWhen } from "@/lib/companies";
 import type { MetaLeadSettingsView } from "@/lib/crm/meta-leads";
+import type { MetaOutcomesView } from "@/lib/crm/meta-outcomes";
 import { cn, GENERIC_ERROR } from "@/lib/utils";
 
-function Status({ on, children }: { on: boolean; children: ReactNode }) {
+function Status({ on, bad = false, children }: { on: boolean; bad?: boolean; children: ReactNode }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", on ? "bg-success" : "bg-faint")} />
+      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", bad ? "bg-danger" : on ? "bg-success" : "bg-faint")} />
       {children}
     </span>
   );
@@ -25,11 +28,12 @@ function leadCount(count: number) {
   return count === 1 ? "1 lead" : `${count.toLocaleString("en-GB")} leads`;
 }
 
-export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSettingsView; canAdmin: boolean }) {
+export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: MetaLeadSettingsView; outcomes: MetaOutcomesView; canAdmin: boolean }) {
   const router = useRouter();
   const [pageId, setPageId] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<MetaLeadActionState>({});
+  const [datasetId, setDatasetId] = useState(outcomes.datasetId);
   const input = useRef<HTMLInputElement>(null);
 
   async function run(kind: string, action: () => Promise<MetaLeadActionState>) {
@@ -52,6 +56,14 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
     if (!pageId.trim()) return;
     void run("add", () => linkMetaPageAction(pageId));
   }
+
+  function saveDataset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void run("dataset", () => saveMetaOutcomesAction({ datasetId: datasetId.trim() }));
+  }
+
+  const ready = outcomes.tokenSet && Boolean(outcomes.datasetId);
+  const sentLine = ["Token set", `${outcomes.sent.toLocaleString("en-GB")} sent`, outcomes.lastSentAt ? `Last ${formatWhen(outcomes.lastSentAt)}` : null].filter(Boolean).join(" · ");
 
   return (
     <SettingsCard
@@ -139,6 +151,84 @@ export default function MetaLeadsSettings({ view, canAdmin }: { view: MetaLeadSe
         <p role="status" className="caption-style text-soft">
           {outcome.message}
         </p>
+      )}
+
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="text-foreground leading-5">Send outcomes to Meta</h4>
+          <Switch
+            label="Send outcomes to Meta"
+            checked={outcomes.enabled}
+            disabled={!canAdmin || pending !== null || (!outcomes.enabled && !ready)}
+            onChange={(enabled) => void run("enabled", () => saveMetaOutcomesAction({ enabled }))}
+          />
+        </div>
+        {canAdmin ? (
+          <form className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={saveDataset}>
+            <label className="flex min-w-0 flex-1 flex-col gap-1.5" htmlFor="meta-dataset-id">
+              <span className="caption-style text-subtle">Dataset ID</span>
+              <Input
+                id="meta-dataset-id"
+                inputMode="numeric"
+                autoComplete="off"
+                value={datasetId}
+                maxLength={40}
+                onChange={(event) => setDatasetId(event.target.value)}
+                placeholder="123456789012345"
+              />
+            </label>
+            <Button variant="secondary" size="sm" type="submit" className="self-start sm:self-auto" disabled={pending !== null || datasetId.trim() === outcomes.datasetId}>
+              {pending === "dataset" ? "Saving…" : "Save"}
+            </Button>
+          </form>
+        ) : (
+          outcomes.datasetId && (
+            <div className="flex flex-col gap-1">
+              <span className="caption-style text-subtle">Dataset ID</span>
+              <span className="ui-style text-soft">{outcomes.datasetId}</span>
+            </div>
+          )
+        )}
+        {canAdmin && outcomes.pipelines.length > 0 && (
+          <label className="flex flex-col gap-1.5" htmlFor="meta-outcomes-pipeline">
+            <span className="caption-style text-subtle">Pipeline</span>
+            <NativeSelect
+              id="meta-outcomes-pipeline"
+              value={outcomes.pipelineId ?? ""}
+              disabled={pending !== null}
+              onChange={(event) => void run("pipeline", () => saveMetaOutcomesAction({ pipelineId: event.target.value || null }))}
+            >
+              {!outcomes.pipelineId && <option value="">Choose a pipeline</option>}
+              {outcomes.pipelines.map((pipeline) => (
+                <option key={pipeline.id} value={pipeline.id}>
+                  {pipeline.name}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
+        )}
+        {outcomes.tokenSet ? <Status on>{sentLine}</Status> : <Status on={false} bad>Add META_DATASET_TOKEN to the environment.</Status>}
+        {canAdmin && outcomes.lastError && (
+          <p role="alert" className="caption-style text-danger">
+            {outcomes.lastError}
+          </p>
+        )}
+      </div>
+
+      {outcomes.stages.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h4 className="text-foreground leading-5">Stages</h4>
+          <span className="caption-style text-subtle">Use these names in Events Manager. Renaming a stage changes the name sent.</span>
+          <ol className="border-border divide-border flex flex-col divide-y overflow-hidden rounded-[10px] border">
+            {outcomes.stages.map((stage, index) => (
+              <li key={stage.name} className="ui-style grid grid-cols-[1.25rem_1fr] items-baseline gap-x-2.5 gap-y-0.5 px-3 py-2 sm:grid-cols-[1.25rem_9.5em_1fr]">
+                <span className="text-faint tabular-nums">{index + 1}</span>
+                <span className="text-foreground font-medium wrap-anywhere">{stage.name}</span>
+                <span className="text-subtle col-start-2 sm:col-start-auto">{stage.note}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
       )}
 
       {view.held.length > 0 && (

@@ -273,7 +273,7 @@ describe("Meta lead ads", () => {
     push = pusher();
     jobs = [];
     await sql("delete from crm.meta_lead_pages where page_id <> $1", [PAGE]);
-    await sql("truncate crm.meta_leads, crm.meta_lead_forms, crm.push_log, crm.notifications");
+    await sql("truncate crm.meta_leads, crm.meta_lead_outcomes, crm.meta_lead_forms, crm.push_log, crm.notifications");
     await sql(
       "update crm.meta_lead_pages set workspace_id = $2, linked_by = $3, full_history = true, created_at = now() - interval '1 day', last_attempt_at = now(), last_run_at = null, last_error = null, pending = false where page_id = $1",
       [PAGE, owner.workspaceId, owner.userId],
@@ -738,7 +738,7 @@ describe("Meta lead ads", () => {
         assert.deepEqual([poisoned.filed_at, poisoned.attempts], [null, 1]);
         assert.ok(logged.every((line) => !line.includes("Pat") && !line.includes("pat@poison")));
 
-        await sql("truncate crm.meta_leads");
+        await sql("truncate crm.meta_leads, crm.meta_lead_outcomes");
         state.leads.set("100042", lead("100042", { full_name: "Gil Good", email: "gil@good.example" }));
         await sql("update crm.meta_lead_pages set last_attempt_at = null where page_id = $1", [PAGE]);
         const { result } = await quietly(() => backup());
@@ -1223,7 +1223,7 @@ describe("Meta lead ads", () => {
       assert.equal(await metaLeadWorkDue(), false);
       await sql("update crm.meta_leads set filed_at = now() - interval '5 minutes', workspace_id = null, next_attempt_at = null");
       assert.equal(await metaLeadWorkDue(), false);
-      await sql("truncate crm.meta_leads");
+      await sql("truncate crm.meta_leads, crm.meta_lead_outcomes");
       await sql("insert into crm.meta_leads (leadgen_id, page_id, held_at) select (720000 + n)::text, '5555555555', now() from generate_series(1, 130) n");
       assert.equal(await metaLeadWorkDue(), true);
       await quietly(() => backup());

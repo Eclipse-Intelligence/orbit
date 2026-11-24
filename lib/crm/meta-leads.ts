@@ -18,10 +18,13 @@ import {
   fetchMetaForm,
   fetchMetaLead,
   fetchMetaPage,
+  hashEmail,
+  hashPhone,
   listMetaForms,
   listMetaLeadsPage,
   metaAccessToken,
   metaConfigured,
+  metaDatasetToken,
   metaEnvStatus,
   metaId,
   verifyMetaChallenge,
@@ -47,6 +50,7 @@ const STEP_RESERVE_MS = 1_500;
 const ALERT_RESERVE_MS = 3_000;
 const PAGE_RESERVE_MS = 3_000;
 const RESUME_MAX_MS = 60 * 60 * 1000;
+const OUTCOMES_PASS_MS = 8_000;
 const RETRY_SHARE = 0.4;
 const MAX_VALUE = 1000;
 const MAX_ANSWERS = 100;
@@ -606,7 +610,23 @@ async function fileAndAlert(leadId: string, workspaceId: string, linkedBy: strin
       await markFailed(leadId, "Couldn't send the notification.");
     }
   }
+  if (filed) await sendOutcomesFor(filed, options);
   return filed;
+}
+
+async function sendOutcomesFor(filed: FiledLead, options: MetaLeadOptions) {
+  if (!metaDatasetToken() || (!filed.contactId && !filed.companyId) || !timeLeft(options.deadline, ALERT_RESERVE_MS)) return;
+  try {
+    const { runMetaOutcomes } = await import("@/lib/crm/meta-outcomes");
+    await runMetaOutcomes({
+      contactId: filed.contactId,
+      companyId: filed.companyId,
+      fetchImpl: options.fetchImpl,
+      deadline: Math.min(Date.now() + OUTCOMES_PASS_MS, options.deadline ?? Number.POSITIVE_INFINITY),
+    });
+  } catch (error) {
+    logFailure("Meta outcomes not sent", filed.leadId, error);
+  }
 }
 
 async function notifyFiled(leadId: string, workspaceId: string, linkedBy: string | null, options: MetaLeadOptions) {
@@ -841,13 +861,10 @@ async function fileMetaLead(actor: UserActor, leadId: string): Promise<FiledLead
         campaignId: row.campaign_id,
       });
     }
-    await db.query("update crm.meta_leads set contact_id = $2, company_id = $3, activity_id = $4, filed_at = now(), error = $5 where id = $1", [
-      row.id,
-      contact.contact?.id ?? null,
-      companyId,
-      activityId,
-      activityId ? null : NO_DETAILS,
-    ]);
+    await db.query(
+      "update crm.meta_leads set contact_id = $2, company_id = $3, activity_id = $4, filed_at = now(), error = $5, email_hash = $6, phone_hash = $7 where id = $1",
+      [row.id, contact.contact?.id ?? null, companyId, activityId, activityId ? null : NO_DETAILS, hashEmail(person.email), hashPhone(person.phone)],
+    );
     const name = personName(person) || contact.contact?.name || person.email || company.company?.name || null;
     return {
       leadId: row.id,

@@ -23,6 +23,7 @@ import {
 } from "@/lib/crm/clickup";
 import { CrmError } from "@/lib/crm/errors";
 import { addHeldLeads, linkMetaPage, unlinkMetaPage } from "@/lib/crm/meta-leads";
+import { saveMetaOutcomes, type MetaOutcomesInput } from "@/lib/crm/meta-outcomes";
 import { connectLinear, disconnectLinear } from "@/lib/crm/linear-connection";
 import { removeGranolaKey, saveGranolaKey } from "@/lib/crm/granola";
 import { saveMeetingLink } from "@/lib/crm/invites";
@@ -422,6 +423,17 @@ export async function unlinkMetaPageAction(id: string): Promise<MetaLeadActionSt
     return { message: "Removed" };
   } catch (error) {
     return { error: error instanceof CrmError ? error.message : "Couldn't remove the Page. Try again." };
+  }
+}
+
+export async function saveMetaOutcomesAction(input: MetaOutcomesInput): Promise<MetaLeadActionState> {
+  const user = await requireUser();
+  try {
+    await saveMetaOutcomes(user, { datasetId: input.datasetId, pipelineId: input.pipelineId, enabled: input.enabled });
+    revalidatePath(SETTINGS_PATHS.tools);
+    return { message: "Saved" };
+  } catch (error) {
+    return { error: error instanceof CrmError ? error.message : "Couldn't save. Try again." };
   }
 }
 

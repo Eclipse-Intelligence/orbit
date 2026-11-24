@@ -22,6 +22,7 @@ import { contactLookups } from "@/lib/enrichment/contacts";
 import { latestEmailCheck } from "@/lib/enrichment/email-check";
 import { configuredVerifiers } from "@/lib/enrichment/providers";
 import { enrichmentAvailability } from "@/lib/enrichment/settings";
+import { metaLeadTrails } from "@/lib/crm/meta-outcomes";
 import { timelineReads } from "@/lib/mail/tracking";
 
 export const dynamic = "force-dynamic";
@@ -104,7 +105,10 @@ export default async function ContactPage({
   const canCheckEmail = configuredVerifiers().length > 0;
   const emailCheck = canCheckEmail ? await latestEmailCheck(user, contact.email) : null;
   const activities = activitiesByContact[contact.id] ?? [];
-  const [insights, reads] = await Promise.all([
+  const metaLeadIds = activities.flatMap((activity) =>
+    activity.metadata.source === "meta_lead_ad" && typeof activity.metadata.metaLeadId === "string" ? [activity.metadata.metaLeadId] : [],
+  );
+  const [insights, reads, metaTrails] = await Promise.all([
     getInsightsForActivities(
       user,
       activities
@@ -114,6 +118,10 @@ export default async function ContactPage({
         .map((activity) => activity.id),
     ),
     timelineReads(user, activities),
+    metaLeadTrails(user, metaLeadIds).catch((error: unknown) => {
+      console.error("Couldn't read the lead's Meta stages", error);
+      return {};
+    }),
   ]);
 
   return (
@@ -140,6 +148,7 @@ export default async function ContactPage({
       activities={activities}
       insights={insights}
       reads={reads}
+      metaTrails={metaTrails}
       campaignLines={campaignLines}
       campaignRows={campaignRows}
       doNotContact={suppression.doNotContact}

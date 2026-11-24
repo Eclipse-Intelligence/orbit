@@ -12,6 +12,8 @@ import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import ActivityPad from "@/components/crm/activity-pad";
 import ContactEmail from "@/components/crm/contact-email";
 import ReadStatus from "@/components/mail/read-status";
+import MetaTrail from "@/components/crm/meta-trail";
+import type { MetaTrailStep } from "@/lib/crm/meta-outcomes";
 import ChannelIcon from "@/components/campaigns/channel-icon";
 import { campaignThreadPath } from "@/lib/campaigns/format";
 import { campaignRowMeta, timelineEntries } from "@/lib/campaigns/thread-view";
@@ -200,6 +202,7 @@ export function ActivityTimeline({
   campaignRows = [],
   insights,
   reads,
+  metaTrails,
   showContact,
   viewerId,
   viewerRole,
@@ -210,6 +213,7 @@ export function ActivityTimeline({
   campaignRows?: CampaignTimelineRow[];
   insights?: Record<string, CallInsight>;
   reads?: Record<string, EmailRead>;
+  metaTrails?: Record<string, MetaTrailStep[]>;
   showContact?: boolean;
   viewerId?: string | null;
   viewerRole?: string | null;
@@ -275,6 +279,7 @@ export function ActivityTimeline({
                         activity={activity}
                         insight={insights?.[activity.id] ?? null}
                         read={reads?.[activity.id] ?? null}
+                        trail={metaTrails?.[metaLeadKey(activity)] ?? null}
                         showContact={showContact}
                         viewerId={viewerId}
                         editable={mayEditActivity({ userId: viewerId, role: viewerRole }, activity)}
@@ -311,6 +316,7 @@ export default function ContactActivities({
   campaignRows,
   insights,
   reads,
+  metaTrails,
   caution = null,
   className,
 }: {
@@ -324,6 +330,7 @@ export default function ContactActivities({
   campaignRows?: CampaignTimelineRow[];
   insights?: Record<string, CallInsight>;
   reads?: Record<string, EmailRead>;
+  metaTrails?: Record<string, MetaTrailStep[]>;
   caution?: string | null;
   className?: string;
 }) {
@@ -349,6 +356,7 @@ export default function ContactActivities({
         campaignRows={campaignRows}
         insights={insights}
         reads={reads}
+        metaTrails={metaTrails}
         viewerId={viewerId}
         viewerRole={viewerRole}
         empty="No activity"
@@ -454,11 +462,17 @@ function DeleteActivity({ activityId, onDeleted }: { activityId: string; onDelet
   );
 }
 
+function metaLeadKey(activity: Activity) {
+  const id = activity.metadata.metaLeadId;
+  return activity.metadata.source === "meta_lead_ad" && typeof id === "string" ? id : "";
+}
+
 function ActivityRow({
   panelId,
   activity,
   insight,
   read,
+  trail,
   showContact,
   viewerId,
   editable,
@@ -471,6 +485,7 @@ function ActivityRow({
   activity: Activity;
   insight: CallInsight | null;
   read: EmailRead | null;
+  trail: MetaTrailStep[] | null;
   showContact?: boolean;
   viewerId?: string | null;
   editable: boolean;
@@ -494,7 +509,7 @@ function ActivityRow({
   const insightful = activity.type === "call" || activity.type === "meeting";
   const reads = read?.opens.length ?? 0;
   const emptyPanel =
-    !details.body && !details.attendees && !granola && !party && !read && !insightful;
+    !details.body && !details.attendees && !granola && !party && !read && !insightful && !trail;
 
   return (
     <li id={`activity-${activity.id}`} className="flex scroll-mt-10 flex-col">
@@ -598,6 +613,7 @@ function ActivityRow({
         {insightful && (
           <CallInsightPanel activityId={activity.id} insight={insight} />
         )}
+        {trail && <MetaTrail steps={trail} />}
         {emptyPanel && (
           <p className="caption-style text-subtle">No details</p>
         )}

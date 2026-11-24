@@ -54,6 +54,7 @@ import { DoNotContactDialog, DoNotContactStatus } from "@/components/campaigns/d
 import { DropdownMenuItem } from "@/components/_ui/dropdown-menu";
 import type { DoNotContact } from "@/lib/campaigns/suppression";
 import type { CampaignLine, CampaignTimelineRow } from "@/lib/campaigns/threads";
+import type { MetaTrailStep } from "@/lib/crm/meta-outcomes";
 import CalendarIcon from "@/public/assets/images/_common/calendar.svg";
 import PhoneIcon from "@/public/assets/images/_common/phone.svg";
 
@@ -66,6 +67,7 @@ export default function ContactRecord({
   activities,
   insights,
   reads = {},
+  metaTrails = {},
   campaignLines = [],
   campaignRows = [],
   doNotContact = null,
@@ -90,6 +92,7 @@ export default function ContactRecord({
   activities: Activity[];
   insights: Record<string, CallInsight>;
   reads?: Record<string, EmailRead>;
+  metaTrails?: Record<string, MetaTrailStep[]>;
   campaignLines?: CampaignLine[];
   campaignRows?: CampaignTimelineRow[];
   doNotContact?: DoNotContact | null;
@@ -430,6 +433,7 @@ export default function ContactRecord({
             campaignRows={campaignRows}
             insights={insights}
             reads={reads}
+            metaTrails={metaTrails}
             caution={sendCaution}
           />
         }
