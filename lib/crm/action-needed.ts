@@ -96,21 +96,22 @@ async function attempt<T>(db: Db, label: string, run: () => Promise<T>): Promise
   }
 }
 
-export async function waitingFor(actor: UserActor, actors: UserActor[], now = new Date()): Promise<Waiting> {
+export async function waitingFor(actor: UserActor, actors: UserActor[], now = new Date(), options: { serial?: boolean } = {}): Promise<Waiting> {
   assertScope(actor.scopes, "crm:read");
   const workspaceIds = actors.length ? actors.map((item) => item.workspaceId) : [actor.workspaceId];
-  const [records, mail] = await Promise.all([
+  const readRecords = () =>
     withActor(actor, async (db) => ({
       approvals: await attempt(db, "Reading approvals waiting on you failed", () => approvalsInDb(db, actor, workspaceIds)),
     })).catch((error) => {
       console.error("Reading approvals failed", error instanceof Error ? error.message : error);
       return { approvals: null };
-    }),
+    });
+  const readMail = () =>
     waitingMail(actor, actors.length ? actors : [actor], now).catch((error) => {
       console.error("Reading mail waiting on you failed", error instanceof Error ? error.message : error);
       return { replies: [], nudges: [], reminders: [], failed: { replies: true, followUps: true } };
-    }),
-  ]);
+    });
+  const [records, mail] = options.serial ? [await readRecords(), await readMail()] : await Promise.all([readRecords(), readMail()]);
   const failed: CaptureSection[] = [];
   if (records.approvals === null) failed.push("approvals");
   if (mail.failed.followUps) failed.push("followUps");
@@ -126,12 +127,12 @@ export async function waitingFor(actor: UserActor, actors: UserActor[], now = ne
 
 const requestWaiting = cache(() => new Map<string, Promise<Waiting>>());
 
-export function waitingOnce(actor: UserActor, actors: UserActor[], now = new Date()) {
+export function waitingOnce(actor: UserActor, actors: UserActor[], now = new Date(), options: { serial?: boolean } = {}) {
   const store = requestWaiting();
-  const key = `${actor.userId}|${actors.map((item) => item.workspaceId).join(",")}`;
+  const key = `${actor.userId}|${actors.map((item) => item.workspaceId).join(",")}|${options.serial ? "serial" : ""}`;
   const found = store.get(key);
   if (found) return found;
-  const pending = waitingFor(actor, actors, now);
+  const pending = waitingFor(actor, actors, now, options);
   store.set(key, pending);
   pending.catch(() => store.delete(key));
   return pending;

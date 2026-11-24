@@ -151,8 +151,8 @@ async function unknownFor(actor: UserActor, now: number, actors: UserActor[], in
   });
 }
 
-async function waitingFor(actor: UserActor, actors: UserActor[], now: number) {
-  return waitingOnce(actor, actors, new Date(now)).catch((error) => {
+async function waitingFor(actor: UserActor, actors: UserActor[], now: number, serial: boolean) {
+  return waitingOnce(actor, actors, new Date(now), { serial }).catch((error) => {
     console.error("Reading what is waiting on you failed", error instanceof Error ? error.message : error);
     return { ...EMPTY_WAITING, failed: ["approvals", "followUps", "replies"] as CaptureSection[] };
   });
@@ -169,8 +169,8 @@ export function captureContext(actor: UserActor, now = Date.now(), options: { in
   const pending = (async () => {
     const actors = await workspaceActors(actor);
     const [mail, waiting] = options.inline
-      ? await Promise.all([unknownFor(actor, now, actors, true), waitingFor(actor, actors, now)])
-      : [await unknownFor(actor, now, actors, false), await waitingFor(actor, actors, now)];
+      ? await Promise.all([unknownFor(actor, now, actors, true), waitingFor(actor, actors, now, false)])
+      : [await unknownFor(actor, now, actors, false), await waitingFor(actor, actors, now, true)];
     const failed: CaptureSection[] = [...waiting.failed, ...(mail ? [] : ["toFile" as const])];
     return { actors, unknown: mail?.shown ?? [], skipped: mail?.skipped ?? [], held: mail?.pending ?? [], waiting, failed };
   })();

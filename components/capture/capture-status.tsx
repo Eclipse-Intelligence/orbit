@@ -24,6 +24,7 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
     let active = true;
     let running = false;
     let again = false;
+    let stale = false;
     let settle: ReturnType<typeof setTimeout> | undefined;
     let signalWait: ReturnType<typeof setTimeout> | undefined;
     const fetchStatus = () => {
@@ -36,7 +37,7 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
       fetch("/api/capture/status", { cache: "no-store" })
         .then((response) => (response.ok ? (response.json() as Promise<CaptureBadges>) : null))
         .then((body) => {
-          if (!active || !body || again) return;
+          if (!active || !body || again || stale) return;
           const state = useCompaniesStore.getState();
           if (body.status) state.setCapture(captureBadgeFrom(body.status, state.capture));
           state.setCaptureWaiting(body.waiting);
@@ -44,6 +45,7 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
         .catch(() => null)
         .finally(() => {
           running = false;
+          stale = false;
           if (!active || !again) return;
           again = false;
           fetchStatus();
@@ -54,15 +56,19 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
       fetchStatus();
     };
     const later = () => {
+      if (running) stale = true;
       clearTimeout(settle);
-      settle = setTimeout(fetchStatus, SETTLE_MS);
+      settle = setTimeout(() => {
+        settle = undefined;
+        fetchStatus();
+      }, SETTLE_MS);
     };
     signalled.current = () => {
       if (document.visibilityState !== "visible") {
         last = 0;
         return;
       }
-      if (signalWait) return;
+      if (settle || signalWait) return;
       signalWait = setTimeout(() => {
         signalWait = undefined;
         if (document.visibilityState === "visible") fetchStatus();
