@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { saveBrandProfile } from "@/lib/crm/brand";
-import { captureStatuses, markCaptureSeen } from "@/lib/crm/capture";
+import { captureBadges, captureStatuses, markCaptureSeen } from "@/lib/crm/capture";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { createCompany } from "@/lib/crm/companies";
@@ -361,11 +361,17 @@ describe("mail across workspaces", () => {
     await markCaptureSeen(eclipse, new Date());
     let statuses = await captureStatuses(eclipse);
     assert.equal(statuses.get(ridgeon.workspaceId)?.fresh, 0);
+    assert.deepEqual((await captureBadges(eclipse)).waiting, []);
     await addMessage(eclipse, primary, { id: "fresh", from: "tom@harbourco.test", name: "Tom Reid", to: ["mark@ridgeon.me"], subject: "Coffee next week?", at: new Date(Date.now() + 1_000).toISOString() });
     statuses = await captureStatuses(eclipse);
     assert.equal(statuses.get(ridgeon.workspaceId)?.fresh, 1);
     assert.equal(statuses.get(eclipse.workspaceId)?.fresh, 0);
     assert.ok((statuses.get(ridgeon.workspaceId)?.waiting ?? 0) >= 1);
+    const badges = await captureBadges(eclipse);
+    assert.deepEqual(badges.waiting, [ridgeon.workspaceId]);
+    assert.equal(badges.status?.fresh, 0);
+    assert.deepEqual((await captureBadges(ridgeon)).waiting, []);
+    assert.equal((await captureBadges(ridgeon)).status?.fresh, 1);
   });
   it("drops a chosen contact when the thread is filed away from its workspace", async () => {
     const admin = getAdminPool();
