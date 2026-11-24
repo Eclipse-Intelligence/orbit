@@ -1227,7 +1227,7 @@ describe("Meta outcomes", () => {
       assert.equal((await sql("select 1 from crm.meta_outcome_settings where enabled and dataset_id = $1", [DATASET])).length, 1);
       const expired = async () => Response.json({ error: { message: "Error validating access token.", type: "OAuthException", code: 190 } }, { status: 400 });
       await sql("update crm.meta_outcome_settings set enabled = false, dataset_id = null where workspace_id = $1", [owner.workspaceId]);
-      await assert.rejects(saveMetaOutcomes(owner, { datasetId: DATASET }, { fetchImpl: expired }));
+      await assert.rejects(saveMetaOutcomes(owner, { datasetId: DATASET }, { fetchImpl: expired }), /access token/i);
     });
 
     it("won't switch on without a dataset ID or the token, or with a dataset Meta can't reach", async () => {
