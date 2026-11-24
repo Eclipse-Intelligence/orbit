@@ -343,15 +343,64 @@ describe("Meta outcomes", () => {
       assert.ok(times[0] <= times[1] && times[1] <= times[2]);
     });
 
-    it("never sends Lost", async () => {
+    it("sends Lost after the stages reached, without filling in stages the lead never reached", async () => {
       const lead = await scenario();
       const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
       await moveTo(id, "Working", 120);
       await moveTo(id, "Lost", 60);
       const fake = metaFake();
       await run(fake);
-      assert.deepEqual(fake.names(), ["Lead", "Working"]);
+      assert.deepEqual(fake.names(), ["Lead", "Working", "Lost"]);
+      const lost = (await outcomes(lead.leadId)).find((row) => row.stage_name === "Lost")!;
+      assert.ok(Math.abs(lost.occurred_at.getTime() - (Date.now() - 60 * 60_000)) < 5_000);
+      assert.equal(lost.value, null);
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Working", "Lost"]);
+    });
+
+    it("sends Lost straight from New with only Lead before it", async () => {
+      const lead = await scenario();
+      const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await moveTo(id, "Lost", 30);
+      const fake = metaFake();
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Lost"]);
+    });
+
+    it("waits five minutes before sending Lost, so a mistaken move sends nothing", async () => {
+      const lead = await scenario();
+      const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await moveTo(id, "Lost", 1);
+      const fake = metaFake();
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead"]);
+      await moveTo(id, "Working", 0);
+      await setEntryAge(id, "Lost", 2);
+      await run(fake);
       assert.equal((await statuses(lead.leadId)).Lost, undefined);
+    });
+
+    it("doesn't send Lost while the lead has another open opportunity at its company", async () => {
+      const lead = await scenario();
+      const lostOne = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await opportunity({ companyId: lead.companyId });
+      await moveTo(lostOne, "Lost", 60);
+      const fake = metaFake();
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead"]);
+    });
+
+    it("still sends Won after Lost when a lost opportunity is reopened and won", async () => {
+      const lead = await scenario();
+      const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId, value: 4000, currency: "GBP" });
+      await moveTo(id, "Lost", 120);
+      const fake = metaFake();
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Lost"]);
+      await moveTo(id, "Won", 30);
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Lost", "Working", "Proposal", "Won"]);
+      assert.equal((await statuses(lead.leadId)).Lost, "sent");
     });
 
     it("sends value and currency on Won only, and only when the opportunity has a value", async () => {
@@ -1196,7 +1245,8 @@ describe("Meta outcomes", () => {
       assert.equal(fake.checks, 2);
       view = await getMetaOutcomesView(owner);
       assert.equal(view.enabled, true);
-      assert.deepEqual(view.stages.map((item) => item.name), ["Lead", "Working", "Proposal", "Won"]);
+      assert.deepEqual(view.stages.map((item) => item.name), ["Lead", "Working", "Proposal", "Won", "Lost"]);
+      assert.equal(view.stages.at(-1)?.note, "Opportunity marked lost");
       assert.deepEqual(view.pipelines, []);
       assert.equal((await auditCount()) - audited, 2);
     });
@@ -1317,6 +1367,16 @@ describe("Meta outcomes", () => {
       assert.deepEqual(steps.map((step) => [step.name, step.state]), [["Lead", "sent"], ["Working", "sent"], ["Proposal", "waiting"], ["Won", "retrying"]]);
       await sql("update crm.meta_lead_outcomes set status = 'skipped', attempts = 0 where lead_id = $1 and stage_name = 'Won'", [lead.leadId]);
       assert.equal((await metaLeadTrails(member, [lead.leadId]))[lead.leadId][3].state, "waiting");
+    });
+
+    it("shows a lost lead's trail as the stages it reached, then Lost, without the grey ones", async () => {
+      const lead = await scenario();
+      const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await moveTo(id, "Working", 120);
+      await moveTo(id, "Lost", 60);
+      await run(metaFake());
+      const steps = (await metaLeadTrails(member, [lead.leadId]))[lead.leadId];
+      assert.deepEqual(steps.map((step) => [step.name, step.state]), [["Lead", "sent"], ["Working", "sent"], ["Lost", "sent"]]);
     });
 
     it("keeps a renamed stage's sent name in the trail", async () => {

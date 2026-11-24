@@ -9,7 +9,7 @@ Mark is scaling Meta lead ads. Orbit sends what happened to each Meta lead back 
 ## Decisions settled with Mark
 
 1. **The opportunity pipeline is the funnel** (2026-11-24). The workflow "Meta lead: email, enrich and call" puts every Meta lead's company into Opportunities at New, and sending a proposal moves the opportunity to Proposal. Each stage of the sales pipeline is sent to Meta the first time a lead's opportunity reaches it. Today that's `Lead` (sent when the lead is filed), `Working`, `Proposal` and `Won`.
-2. **Lost is never sent** (2026-11-24). Meta advises leaving negative stages out of the funnel, so it adds nothing.
+2. **Lost is sent** (Mark, 2026-11-24, reversing the earlier drop). When a lead's opportunity is marked lost and it has no other open or won opportunity, `Lost` is sent after the same 5 minute settle, with only `Lead` needed before it. It is left out of the optimisation funnel in Events Manager, as Meta advises for negative stages, but Meta still gets it.
 3. **Only Meta lead ad leads are sent.** Everything starts from `crm.meta_leads`; referrals, bookings, website enquiries and hand-made opportunities without a Meta lead are never sent.
 4. **Each stage is sent once per lead**, the first time it's reached, with the time it happened. Moving an opportunity back sends nothing and unsends nothing.
 5. **Company fallback:** an opportunity at the lead's company counts for the lead whether its contact is the lead, someone else or nobody, but only opportunities created at or after the lead arrived.
