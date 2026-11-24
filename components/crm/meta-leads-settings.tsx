@@ -233,7 +233,9 @@ export default function MetaLeadsSettings({ view, outcomes, canAdmin }: { view: 
             </NativeSelect>
           </label>
         )}
-        {outcomes.tokenSet ? <Status on>{sentLine}</Status> : <Status on={false} bad>Add META_DATASET_TOKEN to the environment.</Status>}
+        <div className="caption-style text-subtle">
+          {outcomes.tokenSet ? <Status on>{sentLine}</Status> : <Status on={false} bad>Add META_DATASET_TOKEN to the environment.</Status>}
+        </div>
         {canAdmin && outcomes.lastError && (
           <p role="alert" className="caption-style text-danger">
             {outcomes.lastError}
