@@ -364,7 +364,8 @@ async function funnelStages(db: Db, pipelineId: string | null) {
     'select id, name, position, is_won, is_lost from crm.pipeline_stages where pipeline_id = $1 order by position',
     [pipelineId],
   );
-  return result.rows.slice(1).filter((stage) => !stage.is_lost && stage.name.toLowerCase() !== LEAD_STAGE.toLowerCase());
+  const stages = result.rows.slice(1).filter((stage) => stage.name.toLowerCase() !== LEAD_STAGE.toLowerCase());
+  return [...stages.filter((stage) => !stage.is_lost), ...stages.filter((stage) => stage.is_lost)];
 }
 
 export async function getMetaOutcomesView(actor: Actor): Promise<MetaOutcomesView> {
@@ -389,7 +390,7 @@ export async function getMetaOutcomesView(actor: Actor): Promise<MetaOutcomesVie
       pipelines: pipelines.length > 1 ? pipelines : [],
       stages: [
         { name: LEAD_STAGE, note: "Lead arrives" },
-        ...stages.map((stage) => ({ name: stage.name, note: stage.is_won ? "Opportunity won, with value" : `Opportunity reaches ${stage.name}` })),
+        ...stages.map((stage) => ({ name: stage.name, note: stage.is_won ? "Opportunity won, with value" : stage.is_lost ? "Opportunity marked lost" : `Opportunity reaches ${stage.name}` })),
       ],
       sent: totals?.sent ?? 0,
       failed: admin ? (totals?.failed ?? 0) : 0,
@@ -506,11 +507,14 @@ export async function metaLeadTrails(actor: Actor, leadIds: string[]): Promise<R
       const here = mine.length === 0 || mine.every((row) => row.workspace_id === actor.workspaceId);
       if (mine.length === 0 && !settings?.enabled) continue;
       const slots = here
-        ? [{ position: 0, name: LEAD_STAGE }, ...stages.map((stage) => ({ position: stage.position + 1, name: stage.name }))]
+        ? [{ position: 0, name: LEAD_STAGE }, ...stages.filter((stage) => !stage.is_lost).map((stage) => ({ position: stage.position + 1, name: stage.name }))]
         : [];
       for (const row of mine) if (!slots.some((slot) => slot.position === row.position)) slots.push({ position: row.position, name: row.stage_name });
       slots.sort((a, b) => a.position - b.position);
-      trails[id] = slots.map((slot): MetaTrailStep => {
+      const lostNames = new Set(stages.filter((stage) => stage.is_lost).map((stage) => stage.name));
+      const lost = mine.some((row) => lostNames.has(row.stage_name) || row.stage_name === "Lost");
+      const shown = lost ? slots.filter((slot) => mine.some((row) => row.position === slot.position)) : slots;
+      trails[id] = shown.map((slot): MetaTrailStep => {
         const row = mine.find((item) => item.position === slot.position);
         if (!row) return { name: slot.name, state: "waiting", at: null, value: null, currency: null };
         const state = row.status === "sent" ? "sent" : row.status === "pending" && row.attempts > 0 ? "retrying" : "waiting";
