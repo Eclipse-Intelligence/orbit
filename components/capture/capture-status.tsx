@@ -1,27 +1,24 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { usePathname } from "next/navigation";
 import { useSyncSignal } from "@/components/crm/sync-signals";
 import type { CaptureBadges } from "@/lib/crm/capture";
 import { captureBadgeFrom, useCompaniesStore } from "@/stores/companies-store";
 
 const REFRESH_GAP_MS = 60_000;
+const RENDER_GAP_MS = 1_500;
 
-export default function CaptureStatus() {
-  const pathname = usePathname();
-  const live = useCompaniesStore((state) => state.captureLive);
+export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
   const signalled = useRef<() => void>(() => undefined);
-  const navigated = useRef<() => void>(() => undefined);
+  const rendered = useRef<() => void>(() => undefined);
 
   useSyncSignal("mail", () => signalled.current());
 
   useEffect(() => {
-    navigated.current();
-  }, [pathname]);
+    rendered.current();
+  }, [renderedAt]);
 
   useEffect(() => {
-    if (live) return;
     let last = 0;
     let active = true;
     const fetchStatus = () => {
@@ -31,7 +28,6 @@ export default function CaptureStatus() {
         .then((body) => {
           if (!active || !body) return;
           const state = useCompaniesStore.getState();
-          if (state.captureLive) return;
           if (body.status) state.setCapture(captureBadgeFrom(body.status, state.capture));
           state.setCaptureWaiting(body.waiting);
         })
@@ -45,18 +41,20 @@ export default function CaptureStatus() {
       if (document.visibilityState === "visible") fetchStatus();
       else last = 0;
     };
-    navigated.current = load;
+    rendered.current = () => {
+      if (Date.now() - last >= RENDER_GAP_MS) fetchStatus();
+    };
     load();
     window.addEventListener("focus", load);
     document.addEventListener("visibilitychange", load);
     return () => {
       active = false;
       signalled.current = () => undefined;
-      navigated.current = () => undefined;
+      rendered.current = () => undefined;
       window.removeEventListener("focus", load);
       document.removeEventListener("visibilitychange", load);
     };
-  }, [live]);
+  }, []);
 
   return null;
 }

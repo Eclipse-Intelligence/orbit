@@ -68,7 +68,7 @@ How Orbit is built. Follow these when changing or adding code. `README.md` cover
 ## Background work
 
 - Use `after()` from `next/server` to keep work out of the response. Guard it with try/catch because it throws outside a request.
-- Long jobs carry a deadline and stop starting new steps when time runs short. Supabase `pg_cron` calls `/api/cron/sync` every 10 minutes, `/api/cron/mail` every 5 and `/api/cron/mail-due` every minute; with page loads, they drive syncs, mail and workflow runs. `/api/cron/workflows` runs only workflows.
+- Long jobs carry a deadline and stop starting new steps when time runs short. Supabase `pg_cron` calls `/api/cron/sync` every 10 minutes, `/api/cron/mail` every 15 and `/api/cron/mail-due` every minute; they drive syncs, mail and workflow runs, and page loads add only the Granola and ClickUp visit syncs. `/api/cron/workflows` runs only workflows.
 
 ## Testing and checks
 

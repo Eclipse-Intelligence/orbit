@@ -29,6 +29,10 @@ import { visitDue } from "@/lib/visit-throttle";
 
 export const dynamic = "force-dynamic";
 
+async function renderStamp() {
+  return Date.now();
+}
+
 const VISIT_SYNC_GAP_MS = 5 * 60 * 1000;
 const VIEWER_GAP_MS = 60 * 60 * 1000;
 
@@ -75,6 +79,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
   ]);
 
   const enrichment = enrichmentAvailability();
+  const renderedAt = await renderStamp();
 
   return (
     <ShortcutsProvider>
@@ -83,7 +88,7 @@ export default async function CrmLayout({ children }: { children: React.ReactNod
           <main data-app-shell className="relative flex h-dvh max-w-full overflow-hidden">
             <KeepPageInPlace />
             <MailUnread />
-            <CaptureStatus />
+            <CaptureStatus renderedAt={renderedAt} />
             <CampaignsWaiting />
             <ChatLive />
             <SyncSignals />
