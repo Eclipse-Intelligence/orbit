@@ -435,8 +435,11 @@ export async function saveMetaOutcomes(actor: UserActor, input: MetaOutcomesInpu
     try {
       await checkMetaDataset(datasetId, { fetchImpl: options.fetchImpl });
     } catch (error) {
-      if (error instanceof MetaError && error.code === 100) throw new CrmError("invalid_input", UNREACHABLE_DATASET, 400, { field: "datasetId" });
-      throw new CrmError("invalid_input", error instanceof ShownError ? error.message : "Couldn't reach Meta. Try again.", 400, { field: "datasetId" });
+      const sendOnlyToken = error instanceof MetaError && error.code === 100 && error.subcode !== 33;
+      if (!sendOnlyToken) {
+        if (error instanceof MetaError && error.code === 100) throw new CrmError("invalid_input", UNREACHABLE_DATASET, 400, { field: "datasetId" });
+        throw new CrmError("invalid_input", error instanceof ShownError ? error.message : "Couldn't reach Meta. Try again.", 400, { field: "datasetId" });
+      }
     }
   }
   await withActor(actor, async (db) => {
