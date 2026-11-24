@@ -18,10 +18,13 @@ import {
   fetchMetaForm,
   fetchMetaLead,
   fetchMetaPage,
+  hashEmail,
+  hashPhone,
   listMetaForms,
   listMetaLeadsPage,
   metaAccessToken,
   metaConfigured,
+  metaDatasetToken,
   metaEnvStatus,
   metaId,
   verifyMetaChallenge,
@@ -47,6 +50,7 @@ const STEP_RESERVE_MS = 1_500;
 const ALERT_RESERVE_MS = 3_000;
 const PAGE_RESERVE_MS = 3_000;
 const RESUME_MAX_MS = 60 * 60 * 1000;
+const OUTCOMES_PASS_MS = 8_000;
 const RETRY_SHARE = 0.4;
 const MAX_VALUE = 1000;
 const MAX_ANSWERS = 100;
@@ -70,7 +74,7 @@ export type MetaLeadOptions = {
   rateLimit?: boolean;
 };
 
-type RunContext = MetaLeadOptions & { heldAlerted?: Set<string>; token?: string };
+type RunContext = MetaLeadOptions & { heldAlerted?: Set<string>; token?: string; filedLeads?: string[] };
 
 type MemberRow = {
   workspace_id: string;
@@ -516,11 +520,12 @@ async function markFailed(id: string, message: string) {
 
 async function processAll(pending: Pending[], options: RunContext) {
   const forms = new Map<string, string | null>();
-  const context: RunContext = { ...options, heldAlerted: options.heldAlerted ?? new Set() };
+  const context: RunContext = { ...options, heldAlerted: options.heldAlerted ?? new Set(), filedLeads: [] };
   for (const item of pending) {
     if (!timeLeft(context.deadline)) break;
     await processSafely(item, forms, context);
   }
+  await sendOutcomesFor(context);
 }
 
 async function processSafely(pending: Pending, forms: Map<string, string | null>, options: RunContext) {
@@ -583,7 +588,7 @@ function filingActor(members: MemberRow[], linkedBy: string | null) {
   return chosen ? memberActor(chosen) : null;
 }
 
-async function fileAndAlert(leadId: string, workspaceId: string, linkedBy: string | null, options: MetaLeadOptions) {
+async function fileAndAlert(leadId: string, workspaceId: string, linkedBy: string | null, options: RunContext) {
   const members = await workspaceMembers(workspaceId);
   const actor = filingActor(members, linkedBy);
   if (!actor) {
@@ -606,7 +611,23 @@ async function fileAndAlert(leadId: string, workspaceId: string, linkedBy: strin
       await markFailed(leadId, "Couldn't send the notification.");
     }
   }
+  if (filed) options.filedLeads?.push(filed.leadId);
   return filed;
+}
+
+async function sendOutcomesFor(options: RunContext) {
+  const leadIds = options.filedLeads?.splice(0) ?? [];
+  if (leadIds.length === 0 || !metaDatasetToken() || !timeLeft(options.deadline, ALERT_RESERVE_MS)) return;
+  try {
+    const { runMetaOutcomes } = await import("@/lib/crm/meta-outcomes");
+    await runMetaOutcomes({
+      leadIds,
+      fetchImpl: options.fetchImpl,
+      deadline: Math.min(Date.now() + OUTCOMES_PASS_MS, options.deadline ?? Number.POSITIVE_INFINITY),
+    });
+  } catch (error) {
+    logFailure("Meta outcomes not sent", leadIds[0], error);
+  }
 }
 
 async function notifyFiled(leadId: string, workspaceId: string, linkedBy: string | null, options: MetaLeadOptions) {
@@ -841,13 +862,10 @@ async function fileMetaLead(actor: UserActor, leadId: string): Promise<FiledLead
         campaignId: row.campaign_id,
       });
     }
-    await db.query("update crm.meta_leads set contact_id = $2, company_id = $3, activity_id = $4, filed_at = now(), error = $5 where id = $1", [
-      row.id,
-      contact.contact?.id ?? null,
-      companyId,
-      activityId,
-      activityId ? null : NO_DETAILS,
-    ]);
+    await db.query(
+      "update crm.meta_leads set contact_id = $2, company_id = $3, activity_id = $4, filed_at = now(), error = $5, email_hash = $6, phone_hash = $7 where id = $1",
+      [row.id, contact.contact?.id ?? null, companyId, activityId, activityId ? null : NO_DETAILS, hashEmail(person.email), hashPhone(person.phone)],
+    );
     const name = personName(person) || contact.contact?.name || person.email || company.company?.name || null;
     return {
       leadId: row.id,
@@ -942,7 +960,7 @@ type WaitingRow = {
 async function fileWaitingLeads(options: RunContext & { pageId?: string; limit?: number } = {}) {
   const waiting = await query<WaitingRow>("select * from private.meta_leads_waiting($1, $2)", [options.limit ?? 50, options.pageId ?? null]);
   const forms = new Map<string, string | null>();
-  const context: RunContext = { ...options, heldAlerted: options.heldAlerted ?? new Set() };
+  const context: RunContext = { ...options, heldAlerted: options.heldAlerted ?? new Set(), filedLeads: [] };
   let filed = 0;
   for (const row of waiting.rows) {
     if (!timeLeft(context.deadline)) break;
@@ -965,6 +983,7 @@ async function fileWaitingLeads(options: RunContext & { pageId?: string; limit?:
     );
     if (result) filed += 1;
   }
+  await sendOutcomesFor(context);
   return { waiting: waiting.rows.length, filed };
 }
 
@@ -1091,7 +1110,7 @@ export async function runMetaLeadBackup(options: MetaLeadOptions = {}) {
   const empty = { pages: [] as { pageId: string; imported?: number; skipped?: number; complete?: boolean; error?: string }[], retried: { waiting: 0, filed: 0 } };
   if (!metaAccessToken()) return { skipped: "Meta lead ads isn't set up.", ...empty };
   const deadline = Math.floor(options.deadline ?? Date.now() + 10_000);
-  const context: RunContext = { ...options, deadline, heldAlerted: new Set() };
+  const context: RunContext = { ...options, deadline, heldAlerted: new Set(), filedLeads: [] };
   const due = await query<DuePage>("select * from private.meta_lead_pages_due($1::interval)", [BACKUP_EVERY]);
   const retryUntil = due.rows.length === 0 ? deadline : Math.floor(Date.now() + Math.max(0, deadline - Date.now()) * RETRY_SHARE);
   const retried = await fileWaitingLeads({ ...context, deadline: retryUntil }).catch((error) => {
@@ -1113,6 +1132,7 @@ export async function runMetaLeadBackup(options: MetaLeadOptions = {}) {
       pages.push({ pageId: page.page_id, error: message });
     }
   }
+  await sendOutcomesFor(context);
   return { pages, retried };
 }
 

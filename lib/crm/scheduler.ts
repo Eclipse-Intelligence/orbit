@@ -19,13 +19,15 @@ import { runWebSignals, webChecksConfigured } from "@/lib/enrichment/web-checks"
 import { runAiFields } from "@/lib/ai-fields/runner";
 import { microsoftConfigured } from "@/lib/microsoft/oauth";
 import { syncReaderToKnowledge } from "@/lib/readwise/sync";
-import { metaAccessToken } from "@/lib/meta";
+import { metaAccessToken, metaDatasetToken } from "@/lib/meta";
 import { redactedError } from "@/lib/upstream";
 
 const CRON_BUDGET_MS = 50_000;
 const STEP_MIN_MS = 3_000;
 const META_BACKUP_MS = 10_000;
 const META_BACKUP_MIN_MS = 5_000;
+const META_OUTCOMES_MS = 8_000;
+const META_OUTCOMES_MIN_MS = 3_000;
 
 async function metaLeadsDue() {
   if (!metaAccessToken()) return false;
@@ -34,6 +36,17 @@ async function metaLeadsDue() {
     return await metaLeadWorkDue();
   } catch (error) {
     console.error("Meta lead check failed", redactedError(error));
+    return false;
+  }
+}
+
+async function metaOutcomesDue() {
+  if (!metaDatasetToken()) return false;
+  try {
+    const { metaOutcomesDue: due } = await import("@/lib/crm/meta-outcomes");
+    return await due();
+  } catch (error) {
+    console.error("Meta outcomes check failed", redactedError(error));
     return false;
   }
 }
@@ -309,6 +322,10 @@ export async function runScheduledSync(
 export async function handleCronRequest(
   request: Request,
   run: (budgetMs: number) => Promise<CronReport> = (budgetMs) => runScheduledSync({ budgetMs }),
+  outcomes: (deadline: number) => Promise<unknown> = async (deadline) => {
+    const { runMetaOutcomes } = await import("@/lib/crm/meta-outcomes");
+    return runMetaOutcomes({ deadline });
+  },
 ) {
   const received = Date.now();
   const auth = cronAuthorization(request.headers.get("authorization"));
@@ -319,7 +336,19 @@ export async function handleCronRequest(
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
   const metaDue = await metaLeadsDue();
-  const report = await run(metaDue ? CRON_BUDGET_MS - META_BACKUP_MS : CRON_BUDGET_MS);
+  let spent = 0;
+  if (await metaOutcomesDue()) {
+    const deadline = Math.floor(Math.min(Date.now() + META_OUTCOMES_MS, received + CRON_BUDGET_MS));
+    if (deadline - Date.now() >= META_OUTCOMES_MIN_MS) {
+      try {
+        await outcomes(deadline);
+      } catch (error) {
+        console.error("Meta outcomes failed", redactedError(error));
+      }
+      spent = Math.max(0, Date.now() - received);
+    }
+  }
+  const report = await run(Math.max(0, CRON_BUDGET_MS - spent - (metaDue ? META_BACKUP_MS : 0)));
   try {
     const deadline = Math.floor(Math.min(Date.now() + META_BACKUP_MS, received + CRON_BUDGET_MS));
     if (metaDue && deadline - Date.now() >= META_BACKUP_MIN_MS) {

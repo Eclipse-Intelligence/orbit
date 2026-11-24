@@ -1,4 +1,5 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { normalizePhone } from "@/lib/phone";
 import { ShownError } from "@/lib/crm/errors";
 import { logUpstream, unreachable, upstreamMessage } from "@/lib/upstream";
 
@@ -24,7 +25,7 @@ const LEAD_FIELDS = [
   "is_organic",
 ].join(",");
 
-type MetaOptions = { fetchImpl?: typeof fetch; token?: string | null; deadline?: number };
+type MetaOptions = { fetchImpl?: typeof fetch; token?: string | null; deadline?: number; timeoutMs?: number };
 
 export type MetaLead = {
   id: string;
@@ -46,12 +47,16 @@ type MetaForm = { id: string; name: string | null };
 export class MetaError extends ShownError {
   readonly status: number;
   readonly code: number | null;
+  readonly subcode: number | null;
+  readonly detail: string | null;
 
-  constructor(message: string, status: number, code: number | null = null) {
+  constructor(message: string, status: number, code: number | null = null, subcode: number | null = null, detail: string | null = null) {
     super(message);
     this.name = "MetaError";
     this.status = status;
     this.code = code;
+    this.subcode = subcode;
+    this.detail = detail;
   }
 }
 
@@ -68,12 +73,12 @@ function env(name: string) {
   return value ? value : null;
 }
 
-function metaGraphVersion() {
+export function metaGraphVersion() {
   const value = env("META_GRAPH_VERSION");
   return value && /^v\d{1,3}\.\d{1,2}$/.test(value) ? value : META_GRAPH_VERSION;
 }
 
-function graphOrigin() {
+export function graphOrigin() {
   const value = env("META_GRAPH_URL");
   if (!value) return GRAPH_ORIGIN;
   try {
@@ -130,7 +135,7 @@ function graphUrl(path: string, params: Record<string, string> = {}) {
   return url;
 }
 
-function graphFailure(status: number, body: unknown, token: string | null) {
+export function graphFailure(status: number, body: unknown, token: string | null) {
   const error = (body as { error?: { code?: unknown; message?: unknown; type?: unknown; error_subcode?: unknown; fbtrace_id?: unknown } } | null)?.error;
   const code = typeof error?.code === "number" ? error.code : null;
   logUpstream(
@@ -146,20 +151,31 @@ function graphFailure(status: number, body: unknown, token: string | null) {
   else if (code === 10 || code === 200 || (code !== null && code >= 200 && code < 300)) effective = 403;
   else if (code === 4 || code === 17 || code === 32 || code === 613 || code === 80001 || code === 80005) effective = 429;
   else if (code === 1 || code === 2) effective = 503;
-  return new MetaError(upstreamMessage("Meta", effective, { credential: "access token" }), effective, code);
+  const subcode = typeof error?.error_subcode === "number" ? error.error_subcode : null;
+  const detail = typeof error?.message === "string" && error.message.trim() ? cut(error.message.replace(/\s+/g, " ").trim(), 300) : null;
+  return new MetaError(upstreamMessage("Meta", effective, { credential: "access token" }), effective, code, subcode, detail);
 }
 
-async function graphGet<T>(url: URL, options: MetaOptions): Promise<T> {
+type GraphRequest = { method: "GET" } | { method: "POST"; body: string };
+
+async function graphCall<T>(url: URL, options: MetaOptions, request: GraphRequest): Promise<T> {
   const token = options.token ?? metaAccessToken();
   if (!token) throw new MetaError("Meta lead ads isn't set up.", 503);
   if (url.origin !== graphOrigin()) throw new MetaError("Meta returned an error.", 502);
-  const remaining = options.deadline ? options.deadline - Date.now() : TIMEOUT_MS;
+  const limit = options.timeoutMs ?? TIMEOUT_MS;
+  const remaining = options.deadline ? options.deadline - Date.now() : limit;
   if (remaining < 500) throw new MetaError(unreachable("Meta"), 504);
   let response: Response;
   try {
     response = await (options.fetchImpl ?? fetch)(url.toString(), {
-      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-      signal: AbortSignal.timeout(Math.max(1, Math.floor(Math.min(TIMEOUT_MS, remaining)))),
+      method: request.method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+        ...(request.method === "POST" ? { "content-type": "application/json" } : {}),
+      },
+      ...(request.method === "POST" ? { body: request.body } : {}),
+      signal: AbortSignal.timeout(Math.max(1, Math.floor(Math.min(limit, remaining)))),
       cache: "no-store",
     });
   } catch (error) {
@@ -178,6 +194,10 @@ async function graphGet<T>(url: URL, options: MetaOptions): Promise<T> {
   }
   if (!body || typeof body !== "object") throw graphFailure(502, body, token);
   return body as T;
+}
+
+async function graphGet<T>(url: URL, options: MetaOptions): Promise<T> {
+  return graphCall<T>(url, options, { method: "GET" });
 }
 
 export async function fetchMetaLead(leadgenId: string, options: MetaOptions = {}) {
@@ -273,4 +293,68 @@ export async function listMetaLeadsPage(formId: string, since: Date, after: stri
 export function metaId(value: unknown) {
   const text = typeof value === "number" && Number.isSafeInteger(value) ? String(value) : typeof value === "string" ? value.trim() : "";
   return /^\d{1,40}$/.test(text) ? text : null;
+}
+
+const DATASET_TIMEOUT_MS = 5_000;
+const LEAD_ID_MARK = "orbit-lead-id:";
+
+export function metaDatasetToken() {
+  return env("META_DATASET_TOKEN");
+}
+
+export function hashEmail(email: string | null | undefined) {
+  const value = email?.trim().toLowerCase();
+  return value ? createHash("sha256").update(value).digest("hex") : null;
+}
+
+export function hashPhone(phone: string | null | undefined) {
+  const value = normalizePhone(phone)?.replace(/^\+/, "");
+  return value ? createHash("sha256").update(value).digest("hex") : null;
+}
+
+export async function checkMetaDataset(datasetId: string, options: MetaOptions = {}) {
+  const id = metaId(datasetId);
+  if (!id) throw new MetaError("Enter the Dataset ID, digits only.", 400);
+  const token = options.token ?? metaDatasetToken();
+  await graphGet<{ id?: unknown }>(graphUrl(encodeURIComponent(id), { fields: "id" }), { timeoutMs: DATASET_TIMEOUT_MS, ...options, token });
+  return id;
+}
+
+export type MetaOutcomeEvent = {
+  id: string;
+  name: string;
+  time: Date;
+  leadId: string;
+  emailHash: string | null;
+  phoneHash: string | null;
+  value: number | null;
+  currency: string | null;
+};
+
+export async function sendMetaEvents(datasetId: string, events: MetaOutcomeEvent[], options: MetaOptions = {}) {
+  const id = metaId(datasetId);
+  const token = options.token ?? metaDatasetToken();
+  if (!id || !token) throw new MetaError("Meta outcomes aren't set up.", 503);
+  const data = events.map((event) => {
+    const leadId = metaId(event.leadId);
+    if (!leadId) throw new MetaError("The lead has no Meta lead ID.", 400);
+    return {
+      event_name: event.name,
+      event_time: Math.floor(event.time.getTime() / 1000),
+      event_id: event.id,
+      action_source: "system_generated",
+      user_data: {
+        lead_id: `${LEAD_ID_MARK}${leadId}`,
+        ...(event.emailHash ? { em: [event.emailHash] } : {}),
+        ...(event.phoneHash ? { ph: [event.phoneHash] } : {}),
+      },
+      custom_data: {
+        event_source: "crm",
+        lead_event_source: "Orbit",
+        ...(event.value !== null && event.currency ? { value: event.value, currency: event.currency } : {}),
+      },
+    };
+  });
+  const body = JSON.stringify({ data, access_token: token }).replace(new RegExp(`"${LEAD_ID_MARK}(\\d{1,40})"`, "g"), "$1");
+  return graphCall<{ events_received?: unknown }>(graphUrl(`${encodeURIComponent(id)}/events`), { timeoutMs: DATASET_TIMEOUT_MS, ...options, token }, { method: "POST", body });
 }

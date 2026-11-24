@@ -15,6 +15,7 @@ import { getUserActor } from "@/lib/auth/user";
 import { campaignConnectionViews } from "@/lib/campaigns/connections";
 import { getClickUpSettings } from "@/lib/crm/clickup";
 import { getMetaLeadSettings } from "@/lib/crm/meta-leads";
+import { getMetaOutcomesView } from "@/lib/crm/meta-outcomes";
 import { SCOPES } from "@/lib/crm/scopes";
 import { listWebhookDeliveries, listWebhooks } from "@/lib/crm/webhooks";
 import { unenrichedCompanyCount } from "@/lib/enrichment/companies";
@@ -33,7 +34,7 @@ export default async function ToolsSettingsPage() {
   const headerStore = await headers();
   const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:4173";
   const origin = `${headerStore.get("x-forwarded-proto") ?? "http"}://${host}`;
-  const [clickup, enrichment, unenriched, agentMailbox, linear, endpoints, deliveries, metaLeads, campaignTools] = await Promise.all([
+  const [clickup, enrichment, unenriched, agentMailbox, linear, endpoints, deliveries, metaLeads, metaOutcomes, campaignTools] = await Promise.all([
     getClickUpSettings(user),
     getEnrichmentSettings(user),
     unenrichedCompanyCount(user),
@@ -42,6 +43,7 @@ export default async function ToolsSettingsPage() {
     listWebhooks(user),
     listWebhookDeliveries(user, 20),
     getMetaLeadSettings(user, siteOrigin() ?? origin),
+    getMetaOutcomesView(user),
     campaignConnectionViews(user),
   ]);
   const canAdmin = user.role === "owner" || user.role === "admin";
@@ -57,7 +59,7 @@ export default async function ToolsSettingsPage() {
         logoLinkReady={Boolean(enrichmentAvailability().logoClientId)}
       />
       <AgentMailboxSettings view={agentMailbox} isOwner={user.role === "owner"} />
-      <MetaLeadsSettings view={metaLeads} canAdmin={canAdmin} />
+      <MetaLeadsSettings view={metaLeads} outcomes={metaOutcomes} canAdmin={canAdmin} />
       {campaignTools.map((view) => (
         <CampaignConnectionCard key={view.provider} view={view}>
           {view.connected && view.senders ? <CampaignSenders view={view.senders} /> : null}
