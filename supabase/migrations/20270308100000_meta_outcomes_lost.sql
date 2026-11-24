@@ -78,6 +78,7 @@ begin
         or (nxt.entered_at is not null and nxt.entered_at - e.entered_at >= interval '5 minutes')
         or (not cur.is_lost and cur."position" > st."position")
       )
+      and (not st.is_lost or (nxt.entered_at is null and o.stage_id = e.stage_id))
   ),
   reached as (
     select r.lead_id, r.stage_id, r.entered_at, r.opportunity_id, r.value, r.currency

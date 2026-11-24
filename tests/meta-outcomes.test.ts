@@ -346,6 +346,7 @@ describe("Meta outcomes", () => {
     it("sends Lost after the stages reached, without filling in stages the lead never reached", async () => {
       const lead = await scenario();
       const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await setEntryAge(id, "New", 240);
       await moveTo(id, "Working", 120);
       await moveTo(id, "Lost", 60);
       const fake = metaFake();
@@ -361,6 +362,7 @@ describe("Meta outcomes", () => {
     it("sends Lost straight from New with only Lead before it", async () => {
       const lead = await scenario();
       const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await setEntryAge(id, "New", 240);
       await moveTo(id, "Lost", 30);
       const fake = metaFake();
       await run(fake);
@@ -370,6 +372,7 @@ describe("Meta outcomes", () => {
     it("waits five minutes before sending Lost, so a mistaken move sends nothing", async () => {
       const lead = await scenario();
       const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await setEntryAge(id, "New", 240);
       await moveTo(id, "Lost", 1);
       const fake = metaFake();
       await run(fake);
@@ -380,9 +383,27 @@ describe("Meta outcomes", () => {
       assert.equal((await statuses(lead.leadId)).Lost, undefined);
     });
 
+    it("waits five minutes again when an opportunity is reopened and marked lost again, and sends the latest time", async () => {
+      const lead = await scenario();
+      const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await setEntryAge(id, "New", 240);
+      await moveTo(id, "Lost", 60);
+      await moveTo(id, "Working", 50);
+      await moveTo(id, "Lost", 1);
+      const fake = metaFake();
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Working"]);
+      await setEntryAge(id, "Lost", 10);
+      await run(fake);
+      assert.deepEqual(fake.names(), ["Lead", "Working", "Lost"]);
+      const lost = (await outcomes(lead.leadId)).find((row) => row.stage_name === "Lost")!;
+      assert.ok(Math.abs(lost.occurred_at.getTime() - (Date.now() - 10 * 60_000)) < 5_000);
+    });
+
     it("doesn't send Lost while the lead has another open opportunity at its company", async () => {
       const lead = await scenario();
       const lostOne = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await setEntryAge(lostOne, "New", 240);
       await opportunity({ companyId: lead.companyId });
       await moveTo(lostOne, "Lost", 60);
       const fake = metaFake();
@@ -393,6 +414,7 @@ describe("Meta outcomes", () => {
     it("still sends Won after Lost when a lost opportunity is reopened and won", async () => {
       const lead = await scenario();
       const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId, value: 4000, currency: "GBP" });
+      await setEntryAge(id, "New", 240);
       await moveTo(id, "Lost", 120);
       const fake = metaFake();
       await run(fake);
@@ -1372,6 +1394,7 @@ describe("Meta outcomes", () => {
     it("shows a lost lead's trail as the stages it reached, then Lost, without the grey ones", async () => {
       const lead = await scenario();
       const id = await opportunity({ companyId: lead.companyId, contactId: lead.contactId });
+      await setEntryAge(id, "New", 240);
       await moveTo(id, "Working", 120);
       await moveTo(id, "Lost", 60);
       await run(metaFake());
