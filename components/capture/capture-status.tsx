@@ -6,6 +6,8 @@ import type { CaptureBadges } from "@/lib/crm/capture";
 import { captureBadgeFrom, useCompaniesStore } from "@/stores/companies-store";
 
 const REFRESH_GAP_MS = 60_000;
+const SIGNAL_GAP_MS = 30_000;
+const SETTLE_MS = 2_500;
 
 export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
   const signalled = useRef<() => void>(() => undefined);
@@ -22,6 +24,9 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
     let active = true;
     let running = false;
     let again = false;
+    let stale = false;
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    let signalWait: ReturnType<typeof setTimeout> | undefined;
     const fetchStatus = () => {
       if (running) {
         again = true;
@@ -32,7 +37,7 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
       fetch("/api/capture/status", { cache: "no-store" })
         .then((response) => (response.ok ? (response.json() as Promise<CaptureBadges>) : null))
         .then((body) => {
-          if (!active || !body || again) return;
+          if (!active || !body || again || stale) return;
           const state = useCompaniesStore.getState();
           if (body.status) state.setCapture(captureBadgeFrom(body.status, state.capture));
           state.setCaptureWaiting(body.waiting);
@@ -40,6 +45,7 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
         .catch(() => null)
         .finally(() => {
           running = false;
+          stale = false;
           if (!active || !again) return;
           again = false;
           fetchStatus();
@@ -49,16 +55,34 @@ export default function CaptureStatus({ renderedAt }: { renderedAt: number }) {
       if (document.visibilityState !== "visible" || Date.now() - last < REFRESH_GAP_MS) return;
       fetchStatus();
     };
-    signalled.current = () => {
-      if (document.visibilityState === "visible") fetchStatus();
-      else last = 0;
+    const later = () => {
+      if (running) stale = true;
+      clearTimeout(settle);
+      settle = setTimeout(() => {
+        settle = undefined;
+        fetchStatus();
+      }, SETTLE_MS);
     };
-    rendered.current = fetchStatus;
-    load();
+    signalled.current = () => {
+      if (document.visibilityState !== "visible") {
+        last = 0;
+        return;
+      }
+      if (settle || signalWait) return;
+      signalWait = setTimeout(() => {
+        signalWait = undefined;
+        if (document.visibilityState === "visible") fetchStatus();
+        else last = 0;
+      }, Math.max(0, last + SIGNAL_GAP_MS - Date.now()));
+    };
+    rendered.current = later;
+    later();
     window.addEventListener("focus", load);
     document.addEventListener("visibilitychange", load);
     return () => {
       active = false;
+      clearTimeout(settle);
+      clearTimeout(signalWait);
       signalled.current = () => undefined;
       rendered.current = () => undefined;
       window.removeEventListener("focus", load);

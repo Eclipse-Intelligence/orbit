@@ -151,8 +151,8 @@ async function unknownFor(actor: UserActor, now: number, actors: UserActor[], in
   });
 }
 
-async function waitingFor(actor: UserActor, actors: UserActor[], now: number) {
-  return waitingOnce(actor, actors, new Date(now)).catch((error) => {
+async function waitingFor(actor: UserActor, actors: UserActor[], now: number, serial: boolean) {
+  return waitingOnce(actor, actors, new Date(now), { serial }).catch((error) => {
     console.error("Reading what is waiting on you failed", error instanceof Error ? error.message : error);
     return { ...EMPTY_WAITING, failed: ["approvals", "followUps", "replies"] as CaptureSection[] };
   });
@@ -168,7 +168,9 @@ export function captureContext(actor: UserActor, now = Date.now(), options: { in
   if (found) return found;
   const pending = (async () => {
     const actors = await workspaceActors(actor);
-    const [mail, waiting] = await Promise.all([unknownFor(actor, now, actors, Boolean(options.inline)), waitingFor(actor, actors, now)]);
+    const [mail, waiting] = options.inline
+      ? await Promise.all([unknownFor(actor, now, actors, true), waitingFor(actor, actors, now, false)])
+      : [await unknownFor(actor, now, actors, false), await waitingFor(actor, actors, now, true)];
     const failed: CaptureSection[] = [...waiting.failed, ...(mail ? [] : ["toFile" as const])];
     return { actors, unknown: mail?.shown ?? [], skipped: mail?.skipped ?? [], held: mail?.pending ?? [], waiting, failed };
   })();
@@ -184,8 +186,9 @@ export function waitingHere(context: CaptureContext, workspaceId: string) {
 export async function captureStatuses(actor: UserActor, now = Date.now()) {
   const context = await captureContext(actor, now);
   const others = context.actors.length < 2 ? [actor] : context.actors;
-  const statuses = await Promise.all(others.map((item) => captureStatus(item, now, context).catch(() => null)));
-  return new Map(others.map((item, index) => [item.workspaceId, statuses[index]]));
+  const statuses = new Map<string, CaptureStatus | null>();
+  for (const item of others) statuses.set(item.workspaceId, await captureStatus(item, now, context).catch(() => null));
+  return statuses;
 }
 
 export type CaptureBadges = { status: CaptureStatus | null; waiting: string[] };

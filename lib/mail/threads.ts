@@ -161,10 +161,13 @@ export async function listThreads(
         ? `candidates as materialized (
              select m.source_id, m.thread_key from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
              where ${where.join(" and ")}
-               and ((m.received_at >= ${lowerParam}::timestamptz and (${upperParam}::timestamptz is null or m.received_at <= ${upperParam}::timestamptz))
-                 or (m.received_at is null
-                   and coalesce(m.sent_at, m.created_at) >= ${lowerParam}::timestamptz
-                   and (${upperParam}::timestamptz is null or coalesce(m.sent_at, m.created_at) <= ${upperParam}::timestamptz)))
+               and m.received_at >= ${lowerParam}::timestamptz and (${upperParam}::timestamptz is null or m.received_at <= ${upperParam}::timestamptz)
+             union
+             select m.source_id, m.thread_key from crm.mail_messages m join crm.mail_folders f on f.id = m.folder_id
+             where ${where.join(" and ")}
+               and m.received_at is null
+               and coalesce(m.sent_at, m.created_at) >= ${lowerParam}::timestamptz
+               and (${upperParam}::timestamptz is null or coalesce(m.sent_at, m.created_at) <= ${upperParam}::timestamptz)
              union
              select rm.source_id, rm.thread_key from crm.mail_reminders rm where rm.user_id = $1 and rm.state = 'due'
            ),`
