@@ -87,6 +87,19 @@ describe("live preview", () => {
     assert.ok(lines.includes("note-li note-depth-1"));
   });
 
+  it("widens the number gutter for the whole ordered list once its numbers get longer", () => {
+    const lineClasses = (text: string) => plan(text).filter((item): item is Extract<PlanItem, { type: "line" }> => item.type === "line").map((item) => item.className);
+    const nine = Array.from({ length: 9 }, (_, index) => `${index + 1}. Question`).join("\n");
+    assert.deepEqual(new Set(lineClasses(nine)), new Set(["note-li note-depth-0"]));
+    const thirteen = Array.from({ length: 13 }, (_, index) => `${index + 1}. Question`).join("\n");
+    assert.deepEqual(new Set(lineClasses(thirteen)), new Set(["note-li note-depth-0 note-gutter-wide"]));
+    const wrapped = "9. A question\n   that carries on\n10. Another";
+    assert.deepEqual(lineClasses(wrapped), ["note-li note-depth-0 note-gutter-wide", "note-li-cont note-depth-0 note-gutter-wide", "note-li note-depth-0 note-gutter-wide"]);
+    assert.deepEqual(new Set(lineClasses("99. One\n100. Two")), new Set(["note-li note-depth-0 note-gutter-wider"]));
+    assert.deepEqual(lineClasses("10. Outer\n    - Inner"), ["note-li note-depth-0 note-gutter-wide", "note-li note-depth-1"]);
+    assert.deepEqual(new Set(lineClasses("- One\n- Two")), new Set(["note-li note-depth-0"]));
+  });
+
   it("marks unresolved links and turns mentions into chips", () => {
     const text = `[[Known]] [[Missing]] ${MENTION}`;
     const items = plan(text, [], { resolve: (target) => target === "Known" });
