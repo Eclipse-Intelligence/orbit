@@ -1087,7 +1087,7 @@ export default function MailScreen({
 
   function refreshFromAlert() {
     const current = latest.current.query;
-    if (inInbox(current.view) && !current.query) void refreshRef.current(false);
+    if (current.view === HOME_VIEW && !current.query && !current.account) void refreshRef.current(false);
     else showRef.current({ view: HOME_VIEW, account: null, query: "" });
   }
 
