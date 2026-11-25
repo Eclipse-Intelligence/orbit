@@ -1072,11 +1072,19 @@ html[data-sidebar-resizing] * {
 
 .note-surface .note-editor .cm-line.note-li,
 .note-surface .note-editor .cm-line.note-li-cont {
-  padding-left: calc(1.5rem + var(--note-depth, 0) * 1.5rem);
+  padding-left: calc(var(--note-gutter, 1.5rem) + var(--note-depth, 0) * 1.5rem);
+}
+
+.note-surface .note-editor .note-gutter-wide {
+  --note-gutter: 2.125rem;
+}
+
+.note-surface .note-editor .note-gutter-wider {
+  --note-gutter: 2.75rem;
 }
 
 .note-surface .note-editor .cm-line.note-li {
-  text-indent: -1.5rem;
+  text-indent: calc(-1 * var(--note-gutter, 1.5rem));
   padding-top: 2px;
   padding-bottom: 2px;
 }
@@ -1103,7 +1111,8 @@ html[data-sidebar-resizing] * {
 
 .note-surface .note-editor .note-bullet {
   display: inline-flex;
-  width: 1.5rem;
+  width: var(--note-gutter, 1.5rem);
+  white-space: nowrap;
   text-indent: 0;
   vertical-align: top;
   height: 1.7em;
@@ -1131,7 +1140,7 @@ html[data-sidebar-resizing] * {
 
 .note-surface .note-editor .note-task-box {
   display: inline-flex;
-  width: 1.5rem;
+  width: var(--note-gutter, 1.5rem);
   height: 1.7em;
   align-items: center;
   text-indent: 0;

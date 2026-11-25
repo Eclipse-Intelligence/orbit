@@ -31,7 +31,23 @@ export type PlanInput = {
 const MENTION = /^@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):([0-9a-f-]{36})\)$/;
 const LIST_MARK = /^([-*+]|\d+[.)])(\s+|$)(\[[ xX]\](?:\s+|$))?/;
 
-type ListLine = { depth: number; first: boolean; task: boolean; done: boolean };
+type ListLine = { depth: number; first: boolean; task: boolean; done: boolean; markWidth: number };
+
+function widestMark(doc: Text, list: SyntaxNode | null) {
+  if (list?.name !== "OrderedList") return 0;
+  let widest = 0;
+  for (const item of list.getChildren("ListItem")) {
+    const mark = item.getChild("ListMark");
+    if (mark) widest = Math.max(widest, mark.to - mark.from);
+  }
+  return widest;
+}
+
+function gutterClass(markWidth: number) {
+  if (markWidth >= 4) return "note-gutter-wider";
+  if (markWidth === 3) return "note-gutter-wide";
+  return null;
+}
 
 function listDepth(node: SyntaxNode) {
   let depth = 0;
@@ -44,6 +60,7 @@ function listDepth(node: SyntaxNode) {
 export function previewPlan({ doc, tree, from, to, active, daily, resolve }: PlanInput): PlanItem[] {
   const items: PlanItem[] = [];
   const listLines = new Map<number, ListLine>();
+  const markWidths = new Map<number, number>();
   const prefixEnds = new Map<number, number>();
   const codeLines = new Set<number>();
   const isActive = (pos: number) => active.has(doc.lineAt(pos).number);
@@ -142,9 +159,13 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
         const lastLine = doc.lineAt(ref.to).number;
         const marker = node.getChild("Task")?.getChild("TaskMarker");
         const done = marker ? /x/i.test(doc.sliceString(marker.from, marker.to)) : false;
+        const list = node.parent;
+        const listFrom = list?.from ?? ref.from;
+        const markWidth = markWidths.get(listFrom) ?? widestMark(doc, list);
+        markWidths.set(listFrom, markWidth);
         for (let number = firstLine; number <= lastLine; number += 1) {
           const first = number === firstLine;
-          listLines.set(number, { depth, first, task: Boolean(marker) && first, done: done && first });
+          listLines.set(number, { depth, first, task: Boolean(marker) && first, done: done && first, markWidth });
         }
         return;
       }
@@ -230,6 +251,8 @@ export function previewPlan({ doc, tree, from, to, active, daily, resolve }: Pla
     const classes = [info.first ? "note-li" : "note-li-cont", `note-depth-${Math.min(info.depth, 5)}`];
     if (info.task) classes.push("note-task");
     if (info.done) classes.push("note-task-done");
+    const gutter = gutterClass(info.markWidth);
+    if (gutter) classes.push(gutter);
     line(current.from, classes.join(" "));
   }
 
