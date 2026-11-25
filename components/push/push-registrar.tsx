@@ -43,7 +43,7 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
       }
       const url = new URL(target.path, window.location.origin);
       const thread = url.searchParams.get("thread");
-      if (thread && url.pathname === "/mail" && window.location.pathname === "/mail") {
+      if ((thread || !url.search) && url.pathname === "/mail" && window.location.pathname === "/mail") {
         window.dispatchEvent(new CustomEvent(OPEN_THREAD_EVENT, { detail: { thread, view: url.searchParams.get("view") } }));
         return;
       }

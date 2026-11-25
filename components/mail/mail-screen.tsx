@@ -1051,14 +1051,43 @@ export default function MailScreen({
     return () => window.clearTimeout(timer);
   }, [cursor, viewed?.unread, viewed?.latestId]);
 
+  function openFromAlert(key: string, view: string | null) {
+    const current = latest.current.query;
+    const alertSplit = view?.startsWith("inbox:") ? (view.slice("inbox:".length) as MailSplit) : null;
+    const stays = !current.query && (view === current.view || (current.view === HOME_VIEW && Boolean(alertSplit)));
+    if (view && !stays) showRef.current({ view, account: current.account, query: "" });
+    else if (listForThread(current)) showRef.current(listForThread(current)!);
+    else void refreshRef.current(false);
+    forgetThread(key);
+    setDetails((existing) => {
+      if (!(key in existing)) return existing;
+      const next = { ...existing };
+      delete next[key];
+      return next;
+    });
+    selectRef.current(key, true);
+    const target = latest.current.query;
+    loadThread(key)
+      .then((loaded) => {
+        const shown = latest.current.query;
+        if (shown !== target || !inInbox(shown.view) || shown.query) return;
+        if (!loaded.messages.some((message) => message.folderRole === "inbox")) return;
+        const summary = { ...summaryFromDetail(loaded), split: alertSplit };
+        setPage((existing) => (existing ? { ...existing, threads: insertByDate(existing.threads, summary) } : { threads: [summary], next: null }));
+      })
+      .catch(() => undefined);
+  }
+
+  const openFromAlertRef = useRef(openFromAlert);
+  useEffect(() => {
+    openFromAlertRef.current = openFromAlert;
+  });
+
   useEffect(() => {
     const onOpen = (event: Event) => {
-      const detail = (event as CustomEvent<{ thread?: string; view?: string | null }>).detail;
-      if (!detail?.thread) return;
-      const current = latest.current.query;
-      if (detail.view && (detail.view !== current.view || current.query)) showRef.current({ view: detail.view, account: current.account, query: "" });
-      else if (listForThread(current)) showRef.current(listForThread(current)!);
-      selectRef.current(detail.thread, true);
+      const detail = (event as CustomEvent<{ thread?: string | null; view?: string | null }>).detail;
+      if (detail?.thread) openFromAlertRef.current(detail.thread, detail.view ?? null);
+      else void refreshRef.current(false);
     };
     window.addEventListener(OPEN_THREAD_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_THREAD_EVENT, onOpen);
