@@ -7,6 +7,7 @@ import { withActor } from "@/lib/crm/context";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool, type Db } from "@/lib/db/pool";
+import { syncMail } from "@/lib/mail/sync";
 import { fileMailOnTimeline, RECENT_FILING_DAYS } from "@/lib/mail/timeline";
 import { createUser, resetDatabase } from "./helpers";
 
@@ -195,7 +196,26 @@ describe("mail on the contact timeline", () => {
     assert.deepEqual(await titles(), ["Today"]);
     assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 1);
     assert.deepEqual((await titles()).sort(), ["Last week", "Today"]);
-    const reply = (await listActivities(owner, { contactId: janeId, type: "email" })).data.find((activity) => activity.title === "Last week")!;
-    assert.equal(reply.body, "Older.");
+    const older = (await listActivities(owner, { contactId: janeId, type: "email" })).data.find((activity) => activity.title === "Last week")!;
+    assert.equal(older.body, "Older.");
+  });
+
+  it("files the last two days on notification and screen syncs, and 60 days only on the scheduled catch-up", async () => {
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+    await addMessage("inbox", { id: "sync-new", subject: "Sync today", from: "jane@acme.test", to: ["mark@other.test"], at: daysAgo(0.1) });
+    await addMessage("archive", { id: "sync-old", subject: "Sync last week", from: "jane@acme.test", to: ["mark@other.test"], at: daysAgo(8) });
+    const titles = async () =>
+      (await listActivities(owner, { contactId: janeId, type: "email" })).data
+        .map((activity) => activity.title)
+        .filter((title) => (title ?? "").startsWith("Sync "))
+        .sort();
+    const noGraph = (async () => {
+      throw new Error("Graph is not called in this test");
+    }) as typeof fetch;
+
+    await syncMail(owner, { sourceIds: [], fetchImpl: noGraph, budgetMs: 20_000 });
+    assert.deepEqual(await titles(), ["Sync today"]);
+    await syncMail(owner, { sourceIds: [], fetchImpl: noGraph, budgetMs: 20_000, catchUp: true });
+    assert.deepEqual(await titles(), ["Sync last week", "Sync today"]);
   });
 });
