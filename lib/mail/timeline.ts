@@ -15,6 +15,7 @@ import { mailWorthATask } from "@/lib/mail/task-gate";
 import { addressHomesInDb, captureWorkspaces, contactElsewhere, ensureContactInDb, NOT_AUTOMATED, routedParams, routedSql } from "@/lib/mail/routing";
 
 const WINDOW_DAYS = 60;
+export const RECENT_FILING_DAYS = 2;
 const BATCH = 100;
 const FRESH_MS = 24 * 3_600_000;
 
@@ -97,8 +98,10 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
        where a.type = 'email' and a.workspace_id = any($3::uuid[])
          and exists (select 1 from matched m where m.contact_id is null)
      )
+     select picked.*, (select b.body_text from crm.mail_messages b where b.id = picked.message_id) as body_text
+     from (
      select distinct on (x.id, x.workspace_id, coalesce(x.contact_id, x.company_id))
-       x.id as message_id, x.internet_message_id, x.subject, x.snippet, x.body_text, x.at, x.account, x.folder_role,
+       x.id as message_id, x.internet_message_id, x.subject, x.snippet, x.at, x.account, x.folder_role,
        x.workspace_id, x.contact_id, x.company_id, x.address, x.direction, x.has_attachments as attachments,
        case when x.contact_id is not null then (
          select a.id from crm.activities a
@@ -125,7 +128,8 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
        where a.company_id = x.company_id and a.contact_id is null and a.workspace_id = x.workspace_id and a.type = 'email' and ${LOGGED_AT_SEND}
      ))
      order by x.id, x.workspace_id, coalesce(x.contact_id, x.company_id), x.at desc
-     limit ${limitParam}`,
+     limit ${limitParam}
+     ) picked`,
     routedParams(actor, workspaceIds, [...filter.params, limit]),
   );
   return result.rows;

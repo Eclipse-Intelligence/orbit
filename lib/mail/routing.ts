@@ -177,7 +177,7 @@ export function routedSql(filter: string) {
   return `with ${OWN},
   ${OWN_DOMAINS},
   recent as (
-    select m.id, m.source_id, m.thread_key as tk, m.internet_message_id, m.subject, m.snippet, m.body_text,
+    select m.id, m.source_id, m.thread_key as tk, m.internet_message_id, m.subject, m.snippet,
       m.from_email, m.to_recipients, m.cc_recipients, m.has_attachments, s.email as account, f.role as folder_role,
       coalesce(m.sent_at, m.received_at, m.created_at) as at,
       lower(coalesce(m.from_email, '')) in (select email from own) as mine

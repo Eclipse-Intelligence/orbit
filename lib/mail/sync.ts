@@ -25,7 +25,7 @@ import {
 import { graphReconnect, readReconnectSource, reconnectError } from "@/lib/mail/accounts";
 import { trackingIdIn } from "@/lib/mail/html";
 import { classifyEmailTones } from "@/lib/crm/email-tone";
-import { fileMailOnTimeline } from "@/lib/mail/timeline";
+import { fileMailOnTimeline, RECENT_FILING_DAYS } from "@/lib/mail/timeline";
 import { notifyNewMail } from "@/lib/mail/notify";
 import { routeArrivedMail } from "@/lib/mail/subscriptions";
 import { queueMailWorkflowEvents } from "@/lib/workflows/mail-events";
@@ -1095,6 +1095,7 @@ export type MailSyncOptions = {
   skipRecentMs?: number;
   announce?: boolean;
   targeted?: boolean;
+  catchUp?: boolean;
 };
 
 export async function syncMail(actor: UserActor, options: MailSyncOptions): Promise<MailSyncReport> {
@@ -1246,7 +1247,7 @@ export async function syncMail(actor: UserActor, options: MailSyncOptions): Prom
       })
     : [];
   report.routed = routed.length;
-  report.filed = await fileMailOnTimeline(actor, { deadline, fetchImpl: options.fetchImpl })
+  report.filed = await fileMailOnTimeline(actor, { deadline, fetchImpl: options.fetchImpl, days: options.catchUp ? undefined : RECENT_FILING_DAYS })
     .then((result) => result.filed)
     .catch((error) => {
       console.error("Filing mail on contacts failed", error);

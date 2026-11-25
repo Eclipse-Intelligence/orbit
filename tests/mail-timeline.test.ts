@@ -7,7 +7,7 @@ import { withActor } from "@/lib/crm/context";
 import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool, type Db } from "@/lib/db/pool";
-import { fileMailOnTimeline } from "@/lib/mail/timeline";
+import { fileMailOnTimeline, RECENT_FILING_DAYS } from "@/lib/mail/timeline";
 import { createUser, resetDatabase } from "./helpers";
 
 const NOW = Date.parse("2026-10-23T09:00:00Z");
@@ -184,5 +184,18 @@ describe("mail on the contact timeline", () => {
     assert.deepEqual(later, { id: first.id, created: false });
     const audits = await admin.query("select 1 from crm.audit_events where event_type = 'activity.created' and entity_id = $1", [first.id]);
     assert.equal(audits.rowCount, 1);
+  });
+  it("files only recent mail when new mail arrives, and leaves older mail to the scheduled catch-up", async () => {
+    await addMessage("inbox", { id: "late-new", subject: "Today", from: "jane@acme.test", to: ["mark@other.test"], at: hoursAgo(4), body: "Fresh." });
+    await addMessage("archive", { id: "late-old", subject: "Last week", from: "jane@acme.test", to: ["mark@other.test"], at: hoursAgo(24 * 8), body: "Older." });
+    const titles = async () =>
+      (await listActivities(owner, { contactId: janeId, type: "email" })).data.map((activity) => activity.title).filter((title) => title === "Today" || title === "Last week");
+
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW, days: RECENT_FILING_DAYS })).filed, 1);
+    assert.deepEqual(await titles(), ["Today"]);
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 1);
+    assert.deepEqual((await titles()).sort(), ["Last week", "Today"]);
+    const reply = (await listActivities(owner, { contactId: janeId, type: "email" })).data.find((activity) => activity.title === "Last week")!;
+    assert.equal(reply.body, "Older.");
   });
 });
