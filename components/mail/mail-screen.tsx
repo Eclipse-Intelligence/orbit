@@ -1054,40 +1054,55 @@ export default function MailScreen({
   function openFromAlert(key: string, view: string | null) {
     const current = latest.current.query;
     const alertSplit = view?.startsWith("inbox:") ? (view.slice("inbox:".length) as MailSplit) : null;
-    const stays = !current.query && (view === current.view || (current.view === HOME_VIEW && Boolean(alertSplit)));
-    if (view && !stays) showRef.current({ view, account: current.account, query: "" });
+    const sameAccount = !current.account || current.account === key.split("|")[0];
+    const stays = !current.query && sameAccount && (view === current.view || (current.view === HOME_VIEW && Boolean(alertSplit)));
+    if (view && !stays) showRef.current({ view, account: sameAccount ? current.account : null, query: "" });
     else if (listForThread(current)) showRef.current(listForThread(current)!);
     else void refreshRef.current(false);
     forgetThread(key);
-    setDetails((existing) => {
-      if (!(key in existing)) return existing;
-      const next = { ...existing };
-      delete next[key];
-      return next;
-    });
+    if (key !== latest.current.cursor) {
+      setDetails((existing) => {
+        if (!(key in existing)) return existing;
+        const next = { ...existing };
+        delete next[key];
+        return next;
+      });
+    }
     selectRef.current(key, true);
     const target = latest.current.query;
     loadThread(key)
       .then((loaded) => {
         const shown = latest.current.query;
-        if (shown !== target || !inInbox(shown.view) || shown.query) return;
+        if (shown !== target || !inInbox(shown.view) || shown.query || removing.current.has(key)) return;
         if (!loaded.messages.some((message) => message.folderRole === "inbox")) return;
         const summary = { ...summaryFromDetail(loaded), split: alertSplit };
-        setPage((existing) => (existing ? { ...existing, threads: insertByDate(existing.threads, summary) } : { threads: [summary], next: null }));
+        if (shown.account && summary.sourceId !== shown.account) return;
+        setPage((existing) => {
+          const threads = settleSending(insertByDate(existing?.threads ?? [], summary));
+          return existing ? { ...existing, threads } : { threads, next: null };
+        });
       })
       .catch(() => undefined);
   }
 
+  function refreshFromAlert() {
+    const current = latest.current.query;
+    if (inInbox(current.view) && !current.query) void refreshRef.current(false);
+    else showRef.current({ view: HOME_VIEW, account: null, query: "" });
+  }
+
   const openFromAlertRef = useRef(openFromAlert);
+  const refreshFromAlertRef = useRef(refreshFromAlert);
   useEffect(() => {
     openFromAlertRef.current = openFromAlert;
+    refreshFromAlertRef.current = refreshFromAlert;
   });
 
   useEffect(() => {
     const onOpen = (event: Event) => {
       const detail = (event as CustomEvent<{ thread?: string | null; view?: string | null }>).detail;
       if (detail?.thread) openFromAlertRef.current(detail.thread, detail.view ?? null);
-      else void refreshRef.current(false);
+      else refreshFromAlertRef.current();
     };
     window.addEventListener(OPEN_THREAD_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_THREAD_EVENT, onOpen);
