@@ -36,7 +36,7 @@ async function handle(request: Request) {
   const users = await runMailPass(
     targets.map((target) => target.actor),
     {
-      sync: (actor, until) => syncMail(actor, { deadline: until, skipRecentMs: SCHEDULED_FLOOR_MS, announce: true }),
+      sync: (actor, until) => syncMail(actor, { deadline: until, skipRecentMs: SCHEDULED_FLOOR_MS, announce: true, catchUp: true }),
       extras: async (actor, turnEnd) => {
         const within = (ms: number) => Math.min(turnEnd, Date.now() + ms);
         await processDueMail(actor, { deadline: within(30_000) }).catch((error) => console.error("Due mail failed", error));

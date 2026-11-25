@@ -59,7 +59,7 @@ export async function GET(request: Request) {
       console.error("Calendar sync failed", error);
     }
     try {
-      const report = await syncMail(user, { budgetMs: 20_000, backfill: false, announce: true });
+      const report = await syncMail(user, { budgetMs: 20_000, backfill: false, announce: true, catchUp: true });
       if (report.errors.length) console.error("Mail sync failed", report.errors.join("; "));
     } catch (error) {
       console.error("Mail sync failed", error);
