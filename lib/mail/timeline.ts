@@ -1,4 +1,5 @@
-import { createEmailActivityOnce } from "@/lib/crm/activities";
+import { createEmailActivityOnce, emailActivityFor } from "@/lib/crm/activities";
+import { dismissActivityContactsInDb, linkEmailPeopleInDb, removedActivityContactIds } from "@/lib/crm/activity-contacts";
 import { companyHasOpenTask, createFollowUpUnlessOpen, isRecent } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
@@ -6,6 +7,7 @@ import { hasScope } from "@/lib/crm/scopes";
 import { scheduleTaskDue, withDueNote } from "@/lib/crm/task-due";
 import { MAIL_SUGGESTION_NOTE } from "@/lib/crm/suggested-task";
 import { createTaskInDb } from "@/lib/crm/tasks";
+import { emailPeopleInDb } from "@/lib/mail/email-people";
 import { followUpTitle } from "@/lib/mail/follow-up-title";
 import type { UserActor } from "@/lib/crm/types";
 import { workspaceActors } from "@/lib/crm/workspaces";
@@ -34,7 +36,6 @@ type Candidate = {
   address: string;
   direction: "inbound" | "outbound";
   attachments: boolean;
-  relink_id: string | null;
 };
 
 type RuledSender = { message_id: string; address: string; from_name: string | null; workspace_id: string };
@@ -88,6 +89,11 @@ const LOGGED_AT_SEND = `a.metadata->>'mailMessageId' is null and a.metadata->>'i
 
 const SAME_MESSAGE = `(a.metadata->>'mailMessageId' = x.id::text or (x.internet_message_id is not null and a.metadata->>'internetMessageId' = x.internet_message_id))`;
 
+const SENT_POSITION = `(
+  select min(e.ord) from jsonb_array_elements(coalesce(x.to_recipients, '[]'::jsonb) || coalesce(x.cc_recipients, '[]'::jsonb)) with ordinality as e(p, ord)
+  where jsonb_typeof(e.p) = 'object' and lower(e.p->>'address') = x.address
+)`;
+
 async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filter: { sql: string; params: unknown[] }, limit: number) {
   const limitParam = `$${6 + filter.params.length}`;
   const result = await db.query<Candidate>(
@@ -100,34 +106,36 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
      )
      select picked.*, (select b.body_text from crm.mail_messages b where b.id = picked.message_id) as body_text
      from (
-     select distinct on (x.id, x.workspace_id, coalesce(x.contact_id, x.company_id))
+     select distinct on (x.id, x.workspace_id, case when x.contact_id is null then x.company_id end)
        x.id as message_id, x.internet_message_id, x.subject, x.snippet, x.at, x.account, x.folder_role,
-       x.workspace_id, x.contact_id, x.company_id, x.address, x.direction, x.has_attachments as attachments,
-       case when x.contact_id is not null then (
-         select a.id from crm.activities a
-         left join crm.contacts ac on ac.id = a.contact_id
-         where a.workspace_id = x.workspace_id and a.type = 'email' and ${SAME_MESSAGE}
-           and (a.contact_id is null or (ac.archived_at is not null and ac.normalized_email = x.contact_email))
-         order by a.created_at
-         limit 1
-       ) end as relink_id
+       x.workspace_id, x.contact_id, x.company_id, x.address, x.direction, x.has_attachments as attachments
      from matched x
-     where not exists (
-       select 1 from crm.activities a
-       where a.contact_id = x.contact_id and a.workspace_id = x.workspace_id and a.type = 'email'
-         and (${SAME_MESSAGE} or (${LOGGED_AT_SEND}))
+     where (
+       x.contact_id is not null and not exists (
+         select 1 from crm.activities a
+         join (
+           select s.activity_id, s.contact_id from crm.activity_contacts s
+           union all select d.activity_id, d.contact_id from crm.activity_contact_dismissals d
+             where d.kind = 'removed' or (d.kind = 'skipped' and d.user_id = $1)
+         ) l on l.activity_id = a.id and l.contact_id = x.contact_id
+         where a.workspace_id = x.workspace_id and a.type = 'email'
+           and (${SAME_MESSAGE} or (${LOGGED_AT_SEND} and a.contact_id in (
+             select y.contact_id from matched y where y.id = x.id and y.workspace_id = x.workspace_id and y.contact_id is not null
+           )))
+       )
+     ) or (
+       x.contact_id is null
+       and not exists (select 1 from company_logged l where l.mail_id = x.id::text and l.workspace_id = x.workspace_id)
+       and not (x.internet_message_id is not null and exists (
+         select 1 from company_logged l where l.internet_id = x.internet_message_id and l.workspace_id = x.workspace_id
+       ))
+       and not exists (
+         select 1 from crm.activities a
+         where a.company_id = x.company_id and a.contact_id is null and a.workspace_id = x.workspace_id and a.type = 'email' and ${LOGGED_AT_SEND}
+       )
      )
-     and not (x.contact_id is null and exists (
-       select 1 from company_logged l where l.mail_id = x.id::text and l.workspace_id = x.workspace_id
-     ))
-     and not (x.contact_id is null and x.internet_message_id is not null and exists (
-       select 1 from company_logged l where l.internet_id = x.internet_message_id and l.workspace_id = x.workspace_id
-     ))
-     and not (x.contact_id is null and exists (
-       select 1 from crm.activities a
-       where a.company_id = x.company_id and a.contact_id is null and a.workspace_id = x.workspace_id and a.type = 'email' and ${LOGGED_AT_SEND}
-     ))
-     order by x.id, x.workspace_id, coalesce(x.contact_id, x.company_id), x.at desc
+     order by x.id, x.workspace_id, case when x.contact_id is null then x.company_id end, x.contact_id is null,
+       case when x.direction = 'outbound' then ${SENT_POSITION} end, x.at desc
      limit ${limitParam}
      ) picked`,
     routedParams(actor, workspaceIds, [...filter.params, limit]),
@@ -135,26 +143,52 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
   return result.rows;
 }
 
-async function relinkActivity(db: Db, actor: UserActor, activityId: string, row: Candidate) {
+type Existing = { id: string; contact_id: string | null; company_id: string | null; archived_contact_email: string | null; archived_at: Date | null };
+
+async function existingActivity(db: Db, workspaceId: string, row: Candidate, contactIds: string[]) {
+  const byMessage = await emailActivityFor(db, workspaceId, { internetMessageId: row.internet_message_id, mailMessageId: row.message_id }, null);
+  const found = await db.query<Existing>(
+    `select a.id, a.contact_id, a.company_id, a.archived_at, case when ac.archived_at is not null then ac.normalized_email end as archived_contact_email
+     from crm.activities a
+     left join crm.contacts ac on ac.id = a.contact_id
+     where a.workspace_id = $1 and a.type = 'email'
+       and (
+         a.id = $2
+         or (
+           a.metadata->>'mailMessageId' is null and a.metadata->>'internetMessageId' is null
+           and (a.metadata->>'direction' = 'outbound') = ($3 = 'outbound')
+           and a.title = left(coalesce(nullif(trim($4::text), ''), '(no subject)'), 200)
+           and abs(extract(epoch from a.occurred_at - $5::timestamptz)) < 180
+           and (a.contact_id = any($6::uuid[]) or (a.contact_id is null and a.company_id = $7))
+         )
+       )
+     order by (a.id = $2) desc, a.archived_at is not null, a.created_at
+     limit 1`,
+    [workspaceId, byMessage, row.direction, row.subject, new Date(row.at).toISOString(), contactIds, row.company_id],
+  );
+  return found.rows[0] ?? null;
+}
+
+async function relinkActivity(db: Db, actor: UserActor, existing: Existing, mainId: string, row: Candidate) {
   const before = await db.query<{ contact_id: string | null; company_id: string | null }>(
     "select contact_id, company_id from crm.activities where id = $1 and workspace_id = $2 for update",
-    [activityId, actor.workspaceId],
+    [existing.id, actor.workspaceId],
   );
   const current = before.rows[0];
   if (!current) return false;
   const companyId = current.company_id ?? row.company_id;
   const updated = await db.query("update crm.activities set contact_id = $3, company_id = $4 where id = $1 and workspace_id = $2", [
-    activityId,
+    existing.id,
     actor.workspaceId,
-    row.contact_id,
+    mainId,
     companyId,
   ]);
   if (!updated.rowCount) return false;
   const fields = ["contactId", ...(companyId !== current.company_id ? ["companyId"] : [])];
-  await recordAudit(db, actor, "activity.updated", "activity", activityId, { operation: "relink_mail", source: "microsoft" }, {
+  await recordAudit(db, actor, "activity.updated", "activity", existing.id, { operation: "relink_mail", source: "microsoft" }, {
     fields,
     before: { contactId: current.contact_id, ...(fields.includes("companyId") ? { companyId: current.company_id } : {}) },
-    after: { contactId: row.contact_id, ...(fields.includes("companyId") ? { companyId } : {}) },
+    after: { contactId: mainId, ...(fields.includes("companyId") ? { companyId } : {}) },
   });
   return true;
 }
@@ -343,23 +377,57 @@ export async function fileMailOnTimeline(
   const rows = await withActor(actor, (db) => candidates(db, actor, workspaceIds, filter, options.limit ?? BATCH));
   let filed = 0;
   const followUps = new Map<string, string[]>();
-  const relinked = new Set<string>();
   for (const row of rows.sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())) {
     const target = byWorkspace.get(row.workspace_id);
     if (!target) continue;
     const at = new Date(row.at);
-    if (row.relink_id && !relinked.has(row.relink_id)) {
-      relinked.add(row.relink_id);
-      try {
-        await withActor(target, (db) => relinkActivity(db, target, row.relink_id!, row));
-      } catch (error) {
-        console.error("Moving an email onto its contact failed", error);
-      }
-      continue;
-    }
     try {
       const followUp = await needsFollowUp(target, row, at);
       const outcome = await withActor(target, async (db) => {
+        const provenance = { operation: "file_mail", source: "microsoft", catchUp: now - at.getTime() > FRESH_MS };
+        await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+          `email-activity|${target.workspaceId}|${row.internet_message_id || row.message_id}`,
+        ]);
+        const { people, routed } = await emailPeopleInDb(db, target, row.message_id, row.direction);
+        let main: string | null;
+        let companyId = row.company_id;
+        let sentTo = row.address;
+        if (row.direction === "outbound") {
+          const first = people[0];
+          main = first?.id ?? row.contact_id;
+          if (first && first.id !== row.contact_id) {
+            companyId = first.companyId ?? row.company_id;
+            sentTo = first.email;
+          }
+        } else {
+          main = row.contact_id ?? people.find((person) => !person.companyId || person.companyId === row.company_id)?.id ?? null;
+        }
+        const contactIds = [...new Set([...(main ? [main] : []), ...people.map((person) => person.id)])];
+        const skip = (activityId: string, ids: string[]) => dismissActivityContactsInDb(db, target.workspaceId, activityId, ids, target.userId);
+        const settle = (activityId: string) =>
+          skip(activityId, [...routed, ...(row.contact_id ? [row.contact_id] : [])].filter((id) => !contactIds.includes(id)));
+        const found = await existingActivity(db, target.workspaceId, row, contactIds);
+        if (found?.archived_at) {
+          await skip(found.id, [...routed, ...contactIds]);
+          return { created: false, who: null };
+        }
+        if (found) {
+          const replacement = found.archived_contact_email
+            ? (
+                await db.query<{ id: string }>(
+                  "select id from crm.contacts where workspace_id = $1 and archived_at is null and normalized_email = $2 limit 1",
+                  [target.workspaceId, found.archived_contact_email],
+                )
+              ).rows[0]?.id ?? null
+            : null;
+          const removed = await removedActivityContactIds(db, found.id);
+          const candidate = found.contact_id === null ? main : replacement;
+          const newMain = candidate && !removed.has(candidate) ? candidate : null;
+          if (newMain) await relinkActivity(db, target, found, newMain, row);
+          await linkEmailPeopleInDb(db, target, found.id, contactIds, provenance);
+          await settle(found.id);
+          return { created: false, who: null };
+        }
         const saved = await createEmailActivityOnce(
           db,
           target,
@@ -368,12 +436,12 @@ export async function fileMailOnTimeline(
             title: (row.subject?.trim() || "(no subject)").slice(0, 200),
             body: bodyOf(row),
             occurredAt: at.toISOString(),
-            companyId: row.company_id,
-            contactId: row.contact_id,
+            companyId,
+            contactId: main,
             metadata: {
               source: "microsoft",
               direction: row.direction,
-              ...(row.direction === "inbound" ? { from: row.address } : { from: row.account, to: row.address }),
+              ...(row.direction === "inbound" ? { from: row.address } : { from: row.account, to: sentTo }),
               account: row.account,
               mailMessageId: row.message_id,
               ...(row.internet_message_id ? { internetMessageId: row.internet_message_id } : {}),
@@ -381,8 +449,10 @@ export async function fileMailOnTimeline(
             },
           },
           { mailMessageId: row.message_id, internetMessageId: row.internet_message_id },
-          { operation: "file_mail", source: "microsoft", catchUp: now - at.getTime() > FRESH_MS },
+          provenance,
+          { contactIds },
         );
+        await settle(saved.id);
         return { created: saved.created, who: saved.created && followUp ? await followUpWho(db, row) : null };
       });
       if (!outcome.created) continue;

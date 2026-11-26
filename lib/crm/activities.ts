@@ -9,7 +9,7 @@ import {
   type ActivityEditField,
   type ActivityOrigin,
 } from "@/lib/crm/activity-edit";
-import { linkActivityContactsInDb } from "@/lib/crm/activity-contacts";
+import { linkActivityContactsInDb, linkEmailPeopleInDb } from "@/lib/crm/activity-contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
@@ -291,11 +291,11 @@ export type EmailMessageIds = {
 export async function emailActivityFor(db: Db, workspaceId: string, ids: EmailMessageIds, contactId: string | null) {
   if (!ids.internetMessageId && !ids.mailMessageId && !ids.providerMessageId) return null;
   const found = await db.query<{ id: string }>(
-    `select id from crm.activities
-     where workspace_id = $1 and type = 'email'
-       and (metadata->>'internetMessageId' = $2 or metadata->>'mailMessageId' = $3 or metadata->>'providerMessageId' = $4)
-       and ($5::uuid is null or contact_id = $5)
-     order by created_at
+    `select a.id from crm.activities a
+     where a.workspace_id = $1 and a.type = 'email'
+       and (a.metadata->>'internetMessageId' = $2 or a.metadata->>'mailMessageId' = $3 or a.metadata->>'providerMessageId' = $4)
+       and ($5::uuid is null or exists (select 1 from crm.activity_contacts l where l.activity_id = a.id and l.contact_id = $5))
+     order by a.archived_at is not null, a.created_at
      limit 1`,
     [workspaceId, ids.internetMessageId ?? null, ids.mailMessageId ?? null, ids.providerMessageId ?? null, contactId],
   );
@@ -308,14 +308,19 @@ export async function createEmailActivityOnce(
   input: ActivityWrite,
   ids: EmailMessageIds,
   provenance?: Provenance,
+  options: { contactIds?: string[] } = {},
 ): Promise<{ id: string; created: boolean }> {
   const key = ids.internetMessageId || ids.mailMessageId || ids.providerMessageId;
+  const others = (options.contactIds ?? []).filter((id) => id !== input.contactId);
   if (key) {
     await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`email-activity|${actor.workspaceId}|${key}`]);
-    const existing = await emailActivityFor(db, actor.workspaceId, ids, input.contactId ?? null);
-    if (existing) return { id: existing, created: false };
+    const existing = await emailActivityFor(db, actor.workspaceId, ids, null);
+    if (existing) {
+      await linkEmailPeopleInDb(db, actor, existing, [input.contactId, ...others], provenance ?? { operation: "file_mail", source: "microsoft" });
+      return { id: existing, created: false };
+    }
   }
-  const activity = await createActivityInDb(db, actor, input, provenance);
+  const activity = await createActivityInDb(db, actor, input, provenance, { attendeeIds: others });
   return { id: activity.id, created: true };
 }
 

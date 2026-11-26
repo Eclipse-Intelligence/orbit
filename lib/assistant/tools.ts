@@ -6670,7 +6670,7 @@ async function recentFiledEmail(actor: UserActor, contactId: string | null, comp
     const result = await db.query<{ title: string | null; occurred_at: Date }>(
       `select title, occurred_at from crm.activities
        where workspace_id = $1 and type = 'email' and metadata ? 'source' and created_at > now() - interval '6 hours' and archived_at is null
-         and (($2::uuid is not null and contact_id = $2) or ($2::uuid is null and company_id = $3))
+         and (($2::uuid is not null and id in (select activity_id from crm.activity_contacts where contact_id = $2)) or ($2::uuid is null and company_id = $3))
        order by created_at desc limit 1`,
       [actor.workspaceId, contactId, companyId],
     );

@@ -83,7 +83,7 @@ export async function fileMessageActivity(db: Db, actor: Actor, message: Filable
   if (!message.contactId) return null;
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`campaign-activity|${actor.workspaceId}|${message.id}`]);
   const existing = await db.query<{ id: string }>(
-    "select id from crm.activities where workspace_id = $1 and contact_id = $3 and metadata->>'campaignMessageId' = $2 limit 1",
+    "select id from crm.activities where workspace_id = $1 and id in (select activity_id from crm.activity_contacts where contact_id = $3) and metadata->>'campaignMessageId' = $2 limit 1",
     [actor.workspaceId, message.id, message.contactId],
   );
   if (existing.rows[0]) return existing.rows[0].id;
@@ -116,7 +116,7 @@ export async function fileAddedActivity(db: Db, actor: Actor, added: AddedProspe
   if (!added.contactId) return null;
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`campaign-added|${actor.workspaceId}|${added.prospectId}`]);
   const existing = await db.query<{ id: string }>(
-    "select id from crm.activities where workspace_id = $1 and contact_id = $3 and metadata->>'campaignAddedProspectId' = $2 limit 1",
+    "select id from crm.activities where workspace_id = $1 and id in (select activity_id from crm.activity_contacts where contact_id = $3) and metadata->>'campaignAddedProspectId' = $2 limit 1",
     [actor.workspaceId, added.prospectId, added.contactId],
   );
   if (existing.rows[0]) return existing.rows[0].id;
