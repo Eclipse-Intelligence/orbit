@@ -32,10 +32,10 @@ export function updatedLabel(value: string | Date) {
   return `Updated ${date} ${MONTHS[month - 1]} ${year}`;
 }
 
-export function publicUrlOf(row: { public_enabled: boolean; public_token_enc: string | null }) {
+export function publicUrlOf(row: { public_enabled: boolean; public_token_enc: string | null; public_slug: string | null }) {
   if (!row.public_enabled || !row.public_token_enc) return null;
   try {
-    return `${siteOrigin() ?? ""}${publicPath(decryptSecret(row.public_token_enc))}`;
+    return `${siteOrigin() ?? ""}${publicPath(row.public_slug ?? decryptSecret(row.public_token_enc))}`;
   } catch {
     return null;
   }

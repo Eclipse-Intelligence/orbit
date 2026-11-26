@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popove
 import { Radio } from "@/components/_ui/radio";
 import Switch from "@/components/_ui/switch";
 import { ParticipantAvatar } from "@/components/docs/presence";
+import { PublicEndingEditor } from "@/components/docs/public-ending-editor";
 import { usePublicLive } from "@/components/docs/use-public-live";
 import { useDocsNav, useMedia } from "@/components/docs/use-docs";
 import type { Folder, PageSummary, PublicInput, Visibility } from "@/lib/docs/client-types";
@@ -105,12 +106,14 @@ function absolute(url: string) {
   return url.startsWith("/") ? `${origin()}${url}` : url;
 }
 
-function PublicLink({ summary }: { summary: PageSummary }) {
+function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: { current: boolean } }) {
   const owned = summary.canChangePublic;
   const agentMade = summary.owner.kind !== "person";
   const setPublic = useDocsStore((state) => state.setPublic);
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  const checkEnding = useDocsStore((state) => state.checkEnding);
+  const [editing, setEditing] = useState(false);
   const saving = useDocsStore((state) => state.publicSaving[summary.id] === true);
   const url = summary.publicUrl ? absolute(summary.publicUrl) : null;
   const expiresAt = summary.publicExpiresAt;
@@ -123,6 +126,13 @@ function PublicLink({ summary }: { summary: PageSummary }) {
   const caption = ranOut
     ? `Turned off on ${expiryLabel(expiresAt)}, when its timer ran out.${owned ? "" : ` ${who}`}`
     : `Anyone with the link can read it${live && expiresAt ? ` until ${expiryLabel(expiresAt)}` : ""}.${owned ? "" : ` ${who}`}`;
+
+  useEffect(() => {
+    escapeRef.current = editing;
+    return () => {
+      escapeRef.current = false;
+    };
+  }, [editing, escapeRef]);
 
   async function change(input: PublicInput) {
     if (!owned) return;
@@ -154,14 +164,33 @@ function PublicLink({ summary }: { summary: PageSummary }) {
           </span>
           <Switch checked={live} disabled={!owned || saving} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
         </div>
-        {live && url && (
-          <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.04] py-1.5 pr-1.5 pl-2.5">
-            <span className="text-soft min-w-0 flex-1 truncate text-[12.5px]">{url.replace(/^https?:\/\//, "")}</span>
-            <CopyButton text={url} label="Copy" ariaLabel="Copy public link" className="min-w-0" />
-            <Button variant="ghost" size="sm" href={url} target="_blank" aria-label="Open public link" className="hit">
-              Open
-            </Button>
-          </div>
+        {live && url && owned && editing ? (
+          <PublicEndingEditor
+            summary={summary}
+            prefix={url.replace(/^https?:\/\//, "").replace(/[^/]*$/, "")}
+            check={checkEnding}
+            onSave={(slug) => setPublic(summary.id, { slug })}
+            onClose={() => setEditing(false)}
+          />
+        ) : (
+          live &&
+          url && (
+            <>
+              <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.04] py-1.5 pr-1.5 pl-2.5 pointer-coarse:gap-3">
+                <span className="text-soft min-w-0 flex-1 truncate text-[12.5px]">{url.replace(/^https?:\/\//, "")}</span>
+                <CopyButton text={url} label="Copy" ariaLabel="Copy public link" className="min-w-0" />
+                {owned && (
+                  <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(true)} aria-label="Edit the public link ending" className="hit">
+                    Edit
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" href={url} target="_blank" aria-label="Open public link" className="hit">
+                  Open
+                </Button>
+              </div>
+              {summary.publicOldLinks && <span className="caption-style text-subtle">Old links forward here.</span>}
+            </>
+          )
         )}
         {live && (
           <div role="group" aria-label="Turns off" className="flex flex-col gap-2 pl-11">
@@ -372,6 +401,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
   const [pending, setPending] = useState(false);
   const viewerId = useDocsStore((state) => state.viewer?.id ?? nav?.viewer.id);
   const groupLabel = useId();
+  const escapeRef = useRef(false);
   const publicOn = usePublicLive(summary);
   const folder = summary.folderId ? nav?.folders.find((item) => item.id === summary.folderId) : undefined;
   const fromFolder = Boolean(folder?.shared);
@@ -392,7 +422,14 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
       <PopoverTrigger asChild>
         <ShareButton shared={summary.shared} publicOn={publicOn} compact={compact} />
       </PopoverTrigger>
-      <PopoverContent align="end" sideOffset={8} className={SHARE_POPOVER_CLASS}>
+      <PopoverContent
+        align="end"
+        sideOffset={8}
+        className={SHARE_POPOVER_CLASS}
+        onEscapeKeyDown={(event) => {
+          if (escapeRef.current) event.preventDefault();
+        }}
+      >
         <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
           <DocIcon aria-hidden className="text-subtle size-3.5" />
           <h3 className="min-w-0 flex-1 truncate leading-5">Share {summary.title || "Untitled"}</h3>
@@ -425,7 +462,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
             {error}
           </p>
         )}
-        <PublicLink summary={summary} />
+        <PublicLink summary={summary} escapeRef={escapeRef} />
         <ShareFooter link={() => `${origin()}${pageHref(summary.id)}`} />
       </PopoverContent>
     </Popover>

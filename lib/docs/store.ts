@@ -3,7 +3,7 @@ import { alertMembersAfterCommit } from "@/lib/alerts";
 import { afterCommit } from "@/lib/crm/after-commit";
 import { withActor } from "@/lib/crm/context";
 import { memberActor } from "@/lib/crm/conversations";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import type { Actor, Provenance } from "@/lib/crm/types";
@@ -30,6 +30,8 @@ import {
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
 import { endOfDayInstant, expiryProblem } from "@/lib/docs/public-expiry";
+import { checkSlug } from "@/lib/booking/rules";
+import { ENDING_TAKEN, type EndingStatus } from "@/lib/docs/public-ending";
 import { newPublicToken, publicUrlOf, sealPublicToken } from "@/lib/docs/public-link";
 import { pageHref } from "@/lib/docs/routes";
 import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
@@ -96,6 +98,8 @@ export type PageRow = {
   public_enabled: boolean;
   allow_download: boolean;
   public_token_enc: string | null;
+  public_slug: string | null;
+  public_slug_retired: boolean;
   public_expires_at: Date | null;
   public_stored: boolean;
 };
@@ -111,7 +115,7 @@ const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text a
   p.edited_by_user_id, coalesce(nullif(editor.full_name, ''), editor.email) as editor_name, p.edited_by_agent_id,
   agent.name as agent_name, p.versioned_at, p.archived_at, p.created_by_agent_id, creator.name as creator_agent_name,
   coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags,
-  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.public_token_enc, p.public_enabled as public_stored,
+  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.public_token_enc, p.public_slug, p.public_slug_retired, p.public_enabled as public_stored,
   case when p.public_enabled then p.public_expires_at end as public_expires_at`;
 
 const PAGE_JOINS = `crm.pages p
@@ -186,6 +190,8 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
     public: row.public_enabled,
     allowDownload: row.allow_download,
     publicUrl: publicUrlOf(row),
+    publicSlug: row.public_slug,
+    publicOldLinks: row.public_slug_retired,
     publicExpiresAt: iso(row.public_expires_at),
     canChangePublic: controlsPublic(actor, row),
     excerpt: excerptFrom(row.head),
@@ -1143,6 +1149,7 @@ export type DocUpdateInput = {
   public?: boolean;
   allowDownload?: boolean;
   expiresAt?: string | null;
+  slug?: string | null;
   baseRevision?: number;
 };
 
@@ -1161,8 +1168,8 @@ export async function updateDoc(actor: Actor, id: string, input: DocUpdateInput,
       visibility = (await moveIn(db, actor, await loadPage(db, actor, id, { lock: true }), { folderId: input.folderId, allowVisibilityChange: input.allowVisibilityChange }, provenance)).visibility;
     }
     if (input.shared !== undefined) visibility = (await shareIn(db, actor, await loadPage(db, actor, id, { lock: true }), input.shared, provenance)).visibility;
-    if (input.public !== undefined || input.allowDownload !== undefined || input.expiresAt !== undefined) {
-      await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), { public: input.public, allowDownload: input.allowDownload, expiresAt: input.expiresAt }, provenance);
+    if (input.public !== undefined || input.allowDownload !== undefined || input.expiresAt !== undefined || input.slug !== undefined) {
+      await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), { public: input.public, allowDownload: input.allowDownload, expiresAt: input.expiresAt, slug: input.slug }, provenance);
     }
     return { doc: await docDetail(db, actor, id), visibility, linksUpdated };
   });
@@ -1289,19 +1296,37 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
     expiresAt = null;
   }
   const timerChanged = (expiresAt?.getTime() ?? null) !== (page.public_expires_at?.getTime() ?? null);
-  if (enabled === page.public_enabled && allowDownload === page.allow_download && !timerChanged) return page;
+  let slug: string | null = page.public_slug;
+  if (typeof input.slug === "string") {
+    const checked = checkSlug(input.slug);
+    if (!checked.ok) throw new CrmError("invalid_input", checked.error, 400, { field: "slug" });
+    slug = checked.value;
+  } else if (input.slug === null) {
+    slug = null;
+  }
+  const slugChanged = slug !== page.public_slug;
+  if (slugChanged && !enabled) throw new CrmError("invalid_input", "Turn the public link on to change its ending.", 400, { field: "slug" });
+  if (enabled === page.public_enabled && allowDownload === page.allow_download && !timerChanged && !slugChanged) return page;
   if (ranOut && enabled === page.public_enabled && !timerChanged) {
     await db.query("update crm.pages set allow_download = $2 where id = $1", [page.id, allowDownload]);
     return loadPage(db, actor, page.id);
   }
-  if (enabled && !page.public_token_enc) {
-    const sealed = sealPublicToken(newPublicToken());
-    await db.query("update crm.pages set public_enabled = true, allow_download = $2, public_token_hash = $3, public_token_enc = $4, public_expires_at = $5 where id = $1", [page.id, allowDownload, sealed.hash, sealed.sealed, expiresAt]);
-  } else {
-    await db.query("update crm.pages set public_enabled = $2, allow_download = $3, public_expires_at = $4 where id = $1", [page.id, enabled, allowDownload, expiresAt]);
+  try {
+    if (enabled && !page.public_token_enc) {
+      const sealed = sealPublicToken(newPublicToken());
+      await db.query(
+        "update crm.pages set public_enabled = true, allow_download = $2, public_token_hash = $3, public_token_enc = $4, public_expires_at = $5, public_slug = $6 where id = $1",
+        [page.id, allowDownload, sealed.hash, sealed.sealed, expiresAt, slug],
+      );
+    } else {
+      await db.query("update crm.pages set public_enabled = $2, allow_download = $3, public_expires_at = $4, public_slug = $5 where id = $1", [page.id, enabled, allowDownload, expiresAt, slug]);
+    }
+  } catch (error) {
+    if (isPgError(error) && error.code === "23505") throw new CrmError("conflict", ENDING_TAKEN, 409, { field: "slug" });
+    throw error;
   }
   const after = await loadPage(db, actor, page.id);
-  await auditDoc(db, actor, "page.public_changed", after, provenance, { public: after.public_enabled, allowDownload: after.allow_download, expiresAt: iso(after.public_expires_at) });
+  await auditDoc(db, actor, "page.public_changed", after, provenance, { public: after.public_enabled, allowDownload: after.allow_download, expiresAt: iso(after.public_expires_at), slug: after.public_slug });
   return after;
 }
 
@@ -1311,6 +1336,21 @@ export async function setDocPublic(actor: Actor, id: string, input: DocPublicInp
     await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), input, provenance);
     return docDetail(db, actor, id);
   });
+}
+
+const ENDING_CHECKS_PER_MINUTE = 60;
+
+export async function checkPublicEnding(actor: Actor, id: string, raw: string): Promise<EndingStatus> {
+  assertDocsWrite(actor);
+  const checked = checkSlug(raw);
+  if (!checked.ok) return { status: "invalid", message: checked.error };
+  const page = await withActor(actor, async (db) => loadPage(db, actor, id));
+  if (!controlsPublic(actor, page)) throw new CrmError("forbidden", "Only the person who can change this note's public link can check an ending.", 403);
+  const who = actor.type === "agent" ? actor.agentId : actor.userId;
+  const allowed = await query<{ allowed: boolean }>("select private.consume_rate_limit($1, $2, $3) as allowed", [`doc-ending:${who}`, ENDING_CHECKS_PER_MINUTE, 60]);
+  if (allowed.rows[0]?.allowed !== true) throw new CrmError("rate_limited", "Couldn't check the ending. Wait a minute and try again.", 429);
+  const taken = await query<{ taken: boolean }>("select private.public_slug_taken($1, $2) as taken", [checked.value, page.id]);
+  return taken.rows[0]?.taken ? { status: "taken" } : { status: "available" };
 }
 
 export async function assistantMayEdit(actor: Actor, id: string) {

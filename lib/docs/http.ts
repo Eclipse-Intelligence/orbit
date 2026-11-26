@@ -2,6 +2,7 @@ import { CrmError } from "@/lib/crm/errors";
 import { listDocTasks } from "@/lib/crm/task-docs";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { isExpiryDay } from "@/lib/docs/public-expiry";
+import type { EndingStatus } from "@/lib/docs/public-ending";
 import type { CreateInput, Folder, Page, PageFilter, PageSort, PublicInput, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
 import { createFolder, listFolders, moveFolder, renameFolder, shareFolder } from "@/lib/docs/folders";
@@ -19,6 +20,7 @@ import {
   restoreVersion,
   saveDoc,
   setAssistantCanEdit,
+  checkPublicEnding,
   setDocPublic,
   shareDoc,
   syncLiveDoc,
@@ -259,9 +261,16 @@ export function publicInputOf(value: unknown): PublicInput {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalid();
   const input = value as Record<string, unknown>;
   const keys = Object.keys(input);
-  if (keys.length === 0 || keys.some((key) => key !== "public" && key !== "allowDownload" && key !== "expiresAt")) throw invalid();
-  if (keys.some((key) => (key === "expiresAt" ? input[key] !== null && !isExpiryDay(input[key]) : typeof input[key] !== "boolean"))) throw invalid();
-  return { public: input.public as boolean | undefined, allowDownload: input.allowDownload as boolean | undefined, expiresAt: input.expiresAt as string | null | undefined };
+  if (keys.length === 0 || keys.some((key) => key !== "public" && key !== "allowDownload" && key !== "expiresAt" && key !== "slug")) throw invalid();
+  const badValue = (key: string) =>
+    key === "expiresAt" ? input[key] !== null && !isExpiryDay(input[key]) : key === "slug" ? input[key] !== null && typeof input[key] !== "string" : typeof input[key] !== "boolean";
+  if (keys.some(badValue)) throw invalid();
+  return {
+    public: input.public as boolean | undefined,
+    allowDownload: input.allowDownload as boolean | undefined,
+    expiresAt: input.expiresAt as string | null | undefined,
+    slug: input.slug as string | null | undefined,
+  };
 }
 
 export const docsChanges = {
@@ -285,6 +294,9 @@ export const docsChanges = {
   },
   async assistantCanEdit(actor: UserActor, id: string, value: boolean): Promise<Page> {
     return toPage(actor, await setAssistantCanEdit(actor, id, value));
+  },
+  async checkEnding(actor: UserActor, id: string, value: string): Promise<EndingStatus> {
+    return checkPublicEnding(actor, id, typeof value === "string" ? value : "");
   },
   async setPublic(actor: UserActor, id: string, input: PublicInput): Promise<Page> {
     return toPage(actor, await setDocPublic(actor, id, publicInputOf(input), PROVENANCE));

@@ -11,15 +11,18 @@ import { getFolder } from "@/lib/docs/folders";
 import { rebase } from "@/lib/docs/live/rebase";
 import { applyEdits, textEdits, type TextEdit } from "@/lib/docs/live/text-diff";
 import { searchDocs } from "@/lib/docs/search";
-import { archiveDoc, assistantMayEdit, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, setDocPublic, shareDoc } from "@/lib/docs/store";
+import { archiveDoc, assistantMayEdit, checkPublicEnding, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, setDocPublic, shareDoc } from "@/lib/docs/store";
 import { dailyHref, docHref, type DocDetail, type DocDiffLine, type DocEdit, type DocSummary } from "@/lib/docs/types";
 import { toolSource } from "@/lib/assistant/source";
 import { expiryDayLabel, expiryProblem } from "@/lib/docs/public-expiry";
+import { ENDING_TAKEN, endingProblem } from "@/lib/docs/public-ending";
+import { publicPath } from "@/lib/docs/public-link";
+import { siteOrigin } from "@/lib/site-url";
 
 type Args = Record<string, unknown>;
 type Names = (id: unknown) => string;
 
-export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "publish", "unpublish", "set_timer", "allow_download", "block_download", "archive", "append_daily"] as const;
+export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "publish", "unpublish", "set_timer", "allow_download", "block_download", "set_public_ending", "clear_public_ending", "archive", "append_daily"] as const;
 export type SaveDocAction = (typeof SAVE_DOC_ACTIONS)[number];
 
 export const UNATTENDED_DOC_ACTIONS: readonly SaveDocAction[] = ["replace", "append", "edit", "tag"];
@@ -137,6 +140,16 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
         else if (action === "set_timer" && day && !doc.public) out[`${key}:problem`] = "The public link is off. Turn it on first.";
         else if (action === "set_timer" && !day && !str(args.expiresAt) && !doc.public) out[`${key}:problem`] = "The public link is off, so there is no timer to remove.";
       }
+      if (action === "set_public_ending") {
+        const problem = endingProblem(str(args.slug));
+        if (problem) out[`${key}:problem`] = problem;
+        else if (!doc.public) out[`${key}:problem`] = "The public link is off. Turn it on first.";
+        else if (doc.publicSlug !== str(args.slug).toLowerCase()) {
+          const status = await checkPublicEnding(actor, docId, str(args.slug)).catch(() => null);
+          if (status?.status === "taken") out[`${key}:problem`] = ENDING_TAKEN;
+        }
+      }
+      if (action === "clear_public_ending" && !doc.public) out[`${key}:problem`] = "The public link is off. Turn it on first.";
       if (action === "rename") out[`${key}:links`] = String((await listBacklinks(actor, docId).catch(() => [])).length);
     }
   }
@@ -300,6 +313,16 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     }
     case "block_download":
       return result("Stop downloads", [doc, "Readers can no longer download it as a PDF."]);
+    case "set_public_ending": {
+      const slug = str(args.slug).toLowerCase();
+      return result(`Change the public link to ${siteOrigin() ?? ""}${publicPath(slug)}`, [
+        doc,
+        "The random link and earlier endings forward to it.",
+        problem ? `This won't work yet: ${problem}` : "",
+      ]);
+    }
+    case "clear_public_ending":
+      return result("Go back to the random public link", [doc, "Earlier endings forward to it.", problem ? `This won't work yet: ${problem}` : ""]);
     case "archive":
       return result(`Archive ${doc}`, [where ?? ""]);
     case "append_daily":
@@ -322,6 +345,7 @@ function summaryOf(doc: DocSummary) {
     public: doc.public,
     allowDownload: doc.allowDownload,
     publicUrl: doc.publicUrl,
+    publicSlug: doc.publicSlug,
     publicExpiresAt: doc.publicExpiresAt,
     folderId: doc.folderId,
     tags: doc.tags,
@@ -473,6 +497,10 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
             ? { expiresAt: timer.day }
             : { allowDownload: action === "allow_download" };
     return { saved: true, doc: summaryOf(await setDocPublic(actor, docId, input, provenance())) };
+  }
+  if (action === "set_public_ending" || action === "clear_public_ending") {
+    const slug = action === "set_public_ending" ? str(args.slug) : null;
+    return { saved: true, doc: summaryOf(await setDocPublic(actor, requireDoc(args), { slug }, provenance())) };
   }
   if (action === "archive") return { saved: true, doc: summaryOf(await archiveDoc(actor, requireDoc(args), provenance())) };
   const note = await appendToDailyNote(actor, { text: str(args.content), date: str(args.date) || undefined, meetings: args.meetings === true }, provenance());

@@ -23,6 +23,7 @@ import { memberTagCount } from "@/lib/docs/people-tags";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import type { LiveStatus } from "@/lib/docs/live/session";
 import { endOfDayInstant, isExpiryDay } from "@/lib/docs/public-expiry";
+import type { EndingStatus } from "@/lib/docs/public-ending";
 import { listKey } from "@/lib/docs/routes";
 import { viewerParticipant } from "@/lib/docs/participants";
 
@@ -40,7 +41,11 @@ export type VisibilityPrompt = {
 
 const publicSeq = new Map<string, number>();
 
-type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "publicExpiresAt"> & Partial<Pick<PageSummary, "publicUrl">>;
+type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "publicExpiresAt"> & Partial<Pick<PageSummary, "publicUrl" | "publicSlug" | "publicOldLinks">>;
+
+function withEnding(url: string | null, slug: string) {
+  return url ? url.replace(/\/d\/[^/]*$/, `/d/${slug}`) : url;
+}
 
 type DocsState = {
   ready: boolean;
@@ -92,6 +97,7 @@ type DocsState = {
   archive: (id: string) => Promise<void>;
   setAssistantCanEdit: (id: string, value: boolean) => Promise<void>;
   setPublic: (id: string, input: PublicInput) => Promise<string | null>;
+  checkEnding: (id: string, value: string) => Promise<EndingStatus | null>;
   publicSaving: Record<string, true>;
   listsVersion: number;
   createFolder: (name: string, parentId: string | null) => Promise<Folder | null>;
@@ -185,6 +191,8 @@ function summaryFrom(page: Page): PageSummary {
     public: page.public,
     allowDownload: page.allowDownload,
     publicUrl: page.publicUrl,
+    publicSlug: page.publicSlug,
+    publicOldLinks: page.publicOldLinks,
     publicExpiresAt: page.publicExpiresAt,
     canChangePublic: page.canChangePublic,
   };
@@ -607,6 +615,14 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     }
   },
 
+  async checkEnding(id, value) {
+    try {
+      return await docsData().checkEnding(id, value);
+    } catch {
+      return null;
+    }
+  },
+
   async setPublic(id, input) {
     const current = session;
     const seq = (publicSeq.get(id) ?? 0) + 1;
@@ -637,18 +653,46 @@ export const useDocsStore = create<DocsState>((set, get) => ({
             : input.expiresAt === null
               ? null
               : before.publicExpiresAt;
-      patchPublic({ public: enabled, allowDownload: input.allowDownload ?? before.allowDownload, publicExpiresAt });
+      const endingChanged = input.slug !== undefined && input.slug !== before.publicSlug;
+      patchPublic({
+        public: enabled,
+        allowDownload: input.allowDownload ?? before.allowDownload,
+        publicExpiresAt,
+        ...(endingChanged
+          ? {
+              publicSlug: input.slug ?? null,
+              publicUrl: input.slug ? withEnding(before.publicUrl, input.slug) : before.publicUrl,
+              publicOldLinks: before.publicOldLinks || before.publicSlug !== null,
+            }
+          : {}),
+      });
     }
     try {
       const page = await docsData().setPublic(id, input);
       if (latest()) {
-        patchPublic({ public: page.public, allowDownload: page.allowDownload, publicUrl: page.publicUrl, publicExpiresAt: page.publicExpiresAt });
+        patchPublic({
+          public: page.public,
+          allowDownload: page.allowDownload,
+          publicUrl: page.publicUrl,
+          publicSlug: page.publicSlug,
+          publicOldLinks: page.publicOldLinks,
+          publicExpiresAt: page.publicExpiresAt,
+        });
         settle();
       }
       return null;
     } catch (error) {
       if (latest()) {
-        if (before) patchPublic({ public: before.public, allowDownload: before.allowDownload, publicUrl: before.publicUrl, publicExpiresAt: before.publicExpiresAt });
+        if (before) {
+          patchPublic({
+            public: before.public,
+            allowDownload: before.allowDownload,
+            publicUrl: before.publicUrl,
+            publicSlug: before.publicSlug,
+            publicOldLinks: before.publicOldLinks,
+            publicExpiresAt: before.publicExpiresAt,
+          });
+        }
         settle();
       }
       return message(error, "Couldn't change the public link. Try again.");

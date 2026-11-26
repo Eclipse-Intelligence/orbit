@@ -361,6 +361,82 @@ describe("docs store public link", () => {
     assert.equal(store.getState().publicSaving[page.id], undefined);
   });
 
+  it("shows an ending at once, notes old links and fills in the link from the server", async () => {
+    const gate = deferred<void>();
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      const result = await data.setPublic(id, input);
+      if (input.slug) await gate.promise;
+      return result;
+    });
+    await store.getState().setPublic(page.id, { public: true });
+    const first = store.getState().setPublic(page.id, { slug: "plan-one" });
+    assert.equal(store.getState().pages[page.id].publicSlug, "plan-one");
+    assert.match(store.getState().pages[page.id].publicUrl ?? "", /\/d\/plan-one$/);
+    assert.equal(store.getState().pages[page.id].publicOldLinks, false);
+    assert.equal(store.getState().publicSaving[page.id], true);
+    gate.resolve();
+    assert.equal(await first, null);
+    assert.equal(await store.getState().setPublic(page.id, { slug: "plan-two" }), null);
+    assert.equal(store.getState().pages[page.id].publicSlug, "plan-two");
+    assert.equal(store.getState().pages[page.id].publicOldLinks, true);
+    assert.equal(await store.getState().setPublic(page.id, { slug: null }), null);
+    assert.equal(store.getState().pages[page.id].publicSlug, null);
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+
+  it("rolls an ending back, with its link and old links, when the save fails", async () => {
+    let fail = false;
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      if (fail) throw new Error("Taken. Pick another.");
+      return data.setPublic(id, input);
+    });
+    await store.getState().setPublic(page.id, { public: true });
+    await store.getState().setPublic(page.id, { slug: "plan-kept" });
+    const before = store.getState().pages[page.id];
+    fail = true;
+    assert.equal(await store.getState().setPublic(page.id, { slug: "plan-lost" }), "Taken. Pick another.");
+    const after = store.getState().pages[page.id];
+    assert.equal(after.publicSlug, "plan-kept");
+    assert.equal(after.publicUrl, before.publicUrl);
+    assert.equal(after.publicOldLinks, false);
+    assert.equal(await store.getState().setPublic(page.id, { slug: null }), "Taken. Pick another.");
+    assert.equal(store.getState().pages[page.id].publicSlug, "plan-kept");
+    assert.equal(store.getState().pages[page.id].publicOldLinks, false);
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+
+  it("keeps the newest ending when an older reply or failure arrives last", async () => {
+    const gates = [deferred<void>(), deferred<void>()];
+    let call = 0;
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      if (!input.slug) return data.setPublic(id, input);
+      const mine = gates[call++];
+      const result = await data.setPublic(id, input);
+      await mine.promise;
+      if (input.slug === "plan-slow") throw new Error("slow failure");
+      return result;
+    });
+    await store.getState().setPublic(page.id, { public: true });
+    const older = store.getState().setPublic(page.id, { slug: "plan-slow" });
+    const newer = store.getState().setPublic(page.id, { slug: "plan-fast" });
+    assert.equal(store.getState().pages[page.id].publicSlug, "plan-fast");
+    gates[1].resolve();
+    assert.equal(await newer, null);
+    gates[0].resolve();
+    assert.equal(await older, "slow failure");
+    assert.equal(store.getState().pages[page.id].publicSlug, "plan-fast", "the older failure didn't roll the newer ending back");
+    assert.match(store.getState().pages[page.id].publicUrl ?? "", /\/d\/plan-fast$/);
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+
+  it("checks an ending through the data layer", async () => {
+    const { page, store } = await withSetPublic(() => async () => {
+      throw new Error("unused");
+    });
+    assert.deepEqual(await store.getState().checkEnding(page.id, "free-ending"), { status: "available" });
+    assert.deepEqual(await store.getState().checkEnding(page.id, "taken"), { status: "taken" });
+  });
+
   it("ignores an older reply or rollback that arrives after a newer change", async () => {
     const gates = [deferred<void>(), deferred<void>()];
     let call = 0;

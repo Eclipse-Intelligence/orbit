@@ -32,6 +32,7 @@ const patchSchema = z
     public: z.boolean().optional(),
     allowDownload: z.boolean().optional(),
     expiresAt: z.string().max(10).nullable().optional(),
+    slug: z.string().max(200).nullable().optional(),
     baseRevision: z.number().int().min(1).optional(),
     provenance: provenanceSchema.optional(),
   })
@@ -71,8 +72,8 @@ export async function readDocFromQuery(actor: Actor, id: string, params: URLSear
 
 export async function patchDocFromBody(actor: Actor, id: string, body: unknown) {
   const input = parseInput(patchSchema, body);
-  const changes = [input.title, input.content, input.append, input.find, input.folderId, input.shared, input.public, input.allowDownload, input.expiresAt].filter((value) => value !== undefined).length;
-  if (changes === 0) throw new CrmError("invalid_input", "Send at least one change: title, content, append, find and replace, folderId, shared, public, allowDownload or expiresAt.", 400);
+  const changes = [input.title, input.content, input.append, input.find, input.folderId, input.shared, input.public, input.allowDownload, input.expiresAt, input.slug].filter((value) => value !== undefined).length;
+  if (changes === 0) throw new CrmError("invalid_input", "Send at least one change: title, content, append, find and replace, folderId, shared, public, allowDownload, expiresAt or slug.", 400);
   if ((input.find === undefined) !== (input.replace === undefined)) throw new CrmError("invalid_input", "Send find and replace together.", 400, { field: "find" });
   if (input.content !== undefined && (input.append !== undefined || input.find !== undefined)) {
     throw new CrmError("invalid_input", "Send content on its own, or append and find with replace, not both.", 400, { field: "content" });
@@ -95,6 +96,7 @@ export async function patchDocFromBody(actor: Actor, id: string, body: unknown) 
       public: input.public,
       allowDownload: input.allowDownload,
       expiresAt: input.expiresAt,
+      slug: input.slug,
       baseRevision: input.baseRevision,
     },
     provenance,
