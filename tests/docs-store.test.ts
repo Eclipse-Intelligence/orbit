@@ -490,3 +490,55 @@ describe("docs store public link", () => {
     assert.equal(store.getState().publicSaving[page.id], undefined);
   });
 });
+
+describe("docs store lists after sharing", () => {
+  it("never empties the shown list when a note's sharing or public link changes, and asks for a fresh copy instead", async () => {
+    const harness = await open();
+    const page = await note(harness, "Plan", "one");
+    const store = useDocsStore;
+    const ids = await store.getState().loadList({ kind: "all" });
+    assert.ok(ids.includes(page.id));
+    const shown = () => Object.values(store.getState().lists).find((list) => list.includes(page.id));
+    const version = store.getState().listsVersion;
+
+    await store.getState().setPublic(page.id, { public: true });
+    assert.deepEqual(shown(), ids, "the public link leaves the list in place");
+    assert.equal(store.getState().listsVersion, version, "the public link doesn't change which notes a list holds");
+
+    await store.getState().share({ kind: "page", id: page.id }, "shared");
+    assert.deepEqual(shown(), ids, "sharing leaves the list in place while it refreshes");
+    assert.equal(store.getState().listsVersion, version + 1);
+
+    store.getState().refreshAfterAgent();
+    assert.deepEqual(shown(), ids, "an agent's edit leaves the list in place while it refreshes");
+    assert.equal(store.getState().listsVersion, version + 2);
+  });
+
+  it("keeps the newest list when an older load finishes last", async () => {
+    const harness = await open();
+    await note(harness, "Plan", "one");
+    const gate = deferred<void>();
+    let calls = 0;
+    const data: DocsData = {
+      ...harness.data,
+      async listPages(list, sort) {
+        calls += 1;
+        const first = calls === 1;
+        const rows = await harness.data.listPages(list, sort);
+        if (first) {
+          await gate.promise;
+          return [];
+        }
+        return rows;
+      },
+    };
+    connectDocs({}, data);
+    const store = useDocsStore;
+    const older = store.getState().loadList({ kind: "all" }, true);
+    const newer = await store.getState().loadList({ kind: "all" }, true);
+    gate.resolve();
+    await older;
+    const kept = Object.values(store.getState().lists).find((ids) => ids.length > 0);
+    assert.deepEqual(kept, newer, "the late, older reply didn't replace the newer list");
+  });
+});

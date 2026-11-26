@@ -259,6 +259,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   const sort = useDocsStore((state) => state.sort);
   const key = `${listKey(route.list)}|${sort}`;
   const storedIds = useDocsStore((state) => state.lists[key]);
+  const listsVersion = useDocsStore((state) => state.listsVersion);
   const summaries = useDocsStore((state) => state.summaries);
   const pages = useDocsStore((state) => state.pages);
   const activity = useDocsStore((state) => state.activity);
@@ -300,8 +301,9 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   const [listAttempt, setListAttempt] = useState(0);
   useEffect(() => {
     if (!ready) return;
-    if (listLoaded && revalidated.current === key) return;
-    revalidated.current = key;
+    const mark = `${key}#${listsVersion}`;
+    if (listLoaded && revalidated.current === mark) return;
+    revalidated.current = mark;
     let live = true;
     void loadList(routeList.current, listLoaded)
       .then(() => {
@@ -313,7 +315,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
     return () => {
       live = false;
     };
-  }, [ready, key, listLoaded, loadList, listAttempt]);
+  }, [ready, key, listsVersion, listLoaded, loadList, listAttempt]);
   const retryList = useCallback(() => {
     setListError(null);
     revalidated.current = null;
