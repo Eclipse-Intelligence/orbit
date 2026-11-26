@@ -490,3 +490,27 @@ describe("docs store public link", () => {
     assert.equal(store.getState().publicSaving[page.id], undefined);
   });
 });
+
+describe("docs store lists after sharing", () => {
+  it("never empties the shown list when a note's sharing or public link changes, and asks for a fresh copy instead", async () => {
+    const harness = await open();
+    const page = await note(harness, "Plan", "one");
+    const store = useDocsStore;
+    const ids = await store.getState().loadList({ kind: "all" });
+    assert.ok(ids.includes(page.id));
+    const shown = () => Object.values(store.getState().lists).find((list) => list.includes(page.id));
+    const version = store.getState().listsVersion;
+
+    await store.getState().setPublic(page.id, { public: true });
+    assert.deepEqual(shown(), ids, "the public link leaves the list in place");
+    assert.equal(store.getState().listsVersion, version, "the public link doesn't change which notes a list holds");
+
+    await store.getState().share({ kind: "page", id: page.id }, "shared");
+    assert.deepEqual(shown(), ids, "sharing leaves the list in place while it refreshes");
+    assert.equal(store.getState().listsVersion, version + 1);
+
+    store.getState().refreshAfterAgent();
+    assert.deepEqual(shown(), ids, "an agent's edit leaves the list in place while it refreshes");
+    assert.equal(store.getState().listsVersion, version + 2);
+  });
+});

@@ -93,6 +93,7 @@ type DocsState = {
   setAssistantCanEdit: (id: string, value: boolean) => Promise<void>;
   setPublic: (id: string, input: PublicInput) => Promise<string | null>;
   publicSaving: Record<string, true>;
+  listsVersion: number;
   createFolder: (name: string, parentId: string | null) => Promise<Folder | null>;
   renameFolder: (id: string, name: string) => Promise<string | null>;
   moveFolder: (id: string, parentId: string | null, position: number, allowVisibilityChange?: boolean) => Promise<void>;
@@ -205,6 +206,7 @@ function blank() {
   return {
     ready: false,
     publicSaving: {},
+    listsVersion: 0,
     now: new Date(0).toISOString(),
     viewer: null,
     nav: null,
@@ -352,7 +354,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
 
   refreshAfterAgent() {
     if (!get().ready) return;
-    set({ lists: {} });
+    set((state) => ({ listsVersion: state.listsVersion + 1 }));
     refreshDocsActivity();
     void get().refreshNav();
     void get().refreshTitles();
@@ -511,7 +513,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   async move(id, folderId, allowVisibilityChange = false) {
     try {
       const page = await docsData().movePage(id, folderId, { allowVisibilityChange });
-      set((state) => ({ pages: { ...state.pages, [id]: { ...(state.pages[id] ?? page), folderId: page.folderId, shared: page.shared } }, summaries: { ...state.summaries, [id]: { ...summaryFrom(page), updatedAt: state.summaries[id]?.updatedAt ?? page.updatedAt } }, lists: {} }));
+      set((state) => ({ pages: { ...state.pages, [id]: { ...(state.pages[id] ?? page), folderId: page.folderId, shared: page.shared } }, summaries: { ...state.summaries, [id]: { ...summaryFrom(page), updatedAt: state.summaries[id]?.updatedAt ?? page.updatedAt } }, listsVersion: state.listsVersion + 1 }));
       await get().refreshNav();
       const folder = get().nav?.folders.find((item) => item.id === folderId);
       get().notify(folder ? `Moved to ${folder.name}.` : "Moved out of its folder.");
@@ -554,7 +556,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
           if (pages[page.id]) pages[page.id] = { ...pages[page.id], visibility: page.visibility, shared: page.shared };
           summaries[page.id] = { ...(summaries[page.id] ?? summaryFrom(page)), visibility: page.visibility, shared: page.shared };
         }
-        return { pages, summaries, lists: {} };
+        return { pages, summaries, listsVersion: state.listsVersion + 1 };
       });
       await get().refreshNav();
       return null;
@@ -583,7 +585,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
             .restorePage(id)
             .then((page) => {
               if (idle(id)) acked.delete(id);
-              set((state) => ({ summaries: { ...state.summaries, [id]: summaryFrom(page) }, pages: { ...state.pages, [id]: page }, lists: {} }));
+              set((state) => ({ summaries: { ...state.summaries, [id]: summaryFrom(page) }, pages: { ...state.pages, [id]: page }, listsVersion: state.listsVersion + 1 }));
               void get().refreshNav();
               void get().refreshTitles();
               get().notify(`Restored ${title}.`);
@@ -641,7 +643,6 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       const page = await docsData().setPublic(id, input);
       if (latest()) {
         patchPublic({ public: page.public, allowDownload: page.allowDownload, publicUrl: page.publicUrl, publicExpiresAt: page.publicExpiresAt });
-        set({ lists: {} });
         settle();
       }
       return null;
@@ -680,7 +681,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       const folders = await docsData().moveFolder(id, parentId, position, { allowVisibilityChange });
       const nav = get().nav;
       if (nav) set({ nav: { ...nav, folders } });
-      set({ lists: {} });
+      set((state) => ({ listsVersion: state.listsVersion + 1 }));
       if (allowVisibilityChange) await get().refreshNav();
     } catch (error) {
       if (error instanceof DocsError && error.code === "visibility_change") {
