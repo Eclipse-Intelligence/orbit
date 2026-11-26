@@ -59,7 +59,6 @@ import { useTeamUnread } from "@/components/crm/attention";
 import PushPrompt from "@/components/push/push-prompt";
 import ReconnectNotices, { flagReconnect, flagSyncProblems } from "@/components/mail/reconnect-notice";
 import { OPEN_THREAD_EVENT } from "@/components/push/push-registrar";
-import { pushTrail } from "@/components/push/trail";
 import ThreadList, { SWIPE_SETTLE_MS } from "@/components/mail/thread-list";
 import ThreadReader, { type ReaderAction } from "@/components/mail/thread-reader";
 import UnsubscribeDialog, { unsubscribeToast, type UnsubscribeDone, type UnsubscribeMode, type UnsubscribeRequest } from "@/components/mail/unsubscribe-dialog";
@@ -1057,7 +1056,6 @@ export default function MailScreen({
     const alertSplit = view?.startsWith("inbox:") ? (view.slice("inbox:".length) as MailSplit) : null;
     const sameAccount = !current.account || current.account === key.split("|")[0];
     const stays = !current.query && sameAccount && (view === current.view || (current.view === HOME_VIEW && Boolean(alertSplit)));
-    pushTrail("mail-open", { key, view, current: current.view, search: Boolean(current.query), stays, reading: latest.current.cursor === key && latest.current.open });
     if (view && !stays) showRef.current({ view, account: sameAccount ? current.account : null, query: "" });
     else if (listForThread(current)) showRef.current(listForThread(current)!);
     else void refreshRef.current(false);
@@ -1074,7 +1072,6 @@ export default function MailScreen({
     const target = latest.current.query;
     loadThread(key)
       .then((loaded) => {
-        pushTrail("mail-loaded", { key, messages: loaded.messages.length, inbox: loaded.messages.some((message) => message.folderRole === "inbox"), cursor: latest.current.cursor === key, open: latest.current.open });
         const shown = latest.current.query;
         if (shown !== target || !inInbox(shown.view) || shown.query || removing.current.has(key)) return;
         if (!loaded.messages.some((message) => message.folderRole === "inbox")) return;
@@ -1085,11 +1082,10 @@ export default function MailScreen({
           return existing ? { ...existing, threads } : { threads, next: null };
         });
       })
-      .catch((error: unknown) => pushTrail("mail-load-failed", { key, error: error instanceof Error ? error.message : String(error) }));
+      .catch(() => undefined);
   }
 
   function refreshFromAlert() {
-    pushTrail("mail-refresh", { current: latest.current.query.view });
     const current = latest.current.query;
     if (current.view === HOME_VIEW && !current.query && !current.account) void refreshRef.current(false);
     else showRef.current({ view: HOME_VIEW, account: null, query: "" });
@@ -1134,11 +1130,6 @@ export default function MailScreen({
     }
     selectRef.current(target, true);
   }, [linkedShare, initialShared, initialThread]);
-
-  useEffect(() => {
-    const asked = new URL(window.location.href).searchParams.get("thread");
-    if (asked) pushTrail("mail-initial", { asked, loaded: initialThread?.key ?? null, open: latest.current.open, cursor: latest.current.cursor });
-  }, [initialThread]);
 
   const seenProps = useRef({ thread: initialThread, query: initialQuery });
   useEffect(() => {
