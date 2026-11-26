@@ -466,13 +466,19 @@ where i.status = 'filed'
     where (b.workspace_id = a.workspace_id or b.workspace_id in (select m.workspace_id from crm.workspace_members m where m.user_id = i.user_id))
       and split_part(x.email, '@', 2) = any (b.own_domains)
   )
-  and x.email not in (
-    select lower(e) from (
-      select email as e from crm.mail_sources where user_id = i.user_id
-      union select email from crm.send_identities where user_id = i.user_id
-      union select email from crm.mailbox_connections where user_id = i.user_id and email is not null
-      union select email from crm.calendar_accounts where user_id = i.user_id and email is not null
-    ) own where e is not null
+  and not exists (
+    select 1 from (
+      select lower(email) as e from crm.mail_sources where user_id = i.user_id
+      union select lower(email) from crm.send_identities where user_id = i.user_id
+      union select lower(email) from crm.mailbox_connections where user_id = i.user_id and email is not null
+      union select lower(email) from crm.calendar_accounts where user_id = i.user_id and email is not null
+      union select lower(email) from crm.profiles where id = i.user_id and email is not null
+    ) own
+    where own.e = x.email
+      or (
+        split_part(own.e, '@', 2) = split_part(x.email, '@', 2)
+        and not private.activity_contacts_free_mail(split_part(x.email, '@', 2))
+      )
   )
 on conflict (activity_id, contact_id) do nothing;
 

@@ -69,6 +69,8 @@ export default function ActivityPeople({
     router.refresh();
   }
 
+  if (!editable && shown.length === 0) return null;
+
   return (
     <div className="flex flex-col gap-1.5">
       <span className="caption-style text-subtle">People</span>

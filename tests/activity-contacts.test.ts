@@ -17,6 +17,7 @@ import { mergeContacts } from "@/lib/crm/merge";
 import { moveRecordsToWorkspace } from "@/lib/crm/move-workspace";
 import { relationshipsFor } from "@/lib/crm/relationship-signals";
 import { scopesForRole } from "@/lib/crm/scopes";
+import { encryptSecret } from "@/lib/crypto/secret";
 import type { UserActor } from "@/lib/crm/types";
 import { createWorkspace } from "@/lib/crm/workspaces";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -34,6 +35,7 @@ let anna: string;
 let ben: string;
 let carl: string;
 let colleagueContact: string;
+let colleagueMember: UserActor;
 let counter = 0;
 
 async function admin<T extends Record<string, unknown>>(text: string, values: unknown[] = []) {
@@ -115,6 +117,7 @@ before(async () => {
   outsider = await createUser("oscar@elsewhere-links.test", "Oscar Outsider");
   const colleague = await createUser("priya@eclipse-links.test", "Priya Shah");
   await admin("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, colleague.userId]);
+  colleagueMember = { ...colleague, workspaceId: owner.workspaceId, role: "member", scopes: scopesForRole("member") };
   acme = (await createCompany(owner, { name: "Acme", domain: "acme-links.test" }, { provenance: PROVENANCE })).body.company.id;
   brook = (await createCompany(owner, { name: "Brook", domain: "brook-links.test" }, { provenance: PROVENANCE })).body.company.id;
   anna = await person(owner, { firstName: "Anna", lastName: "Acme", email: "anna@acme-links.test", companyId: acme });
@@ -299,6 +302,14 @@ describe("adding and removing people on an activity", () => {
     assert.deepEqual([...audit[0].changes.after.attendees].sort(), [anna, carl].sort());
   });
 
+  it("refuses a member who can't edit the activity, and changes nothing", async () => {
+    const note = (await createActivity(owner, { type: "meeting", title: "Pricing call", contactId: anna }, { provenance: PROVENANCE })).body.activity;
+    await addActivityContact(owner, note.id, carl, PROVENANCE);
+    await assert.rejects(addActivityContact(colleagueMember, note.id, ben, PROVENANCE), /Only its author, owners and admins/);
+    await assert.rejects(removeActivityContact(colleagueMember, note.id, carl, PROVENANCE), /Only its author, owners and admins/);
+    assert.deepEqual([...(await linkedIds(note.id))].sort(), [anna, carl].sort());
+  });
+
   it("only links people from the activity's own workspace who are not archived", async () => {
     const note = (await createActivity(owner, { type: "meeting", title: "Another", contactId: anna }, { provenance: PROVENANCE })).body.activity;
     const elsewhere = await person(ridgeon, { firstName: "Ravi", lastName: "Rao", email: "ravi@ridgeon-links.test" });
@@ -414,11 +425,18 @@ describe("backfill", () => {
           { name: "Priya Shah", email: "priya@eclipse-links.test" },
           { name: "Archie", email: "archie@backfill-links.test" },
           { name: "Mark", email: owner.email },
+          { name: "Jane Alias", email: "jane@ridgeon-alias-links.test" },
           { name: "Nobody", email: null },
         ]),
         old[0].id,
         anna,
       ],
+    );
+    await person(owner, { firstName: "Jane", lastName: "Alias", email: "jane@ridgeon-alias-links.test" });
+    await admin(
+      `insert into crm.calendar_accounts (workspace_id, user_id, provider, email, status, refresh_token, access_token, access_token_expires_at, can_send)
+       values ($1, $2, 'microsoft', 'mark@ridgeon-alias-links.test', 'connected', $3, $4, now() + interval '1 hour', true)`,
+      [owner.workspaceId, owner.userId, encryptSecret("links-refresh"), encryptSecret("links-access")],
     );
     await admin("delete from crm.activity_contacts where activity_id = any($1::uuid[])", [[old[0].id, noteOnly[0].id]]);
 
