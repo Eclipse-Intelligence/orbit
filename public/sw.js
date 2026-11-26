@@ -58,42 +58,89 @@ function pathOf(value) {
   }
 }
 
+const ANSWER_MS = 1000;
+
+function askPage(client, target, id) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve({ answered: false, ms: Date.now() - started }), ANSWER_MS);
+    channel.port1.onmessage = () => {
+      clearTimeout(timer);
+      resolve({ answered: true, ms: Date.now() - started });
+    };
+    try {
+      client.postMessage({ type: "orbit-open", url: target, id }, [channel.port2]);
+    } catch {
+      clearTimeout(timer);
+      resolve({ answered: false, ms: 0 });
+    }
+  });
+}
+
+function focusClient(client, id) {
+  if (!("focus" in client)) return trail("sw-focus", { id, ok: false, reason: "no focus" });
+  return client.focus().then(
+    () => trail("sw-focus", { id, ok: true }),
+    (error) => trail("sw-focus", { id, ok: false, reason: String(error && error.name) }),
+  );
+}
+
+function sendClientTo(client, target, id) {
+  if ("navigate" in client) {
+    return client.navigate(target).then(
+      (moved) => trail("sw-navigate", { id, how: "navigate", ok: Boolean(moved), url: moved ? pathOf(moved.url) : null }),
+      (error) =>
+        self.clients.openWindow(target).then(
+          (opened) => trail("sw-navigate", { id, how: "open-window", reason: String(error && error.name), ok: Boolean(opened) }),
+          (failure) => trail("sw-navigate", { id, how: "failed", reason: String(failure && failure.name) }),
+        ),
+    );
+  }
+  return self.clients.openWindow(target).then(
+    (opened) => trail("sw-navigate", { id, how: "open-window", ok: Boolean(opened) }),
+    (error) => trail("sw-navigate", { id, how: "failed", reason: String(error && error.name) }),
+  );
+}
+
+async function openFromTap(target, id) {
+  const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const client = clients.find((item) => new URL(item.url).origin === self.location.origin);
+  const logged = [
+    trail("sw-clients", {
+      id,
+      count: clients.length,
+      clients: clients.map((item) => ({ url: pathOf(item.url), visibility: item.visibilityState, focused: item.focused })),
+    }),
+  ];
+  if (!client) {
+    const remembered = rememberPending({ url: target, at: Date.now(), id });
+    const opened = self.clients.openWindow(target).then(
+      (window) => trail("sw-open-window", { id, ok: Boolean(window), url: window ? pathOf(window.url) : null }),
+      (error) => trail("sw-open-window", { id, ok: false, reason: String(error && error.name) }),
+    );
+    await Promise.all([remembered, opened, ...logged]);
+    return;
+  }
+  logged.push(focusClient(client, id));
+  pending = null;
+  logged.push(caches.delete(PENDING_CACHE).catch(() => undefined));
+  const reply = await askPage(client, target, id);
+  logged.push(trail("sw-answer", { id, answered: reply.answered, ms: reply.ms }));
+  if (!reply.answered) logged.push(sendClientTo(client, target, id));
+  await Promise.all(logged);
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const target = new URL((event.notification.data && event.notification.data.url) || "/mail", self.location.origin).href;
-  const logged = [trail("sw-click", { id, url: pathOf(target) })];
+  const clicked = trail("sw-click", { id, url: pathOf(target) });
   if (new URL(target).origin !== self.location.origin) {
-    event.waitUntil(Promise.all([...logged, self.clients.openWindow(target)]));
+    event.waitUntil(Promise.all([clicked, self.clients.openWindow(target)]));
     return;
   }
-  event.waitUntil(
-    rememberPending({ url: target, at: Date.now(), id })
-      .then(() => self.clients.matchAll({ type: "window", includeUncontrolled: true }))
-      .then((clients) => {
-        logged.push(
-          trail("sw-clients", {
-            id,
-            count: clients.length,
-            clients: clients.map((item) => ({ url: pathOf(item.url), visibility: item.visibilityState, focused: item.focused })),
-          }),
-        );
-        const client = clients.find((item) => new URL(item.url).origin === self.location.origin);
-        if (client) {
-          client.postMessage({ type: "orbit-open", url: target, id });
-          if (!("focus" in client)) return trail("sw-focus", { id, ok: false, reason: "no focus" });
-          return client.focus().then(
-            () => trail("sw-focus", { id, ok: true }),
-            (error) => trail("sw-focus", { id, ok: false, reason: String(error && error.name) }),
-          );
-        }
-        return self.clients.openWindow(target).then(
-          (opened) => trail("sw-open-window", { id, ok: Boolean(opened), url: opened ? pathOf(opened.url) : null }),
-          (error) => trail("sw-open-window", { id, ok: false, reason: String(error && error.name) }),
-        );
-      })
-      .then(() => Promise.all(logged)),
-  );
+  event.waitUntil(Promise.all([clicked, openFromTap(target, id)]));
 });
 
 self.addEventListener("message", (event) => {
