@@ -9,6 +9,7 @@ import {
   restoreDocAction,
   restoreVersionAction,
   setAssistantCanEditAction,
+  setDocPublicAction,
   shareDocsAction,
 } from "@/app/(crm)/docs/actions";
 import {
@@ -259,6 +260,7 @@ export function createLiveDocs(options: Options = {}): DocsData & { refreshActiv
     },
     restorePage: async (id) => unwrap(await restoreDocAction(id)),
     setAssistantCanEdit: async (id, value) => unwrap(await setAssistantCanEditAction(id, value)),
+    setPublic: async (id, input) => unwrap(await setDocPublicAction(id, input)),
     createFolder: async (name, parentId) => unwrap(await createFolderAction(name, parentId)) as Folder,
     renameFolder: async (id, name) => unwrap(await renameFolderAction(id, name)),
     moveFolder: async (id, parentId, position, moveOptions = {}) => unwrap(await moveFolderAction(id, parentId, position, moveOptions.allowVisibilityChange === true)),

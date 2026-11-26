@@ -566,6 +566,17 @@ html[data-sidebar-resizing] * {
   text-wrap: balance;
 }
 
+.note-title.note-public-title {
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 768px) {
+  .note-title.note-public-title {
+    font-size: 28px;
+  }
+}
+
 .mail-body-editor {
   font-size: 14px;
   line-height: 1.5rem;
@@ -1259,6 +1270,14 @@ html[data-sidebar-resizing] * {
   box-shadow: inset 0 0 0 1px var(--tag-purple-border);
   cursor: pointer;
   transition: background-color 150ms var(--ease-power3-out);
+}
+
+.note-surface .note-editor.note-public .note-mention {
+  cursor: default;
+}
+
+.note-surface .note-editor.note-public .note-mention:hover {
+  background: var(--tag-purple-bg);
 }
 
 .note-surface .note-editor .note-mention-name {

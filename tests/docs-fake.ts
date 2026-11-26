@@ -102,6 +102,8 @@ type Row = {
   updatedBy: Participant;
   revision: number;
   assistantCanEdit: boolean;
+  public: boolean;
+  allowDownload: boolean;
   archived: boolean;
 };
 
@@ -167,6 +169,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       updatedBy: people[note.editedBy ?? note.author],
       revision: 1,
       assistantCanEdit: false,
+      public: false,
+      allowDownload: false,
       archived: false,
     });
   }
@@ -186,6 +190,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       updatedBy: viewer,
       revision: 1,
       assistantCanEdit: false,
+      public: false,
+      allowDownload: false,
       archived: false,
     });
   }
@@ -208,6 +214,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       updatedBy: viewer,
       revision: 1,
       assistantCanEdit: false,
+      public: false,
+      allowDownload: false,
       archived: false,
     });
   });
@@ -254,7 +262,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
 
   function summary(row: Row): PageSummary {
     const shared = row.kind === "note" && (row.visibility === "shared" || folderShared(row.folderId));
-    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}`;
+    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}:${row.public}:${row.allowDownload}`;
     const cached = summaryCache.get(row.id);
     if (cached?.key === key) return cached.value;
     const value: PageSummary = {
@@ -273,6 +281,10 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       updatedBy: row.updatedBy,
       wordCount: wordCount(row.body),
       entryCount: entryCount(row.body),
+      public: row.public,
+      allowDownload: row.allowDownload,
+      publicUrl: row.public ? `https://orbit.test/d/${row.id}` : null,
+      canChangePublic: row.kind === "note",
     };
     summaryCache.set(row.id, { key, value });
     return value;
@@ -531,6 +543,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
         updatedBy: viewer,
         revision: 1,
         assistantCanEdit: false,
+        public: false,
+      allowDownload: false,
         archived: false,
       };
       rows.set(id, row);
@@ -567,6 +581,12 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
     async setAssistantCanEdit(id, value) {
       const row = require(id);
       row.assistantCanEdit = value;
+      return page(row);
+    },
+    async setPublic(id, input) {
+      const row = require(id);
+      row.public = input.public ?? row.public;
+      row.allowDownload = input.allowDownload ?? row.allowDownload;
       return page(row);
     },
     async createFolder(name, parentId) {
@@ -653,6 +673,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
           updatedBy: viewer,
           revision: 1,
           assistantCanEdit: false,
+          public: false,
+          allowDownload: false,
           archived: false,
         };
         rows.set(id, row);

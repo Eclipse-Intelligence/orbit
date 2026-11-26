@@ -11,14 +11,14 @@ import { getFolder } from "@/lib/docs/folders";
 import { rebase } from "@/lib/docs/live/rebase";
 import { applyEdits, textEdits, type TextEdit } from "@/lib/docs/live/text-diff";
 import { searchDocs } from "@/lib/docs/search";
-import { archiveDoc, assistantMayEdit, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, shareDoc } from "@/lib/docs/store";
+import { archiveDoc, assistantMayEdit, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, setDocPublic, shareDoc } from "@/lib/docs/store";
 import { dailyHref, docHref, type DocDetail, type DocDiffLine, type DocEdit, type DocSummary } from "@/lib/docs/types";
 import { toolSource } from "@/lib/assistant/source";
 
 type Args = Record<string, unknown>;
 type Names = (id: unknown) => string;
 
-export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "archive", "append_daily"] as const;
+export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "publish", "unpublish", "allow_download", "block_download", "archive", "append_daily"] as const;
 export type SaveDocAction = (typeof SAVE_DOC_ACTIONS)[number];
 
 export const UNATTENDED_DOC_ACTIONS: readonly SaveDocAction[] = ["replace", "append", "edit", "tag"];
@@ -105,6 +105,8 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
       out[docId] = doc.title || "Untitled doc";
       out[`${docId}:where`] = whereLine(doc);
       out[`${docId}:revision`] = String(doc.revision);
+      out[`${docId}:public`] = doc.public ? "yes" : "no";
+      out[`${docId}:download`] = doc.allowDownload ? "yes" : "no";
       const edit = editFrom(args);
       if (edit) {
         try {
@@ -257,6 +259,18 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
       return result(`Share ${doc} with the workspace`, ["Everyone in the workspace, and agents with Docs access, can read and edit it."]);
     case "unshare":
       return result(`Make ${doc} private`, ["Teammates and agents will no longer see it, unless its folder is shared."]);
+    case "publish": {
+      const download = docId ? known(name, `${docId}:download`) === "yes" : false;
+      return result("Turn on the public link", [doc, `Anyone with the link can read it. ${download ? "Download is on." : "Download stays off."}`]);
+    }
+    case "unpublish":
+      return result("Turn off the public link", [doc, "The link will show not found until it's turned on again."]);
+    case "allow_download": {
+      const live = docId ? known(name, `${docId}:public`) === "yes" : true;
+      return result("Allow download", [doc, "Readers can download it as a PDF.", live ? "" : "The public link is off, so nobody can read it yet."]);
+    }
+    case "block_download":
+      return result("Stop downloads", [doc, "Readers can no longer download it as a PDF."]);
     case "archive":
       return result(`Archive ${doc}`, [where ?? ""]);
     case "append_daily":
@@ -276,6 +290,9 @@ function summaryOf(doc: DocSummary) {
     kind: doc.kind,
     dailyDate: doc.dailyDate,
     visibility: doc.visibility,
+    public: doc.public,
+    allowDownload: doc.allowDownload,
+    publicUrl: doc.publicUrl,
     folderId: doc.folderId,
     tags: doc.tags,
     revision: doc.revision,
@@ -409,6 +426,10 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
   if (action === "share" || action === "unshare") {
     const result = await shareDoc(actor, requireDoc(args), action === "share", provenance());
     return { saved: true, doc: summaryOf(result.doc), visibility: result.visibility };
+  }
+  if (action === "publish" || action === "unpublish" || action === "allow_download" || action === "block_download") {
+    const input = action === "publish" ? { public: true } : action === "unpublish" ? { public: false } : { allowDownload: action === "allow_download" };
+    return { saved: true, doc: summaryOf(await setDocPublic(actor, requireDoc(args), input, provenance())) };
   }
   if (action === "archive") return { saved: true, doc: summaryOf(await archiveDoc(actor, requireDoc(args), provenance())) };
   const note = await appendToDailyNote(actor, { text: str(args.content), date: str(args.date) || undefined, meetings: args.meetings === true }, provenance());

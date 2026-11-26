@@ -11,6 +11,7 @@ import {
   type PageSort,
   type PageSummary,
   type Participant,
+  type PublicInput,
   type SaveResult,
   type ShareTarget,
   type Visibility,
@@ -35,6 +36,10 @@ export type VisibilityPrompt = {
   after: Visibility;
   retry: () => Promise<void>;
 };
+
+const publicSeq = new Map<string, number>();
+
+type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "publicUrl"> | Pick<PageSummary, "public" | "allowDownload">;
 
 type DocsState = {
   ready: boolean;
@@ -85,6 +90,8 @@ type DocsState = {
   share: (target: ShareTarget, visibility: Visibility, onShared?: () => void) => Promise<string | null>;
   archive: (id: string) => Promise<void>;
   setAssistantCanEdit: (id: string, value: boolean) => Promise<void>;
+  setPublic: (id: string, input: PublicInput) => Promise<string | null>;
+  publicSaving: Record<string, true>;
   createFolder: (name: string, parentId: string | null) => Promise<Folder | null>;
   renameFolder: (id: string, name: string) => Promise<string | null>;
   moveFolder: (id: string, parentId: string | null, position: number, allowVisibilityChange?: boolean) => Promise<void>;
@@ -173,6 +180,10 @@ function summaryFrom(page: Page): PageSummary {
     updatedBy: page.updatedBy,
     wordCount: page.wordCount,
     entryCount: page.entryCount,
+    public: page.public,
+    allowDownload: page.allowDownload,
+    publicUrl: page.publicUrl,
+    canChangePublic: page.canChangePublic,
   };
 }
 
@@ -191,6 +202,7 @@ function acknowledgedFrom(page: Page): Acknowledged {
 function blank() {
   return {
     ready: false,
+    publicSaving: {},
     now: new Date(0).toISOString(),
     viewer: null,
     nav: null,
@@ -588,6 +600,42 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       set((state) => ({ pages: { ...state.pages, [id]: { ...(state.pages[id] ?? page), assistantCanEdit: page.assistantCanEdit } } }));
     } catch (error) {
       get().notify(message(error, "Couldn't change the setting. Try again."), { tone: "alert" });
+    }
+  },
+
+  async setPublic(id, input) {
+    const current = session;
+    const seq = (publicSeq.get(id) ?? 0) + 1;
+    publicSeq.set(id, seq);
+    const latest = () => current === session && publicSeq.get(id) === seq;
+    set((state) => ({ publicSaving: { ...state.publicSaving, [id]: true } }));
+    const settle = () =>
+      set((state) => {
+        const rest = { ...state.publicSaving };
+        delete rest[id];
+        return { publicSaving: rest };
+      });
+    const before = get().summaries[id] ?? get().pages[id];
+    const patchPublic = (patch: PublicPatch) =>
+      set((state) => ({
+        pages: state.pages[id] ? { ...state.pages, [id]: { ...state.pages[id], ...patch } } : state.pages,
+        summaries: state.summaries[id] ? { ...state.summaries, [id]: { ...state.summaries[id], ...patch } } : state.summaries,
+      }));
+    if (before) patchPublic({ public: input.public ?? before.public, allowDownload: input.allowDownload ?? before.allowDownload });
+    try {
+      const page = await docsData().setPublic(id, input);
+      if (latest()) {
+        patchPublic({ public: page.public, allowDownload: page.allowDownload, publicUrl: page.publicUrl });
+        set({ lists: {} });
+        settle();
+      }
+      return null;
+    } catch (error) {
+      if (latest()) {
+        if (before) patchPublic({ public: before.public, allowDownload: before.allowDownload, publicUrl: before.publicUrl });
+        settle();
+      }
+      return message(error, "Couldn't change the public link. Try again.");
     }
   },
 

@@ -67,6 +67,10 @@ export type DocSummary = {
   effectiveShared: boolean;
   visibility: DocVisibility;
   assistantCanEdit: boolean;
+  public: boolean;
+  allowDownload: boolean;
+  publicUrl: string | null;
+  canChangePublic: boolean;
   excerpt: string;
   tags: string[];
   wordCount: number;
@@ -109,6 +113,8 @@ export type DocDetail = DocSummary & {
   canChangeSharing: boolean;
   canChangeAssistantEdit: boolean;
 };
+
+export type DocPublicInput = { public?: boolean; allowDownload?: boolean };
 
 export type DocSearchHit = {
   id: string;

@@ -1,7 +1,7 @@
 import { CrmError } from "@/lib/crm/errors";
 import { listDocTasks } from "@/lib/crm/task-docs";
 import type { Provenance, UserActor } from "@/lib/crm/types";
-import type { CreateInput, Folder, Page, PageFilter, PageSort, ShareTarget, Visibility } from "@/lib/docs/client-types";
+import type { CreateInput, Folder, Page, PageFilter, PageSort, PublicInput, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
 import { createFolder, listFolders, moveFolder, renameFolder, shareFolder } from "@/lib/docs/folders";
 import { liveTransport } from "@/lib/docs/live/broadcast";
@@ -18,6 +18,7 @@ import {
   restoreVersion,
   saveDoc,
   setAssistantCanEdit,
+  setDocPublic,
   shareDoc,
   syncLiveDoc,
 } from "@/lib/docs/store";
@@ -252,6 +253,16 @@ async function foldersOf(actor: UserActor): Promise<Folder[]> {
   return (await listFolders(actor)).map((folder) => toFolder(actor, folder));
 }
 
+export function publicInputOf(value: unknown): PublicInput {
+  const invalid = () => new CrmError("invalid_input", "Couldn't change the public link. Try again.", 400);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalid();
+  const input = value as Record<string, unknown>;
+  const keys = Object.keys(input);
+  if (keys.length === 0 || keys.some((key) => key !== "public" && key !== "allowDownload")) throw invalid();
+  if (keys.some((key) => typeof input[key] !== "boolean")) throw invalid();
+  return { public: input.public as boolean | undefined, allowDownload: input.allowDownload as boolean | undefined };
+}
+
 export const docsChanges = {
   async create(actor: UserActor, input: CreateInput): Promise<Page> {
     return toPage(actor, await createDoc(actor, { title: input.title, content: input.body, folderId: input.folderId ?? null }, PROVENANCE));
@@ -273,6 +284,9 @@ export const docsChanges = {
   },
   async assistantCanEdit(actor: UserActor, id: string, value: boolean): Promise<Page> {
     return toPage(actor, await setAssistantCanEdit(actor, id, value));
+  },
+  async setPublic(actor: UserActor, id: string, input: PublicInput): Promise<Page> {
+    return toPage(actor, await setDocPublic(actor, id, publicInputOf(input), PROVENANCE));
   },
   async createFolder(actor: UserActor, name: string, parentId: string | null): Promise<Folder> {
     return toFolder(actor, await createFolder(actor, { name, parentId }, PROVENANCE));

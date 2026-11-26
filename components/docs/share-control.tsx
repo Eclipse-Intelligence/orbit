@@ -6,6 +6,7 @@ import Button from "@/components/_ui/button";
 import CopyButton from "@/components/_ui/copy-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { Radio } from "@/components/_ui/radio";
+import Switch from "@/components/_ui/switch";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { useDocsNav, useMedia } from "@/components/docs/use-docs";
 import type { Folder, PageSummary, Visibility } from "@/lib/docs/client-types";
@@ -13,6 +14,7 @@ import { listHref, pageHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
+import GlobeIcon from "@/public/assets/images/docs/globe.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 import DocIcon from "@/public/assets/images/docs/doc.svg";
 import FolderIcon from "@/public/assets/images/mail/folder.svg";
@@ -52,18 +54,19 @@ function ShareOption({
   );
 }
 
-function ShareButton({ shared, compact, className, ...props }: { shared: boolean; compact?: boolean; className?: string } & ComponentProps<"button">) {
-  const Icon = shared ? UsersIcon : LockIcon;
+function ShareButton({ shared, publicOn = false, compact, className, ...props }: { shared: boolean; publicOn?: boolean; compact?: boolean; className?: string } & ComponentProps<"button">) {
+  const Icon = compact && publicOn ? GlobeIcon : shared ? UsersIcon : LockIcon;
   return (
     <Button
       variant="secondary"
       size={compact ? "icon" : "sm"}
-      aria-label={shared ? "Shared with workspace. Change sharing" : "Private. Change sharing"}
+      aria-label={`${shared ? "Shared with workspace" : "Private"}${publicOn ? ", public link on" : ""}. Change sharing`}
       className={cn("data-[state=open]:bg-muted", !compact && "h-[30px] px-3", className)}
       {...props}
     >
-      <Icon aria-hidden className={cn("size-3.5", shared ? "text-(--tag-blue-text)" : "text-subtle")} />
+      <Icon aria-hidden className={cn("size-3.5", compact && publicOn ? "text-(--tag-green-text)" : shared ? "text-(--tag-blue-text)" : "text-subtle")} />
       {!compact && (shared ? "Shared" : "Private")}
+      {!compact && publicOn && <GlobeIcon aria-hidden className="size-3.5 text-(--tag-green-text)" />}
     </Button>
   );
 }
@@ -91,6 +94,68 @@ function ShareFooter({ link }: { link: () => string }) {
       <span className="caption-style text-subtle flex-1">The assistant and your MCP agents follow the same rule.</span>
       <CopyButton text={link} label="Copy link" />
     </div>
+  );
+}
+
+function absolute(url: string) {
+  return url.startsWith("/") ? `${origin()}${url}` : url;
+}
+
+function PublicLink({ summary }: { summary: PageSummary }) {
+  const owned = summary.canChangePublic;
+  const agentMade = summary.owner.kind !== "person";
+  const setPublic = useDocsStore((state) => state.setPublic);
+  const [error, setError] = useState<string | null>(null);
+  const saving = useDocsStore((state) => state.publicSaving[summary.id] === true);
+  const url = summary.publicUrl ? absolute(summary.publicUrl) : null;
+
+  async function change(input: { public?: boolean; allowDownload?: boolean }) {
+    if (!owned) return;
+    setError(null);
+    setError(await setPublic(summary.id, input));
+  }
+
+  return (
+    <>
+      <div className="mx-4 mt-3 h-px bg-white/[0.05]" />
+      <div className="flex flex-col gap-2.5 px-4 pt-3">
+        <div className="flex items-center gap-3">
+          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]", summary.public ? "bg-(--tag-green-bg)" : "bg-secondary")}>
+            <GlobeIcon aria-hidden className={cn("size-3.5", summary.public ? "text-(--tag-green-text)" : "text-soft")} />
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+            <span className="text-foreground text-[13.5px] leading-5 font-medium">Public link</span>
+            <span className="caption-style text-subtle">
+              {owned ? "Anyone with the link can read it." : `Anyone with the link can read it. Only ${summary.owner.short}${agentMade ? " or the workspace owner" : ""} can turn it ${summary.public ? "off" : "on"}.`}
+            </span>
+          </span>
+          <Switch checked={summary.public} disabled={!owned || saving} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
+        </div>
+        {summary.public && url && (
+          <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.04] py-1.5 pr-1.5 pl-2.5">
+            <span className="text-soft min-w-0 flex-1 truncate text-[12.5px]">{url.replace(/^https?:\/\//, "")}</span>
+            <CopyButton text={url} label="Copy" ariaLabel="Copy public link" className="min-w-0" />
+            <Button variant="ghost" size="sm" href={url} target="_blank" aria-label="Open public link" className="hit">
+              Open
+            </Button>
+          </div>
+        )}
+        {summary.public && (
+          <div className="flex items-center gap-3 pl-11">
+            <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+              <span className="text-foreground text-[13px] leading-5 font-medium">Allow download</span>
+              <span className="caption-style text-subtle">Readers can download it as a PDF.</span>
+            </span>
+            <Switch checked={summary.allowDownload} disabled={!owned || saving} onChange={(value) => void change({ allowDownload: value })} label="Allow download" className="hit" />
+          </div>
+        )}
+        {error && (
+          <p role="alert" className="caption-style text-danger">
+            {error}
+          </p>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -265,7 +330,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <ShareButton shared={summary.shared} compact={compact} />
+        <ShareButton shared={summary.shared} publicOn={summary.public} compact={compact} />
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={8} className={SHARE_POPOVER_CLASS}>
         <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
@@ -300,6 +365,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
             {error}
           </p>
         )}
+        <PublicLink summary={summary} />
         <ShareFooter link={() => `${origin()}${pageHref(summary.id)}`} />
       </PopoverContent>
     </Popover>
