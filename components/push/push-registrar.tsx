@@ -4,7 +4,6 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { refreshPush, registerServiceWorker } from "@/components/push/push-client";
 import { linkInWorkspace } from "@/lib/open-link";
-import { pushTrail, trailPath } from "@/components/push/trail";
 
 export const OPEN_THREAD_EVENT = "orbit:open-thread";
 
@@ -19,10 +18,8 @@ async function takeCachedPending() {
   const hit = await cache.match(PENDING_KEY);
   if (!hit) return null;
   await caches.delete(PENDING_CACHE);
-  const value = (await hit.json().catch(() => null)) as { url?: unknown; at?: unknown; id?: unknown } | null;
-  const fresh = value && typeof value.url === "string" && typeof value.at === "number" && Date.now() - value.at < FRESH_MS ? value.url : null;
-  pushTrail("page-cache", { id: value?.id ?? null, fresh: Boolean(fresh), ageMs: typeof value?.at === "number" ? Date.now() - value.at : null, path: window.location.pathname });
-  return fresh;
+  const value = (await hit.json().catch(() => null)) as { url?: unknown; at?: unknown } | null;
+  return value && typeof value.url === "string" && typeof value.at === "number" && Date.now() - value.at < FRESH_MS ? value.url : null;
 }
 
 export default function PushRegistrar({ workspaceId }: { workspaceId?: string }) {
@@ -31,12 +28,8 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     let last: string | null = null;
-    const open = (value: unknown, source: string) => {
-      if (typeof value !== "string") return;
-      if (value === last) {
-        pushTrail("page-open", { source, how: "repeat", path: window.location.pathname });
-        return;
-      }
+    const open = (value: unknown) => {
+      if (typeof value !== "string" || value === last) return;
       last = value;
       window.setTimeout(() => {
         if (last === value) last = null;
@@ -44,15 +37,13 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
       const first = new URL(value, window.location.origin);
       if (first.origin !== window.location.origin) return;
       const target = linkInWorkspace(`${first.pathname}${first.search}`, workspaceId);
-      const url = new URL(target.path, window.location.origin);
-      const thread = url.searchParams.get("thread");
-      const event = (thread || !url.search) && url.pathname === "/mail" && window.location.pathname === "/mail";
-      pushTrail("page-open", { source, target: target.path, from: trailPath(), how: target.reload ? "reload" : event ? "event" : "navigate" });
       if (target.reload) {
         window.location.assign(target.path);
         return;
       }
-      if (event) {
+      const url = new URL(target.path, window.location.origin);
+      const thread = url.searchParams.get("thread");
+      if ((thread || !url.search) && url.pathname === "/mail" && window.location.pathname === "/mail") {
         window.dispatchEvent(new CustomEvent(OPEN_THREAD_EVENT, { detail: { thread, view: url.searchParams.get("view") } }));
         return;
       }
@@ -63,12 +54,12 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
       const worker = navigator.serviceWorker.controller ?? registration.active;
       if (!worker) return;
       const channel = new MessageChannel();
-      channel.port1.onmessage = (event) => open(event.data, "worker");
+      channel.port1.onmessage = (event) => open(event.data);
       worker.postMessage({ type: "orbit-pending" }, [channel.port2]);
     };
     const checkPending = () => {
       void takeCachedPending()
-        .then((url) => (url ? open(url, "cache") : askWorker()))
+        .then((url) => (url ? open(url) : askWorker()))
         .catch(() => askWorker().catch(() => undefined));
     };
     let checks: number[] = [];
@@ -78,8 +69,7 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
     };
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type !== "orbit-open") return;
-      pushTrail("page-message", { id: event.data.id ?? null, path: window.location.pathname });
-      open(event.data.url, "message");
+      open(event.data.url);
       event.ports[0]?.postMessage("opened");
     };
     const onVisible = () => {
@@ -89,10 +79,8 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("pageshow", watchPending);
     window.addEventListener("focus", watchPending);
-    pushTrail("page-start", { path: trailPath(), standalone: window.matchMedia("(display-mode: standalone)").matches, controlled: Boolean(navigator.serviceWorker.controller) });
     void registerServiceWorker().then(async () => {
       await refreshPush();
-      pushTrail("page-ready", { path: window.location.pathname });
       watchPending();
     });
     return () => {
