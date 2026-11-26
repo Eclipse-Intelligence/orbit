@@ -150,7 +150,8 @@ async function lastContactFor(db: Db, workspaceId: string, contactId: string): P
   const result = await db.query<{ type: string; title: string | null; body: string | null; occurred_at: Date | string }>(
     `select a.type, a.title, a.body, a.occurred_at
      from crm.activities a
-     where a.workspace_id = $1 and a.contact_id = $2 and a.archived_at is null and a.type = any($3::text[])
+     where a.workspace_id = $1 and a.archived_at is null and a.type = any($3::text[])
+       and a.id in (select l.activity_id from crm.activity_contacts l where l.contact_id = $2)
      order by a.occurred_at desc
      limit 1`,
     [workspaceId, contactId, INTERACTION_TYPES],

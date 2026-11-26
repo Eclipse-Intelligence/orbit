@@ -303,7 +303,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
       ? route.targets
       : phones.flatMap((phone) => {
           const actor = open.find((item) => item.workspaceId === phone.workspaceId);
-          return actor && phone.match ? [{ actor, match: phone.match }] : [];
+          return actor && phone.match ? [{ actor, match: phone.match, attendeeIds: phone.match.contactId ? [phone.match.contactId] : [] }] : [];
         });
     const byTitle = targets.length === 0 && route.suggested.length === 0;
     const suggested = byTitle
@@ -316,7 +316,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
     );
     const writes = targets.length > 0
       ? targets
-      : [{ actor: open.find((item) => item.workspaceId === captureId) ?? owner, match: null }];
+      : [{ actor: open.find((item) => item.workspaceId === captureId) ?? owner, match: null, attendeeIds: [] as string[] }];
     for (const write of writes) {
       let activityId: string | null = null;
       if (write.match) {
@@ -341,6 +341,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
             },
           ),
           { operation: "import_granola", source: "granola" },
+          { attendeeIds: write.attendeeIds },
         );
         activityId = activity.id;
       }

@@ -178,7 +178,10 @@ export async function activitySuggestions(actor: UserActor, now = new Date()): P
          where a.workspace_id = $2
            and (a.metadata->>'eventId' = e.id::text
              or (a.type in ('meeting', 'call') and a.occurred_at between e.starts_at - interval '30 minutes' and e.ends_at + interval '2 hours'
-                 and (a.contact_id = any(e.contact_ids) or a.company_id = any(e.company_ids))))
+                 and (
+                   exists (select 1 from crm.activity_contacts l where l.activity_id = a.id and l.contact_id = any(e.contact_ids))
+                   or a.company_id = any(e.company_ids)
+                 )))
        )
        order by e.ends_at desc
        limit 4`,

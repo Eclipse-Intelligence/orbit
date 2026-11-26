@@ -1150,6 +1150,19 @@ export async function matchParties(
   };
 }
 
+export async function matchAllParties(db: Db, workspaceId: string, emails: string[]): Promise<string[]> {
+  const wanted = [...new Set(emails)];
+  if (wanted.length === 0) return [];
+  const found = await db.query<{ id: string; normalized_email: string }>(
+    `select id, normalized_email from crm.contacts
+     where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])`,
+    [workspaceId, wanted],
+  );
+  const byEmail = new Map<string, string>();
+  for (const row of found.rows) if (!byEmail.has(row.normalized_email)) byEmail.set(row.normalized_email, row.id);
+  return [...new Set(wanted.flatMap((email) => byEmail.get(email) ?? []))];
+}
+
 async function companyName(db: Db, companyId: string) {
   const result = await db.query<{ name: string }>(
     "select name from crm.companies where id = $1",

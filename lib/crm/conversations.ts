@@ -15,7 +15,9 @@ import { upsertContactInDb } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
 import {
   asSuggestion,
+  confidentFor,
   contactsByName,
+  exactFor,
   excludedNameKeys,
   inQueryOrder,
   nameQueries,
@@ -27,7 +29,7 @@ import { CrmError, errorText, notFound } from "@/lib/crm/errors";
 import { isFreeMailDomain } from "@/lib/crm/communications";
 import { hasCalendarAccounts, hasCalendarFeeds } from "@/lib/crm/calendar-accounts";
 import { firstNamesToIgnore, matchPhonesInDb, phoneNumbersIn } from "@/lib/crm/call-phones";
-import { readStored } from "@/lib/crm/inbox";
+import { matchAllParties, readStored } from "@/lib/crm/inbox";
 import { iso, isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
 import { ownDomainsInDb } from "@/lib/crm/own-domains";
@@ -554,6 +556,43 @@ export async function internalAddresses(db: Db, workspaceId: string, extra: (str
   };
 }
 
+export async function ownCallAddresses(db: Db, owner: UserActor, extra: (string | null | undefined)[] = []) {
+  const result = await db.query<{ email: string }>(
+    `select lower(email) as email from crm.mail_sources where user_id = $1
+     union select lower(email) from crm.send_identities where user_id = $1
+     union select lower(email) from crm.mailbox_connections where user_id = $1 and email is not null
+     union select lower(email) from crm.calendar_accounts where user_id = $1 and email is not null`,
+    [owner.userId],
+  );
+  const own = new Set(result.rows.map((row) => row.email));
+  for (const value of [owner.email, ...extra]) {
+    const email = value ? canonicalEmail(value) : null;
+    if (email) own.add(email);
+  }
+  return own;
+}
+
+export async function recognisedAttendeeIds(db: Db, actor: UserActor, people: Participant[]) {
+  const own = await ownCallAddresses(db, actor);
+  const internal = await internalAddresses(db, actor.workspaceId, [...own], actor.userId);
+  const emails = [
+    ...new Set(
+      people
+        .map((person) => (person.email ? canonicalEmail(person.email) : null))
+        .filter((email): email is string => Boolean(email) && !internal.isInternal(email as string)),
+    ),
+  ];
+  const ids = await matchAllParties(db, actor.workspaceId, emails);
+  const nameless = people.filter((person) => !person.email).map((person) => person.name);
+  if (nameless.length === 0) return ids;
+  const queries = nameQueries(nameless, await excludedNameKeys(db, actor.userId, [actor.fullName]));
+  if (queries.length === 0) return ids;
+  const lookup = await contactsByName(db, [actor.workspaceId], queries);
+  const confident = queries.filter((query) => confidentFor(query, lookup));
+  const named = confident.flatMap((query) => exactFor(query, lookup.candidates)).map((candidate) => candidate.contactId);
+  return [...new Set([...ids, ...named])];
+}
+
 export async function lockImportKey(db: Db, scope: string, source: ConversationSource, externalId: string) {
   await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
     `import:${scope}:${source}:${externalId}`,
@@ -759,6 +798,7 @@ async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, con
       contactName: contact.name,
     }),
     provenance ?? { operation: "file_conversation", source: row.source === "granola" ? "granola" : "microsoft" },
+    { attendeeIds: await recognisedAttendeeIds(db, actor, mapParticipants(row.participants)) },
   );
   await db.query(
     `update crm.conversation_imports

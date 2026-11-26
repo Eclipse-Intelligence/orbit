@@ -133,7 +133,11 @@ async function callNotes(db: Db, actor: UserActor, addresses: string[]) {
      where a.workspace_id = $1 and a.type in ('call', 'meeting') and a.body is not null and a.archived_at is null
        and a.occurred_at > now() - interval '60 days'
        and (
-         a.contact_id in (select c.id from crm.contacts c where c.workspace_id = $1 and c.normalized_email = any($2::text[]))
+         exists (
+           select 1 from crm.activity_contacts l
+           join crm.contacts c on c.id = l.contact_id
+           where l.activity_id = a.id and c.workspace_id = $1 and c.normalized_email = any($2::text[])
+         )
          or a.company_id in (
            select c.company_id from crm.contacts c where c.workspace_id = $1 and c.normalized_email = any($2::text[]) and c.company_id is not null
          )

@@ -89,12 +89,18 @@ async function opportunityFor(db: Db, workspaceId: string, task: Task) {
 }
 
 async function lastActivityFor(db: Db, workspaceId: string, task: Task) {
-  const column = task.contactId ? "contact_id" : task.companyId ? "company_id" : task.opportunityId ? "opportunity_id" : null;
+  const match = task.contactId
+    ? "id in (select l.activity_id from crm.activity_contacts l where l.contact_id = $2)"
+    : task.companyId
+      ? "company_id = $2"
+      : task.opportunityId
+        ? "opportunity_id = $2"
+        : null;
   const id = task.contactId ?? task.companyId ?? task.opportunityId;
-  if (!column || !id) return null;
+  if (!match || !id) return null;
   const result = await db.query<{ type: ActivityType; title: string | null; occurred_at: Date }>(
     `select type, title, occurred_at from crm.activities
-     where workspace_id = $1 and ${column} = $2 and archived_at is null and occurred_at <= now()
+     where workspace_id = $1 and ${match} and archived_at is null and occurred_at <= now()
      order by occurred_at desc limit 1`,
     [workspaceId, id],
   );

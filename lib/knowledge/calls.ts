@@ -51,7 +51,10 @@ export async function backfillCalls(actor: UserActor, companyId: string, limit =
       `with activity as (
          select a.id from crm.activities a where a.workspace_id = $1 and a.company_id = $2
          union
-         select a.id from crm.activities a join crm.contacts ct on ct.id = a.contact_id where a.workspace_id = $1 and ct.company_id = $2
+         select a.id from crm.activities a
+         join crm.activity_contacts l on l.activity_id = a.id
+         join crm.contacts ct on ct.id = l.contact_id
+         where a.workspace_id = $1 and ct.company_id = $2
        )
        select i.id from crm.call_insights i
        join crm.activities a on a.id = i.activity_id

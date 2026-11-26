@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { getUserActor } from "@/lib/auth/user";
 import { archiveActivity, logActivity, updateActivity, type LoggedActivityType } from "@/lib/crm/activities";
+import { addActivityContact, removeActivityContact } from "@/lib/crm/activity-contacts";
 import type { ActivityEdit } from "@/lib/crm/activity-edit";
 import { actionError } from "@/lib/companies";
 import { snoozeTask } from "@/lib/crm/action-needed";
@@ -461,6 +462,28 @@ export async function updateActivityAction(id: string, edit: ActivityEdit): Prom
     refresh();
     revalidatePath(SETTINGS_PATHS.activity);
     return { ok: true, activity: result.activity };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function addActivityPersonAction(activityId: string, contactId: string): Promise<RecordActionState> {
+  const user = await requireUser();
+  try {
+    await addActivityContact(user, activityId, contactId, { operation: "add_activity_person", source: "web" });
+    refresh();
+    return { ok: true };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function removeActivityPersonAction(activityId: string, contactId: string): Promise<RecordActionState> {
+  const user = await requireUser();
+  try {
+    await removeActivityContact(user, activityId, contactId, { operation: "remove_activity_person", source: "web" });
+    refresh();
+    return { ok: true };
   } catch (error) {
     return actionError(error);
   }

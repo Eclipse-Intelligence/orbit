@@ -10,6 +10,7 @@ import CallInsightPanel from "@/components/crm/call-insight";
 import DetailSection from "@/components/companies/detail/detail-section";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import ActivityPad from "@/components/crm/activity-pad";
+import ActivityPeople from "@/components/crm/activity-people";
 import ContactEmail from "@/components/crm/contact-email";
 import ReadStatus from "@/components/mail/read-status";
 import MetaTrail from "@/components/crm/meta-trail";
@@ -591,6 +592,9 @@ function ActivityRow({
             <span className="caption-style text-subtle">Guests</span>
             <p className="text-[14px] leading-5">{details.attendees}</p>
           </div>
+        )}
+        {insightful && (
+          <ActivityPeople activityId={activity.id} people={activity.contacts} mainId={activity.contactId} editable={editable} />
         )}
         {details.body && (
           <p className="text-[14px] leading-5 break-words whitespace-pre-wrap">

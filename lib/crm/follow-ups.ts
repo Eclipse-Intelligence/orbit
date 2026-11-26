@@ -103,7 +103,10 @@ function nextStep(freeParam: string) {
   or exists (
     select 1 from crm.activities e
     where e.workspace_id = $2 and e.id <> a.id and e.archived_at is null
-      and (e.company_id = co.id or e.contact_id in (${COMPANY_PEOPLE}))
+      and (
+        e.company_id = co.id
+        or exists (select 1 from crm.activity_contacts el where el.activity_id = e.id and el.contact_id in (${COMPANY_PEOPLE}))
+      )
       and (
         (e.type = 'email' and e.actor_user_id = $1 and e.metadata->>'direction' = 'outbound' and e.occurred_at > ${CALL_END})
         or (e.type in ('meeting', 'call') and e.occurred_at >= ${CALL_END})

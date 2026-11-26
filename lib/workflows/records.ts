@@ -103,7 +103,7 @@ export async function findRecords(actor: UserActor, workflowId: string, config: 
          act.last as last_contacted_at, c.created_at
        from crm.contacts c
        left join crm.companies co on co.id = c.company_id and co.archived_at is null
-       left join lateral (select max(a.occurred_at) as last from crm.activities a where a.workspace_id = $1 and a.contact_id = c.id and a.archived_at is null) act on true`
+       left join lateral (select max(a.occurred_at) as last from crm.activity_contacts l join crm.activities a on a.id = l.activity_id where l.contact_id = c.id and a.workspace_id = $1 and a.archived_at is null) act on true`
     : `select co.id, co.name, null::text as email, null::text as company, act.last as last_contacted_at, co.created_at
        from crm.companies co
        left join lateral (select max(a.occurred_at) as last from crm.activities a where a.workspace_id = $1 and a.company_id = co.id and a.archived_at is null) act on true`;
