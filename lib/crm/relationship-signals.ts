@@ -28,11 +28,12 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
   const wanted = [...new Set(ids.filter(isUuid))];
   const signals = new Map<string, RelationshipSignals>();
   if (wanted.length === 0) return signals;
-  const column = target === "company" ? "company_id" : "contact_id";
+  const column = target === "company" ? "a.company_id" : "l.contact_id";
+  const via = target === "company" ? "" : "join crm.activity_contacts l on l.activity_id = a.id";
   const at = new Date(now).toISOString();
   const rows = await db.query<SignalRow>(
     `with acts as (
-       select a.${column} as id, a.occurred_at,
+       select ${column} as id, a.occurred_at,
          coalesce(a.metadata->>'internetMessageId', coalesce(a.title, '') || '|' || date_trunc('minute', a.occurred_at)::text) as message,
          case
            when a.type = 'email' and ${INBOUND} then 'in'
@@ -40,8 +41,9 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
            else 'meet'
          end as kind
        from crm.activities a
+       ${via}
        left join crm.activity_tones t on t.activity_id = a.id
-       where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and a.occurred_at <= $3::timestamptz
+       where a.workspace_id = $1 and ${column} = any($2::uuid[]) and a.occurred_at <= $3::timestamptz
          and a.archived_at is null
          and a.type in ('email', 'meeting', 'call')
          and (t.activity_id is not null or coalesce(a.title, '') !~* $4)
@@ -66,14 +68,16 @@ async function relationshipSignalsInDb(db: Db, workspaceId: string, target: Rela
   );
   const tones = await db.query<{ id: string; tone: Tone }>(
     `select distinct on (id) id, tone from (
-       select a.${column} as id, t.tone, a.occurred_at
+       select ${column} as id, t.tone, a.occurred_at
        from crm.activity_tones t join crm.activities a on a.id = t.activity_id
-       where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and not t.automatic and a.archived_at is null
+       ${via}
+       where a.workspace_id = $1 and ${column} = any($2::uuid[]) and not t.automatic and a.archived_at is null
          and a.occurred_at between $3::timestamptz - interval '120 days' and $3::timestamptz
        union all
-       select a.${column}, case i.sentiment when 'healthy' then 'positive' when 'at_risk' then 'negative' else 'neutral' end, a.occurred_at
+       select ${column}, case i.sentiment when 'healthy' then 'positive' when 'at_risk' then 'negative' else 'neutral' end, a.occurred_at
        from crm.call_insights i join crm.activities a on a.id = i.activity_id
-       where a.workspace_id = $1 and a.${column} = any($2::uuid[]) and i.sentiment is not null and a.archived_at is null
+       ${via}
+       where a.workspace_id = $1 and ${column} = any($2::uuid[]) and i.sentiment is not null and a.archived_at is null
          and a.occurred_at between $3::timestamptz - interval '120 days' and $3::timestamptz
      ) found
      order by id, occurred_at desc`,

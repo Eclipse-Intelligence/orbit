@@ -112,7 +112,8 @@ async function contactFacts(db: Db, actor: UserActor, items: Candidate[]): Promi
      union all
      select distinct 'crm', c.workspace_id, split_part(c.normalized_email, '@', 2)
      from crm.contacts c
-     join crm.activities a on a.contact_id = c.id and a.archived_at is null
+     join crm.activity_contacts l on l.contact_id = c.id
+     join crm.activities a on a.id = l.activity_id and a.archived_at is null
      where c.workspace_id = any($4::uuid[]) and c.archived_at is null
        and split_part(c.normalized_email, '@', 2) = any($3::text[])`,
     [actor.userId, senders, domains, [...new Set(items.map((item) => item.workspaceId))]],
@@ -387,7 +388,8 @@ export async function historyInDb(db: Db, actor: UserActor, workspaceId: string,
        from wanted w
        join crm.contacts c on c.workspace_id = $4 and c.archived_at is null
          and (c.normalized_email = w.sender or (w.domain is not null and c.normalized_email like '%@' || w.domain))
-       join crm.activities a on a.contact_id = c.id and a.archived_at is null
+       join crm.activity_contacts l on l.contact_id = c.id
+     join crm.activities a on a.id = l.activity_id and a.archived_at is null
        group by w.sender
      )
      select w.sender,

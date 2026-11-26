@@ -9,6 +9,7 @@ import {
   type ActivityEditField,
   type ActivityOrigin,
 } from "@/lib/crm/activity-edit";
+import { linkActivityContactsInDb } from "@/lib/crm/activity-contacts";
 import { withActor } from "@/lib/crm/context";
 import { CrmError, notFound } from "@/lib/crm/errors";
 import { resolveLinks } from "@/lib/crm/links";
@@ -30,6 +31,7 @@ import {
   ACTIVITY_TYPES,
   type Activity,
   type ActivityListQuery,
+  type ActivityPerson,
   type ActivityType,
   type ActivityWrite,
   type Actor,
@@ -45,6 +47,19 @@ const ACTOR_NAME_SQL = `coalesce(
 
 const ACTOR_JOIN_SQL = `left join crm.profiles pr on pr.id = a.actor_user_id
   left join crm.agents ag on ag.id = a.actor_agent_id`;
+
+const PEOPLE_SQL = `coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'id', lc.id,
+          'name', coalesce(nullif(trim(concat_ws(' ', lc.first_name, lc.last_name)), ''), lc.email, lc.phone, 'Unnamed')
+        )
+        order by (lc.id = a.contact_id) desc, l.created_at, lc.id
+      )
+      from crm.activity_contacts l
+      join crm.contacts lc on lc.id = l.contact_id and lc.archived_at is null
+      where l.activity_id = a.id
+    ), '[]'::jsonb)`;
 
 const ACTIVITY_SQL = `
   select
@@ -62,6 +77,7 @@ const ACTIVITY_SQL = `
       ct.email,
       ct.phone
     ) as contact_name,
+    ${PEOPLE_SQL} as people,
     a.opportunity_id,
     op.name as opportunity_name,
     a.actor_user_id,
@@ -77,6 +93,7 @@ const ACTIVITY_SQL = `
 `;
 
 type ActivityRow = {
+  group_id?: string;
   id: string;
   workspace_id: string;
   type: ActivityType;
@@ -87,6 +104,7 @@ type ActivityRow = {
   company_name: string | null;
   contact_id: string | null;
   contact_name: string | null;
+  people: ActivityPerson[] | null;
   opportunity_id: string | null;
   opportunity_name: string | null;
   actor_user_id: string | null;
@@ -97,6 +115,7 @@ type ActivityRow = {
 };
 
 function mapActivity(row: ActivityRow): Activity {
+  const contacts = row.people ?? [];
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -108,6 +127,8 @@ function mapActivity(row: ActivityRow): Activity {
     companyName: row.company_name,
     contactId: row.contact_id,
     contactName: row.contact_name,
+    contactIds: contacts.map((person) => person.id),
+    contacts,
     opportunityId: row.opportunity_id,
     opportunityName: row.opportunity_name,
     actorUserId: row.actor_user_id,
@@ -194,6 +215,7 @@ export async function createActivityInDb(
   actor: Actor,
   input: ActivityWrite,
   provenance?: Provenance,
+  options: { attendeeIds?: string[] } = {},
 ) {
   const write = prepareActivity(input);
   const links = await resolveLinks(db, actor.workspaceId, { ...write, companyId: write.companyId ?? undefined });
@@ -228,6 +250,9 @@ export async function createActivityInDb(
         JSON.stringify(write.metadata),
       ],
     );
+    if (options.attendeeIds?.length) {
+      await linkActivityContactsInDb(db, actor.workspaceId, inserted.rows[0].id, options.attendeeIds);
+    }
     const saved = await db.query<ActivityRow>(
       `${ACTIVITY_SQL} where a.id = $1`,
       [inserted.rows[0].id],
@@ -309,7 +334,7 @@ export async function listActivities(
     }
     if (query.contactId) {
       values.push(query.contactId);
-      where.push(`a.contact_id = $${values.length}`);
+      where.push(`exists (select 1 from crm.activity_contacts lc where lc.activity_id = a.id and lc.contact_id = $${values.length})`);
     }
     if (query.opportunityId) {
       values.push(query.opportunityId);
@@ -395,11 +420,12 @@ export async function listActivitiesByContact(
   return withActor(actor, async (db) => {
     const rows = await db.query<ActivityRow>(
       `select
-         id, workspace_id, type, title, body, occurred_at, company_id, company_name,
-         contact_id, contact_name, opportunity_id, opportunity_name,
+         group_id, id, workspace_id, type, title, body, occurred_at, company_id, company_name,
+         contact_id, contact_name, people, opportunity_id, opportunity_name,
          actor_user_id, actor_agent_id, actor_name, metadata, created_at
        from (
          select
+           l.contact_id as group_id,
            a.id,
            a.workspace_id,
            a.type,
@@ -414,6 +440,7 @@ export async function listActivitiesByContact(
              ct.email,
              ct.phone
            ) as contact_name,
+           ${PEOPLE_SQL} as people,
            a.opportunity_id,
            op.name as opportunity_name,
            a.actor_user_id,
@@ -422,23 +449,23 @@ export async function listActivitiesByContact(
            a.metadata,
            a.created_at,
            row_number() over (
-             partition by a.contact_id
+             partition by l.contact_id
              order by a.occurred_at desc, a.id desc
            ) as rn
-         from crm.activities a
+         from crm.activity_contacts l
+         join crm.activities a on a.id = l.activity_id
          left join crm.companies co on co.id = a.company_id
          left join crm.contacts ct on ct.id = a.contact_id
          left join crm.opportunities op on op.id = a.opportunity_id
          ${ACTOR_JOIN_SQL}
-         where a.workspace_id = $1 and a.contact_id = any($2::uuid[]) and a.archived_at is null
+         where a.workspace_id = $1 and l.contact_id = any($2::uuid[]) and a.archived_at is null
        ) ranked
        where rn <= 40
        order by occurred_at desc, id desc`,
       [actor.workspaceId, ids],
     );
     for (const row of rows.rows) {
-      const activity = mapActivity(row);
-      if (activity.contactId) grouped[activity.contactId]?.push(activity);
+      if (row.group_id) grouped[row.group_id]?.push(mapActivity(row));
     }
     return grouped;
   });
@@ -459,10 +486,12 @@ export async function listCompanyTimeline(
          and a.archived_at is null
          and (
            a.company_id = $2
-           or a.contact_id in (
-             select c.id
-             from crm.contacts c
-             where c.workspace_id = $1
+           or exists (
+             select 1
+             from crm.activity_contacts lc
+             join crm.contacts c on c.id = lc.contact_id
+             where lc.activity_id = a.id
+               and c.workspace_id = $1
                and c.company_id = $2
                and c.archived_at is null
            )

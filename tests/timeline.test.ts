@@ -31,6 +31,8 @@ function activity(patch: Partial<Activity>): Activity {
     companyName: null,
     contactId: null,
     contactName: null,
+    contactIds: [],
+    contacts: [],
     opportunityId: null,
     opportunityName: null,
     actorUserId: null,

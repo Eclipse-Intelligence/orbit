@@ -1169,8 +1169,8 @@ export async function getMeetings(
     const status = (await readStatus(db, actor))?.status;
     const column = byContact ? "contact_ids" : "company_ids";
     const notes = byContact
-      ? "a.contact_id = $3"
-      : "(a.company_id = $3 or a.contact_id = any(m.contact_ids))";
+      ? "exists (select 1 from crm.activity_contacts l where l.activity_id = a.id and l.contact_id = $3)"
+      : "(a.company_id = $3 or exists (select 1 from crm.activity_contacts l where l.activity_id = a.id and l.contact_id = any(m.contact_ids)))";
     const select = (upcoming: boolean) =>
       db.query<EventRow>(
         `select m.id, m.subject, m.starts_at, m.ends_at, m.is_all_day, m.location, m.web_link,

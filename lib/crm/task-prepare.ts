@@ -182,7 +182,11 @@ async function activityLines(db: Db, workspaceId: string, task: Task) {
      from crm.activities a
      left join crm.call_insights ci on ci.activity_id = a.id and ci.status = 'ready'
      where a.workspace_id = $1 and a.archived_at is null and a.occurred_at <= now()
-       and (($2::uuid is not null and a.contact_id = $2) or ($3::uuid is not null and a.company_id = $3) or ($4::uuid is not null and a.opportunity_id = $4))
+       and (
+         ($2::uuid is not null and exists (select 1 from crm.activity_contacts l where l.activity_id = a.id and l.contact_id = $2))
+         or ($3::uuid is not null and a.company_id = $3)
+         or ($4::uuid is not null and a.opportunity_id = $4)
+       )
      order by a.occurred_at desc
      limit ${ACTIVITIES_READ}`,
     [workspaceId, task.contactId, task.companyId, task.opportunityId],

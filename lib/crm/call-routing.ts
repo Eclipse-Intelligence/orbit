@@ -9,9 +9,9 @@ import {
   type NameCandidate,
 } from "@/lib/crm/call-names";
 import { isFreeMailDomain } from "@/lib/crm/communications";
-import { internalAddresses, type Participant } from "@/lib/crm/conversations";
+import { internalAddresses, ownCallAddresses, type Participant } from "@/lib/crm/conversations";
 import { CrmError, isPgError, notFound } from "@/lib/crm/errors";
-import { matchParties, type PartyMatch } from "@/lib/crm/inbox";
+import { matchAllParties, matchParties, type PartyMatch } from "@/lib/crm/inbox";
 import { withActor } from "@/lib/crm/context";
 import { isUuid } from "@/lib/crm/mutate";
 import { canonicalEmail } from "@/lib/crm/normalize";
@@ -23,9 +23,11 @@ import { query } from "@/lib/db/pool";
 import { AUTOMATED_DOMAIN, AUTOMATED_SENDER } from "@/lib/mail/patterns";
 import { addressHomesInDb } from "@/lib/mail/routing";
 
+export { ownCallAddresses };
+
 const RULE_GRACE_MS = 5 * 60 * 1000;
 
-export type CallTarget = { actor: UserActor; match: PartyMatch };
+export type CallTarget = { actor: UserActor; match: PartyMatch; attendeeIds: string[] };
 export type RuledPerson = { workspaceId: string; email: string; name: string | null };
 export type CallRoute = { targets: CallTarget[]; ruled: RuledPerson[]; suggested: NameCandidate[] };
 
@@ -35,22 +37,6 @@ const automated = [new RegExp(AUTOMATED_SENDER, "i"), new RegExp(AUTOMATED_DOMAI
 
 function isAutomated(email: string) {
   return automated.some((pattern) => pattern.test(email));
-}
-
-export async function ownCallAddresses(db: Db, owner: UserActor, extra: (string | null | undefined)[] = []) {
-  const result = await db.query<{ email: string }>(
-    `select lower(email) as email from crm.mail_sources where user_id = $1
-     union select lower(email) from crm.send_identities where user_id = $1
-     union select lower(email) from crm.mailbox_connections where user_id = $1 and email is not null
-     union select lower(email) from crm.calendar_accounts where user_id = $1 and email is not null`,
-    [owner.userId],
-  );
-  const own = new Set(result.rows.map((row) => row.email));
-  for (const value of [owner.email, ...extra]) {
-    const email = value ? canonicalEmail(value) : null;
-    if (email) own.add(email);
-  }
-  return own;
 }
 
 async function rulesFor(db: Db, owner: UserActor, workspaceIds: string[]) {
@@ -100,6 +86,7 @@ export async function routeCallInDb(
     ? nameQueries(nameless, await excludedNameKeys(db, owner.userId, [owner.fullName, ...(options.ownNames ?? [])]))
     : [];
   const matched = new Map<string, CallTarget>();
+  const emailed = new Map<string, string[]>();
   const unmatched: UserActor[] = [];
   const ruled: RuledPerson[] = [];
   for (const actor of actors) {
@@ -109,7 +96,9 @@ export async function routeCallInDb(
       const rule = rules.get(domainOf(item.email));
       return !rule || rule.workspaceIds.includes(actor.workspaceId);
     });
-    const match = await matchParties(db, actor.workspaceId, allowed.map((item) => item.email));
+    const allowedEmails = allowed.map((item) => item.email);
+    const match = await matchParties(db, actor.workspaceId, allowedEmails);
+    emailed.set(actor.workspaceId, await matchAllParties(db, actor.workspaceId, allowedEmails));
     for (const item of allowed) {
       const domain = domainOf(item.email);
       const rule = rules.get(domain);
@@ -121,21 +110,40 @@ export async function routeCallInDb(
       );
       if (!known.rowCount) ruled.push({ workspaceId: actor.workspaceId, email: item.email, name: item.name });
     }
-    if (match.contactId || match.companyId) matched.set(actor.workspaceId, { actor, match });
+    if (match.contactId || match.companyId) matched.set(actor.workspaceId, { actor, match, attendeeIds: [] });
     else unmatched.push(actor);
   }
   let suggested: NameCandidate[] = [];
-  if (names.length > 0 && unmatched.length > 0) {
+  const named = new Map<string, string[]>();
+  if (names.length > 0) {
     const lookup = await contactsByName(db, [...new Set([...workspaceIds, ...(options.nameWorkspaceIds ?? [])])], names);
     const confident = names.filter((query) => confidentFor(query, lookup));
     const hits = confident.flatMap((query) => exactFor(query, lookup.candidates));
+    for (const actor of actors) {
+      const here = hits.filter((candidate) => candidate.workspaceId === actor.workspaceId);
+      named.set(actor.workspaceId, here.map((candidate) => candidate.contactId));
+    }
     for (const actor of unmatched) {
       const hit = hits.find((candidate) => candidate.workspaceId === actor.workspaceId);
-      if (hit) matched.set(actor.workspaceId, { actor, match: hit });
+      if (hit) matched.set(actor.workspaceId, { actor, match: hit, attendeeIds: [] });
     }
-    if (matched.size === 0) suggested = inQueryOrder(lookup.candidates, names).filter((candidate) => workspaceIds.includes(candidate.workspaceId));
+    if (matched.size === 0 && unmatched.length > 0) {
+      suggested = inQueryOrder(lookup.candidates, names).filter((candidate) => workspaceIds.includes(candidate.workspaceId));
+    }
   }
-  const targets = actors.map((actor) => matched.get(actor.workspaceId)).filter((target): target is CallTarget => Boolean(target));
+  const targets = actors
+    .map((actor) => matched.get(actor.workspaceId))
+    .filter((target): target is CallTarget => Boolean(target))
+    .map((target) => ({
+      ...target,
+      attendeeIds: [
+        ...new Set([
+          ...(target.match.contactId ? [target.match.contactId] : []),
+          ...(emailed.get(target.actor.workspaceId) ?? []),
+          ...(named.get(target.actor.workspaceId) ?? []),
+        ]),
+      ],
+    }));
   return { targets, ruled, suggested };
 }
 

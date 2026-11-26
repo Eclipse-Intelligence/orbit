@@ -350,8 +350,9 @@ export async function stalledDealsInDb(db: Db, actor: Actor, options: StalledOpt
          union all
          (select a.occurred_at, a.type from crm.activities a where a.company_id = d.company_id and a.archived_at is null order by a.occurred_at desc limit 1)
          union all
-         (select a.occurred_at, a.type from crm.activities a
-          where d.primary_contact_id is not null and a.contact_id = d.primary_contact_id and a.archived_at is null order by a.occurred_at desc limit 1)
+         (select a.occurred_at, a.type from crm.activity_contacts l
+          join crm.activities a on a.id = l.activity_id
+          where d.primary_contact_id is not null and l.contact_id = d.primary_contact_id and a.archived_at is null order by a.occurred_at desc limit 1)
        ) touch
        order by touch.occurred_at desc limit 1
      ) last on true

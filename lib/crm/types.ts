@@ -349,6 +349,8 @@ export type Activity = {
   companyName: string | null;
   contactId: string | null;
   contactName: string | null;
+  contactIds: string[];
+  contacts: ActivityPerson[];
   opportunityId: string | null;
   opportunityName: string | null;
   actorUserId: string | null;
@@ -357,6 +359,8 @@ export type Activity = {
   metadata: Record<string, unknown>;
   createdAt: string;
 };
+
+export type ActivityPerson = { id: string; name: string };
 
 export type ActivityWrite = {
   type?: ActivityType;
