@@ -94,7 +94,7 @@ export function PublicEndingEditor({
   return (
     <div className="flex flex-col gap-2">
       <div className="bg-surface-field focus-within:border-ring/50 focus-within:bg-surface-raised ease-power3-out flex h-9 min-w-0 items-center rounded-lg border border-transparent pl-2.5 text-[13px] transition-[background-color,border-color] duration-150">
-        <span aria-hidden className="text-subtle max-w-[65%] min-w-0 shrink truncate">
+        <span aria-hidden className="text-subtle min-w-0 shrink-[100] truncate">
           {prefix}
         </span>
         <Input
@@ -111,7 +111,7 @@ export function PublicEndingEditor({
           autoCorrect="off"
           spellCheck={false}
           disabled={saving}
-          className="h-full min-w-[6ch] flex-1 border-0 bg-transparent px-0 text-[13px] hover:bg-transparent focus-visible:border-0 focus-visible:bg-transparent"
+          className="h-full min-w-[12ch] flex-1 border-0 bg-transparent px-0 text-[13px] hover:bg-transparent focus-visible:border-0 focus-visible:bg-transparent"
         />
       </div>
       <div className="flex items-start gap-2 pointer-coarse:gap-3">

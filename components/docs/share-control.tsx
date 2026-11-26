@@ -177,7 +177,9 @@ function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: {
           url && (
             <>
               <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.04] py-1.5 pr-1.5 pl-2.5 pointer-coarse:gap-3">
-                <span className="text-soft min-w-0 flex-1 truncate text-[12.5px]">{url.replace(/^https?:\/\//, "")}</span>
+                <span className="text-soft min-w-0 flex-1 truncate text-left text-[12.5px] [direction:rtl]">
+                  <bdo dir="ltr">{url.replace(/^https?:\/\//, "")}</bdo>
+                </span>
                 <CopyButton text={url} label="Copy" ariaLabel="Copy public link" className="min-w-0" />
                 {owned && (
                   <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(true)} aria-label="Edit the public link ending" className="hit">
