@@ -201,12 +201,22 @@ export function inCode(state: EditorState, pos: number) {
   return false;
 }
 
+const BLOCK_START = /^(#{1,6} |[-*+] |\d+\. |> |\||```|---$)/;
+
+function blankLine(state: EditorState, number: number) {
+  return number < 1 || number > state.doc.lines || !state.doc.line(number).text.trim();
+}
+
 export function pasteChange(state: EditorState, markdown: string): TransactionSpec {
   const range = state.selection.main;
   let text = markdown;
-  if (text.includes("\n")) {
-    if (state.doc.sliceString(state.doc.lineAt(range.from).from, range.from).trim()) text = `\n\n${text}`;
-    if (state.doc.sliceString(range.to, state.doc.lineAt(range.to).to).trim()) text = `${text}\n\n`;
+  if (text.includes("\n") || BLOCK_START.test(text)) {
+    const first = state.doc.lineAt(range.from);
+    const last = state.doc.lineAt(range.to);
+    if (state.doc.sliceString(first.from, range.from).trim()) text = `\n\n${text}`;
+    else if (!blankLine(state, first.number - 1)) text = `\n${text}`;
+    if (state.doc.sliceString(range.to, last.to).trim()) text = `${text}\n\n`;
+    else if (!blankLine(state, last.number + 1)) text = `${text}\n`;
   }
   return {
     changes: { from: range.from, to: range.to, insert: text },

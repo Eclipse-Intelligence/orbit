@@ -136,6 +136,17 @@ describe("pasting HTML into Docs", () => {
     assert.equal(pasted("world", 0, 0, table), `${table}\n\nworld`);
     assert.equal(pasted("Intro", 5, 5, table), `Intro\n\n${table}`);
     assert.equal(pasted("Say hi there", 4, 6, "**hello**"), "Say **hello** there");
+    assert.equal(pasted("Intro\n\nOutro", 6, 6, table), `Intro\n\n${table}\n\nOutro`);
+    assert.equal(pasted("A\nB\nC", 2, 3, table), `A\n\n${table}\n\nC`);
+    assert.equal(pasted("Intro\nOutro", 5, 5, "- x\n- y"), "Intro\n\n- x\n- y\n\nOutro");
+    assert.equal(pasted("Hello world", 6, 6, "## Heading"), "Hello \n\n## Heading\n\nworld");
+    assert.equal(pasted("Hello world", 6, 6, "- x"), "Hello \n\n- x\n\nworld");
+    for (const [doc, from, to] of [["Intro\n\nOutro", 6, 6], ["A\nB\nC", 2, 3], ["Intro\nOutro", 0, 0], ["Intro\nOutro", 11, 11]] as const) {
+      const result = pasted(doc, from, to, table);
+      const found = findTables(Text.of(result.split("\n")), docsParser.parse(result));
+      assert.equal(found.length, 1, result);
+      assert.equal(found[0].rows.length, 1, result);
+    }
     assert.equal(findTables(Text.of(pasted("Hello world", 6, 6, table).split("\n")), docsParser.parse(pasted("Hello world", 6, 6, table))).length, 1);
   });
 
