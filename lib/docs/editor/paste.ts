@@ -1,6 +1,6 @@
 import { syntaxTree } from "@codemirror/language";
-import { EditorSelection } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorSelection, type EditorState, type TransactionSpec } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 
 export type HtmlNode = {
   nodeType: number;
@@ -105,32 +105,38 @@ function table(node: HtmlNode): string {
   return [line(rows[0]), `|${Array.from({ length: width }, () => " --- ").join("|")}|`, ...rows.slice(1).map(line)].join("\n");
 }
 
-function list(node: HtmlNode, depth: number): string {
+function list(node: HtmlNode): string {
   const ordered = tag(node) === "OL";
   let number = Number(node.getAttribute?.("start") ?? 1);
   if (!Number.isFinite(number)) number = 1;
   const items: string[] = [];
+  let lastMarker = "";
+  const nest = (text: string, width: number) => text.split("\n").map((line) => (line ? `${" ".repeat(width)}${line}` : line)).join("\n");
   for (const item of children(node)) {
     if (!isElement(item, "LI")) {
-      if (isElement(item, "UL") || isElement(item, "OL")) items.push(list(item, depth + 1));
+      if (isElement(item, "UL") || isElement(item, "OL")) items.push(nest(list(item), lastMarker.length));
       continue;
     }
     const marker = ordered ? `${number}. ` : "- ";
     number += 1;
-    const indent = " ".repeat(depth * 2);
+    lastMarker = marker;
     const own: HtmlNode[] = [];
     const nested: string[] = [];
     for (const child of children(item)) {
-      if (isElement(child, "UL") || isElement(child, "OL")) nested.push(list(child, depth + 1));
+      if (isElement(child, "UL") || isElement(child, "OL")) nested.push(nest(list(child), marker.length));
       else own.push(child);
     }
-    const text = tidy(blocks(own, depth).join("\n"));
-    items.push([`${indent}${marker}${text.replace(/\n/g, `\n${indent}${" ".repeat(marker.length)}`)}`, ...nested].join("\n"));
+    const text = blocks(own).join("\n");
+    items.push([`${marker}${nest(text, marker.length).slice(marker.length)}`, ...nested].join("\n"));
   }
   return items.join("\n");
 }
 
-function blocks(nodes: HtmlNode[], depth = 0): string[] {
+function holdsBlocks(node: HtmlNode): boolean {
+  return children(node).some((child) => child.nodeType === ELEMENT && !SKIPPED.has(tag(child)) && (BLOCKS.has(tag(child)) || holdsBlocks(child)));
+}
+
+function blocks(nodes: HtmlNode[]): string[] {
   const out: string[] = [];
   let run = "";
   const flush = () => {
@@ -141,16 +147,19 @@ function blocks(nodes: HtmlNode[], depth = 0): string[] {
   for (const node of nodes) {
     if (node.nodeType === ELEMENT && SKIPPED.has(tag(node))) continue;
     if (node.nodeType !== ELEMENT || !BLOCKS.has(tag(node))) {
-      run += inline(node, "\n");
+      if (node.nodeType === ELEMENT && holdsBlocks(node)) {
+        flush();
+        out.push(...blocks(children(node)));
+      } else run += inline(node, "\n");
       continue;
     }
     flush();
     const name = tag(node);
     if (/^H[1-6]$/.test(name)) {
       const text = tidy(children(node).map((child) => inline(child, " ")).join("")).replace(/\n/g, " ");
-      if (text) out.push(`${"#".repeat(Number(name[1]))} ${text.replace(/^\*\*([\s\S]*)\*\*$/, "$1")}`);
+      if (text) out.push(`${"#".repeat(Number(name[1]))} ${text.replace(/^\*\*((?:(?!\*\*)[\s\S])*)\*\*$/, "$1")}`);
     } else if (name === "UL" || name === "OL") {
-      const text = list(node, depth);
+      const text = list(node);
       if (text.trim()) out.push(text);
     } else if (name === "TABLE") {
       const text = table(node);
@@ -161,10 +170,10 @@ function blocks(nodes: HtmlNode[], depth = 0): string[] {
     } else if (name === "HR") {
       out.push("---");
     } else if (name === "BLOCKQUOTE") {
-      const text = blocks(children(node), depth).join("\n\n");
+      const text = blocks(children(node)).join("\n\n");
       if (text) out.push(text.split("\n").map((line) => (line ? `> ${line}` : ">")).join("\n"));
     } else {
-      out.push(...blocks(children(node), depth));
+      out.push(...blocks(children(node)));
     }
   }
   flush();
@@ -185,30 +194,37 @@ export function worthConverting(html: string) {
   return STRUCTURE.test(html);
 }
 
-function inCode(view: EditorView, pos: number) {
-  for (let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(view.state).resolveInner(pos, -1); node; node = node.parent) {
+export function inCode(state: EditorState, pos: number) {
+  for (let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(state).resolveInner(pos, -1); node; node = node.parent) {
     if (CODE_NODES.has(node.name)) return true;
   }
   return false;
+}
+
+export function pasteChange(state: EditorState, markdown: string): TransactionSpec {
+  const range = state.selection.main;
+  let text = markdown;
+  if (text.includes("\n")) {
+    if (state.doc.sliceString(state.doc.lineAt(range.from).from, range.from).trim()) text = `\n\n${text}`;
+    if (state.doc.sliceString(range.to, state.doc.lineAt(range.to).to).trim()) text = `${text}\n\n`;
+  }
+  return {
+    changes: { from: range.from, to: range.to, insert: text },
+    selection: EditorSelection.cursor(range.from + text.length),
+    scrollIntoView: true,
+    userEvent: "input.paste",
+  };
 }
 
 export function richPaste(event: ClipboardEvent, view: EditorView) {
   if (view.state.readOnly || typeof DOMParser === "undefined") return false;
   const html = event.clipboardData?.getData("text/html");
   if (!html || !worthConverting(html)) return false;
-  const range = view.state.selection.main;
-  if (inCode(view, range.from)) return false;
+  if (inCode(view.state, view.state.selection.main.from)) return false;
   const body = new DOMParser().parseFromString(html, "text/html").body as unknown as HtmlNode;
-  let text = htmlToMarkdown(body);
-  if (!text.trim()) return false;
-  const line = view.state.doc.lineAt(range.from);
-  if (text.includes("\n") && view.state.doc.sliceString(line.from, range.from).trim()) text = `\n\n${text}`;
+  const markdown = htmlToMarkdown(body);
+  if (!markdown.trim()) return false;
   event.preventDefault();
-  view.dispatch({
-    changes: { from: range.from, to: range.to, insert: text },
-    selection: EditorSelection.cursor(range.from + text.length),
-    scrollIntoView: true,
-    userEvent: "input.paste",
-  });
+  view.dispatch(pasteChange(view.state, markdown));
   return true;
 }
