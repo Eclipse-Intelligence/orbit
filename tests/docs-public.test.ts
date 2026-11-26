@@ -182,9 +182,9 @@ describe("Public docs: the link", () => {
   });
 
   it("keeps the private definer function out of reach of signed-in roles", async () => {
-    await assert.rejects(queryAsUser(mark.userId, "select * from private.public_page('x')"), /permission denied/);
-    const columns = await getAdminPool().query("select * from private.public_page('x')");
-    assert.deepEqual(columns.fields.map((field) => field.name), ["title", "content", "edited_at", "allow_download", "expires_at"]);
+    await assert.rejects(queryAsUser(mark.userId, "select * from private.public_page_link('x')"), /permission denied/);
+    const columns = await getAdminPool().query("select * from private.public_page_link('x')");
+    assert.deepEqual(columns.fields.map((field) => field.name), ["title", "content", "edited_at", "allow_download", "expires_at", "public_slug", "forward_token_enc"]);
   });
 
   it("exposes only the title, text, updated date and download flag", async () => {

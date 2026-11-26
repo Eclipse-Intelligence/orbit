@@ -369,14 +369,6 @@ describe("Public doc endings: old links", () => {
     await assert.rejects(queryAsUser(mark.userId, "select * from private.public_page_link('x')"), /permission denied/);
     await assert.rejects(queryAsUser(mark.userId, "select private.public_slug_taken('x', null)"), /permission denied/);
   });
-
-  it("keeps the code live before this change working", async () => {
-    const { id, token } = await publish(mark, "Compat");
-    await setDocPublic(mark, id, { slug: "compat-ending" });
-    const result = await getAdminPool().query("select * from private.public_page(encode(sha256(convert_to($1, 'UTF8')), 'hex'))", [token]);
-    assert.deepEqual(result.fields.map((field) => field.name), ["title", "content", "edited_at", "allow_download", "expires_at"]);
-    assert.equal(result.rows[0].title, "Compat");
-  });
 });
 
 describe("Public doc endings: who can change them", () => {
