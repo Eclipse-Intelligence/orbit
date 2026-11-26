@@ -10,6 +10,7 @@ import { docsLanguage } from "@/lib/docs/editor/syntax";
 import { activeLines, livePreview } from "@/lib/docs/editor/preview";
 import { external, liveSlot } from "@/lib/docs/editor/live-slot";
 import { presenceField } from "@/lib/docs/editor/presence";
+import { richPaste } from "@/lib/docs/editor/paste";
 import { noteTables } from "@/lib/docs/editor/tables";
 import { DeletedText } from "@/lib/docs/editor/widgets";
 import { isTagChar, toggleTaskMarker, triggerBefore, type Trigger } from "@/lib/docs/markdown";
@@ -252,7 +253,7 @@ export function noteExtensions(options: NoteExtensionOptions = {}): Extension[] 
     EditorView.lineWrapping,
     editable ? Prec.highest(keymap.of(pickerKeymap)) : [],
     keymap.of([...(editable ? [...markdownKeymap, ...editingKeymap] : []), ...historyKeymap, ...defaultKeymap]),
-    EditorView.domEventHandlers({ mousedown: clickHandler, keydown: checkboxKey }),
+    EditorView.domEventHandlers({ mousedown: clickHandler, keydown: checkboxKey, paste: richPaste }),
     editable
       ? EditorView.updateListener.of((update) => {
           if (update.docChanged && !update.transactions.every((transaction) => transaction.annotation(external))) bridge.changed(update.view);
