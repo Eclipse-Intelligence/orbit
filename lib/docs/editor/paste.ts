@@ -207,6 +207,15 @@ function blankLine(state: EditorState, number: number) {
   return number < 1 || number > state.doc.lines || !state.doc.line(number).text.trim();
 }
 
+export function belongsInline(state: EditorState, markdown: string) {
+  const oneLineBlock = /^```\n[^\n]*\n```$/.test(markdown) || (!markdown.includes("\n") && BLOCK_START.test(markdown));
+  if (!oneLineBlock) return false;
+  const range = state.selection.main;
+  const before = state.doc.sliceString(state.doc.lineAt(range.from).from, range.from);
+  const after = state.doc.sliceString(range.to, state.doc.lineAt(range.to).to);
+  return Boolean(before.trim() || after.trim());
+}
+
 export function pasteChange(state: EditorState, markdown: string): TransactionSpec {
   const range = state.selection.main;
   let text = markdown;
@@ -233,7 +242,7 @@ export function richPaste(event: ClipboardEvent, view: EditorView) {
   if (inCode(view.state, view.state.selection.main.from)) return false;
   const body = new DOMParser().parseFromString(html, "text/html").body as unknown as HtmlNode;
   const markdown = htmlToMarkdown(body);
-  if (!markdown.trim()) return false;
+  if (!markdown.trim() || belongsInline(view.state, markdown)) return false;
   event.preventDefault();
   view.dispatch(pasteChange(view.state, markdown));
   return true;

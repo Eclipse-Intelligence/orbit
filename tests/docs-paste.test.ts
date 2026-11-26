@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { findTables } from "@/lib/docs/editor/tables";
 import { docsLanguage, docsParser } from "@/lib/docs/editor/syntax";
-import { htmlToMarkdown, inCode, pasteChange, worthConverting, type HtmlNode } from "@/lib/docs/editor/paste";
+import { belongsInline, htmlToMarkdown, inCode, pasteChange, worthConverting, type HtmlNode } from "@/lib/docs/editor/paste";
 import { EditorSelection, EditorState, Text } from "@codemirror/state";
 
 type Child = HtmlNode | string;
@@ -156,5 +156,15 @@ describe("pasting HTML into Docs", () => {
     assert.equal(inCode(state, 7), true);
     assert.equal(inCode(state, doc.indexOf("inline") + 2), true);
     assert.equal(inCode(state, doc.length), false);
+  });
+
+  it("leaves a one-line paste beside existing text to the plain text", () => {
+    const at = (doc: string, from: number, to = from) => EditorState.create({ doc, selection: EditorSelection.range(from, to) });
+    assert.equal(belongsInline(at("Hello world", 6), "## two words"), true);
+    assert.equal(belongsInline(at("Run  now", 4), "```\nnpm run dev\n```"), true);
+    assert.equal(belongsInline(at("Hello world", 6), "**bold**"), false);
+    assert.equal(belongsInline(at("Hello world", 0, 11), "## Heading"), false);
+    assert.equal(belongsInline(at("Intro\n\nOutro", 6), "## Heading"), false);
+    assert.equal(belongsInline(at("Hello world", 6), "| a |\n| --- |\n| 1 |"), false);
   });
 });
