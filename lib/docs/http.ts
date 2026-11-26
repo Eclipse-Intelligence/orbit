@@ -1,6 +1,7 @@
 import { CrmError } from "@/lib/crm/errors";
 import { listDocTasks } from "@/lib/crm/task-docs";
 import type { Provenance, UserActor } from "@/lib/crm/types";
+import { isExpiryDay } from "@/lib/docs/public-expiry";
 import type { CreateInput, Folder, Page, PageFilter, PageSort, PublicInput, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
 import { createFolder, listFolders, moveFolder, renameFolder, shareFolder } from "@/lib/docs/folders";
@@ -258,9 +259,9 @@ export function publicInputOf(value: unknown): PublicInput {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalid();
   const input = value as Record<string, unknown>;
   const keys = Object.keys(input);
-  if (keys.length === 0 || keys.some((key) => key !== "public" && key !== "allowDownload")) throw invalid();
-  if (keys.some((key) => typeof input[key] !== "boolean")) throw invalid();
-  return { public: input.public as boolean | undefined, allowDownload: input.allowDownload as boolean | undefined };
+  if (keys.length === 0 || keys.some((key) => key !== "public" && key !== "allowDownload" && key !== "expiresAt")) throw invalid();
+  if (keys.some((key) => (key === "expiresAt" ? input[key] !== null && !isExpiryDay(input[key]) : typeof input[key] !== "boolean"))) throw invalid();
+  return { public: input.public as boolean | undefined, allowDownload: input.allowDownload as boolean | undefined, expiresAt: input.expiresAt as string | null | undefined };
 }
 
 export const docsChanges = {

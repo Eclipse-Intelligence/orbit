@@ -70,6 +70,7 @@ export type DocSummary = {
   public: boolean;
   allowDownload: boolean;
   publicUrl: string | null;
+  publicExpiresAt: string | null;
   canChangePublic: boolean;
   excerpt: string;
   tags: string[];
@@ -114,7 +115,7 @@ export type DocDetail = DocSummary & {
   canChangeAssistantEdit: boolean;
 };
 
-export type DocPublicInput = { public?: boolean; allowDownload?: boolean };
+export type DocPublicInput = { public?: boolean; allowDownload?: boolean; expiresAt?: string | null };
 
 export type DocSearchHit = {
   id: string;

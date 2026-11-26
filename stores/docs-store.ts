@@ -22,6 +22,7 @@ import { entryCount, excerptFrom, parseTags, rewriteLinkTitle, wordCount } from 
 import { memberTagCount } from "@/lib/docs/people-tags";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import type { LiveStatus } from "@/lib/docs/live/session";
+import { endOfDayInstant, isExpiryDay } from "@/lib/docs/public-expiry";
 import { listKey } from "@/lib/docs/routes";
 import { viewerParticipant } from "@/lib/docs/participants";
 
@@ -39,7 +40,7 @@ export type VisibilityPrompt = {
 
 const publicSeq = new Map<string, number>();
 
-type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "publicUrl"> | Pick<PageSummary, "public" | "allowDownload">;
+type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "publicExpiresAt"> & Partial<Pick<PageSummary, "publicUrl">>;
 
 type DocsState = {
   ready: boolean;
@@ -183,6 +184,7 @@ function summaryFrom(page: Page): PageSummary {
     public: page.public,
     allowDownload: page.allowDownload,
     publicUrl: page.publicUrl,
+    publicExpiresAt: page.publicExpiresAt,
     canChangePublic: page.canChangePublic,
   };
 }
@@ -621,18 +623,31 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         pages: state.pages[id] ? { ...state.pages, [id]: { ...state.pages[id], ...patch } } : state.pages,
         summaries: state.summaries[id] ? { ...state.summaries, [id]: { ...state.summaries[id], ...patch } } : state.summaries,
       }));
-    if (before) patchPublic({ public: input.public ?? before.public, allowDownload: input.allowDownload ?? before.allowDownload });
+    if (before) {
+      const enabled = input.public ?? before.public;
+      const publicExpiresAt =
+        input.expiresAt === undefined
+          ? enabled === before.public
+            ? before.publicExpiresAt
+            : null
+          : isExpiryDay(input.expiresAt)
+            ? endOfDayInstant(input.expiresAt).toISOString()
+            : input.expiresAt === null
+              ? null
+              : before.publicExpiresAt;
+      patchPublic({ public: enabled, allowDownload: input.allowDownload ?? before.allowDownload, publicExpiresAt });
+    }
     try {
       const page = await docsData().setPublic(id, input);
       if (latest()) {
-        patchPublic({ public: page.public, allowDownload: page.allowDownload, publicUrl: page.publicUrl });
+        patchPublic({ public: page.public, allowDownload: page.allowDownload, publicUrl: page.publicUrl, publicExpiresAt: page.publicExpiresAt });
         set({ lists: {} });
         settle();
       }
       return null;
     } catch (error) {
       if (latest()) {
-        if (before) patchPublic({ public: before.public, allowDownload: before.allowDownload, publicUrl: before.publicUrl });
+        if (before) patchPublic({ public: before.public, allowDownload: before.allowDownload, publicUrl: before.publicUrl, publicExpiresAt: before.publicExpiresAt });
         settle();
       }
       return message(error, "Couldn't change the public link. Try again.");

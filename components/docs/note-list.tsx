@@ -5,6 +5,7 @@ import Link from "next/link";
 import Button from "@/components/_ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/_ui/dropdown-menu";
 import { PresenceStack } from "@/components/docs/presence";
+import { usePublicLive } from "@/components/docs/use-public-live";
 import { NOTE_TYPE } from "@/components/docs/use-docs";
 import type { PageFilter, PageSort, PageSummary, Participant } from "@/lib/docs/client-types";
 import { listKey } from "@/lib/docs/routes";
@@ -100,6 +101,7 @@ export const NoteRow = memo(function NoteRow({
   const agent = writers.find((writer) => writer.kind !== "person");
   const editor = agent ?? writers[0];
   const when = whenLabel(summary.updatedAt, now);
+  const publicOn = usePublicLive(summary);
   const sharedAlone = summary.visibility === "shared" && !folderShared;
   return (
     <li>
@@ -128,7 +130,7 @@ export const NoteRow = memo(function NoteRow({
           </span>
           {sharedAlone && <SharedGlyph label="Shared on its own" />}
           {!summary.shared && folderShared && <PrivateGlyph />}
-          {summary.public && <PublicGlyph />}
+          {publicOn && <PublicGlyph />}
           <span className={cn("ml-auto shrink-0 text-[12px] tabular-nums", agent ? "text-[#b9b0ff]" : "text-subtle")}>{agent ? "Now" : when}</span>
         </span>
         {summary.snippet && <span className="text-subtle line-clamp-2 text-[13px] leading-[1.45] max-md:text-[14px]">{summary.snippet}</span>}

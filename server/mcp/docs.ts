@@ -57,6 +57,7 @@ function summary(doc: DocSummary) {
     public: doc.public,
     allowDownload: doc.allowDownload,
     publicUrl: doc.publicUrl,
+    publicExpiresAt: doc.publicExpiresAt,
     tags: doc.tags,
     excerpt: doc.excerpt,
     wordCount: doc.wordCount,
@@ -275,15 +276,15 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
     "set_doc_public",
     {
       description:
-        "Turns a doc's public read-only link on or off, and whether readers can download it as a PDF. The link never changes: turning it off makes it show not found, and turning it on again brings the same link back. Anyone with the link can read the doc's current text, with @mentions shown as plain names and [[links]] and #tags as plain text. Only the owner can change it (a workspace agent token only on docs it made); daily notes can't be public. Download is off until you turn it on.",
-      inputSchema: { id: z.uuid(), public: z.boolean().optional(), allow_download: z.boolean().optional(), provenanceUrl },
+        "Turns a doc's public read-only link on or off, whether readers can download it as a PDF, and when it turns itself off. The link never changes: turning it off makes it show not found, and turning it on again brings the same link back with no timer. expires_at is a date as YYYY-MM-DD (today or later): the link stops working at midnight UK time at the end of that day. Send it with public true to set it when turning the link on, or alone to change it while the link is on, and send null to remove it. Docs report publicExpiresAt, and once the timer runs out they report public false. Anyone with the link can read the doc's current text, with @mentions shown as plain names and [[links]] and #tags as plain text. Only the owner can change it (a workspace agent token only on docs it made); daily notes can't be public. Download is off until you turn it on.",
+      inputSchema: { id: z.uuid(), public: z.boolean().optional(), allow_download: z.boolean().optional(), expires_at: z.string().max(10).nullable().optional(), provenanceUrl },
     },
     async (args) =>
       run(async () => {
-        if (args.public === undefined && args.allow_download === undefined) {
-          throw new CrmError("invalid_input", "Send public, allow_download or both.", 400, { field: "public" });
+        if (args.public === undefined && args.allow_download === undefined && args.expires_at === undefined) {
+          throw new CrmError("invalid_input", "Send at least one of public, allow_download or expires_at.", 400, { field: "public" });
         }
-        const doc = await setDocPublic(actor, args.id, { public: args.public, allowDownload: args.allow_download }, provenance("set_doc_public", args.provenanceUrl));
+        const doc = await setDocPublic(actor, args.id, { public: args.public, allowDownload: args.allow_download, expiresAt: args.expires_at }, provenance("set_doc_public", args.provenanceUrl));
         return { doc: summary(doc) };
       }),
   );

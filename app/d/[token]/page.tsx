@@ -4,7 +4,9 @@ import { cache } from "react";
 import Button from "@/components/_ui/button";
 import { PublicNote } from "@/components/docs/static-note";
 import { openPublicDoc } from "@/lib/docs/public";
+import { availabilityLabel } from "@/lib/docs/public-expiry";
 import { updatedLabel } from "@/lib/docs/public-link";
+import ClockIcon from "@/public/assets/images/docs/clock.svg";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,12 @@ export default async function PublicDocPage({ params }: { params: Promise<{ toke
             </Button>
           )}
         </div>
+        {doc.expiresAt && (
+          <span className="caption-style text-soft bg-surface-raised flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1.5">
+            <ClockIcon aria-hidden className="size-3" />
+            {availabilityLabel(doc.expiresAt)}
+          </span>
+        )}
         <h1 className="note-title note-public-title">{doc.title}</h1>
         <PublicNote body={doc.content} />
       </article>

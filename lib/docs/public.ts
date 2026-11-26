@@ -2,16 +2,16 @@ import { query } from "@/lib/db/pool";
 import { renderDocPdf } from "@/lib/docs/pdf";
 import { hashPublicToken, isPublicToken } from "@/lib/docs/public-link";
 
-export type PublicDoc = { title: string; content: string; updatedAt: string; allowDownload: boolean };
+export type PublicDoc = { title: string; content: string; updatedAt: string; allowDownload: boolean; expiresAt: string | null };
 
-type PublicRow = { title: string; content: string; edited_at: Date; allow_download: boolean };
+type PublicRow = { title: string; content: string; edited_at: Date; allow_download: boolean; expires_at: Date | null };
 
 export async function openPublicDoc(token: string): Promise<PublicDoc | null> {
   if (!isPublicToken(token)) return null;
   const result = await query<PublicRow>("select * from private.public_page($1)", [hashPublicToken(token)]);
   const row = result.rows[0];
   if (!row) return null;
-  return { title: row.title.trim() || "Untitled", content: row.content, updatedAt: row.edited_at.toISOString(), allowDownload: row.allow_download };
+  return { title: row.title.trim() || "Untitled", content: row.content, updatedAt: row.edited_at.toISOString(), allowDownload: row.allow_download, expiresAt: row.expires_at ? row.expires_at.toISOString() : null };
 }
 
 function asciiName(title: string) {

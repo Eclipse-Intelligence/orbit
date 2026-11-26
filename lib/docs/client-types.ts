@@ -28,7 +28,7 @@ export type Folder = {
 
 export type TagNode = TagTreeNode;
 
-export type PublicInput = { public?: boolean; allowDownload?: boolean };
+export type PublicInput = { public?: boolean; allowDownload?: boolean; expiresAt?: string | null };
 
 export type PageKind = "note" | "daily";
 
@@ -51,6 +51,7 @@ export type PageSummary = {
   public: boolean;
   allowDownload: boolean;
   publicUrl: string | null;
+  publicExpiresAt: string | null;
   canChangePublic: boolean;
 };
 
