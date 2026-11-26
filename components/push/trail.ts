@@ -5,3 +5,9 @@ export function pushTrail(step: string, data: Record<string, unknown> = {}) {
     void fetch("/api/push/trail", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => undefined);
   } catch {}
 }
+
+export function trailPath() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.has("q")) url.searchParams.set("q", "search");
+  return `${url.pathname}${url.search}`;
+}

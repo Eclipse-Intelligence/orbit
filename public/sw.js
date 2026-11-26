@@ -51,6 +51,7 @@ function trail(step, data) {
 function pathOf(value) {
   try {
     const url = new URL(value);
+    if (url.searchParams.has("q")) url.searchParams.set("q", "search");
     return `${url.pathname}${url.search}`;
   } catch {
     return String(value);

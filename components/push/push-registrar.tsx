@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { refreshPush, registerServiceWorker } from "@/components/push/push-client";
 import { linkInWorkspace } from "@/lib/open-link";
-import { pushTrail } from "@/components/push/trail";
+import { pushTrail, trailPath } from "@/components/push/trail";
 
 export const OPEN_THREAD_EVENT = "orbit:open-thread";
 
@@ -47,7 +47,7 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
       const url = new URL(target.path, window.location.origin);
       const thread = url.searchParams.get("thread");
       const event = (thread || !url.search) && url.pathname === "/mail" && window.location.pathname === "/mail";
-      pushTrail("page-open", { source, target: target.path, from: `${window.location.pathname}${window.location.search}`, how: target.reload ? "reload" : event ? "event" : "navigate" });
+      pushTrail("page-open", { source, target: target.path, from: trailPath(), how: target.reload ? "reload" : event ? "event" : "navigate" });
       if (target.reload) {
         window.location.assign(target.path);
         return;
@@ -88,7 +88,7 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("pageshow", watchPending);
     window.addEventListener("focus", watchPending);
-    pushTrail("page-start", { path: `${window.location.pathname}${window.location.search}`, standalone: window.matchMedia("(display-mode: standalone)").matches, controlled: Boolean(navigator.serviceWorker.controller) });
+    pushTrail("page-start", { path: trailPath(), standalone: window.matchMedia("(display-mode: standalone)").matches, controlled: Boolean(navigator.serviceWorker.controller) });
     void registerServiceWorker().then(async () => {
       await refreshPush();
       pushTrail("page-ready", { path: window.location.pathname });
