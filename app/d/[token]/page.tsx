@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 import Button from "@/components/_ui/button";
 import { PublicNote } from "@/components/docs/static-note";
@@ -24,6 +24,7 @@ export default async function PublicDocPage({ params }: { params: Promise<{ toke
   const { token } = await params;
   const doc = await loadDoc(token);
   if (!doc) notFound();
+  if (doc.redirectTo) redirect(doc.redirectTo);
   return (
     <main className="bg-background min-h-dvh">
       <article className="note-surface mx-auto flex w-full max-w-[46em] flex-col gap-4 px-4 pt-8 pb-20 md:px-6 md:pt-14">

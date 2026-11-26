@@ -106,6 +106,8 @@ type Row = {
   public: boolean;
   allowDownload: boolean;
   publicExpiresAt: string | null;
+  publicSlug: string | null;
+  publicOldLinks: boolean;
   archived: boolean;
 };
 
@@ -174,6 +176,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       public: false,
       allowDownload: false,
       publicExpiresAt: null,
+      publicSlug: null,
+      publicOldLinks: false,
       archived: false,
     });
   }
@@ -196,6 +200,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       public: false,
       allowDownload: false,
       publicExpiresAt: null,
+      publicSlug: null,
+      publicOldLinks: false,
       archived: false,
     });
   }
@@ -221,6 +227,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       public: false,
       allowDownload: false,
       publicExpiresAt: null,
+      publicSlug: null,
+      publicOldLinks: false,
       archived: false,
     });
   });
@@ -267,7 +275,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
 
   function summary(row: Row): PageSummary {
     const shared = row.kind === "note" && (row.visibility === "shared" || folderShared(row.folderId));
-    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}:${row.public}:${row.allowDownload}:${row.publicExpiresAt}`;
+    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}:${row.public}:${row.allowDownload}:${row.publicExpiresAt}:${row.publicSlug}`;
     const cached = summaryCache.get(row.id);
     if (cached?.key === key) return cached.value;
     const value: PageSummary = {
@@ -288,7 +296,9 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       entryCount: entryCount(row.body),
       public: row.public,
       allowDownload: row.allowDownload,
-      publicUrl: row.public ? `https://orbit.test/d/${row.id}` : null,
+      publicUrl: row.public ? `https://orbit.test/d/${row.publicSlug ?? row.id}` : null,
+      publicSlug: row.publicSlug,
+      publicOldLinks: row.publicOldLinks,
       publicExpiresAt: row.publicExpiresAt,
       canChangePublic: row.kind === "note",
     };
@@ -552,6 +562,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
         public: false,
       allowDownload: false,
       publicExpiresAt: null,
+      publicSlug: null,
+      publicOldLinks: false,
         archived: false,
       };
       rows.set(id, row);
@@ -597,7 +609,14 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       else if (enabled !== row.public) row.publicExpiresAt = null;
       row.public = enabled;
       row.allowDownload = input.allowDownload ?? row.allowDownload;
+      if (input.slug !== undefined && input.slug !== row.publicSlug) {
+        if (row.publicSlug) row.publicOldLinks = true;
+        row.publicSlug = input.slug;
+      }
       return page(row);
+    },
+    async checkEnding(_id, value) {
+      return value === "taken" ? { status: "taken" } : { status: "available" };
     },
     async createFolder(name, parentId) {
       const clean = name.trim();
@@ -686,6 +705,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
           public: false,
           allowDownload: false,
           publicExpiresAt: null,
+          publicSlug: null,
+          publicOldLinks: false,
           archived: false,
         };
         rows.set(id, row);

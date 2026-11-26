@@ -191,7 +191,7 @@ describe("Public docs: the link", () => {
     const doc = await createDoc(mark, { title: "Payload", content: "Text" });
     const token = tokenOf((await setDocPublic(mark, doc.id, { public: true })).publicUrl);
     const opened = await openPublicDoc(token);
-    assert.deepEqual(Object.keys(opened ?? {}).sort(), ["allowDownload", "content", "expiresAt", "title", "updatedAt"]);
+    assert.deepEqual(Object.keys(opened ?? {}).sort(), ["allowDownload", "content", "expiresAt", "redirectTo", "title", "updatedAt"]);
     assert.ok(!JSON.stringify(opened).includes(doc.id));
     assert.ok(!JSON.stringify(opened).includes(mark.workspaceId));
     assert.ok(!JSON.stringify(opened).includes(mark.userId));

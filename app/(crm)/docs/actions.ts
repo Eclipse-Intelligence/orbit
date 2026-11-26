@@ -32,6 +32,10 @@ export async function setDocPublicAction(id: string, input: PublicInput) {
   return docsAction(await getUserActor(), (actor) => docsChanges.setPublic(actor, id, input));
 }
 
+export async function checkPublicEndingAction(id: string, value: string) {
+  return docsAction(await getUserActor(), (actor) => docsChanges.checkEnding(actor, id, value));
+}
+
 export async function createFolderAction(name: string, parentId: string | null) {
   return docsAction(await getUserActor(), (actor) => docsChanges.createFolder(actor, name, parentId));
 }

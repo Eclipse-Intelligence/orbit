@@ -1,4 +1,5 @@
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
+import type { EndingStatus } from "@/lib/docs/public-ending";
 import type { TagTreeNode } from "@/lib/docs/markdown";
 import type { MentionKind } from "@/lib/mentions";
 
@@ -28,7 +29,7 @@ export type Folder = {
 
 export type TagNode = TagTreeNode;
 
-export type PublicInput = { public?: boolean; allowDownload?: boolean; expiresAt?: string | null };
+export type PublicInput = { public?: boolean; allowDownload?: boolean; expiresAt?: string | null; slug?: string | null };
 
 export type PageKind = "note" | "daily";
 
@@ -51,6 +52,8 @@ export type PageSummary = {
   public: boolean;
   allowDownload: boolean;
   publicUrl: string | null;
+  publicSlug: string | null;
+  publicOldLinks: boolean;
   publicExpiresAt: string | null;
   canChangePublic: boolean;
 };
@@ -230,6 +233,7 @@ export interface DocsData {
   restorePage(id: string): Promise<Page>;
   setAssistantCanEdit(id: string, value: boolean): Promise<Page>;
   setPublic(id: string, input: PublicInput): Promise<Page>;
+  checkEnding(id: string, value: string): Promise<EndingStatus>;
   createFolder(name: string, parentId: string | null): Promise<Folder>;
   renameFolder(id: string, name: string): Promise<Folder>;
   moveFolder(id: string, parentId: string | null, position: number, options?: MoveOptions): Promise<Folder[]>;
