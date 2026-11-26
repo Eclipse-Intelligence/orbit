@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { createEmailActivityOnce, listActivities, listCompanyTimeline } from "@/lib/crm/activities";
+import { archiveActivity, createEmailActivityOnce, listActivities, listCompanyTimeline } from "@/lib/crm/activities";
+import { addActivityContact, removeActivityContact } from "@/lib/crm/activity-contacts";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
 import { withActor } from "@/lib/crm/context";
@@ -35,7 +36,7 @@ async function person(input: Record<string, unknown>) {
   return (await createContact(owner, input)).body.contact.id as string;
 }
 
-async function addMessage(folder: string, values: { subject: string; from: string; to?: string[]; cc?: string[]; at?: string }) {
+async function addMessage(folder: string, values: { subject: string; from: string; to?: string[]; cc?: string[]; at?: string; internetId?: string }) {
   counter += 1;
   const id = `recipients-${counter}`;
   const rows = await admin<{ id: string }>(
@@ -48,7 +49,7 @@ async function addMessage(folder: string, values: { subject: string; from: strin
       sourceId,
       folders[folder],
       id,
-      `<${id}@mail.test>`,
+      values.internetId ?? `<${id}@mail.test>`,
       values.subject,
       values.from,
       JSON.stringify((values.to ?? []).map((address) => ({ name: "", address }))),
@@ -56,7 +57,7 @@ async function addMessage(folder: string, values: { subject: string; from: strin
       values.at ?? hoursAgo(1),
     ],
   );
-  return { id: rows[0].id, internetId: `<${id}@mail.test>` };
+  return { id: rows[0].id, internetId: values.internetId ?? `<${id}@mail.test>` };
 }
 
 async function emailsFor(internetId: string) {
@@ -231,6 +232,64 @@ describe("emails with several people", () => {
     assert.equal(all.length, 2);
     assert.deepEqual(await linkedIds(all[0].id), [anna]);
     assert.deepEqual(await linkedIds(all[1].id), [ben]);
+  });
+
+  it("keeps a removed person removed through later filing runs, until they are added back", async () => {
+    const sent = await addMessage("sent", { subject: "Remove me", from: "mark@other-recipients.test", to: ["anna@acme-recipients.test", "carl@acme-recipients.test"] });
+    await fileMailOnTimeline(owner, { now: NOW });
+    const [email] = await emailsFor(sent.internetId);
+    assert.deepEqual(await linkedIds(email.id), [anna, carl].sort());
+    await removeActivityContact(owner, email.id, carl, { operation: "test", source: "test" });
+    await fileMailOnTimeline(owner, { now: NOW });
+    await fileMailOnTimeline(owner, { now: NOW });
+    assert.deepEqual(await linkedIds(email.id), [anna]);
+    assert.equal((await admin("select 1 from crm.activity_contact_dismissals where activity_id = $1 and contact_id = $2", [email.id, carl])).length, 1);
+
+    const copy = await addMessage("sent", { subject: "Remove me", from: "mark@other-recipients.test", to: ["anna@acme-recipients.test", "carl@acme-recipients.test"], internetId: sent.internetId });
+    assert.ok(copy.id);
+    await fileMailOnTimeline(owner, { now: NOW });
+    assert.deepEqual(await linkedIds(email.id), [anna]);
+    await withActor(owner, (db) =>
+      createEmailActivityOnce(db, owner, { type: "email", title: "Remove me", contactId: carl, metadata: { source: "microsoft" } }, { internetMessageId: sent.internetId }, { operation: "sync_inbox", source: "microsoft" }),
+    );
+    assert.deepEqual(await linkedIds(email.id), [anna]);
+    assert.equal((await emailsFor(sent.internetId)).length, 1);
+
+    await addActivityContact(owner, email.id, carl, { operation: "test", source: "test" });
+    assert.equal((await admin("select 1 from crm.activity_contact_dismissals where activity_id = $1", [email.id])).length, 0);
+    assert.deepEqual(await linkedIds(email.id), [anna, carl].sort());
+  });
+
+  it("settles a message with an internal contact in one run and names the main contact as the recipient", async () => {
+    const sent = await addMessage("sent", { subject: "Mixed Cc", from: "mark@other-recipients.test", to: ["priya@eclipse-recipients.test"], cc: ["carl@acme-recipients.test"] });
+    await fileMailOnTimeline(owner, { now: NOW });
+    const [email] = await emailsFor(sent.internetId);
+    assert.equal(email.contact_id, carl);
+    assert.equal(email.company_id, acme);
+    assert.deepEqual(await linkedIds(email.id), [carl]);
+    const stored = await admin<{ to: string }>("select metadata->>'to' as \"to\" from crm.activities where id = $1", [email.id]);
+    assert.equal(stored[0].to, "carl@acme-recipients.test");
+    const events = async () => (await admin("select 1 from crm.audit_events where entity_id = $1", [email.id])).length;
+    const before = await events();
+    await fileMailOnTimeline(owner, { now: NOW });
+    assert.equal(await events(), before);
+    assert.equal((await admin("select 1 from crm.activity_contact_dismissals where activity_id = $1 and contact_id = $2", [email.id, priyaContact])).length, 1);
+  });
+
+  it("leaves a deleted email deleted when a contact is created for someone on it", async () => {
+    const sent = await addMessage("sent", { subject: "Deleted note", from: "mark@other-recipients.test", to: ["anna@acme-recipients.test", "erin@acme-recipients.test"] });
+    await fileMailOnTimeline(owner, { now: NOW });
+    const [email] = await emailsFor(sent.internetId);
+    await archiveActivity(owner, email.id, { operation: "test", source: "test" });
+    const erin = await person({ firstName: "Erin", lastName: "Ede", email: "erin@acme-recipients.test", companyId: acme });
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
+    const events = async () => (await admin("select 1 from crm.audit_events where entity_id = $1", [email.id])).length;
+    const before = await events();
+    assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
+    assert.equal(await events(), before);
+    assert.equal((await emailsFor(sent.internetId)).length, 1);
+    assert.ok(!(await linkedIds(email.id)).includes(erin));
+    assert.equal((await admin("select 1 from crm.activity_contact_dismissals where activity_id = $1 and contact_id = $2", [email.id, erin])).length, 1);
   });
 
   it("links the second contact to the activity an earlier send already logged, never a second copy", async () => {

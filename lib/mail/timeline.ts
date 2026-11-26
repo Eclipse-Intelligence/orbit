@@ -1,5 +1,5 @@
 import { createEmailActivityOnce, emailActivityFor } from "@/lib/crm/activities";
-import { linkEmailPeopleInDb } from "@/lib/crm/activity-contacts";
+import { dismissActivityContactsInDb, linkEmailPeopleInDb } from "@/lib/crm/activity-contacts";
 import { companyHasOpenTask, createFollowUpUnlessOpen, isRecent } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
@@ -113,7 +113,10 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
      where (
        x.contact_id is not null and not exists (
          select 1 from crm.activities a
-         join crm.activity_contacts l on l.activity_id = a.id and l.contact_id = x.contact_id
+         join (
+           select s.activity_id, s.contact_id from crm.activity_contacts s
+           union all select d.activity_id, d.contact_id from crm.activity_contact_dismissals d
+         ) l on l.activity_id = a.id and l.contact_id = x.contact_id
          where a.workspace_id = x.workspace_id and a.type = 'email'
            and (${SAME_MESSAGE} or (${LOGGED_AT_SEND} and a.contact_id in (
              select y.contact_id from matched y where y.id = x.id and y.workspace_id = x.workspace_id and y.contact_id is not null
@@ -139,15 +142,15 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
   return result.rows;
 }
 
-type Existing = { id: string; contact_id: string | null; company_id: string | null; archived_contact_email: string | null };
+type Existing = { id: string; contact_id: string | null; company_id: string | null; archived_contact_email: string | null; archived_at: Date | null };
 
 async function existingActivity(db: Db, workspaceId: string, row: Candidate, contactIds: string[]) {
   const byMessage = await emailActivityFor(db, workspaceId, { internetMessageId: row.internet_message_id, mailMessageId: row.message_id }, null);
   const found = await db.query<Existing>(
-    `select a.id, a.contact_id, a.company_id, case when ac.archived_at is not null then ac.normalized_email end as archived_contact_email
+    `select a.id, a.contact_id, a.company_id, a.archived_at, case when ac.archived_at is not null then ac.normalized_email end as archived_contact_email
      from crm.activities a
      left join crm.contacts ac on ac.id = a.contact_id
-     where a.workspace_id = $1 and a.type = 'email' and a.archived_at is null
+     where a.workspace_id = $1 and a.type = 'email'
        and (
          a.id = $2
          or (
@@ -158,7 +161,7 @@ async function existingActivity(db: Db, workspaceId: string, row: Candidate, con
            and (a.contact_id = any($6::uuid[]) or (a.contact_id is null and a.company_id = $7))
          )
        )
-     order by (a.id = $2) desc, a.created_at
+     order by (a.id = $2) desc, a.archived_at is not null, a.created_at
      limit 1`,
     [workspaceId, byMessage, row.direction, row.subject, new Date(row.at).toISOString(), contactIds, row.company_id],
   );
@@ -384,18 +387,32 @@ export async function fileMailOnTimeline(
         await db.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
           `email-activity|${target.workspaceId}|${row.internet_message_id || row.message_id}`,
         ]);
-        const people = await emailPeopleInDb(db, target, row.message_id, row.direction);
+        const { people, routed } = await emailPeopleInDb(db, target, row.message_id, row.direction);
         let main: string | null;
         let companyId = row.company_id;
+        let sentTo = row.address;
         if (row.direction === "outbound") {
           const first = people[0];
           main = first?.id ?? row.contact_id;
-          if (first && first.id !== row.contact_id) companyId = first.companyId ?? row.company_id;
+          if (first && first.id !== row.contact_id) {
+            companyId = first.companyId ?? row.company_id;
+            sentTo = first.email;
+          }
         } else {
           main = row.contact_id ?? people.find((person) => !person.companyId || person.companyId === row.company_id)?.id ?? null;
         }
         const contactIds = [...new Set([...(main ? [main] : []), ...people.map((person) => person.id)])];
+        const settle = async (activityId: string) => {
+          const linked = new Set(
+            (await db.query<{ contact_id: string }>("select contact_id from crm.activity_contacts where activity_id = $1", [activityId])).rows.map((item) => item.contact_id),
+          );
+          await dismissActivityContactsInDb(db, target.workspaceId, activityId, [...routed, ...(row.contact_id ? [row.contact_id] : [])].filter((id) => !linked.has(id)));
+        };
         const found = await existingActivity(db, target.workspaceId, row, contactIds);
+        if (found?.archived_at) {
+          await dismissActivityContactsInDb(db, target.workspaceId, found.id, [...routed, ...contactIds]);
+          return { created: false, who: null };
+        }
         if (found) {
           const replacement = found.archived_contact_email
             ? (
@@ -408,6 +425,7 @@ export async function fileMailOnTimeline(
           const newMain = found.contact_id === null ? main : replacement;
           if (newMain) await relinkActivity(db, target, found, newMain, row);
           await linkEmailPeopleInDb(db, target, found.id, contactIds, provenance);
+          await settle(found.id);
           return { created: false, who: null };
         }
         const saved = await createEmailActivityOnce(
@@ -423,7 +441,7 @@ export async function fileMailOnTimeline(
             metadata: {
               source: "microsoft",
               direction: row.direction,
-              ...(row.direction === "inbound" ? { from: row.address } : { from: row.account, to: row.address }),
+              ...(row.direction === "inbound" ? { from: row.address } : { from: row.account, to: sentTo }),
               account: row.account,
               mailMessageId: row.message_id,
               ...(row.internet_message_id ? { internetMessageId: row.internet_message_id } : {}),
@@ -434,6 +452,7 @@ export async function fileMailOnTimeline(
           provenance,
           { contactIds },
         );
+        await settle(saved.id);
         return { created: saved.created, who: saved.created && followUp ? await followUpWho(db, row) : null };
       });
       if (!outcome.created) continue;

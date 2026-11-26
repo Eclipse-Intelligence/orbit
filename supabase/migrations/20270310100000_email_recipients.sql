@@ -8,6 +8,65 @@ begin
 end;
 $$;
 
+create table if not exists crm.activity_contact_dismissals (
+  activity_id uuid not null references crm.activities (id) on delete cascade,
+  contact_id uuid not null references crm.contacts (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (activity_id, contact_id)
+);
+
+create index if not exists activity_contact_dismissals_contact_idx on crm.activity_contact_dismissals (contact_id, activity_id);
+
+alter table crm.activity_contact_dismissals enable row level security;
+alter table crm.activity_contact_dismissals force row level security;
+
+drop policy if exists activity_contact_dismissals_select_member on crm.activity_contact_dismissals;
+create policy activity_contact_dismissals_select_member on crm.activity_contact_dismissals
+  for select to authenticated
+  using (exists (select 1 from crm.activities a where a.id = activity_contact_dismissals.activity_id));
+
+drop policy if exists activity_contact_dismissals_select_agent on crm.activity_contact_dismissals;
+create policy activity_contact_dismissals_select_agent on crm.activity_contact_dismissals
+  for select to crm_agent
+  using (exists (select 1 from crm.activities a where a.id = activity_contact_dismissals.activity_id));
+
+drop policy if exists activity_contact_dismissals_insert_member on crm.activity_contact_dismissals;
+create policy activity_contact_dismissals_insert_member on crm.activity_contact_dismissals
+  for insert to authenticated
+  with check (
+    exists (
+      select 1
+      from crm.activities a
+      join crm.contacts c on c.workspace_id = a.workspace_id
+      where a.id = activity_contact_dismissals.activity_id and c.id = activity_contact_dismissals.contact_id
+    )
+  );
+
+drop policy if exists activity_contact_dismissals_insert_agent on crm.activity_contact_dismissals;
+create policy activity_contact_dismissals_insert_agent on crm.activity_contact_dismissals
+  for insert to crm_agent
+  with check (
+    exists (
+      select 1
+      from crm.activities a
+      join crm.contacts c on c.workspace_id = a.workspace_id
+      where a.id = activity_contact_dismissals.activity_id and c.id = activity_contact_dismissals.contact_id
+    )
+  );
+
+drop policy if exists activity_contact_dismissals_delete_member on crm.activity_contact_dismissals;
+create policy activity_contact_dismissals_delete_member on crm.activity_contact_dismissals
+  for delete to authenticated
+  using (exists (select 1 from crm.activities a where a.id = activity_contact_dismissals.activity_id));
+
+drop policy if exists activity_contact_dismissals_delete_agent on crm.activity_contact_dismissals;
+create policy activity_contact_dismissals_delete_agent on crm.activity_contact_dismissals
+  for delete to crm_agent
+  using (exists (select 1 from crm.activities a where a.id = activity_contact_dismissals.activity_id));
+
+revoke all on crm.activity_contact_dismissals from anon, authenticated, crm_agent;
+grant select, insert, delete on crm.activity_contact_dismissals to authenticated, crm_agent;
+
 create or replace function private.activity_contacts_free_mail(p_domain text)
 returns boolean
 language sql
@@ -55,6 +114,7 @@ begin
       from crm.activity_contacts l
       join crm.contacts c on c.id = l.contact_id and c.workspace_id = dup.workspace_id and c.archived_at is null
       where l.activity_id = dup.id
+        and not exists (select 1 from crm.activity_contact_dismissals d where d.activity_id = dup.keep_id and d.contact_id = l.contact_id)
       on conflict (activity_id, contact_id) do nothing;
       update crm.mail_tracking t set activity_id = dup.keep_id
       where t.activity_id = dup.id
@@ -164,6 +224,7 @@ begin
     linked_before := array(select l.contact_id from crm.activity_contacts l where l.activity_id = filed.id order by l.created_at, l.contact_id);
     insert into crm.activity_contacts (activity_id, contact_id, implicit)
     select filed.id, w.contact_id, false from unnest(filed.wanted) as w(contact_id)
+    where not exists (select 1 from crm.activity_contact_dismissals d where d.activity_id = filed.id and d.contact_id = w.contact_id)
     on conflict (activity_id, contact_id) do nothing;
     linked_after := array(select l.contact_id from crm.activity_contacts l where l.activity_id = filed.id order by l.created_at, l.contact_id);
     if linked_after is distinct from linked_before then

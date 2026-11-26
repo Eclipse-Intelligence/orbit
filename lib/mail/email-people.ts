@@ -21,13 +21,19 @@ export async function emailPeopleInDb(db: Db, actor: UserActor, messageId: strin
     [messageId, actor.userId],
   );
   const message = found.rows[0];
-  if (!message) return [];
+  if (!message) return { people: [] as EmailPerson[], routed: [] as string[] };
   const listed = [
     ...(direction === "inbound" && message.from_email ? [message.from_email] : []),
     ...addressesIn(message.to_recipients),
     ...addressesIn(message.cc_recipients),
   ];
-  return externalContactIdsInDb(db, actor, listed);
+  const people = await externalContactIdsInDb(db, actor, listed);
+  const emails = [...new Set(listed.map((value) => canonicalEmail(value)).filter((email): email is string => Boolean(email)))];
+  const everyone = await db.query<{ id: string }>(
+    "select id from crm.contacts where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[]) limit 200",
+    [actor.workspaceId, emails],
+  );
+  return { people, routed: everyone.rows.map((row) => row.id) };
 }
 
 export async function externalContactIdsInDb(db: Db, actor: UserActor, addresses: string[]) {
