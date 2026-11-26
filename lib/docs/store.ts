@@ -29,6 +29,7 @@ import {
   type LiveCopy,
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
+import { PAST_EXPIRY_MESSAGE, endOfDayInstant, isExpiryDay, isPastDay } from "@/lib/docs/public-expiry";
 import { newPublicToken, publicUrlOf, sealPublicToken } from "@/lib/docs/public-link";
 import { pageHref } from "@/lib/docs/routes";
 import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
@@ -95,6 +96,7 @@ export type PageRow = {
   public_enabled: boolean;
   allow_download: boolean;
   public_token_enc: string | null;
+  public_expires_at: Date | null;
 };
 
 export type FullPageRow = PageRow & { content: string };
@@ -108,7 +110,8 @@ const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text a
   p.edited_by_user_id, coalesce(nullif(editor.full_name, ''), editor.email) as editor_name, p.edited_by_agent_id,
   agent.name as agent_name, p.versioned_at, p.archived_at, p.created_by_agent_id, creator.name as creator_agent_name,
   coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags,
-  p.public_enabled, p.allow_download, p.public_token_enc`;
+  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.public_token_enc,
+  case when p.public_enabled then p.public_expires_at end as public_expires_at`;
 
 const PAGE_JOINS = `crm.pages p
   left join crm.profiles owner on owner.id = p.user_id
@@ -182,6 +185,7 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
     public: row.public_enabled,
     allowDownload: row.allow_download,
     publicUrl: publicUrlOf(row),
+    publicExpiresAt: iso(row.public_expires_at),
     canChangePublic: controlsPublic(actor, row),
     excerpt: excerptFrom(row.head),
     tags: row.tags ?? [],
@@ -1137,6 +1141,7 @@ export type DocUpdateInput = {
   shared?: boolean;
   public?: boolean;
   allowDownload?: boolean;
+  expiresAt?: string | null;
   baseRevision?: number;
 };
 
@@ -1155,8 +1160,8 @@ export async function updateDoc(actor: Actor, id: string, input: DocUpdateInput,
       visibility = (await moveIn(db, actor, await loadPage(db, actor, id, { lock: true }), { folderId: input.folderId, allowVisibilityChange: input.allowVisibilityChange }, provenance)).visibility;
     }
     if (input.shared !== undefined) visibility = (await shareIn(db, actor, await loadPage(db, actor, id, { lock: true }), input.shared, provenance)).visibility;
-    if (input.public !== undefined || input.allowDownload !== undefined) {
-      await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), { public: input.public, allowDownload: input.allowDownload }, provenance);
+    if (input.public !== undefined || input.allowDownload !== undefined || input.expiresAt !== undefined) {
+      await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), { public: input.public, allowDownload: input.allowDownload, expiresAt: input.expiresAt }, provenance);
     }
     return { doc: await docDetail(db, actor, id), visibility, linksUpdated };
   });
@@ -1272,15 +1277,25 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
   if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
   const enabled = input.public ?? page.public_enabled;
   const allowDownload = input.allowDownload ?? page.allow_download;
-  if (enabled === page.public_enabled && allowDownload === page.allow_download) return page;
+  let expiresAt: Date | null = page.public_expires_at;
+  if (typeof input.expiresAt === "string") {
+    if (!isExpiryDay(input.expiresAt)) throw new CrmError("invalid_input", "Give the date as YYYY-MM-DD.", 400, { field: "expiresAt" });
+    if (isPastDay(input.expiresAt)) throw new CrmError("invalid_input", PAST_EXPIRY_MESSAGE, 400, { field: "expiresAt" });
+    if (!enabled) throw new CrmError("invalid_input", "Turn the public link on to set a timer.", 400, { field: "expiresAt" });
+    expiresAt = endOfDayInstant(input.expiresAt);
+  } else if (input.expiresAt === null || enabled !== page.public_enabled) {
+    expiresAt = null;
+  }
+  const timerChanged = (expiresAt?.getTime() ?? null) !== (page.public_expires_at?.getTime() ?? null);
+  if (enabled === page.public_enabled && allowDownload === page.allow_download && !timerChanged) return page;
   if (enabled && !page.public_token_enc) {
     const sealed = sealPublicToken(newPublicToken());
-    await db.query("update crm.pages set public_enabled = true, allow_download = $2, public_token_hash = $3, public_token_enc = $4 where id = $1", [page.id, allowDownload, sealed.hash, sealed.sealed]);
+    await db.query("update crm.pages set public_enabled = true, allow_download = $2, public_token_hash = $3, public_token_enc = $4, public_expires_at = $5 where id = $1", [page.id, allowDownload, sealed.hash, sealed.sealed, expiresAt]);
   } else {
-    await db.query("update crm.pages set public_enabled = $2, allow_download = $3 where id = $1", [page.id, enabled, allowDownload]);
+    await db.query("update crm.pages set public_enabled = $2, allow_download = $3, public_expires_at = $4 where id = $1", [page.id, enabled, allowDownload, expiresAt]);
   }
   const after = await loadPage(db, actor, page.id);
-  await auditDoc(db, actor, "page.public_changed", after, provenance, { public: after.public_enabled, allowDownload: after.allow_download });
+  await auditDoc(db, actor, "page.public_changed", after, provenance, { public: after.public_enabled, allowDownload: after.allow_download, expiresAt: iso(after.public_expires_at) });
   return after;
 }
 

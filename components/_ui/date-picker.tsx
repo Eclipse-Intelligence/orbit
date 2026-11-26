@@ -33,6 +33,7 @@ type PickerProps = {
   onChange?: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  min?: string;
   className?: string;
   "aria-invalid"?: boolean;
   "aria-describedby"?: string;
@@ -61,6 +62,7 @@ function PickerField({
   onChange,
   placeholder,
   disabled,
+  min,
   className,
   withTime,
   optionalTime = false,
@@ -133,6 +135,7 @@ function PickerField({
                 variant={selectedDate === quick.value ? "muted" : "subtle"}
                 size="sm"
                 type="button"
+                disabled={min !== undefined && quick.value < min}
                 onClick={() => pickDate(quick.value)}
               >
                 {quick.label}
@@ -170,19 +173,21 @@ function PickerField({
             ))}
             {monthGrid(view.year, view.month).flat().map((day) => {
               const selected = day.value === selectedDate;
+              const blocked = min !== undefined && day.value < min;
               return (
                 <button
                   key={day.value}
                   type="button"
                   aria-label={formatDateLabel(day.value)}
                   aria-pressed={selected}
+                  disabled={blocked}
                   onClick={() => pickDate(day.value)}
                   className={cn(
-                    "ease-power3-out mx-auto flex size-8 cursor-pointer items-center justify-center rounded-full text-[13px] tabular-nums outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring/60",
+                    "ease-power3-out mx-auto disabled:cursor-not-allowed disabled:opacity-30 flex size-8 cursor-pointer items-center justify-center rounded-full text-[13px] tabular-nums outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring/60",
                     selected
                       ? "bg-primary text-primary-foreground"
                       : day.inMonth
-                        ? "text-foreground hover:bg-white/8"
+                        ? "text-foreground enabled:hover:bg-white/8"
                         : "text-faint hover:bg-white/6",
                     !selected && day.value === today && "shadow-[inset_0px_0px_0px_1px_var(--line-strong)]",
                   )}

@@ -6561,7 +6561,7 @@ const TOOL_LIST: AssistantTool[] = [
     write: true,
     description: [
       "Create or change a doc in Docs, the user's Markdown notes. Docs link to each other with [[Doc title]] (or [[Doc title#Heading]] and [[Doc title|label]]), carry inline #tags (nested like #clients/acme) and mention records as @[Name](company:id), @[Name](contact:id) or @[Name](opportunity:id).",
-      "Actions: create (title, content, folderId, shared), replace (docId, content: the whole new text), append (docId, content), edit (docId, find: exact existing text, replace: its new text, all), rename (docId, title; links to it are updated), move (docId, folderId or none for no folder, allowVisibilityChange when the move shares it or makes it private), tag (docId, addTags, removeTags), share and unshare (docId), publish and unpublish (docId: turn the doc's public read-only link on or off; the link never changes and shows not found while off), allow_download and block_download (docId: whether readers of the public link can download a PDF), archive (docId), append_daily (content: an entry for the user's private daily note, stamped with the time; date as YYYY-MM-DD for another day; meetings true to add the day's meetings).",
+      "Actions: create (title, content, folderId, shared), replace (docId, content: the whole new text), append (docId, content), edit (docId, find: exact existing text, replace: its new text, all), rename (docId, title; links to it are updated), move (docId, folderId or none for no folder, allowVisibilityChange when the move shares it or makes it private), tag (docId, addTags, removeTags), share and unshare (docId), publish and unpublish (docId: turn the doc's public read-only link on or off; the link never changes and shows not found while off; publish takes expiresAt to turn it off by itself), set_timer (docId, expiresAt: a date for a link that is already on to turn itself off, or leave expiresAt out to remove the timer), allow_download and block_download (docId: whether readers of the public link can download a PDF), archive (docId), append_daily (content: an entry for the user's private daily note, stamped with the time; date as YYYY-MM-DD for another day; meetings true to add the day's meetings).",
       "Read a doc with read_knowledge first and prefer edit or append over replace. Changes to shared docs are seen by the whole workspace. Orbit saves a version before every assistant edit, so it can be undone.",
     ].join(" "),
     parameters: {
@@ -6579,6 +6579,7 @@ const TOOL_LIST: AssistantTool[] = [
         addTags: { type: "array", items: { type: "string" }, description: "For tag: tags to add, like clients/acme." },
         removeTags: { type: "array", items: { type: "string" }, description: "For tag: tags to remove." },
         allowVisibilityChange: { type: "boolean", description: "For move: true when the user knows the move changes who can see the doc." },
+        expiresAt: { type: "string", description: "For publish and set_timer: the day the public link turns off, as YYYY-MM-DD, today or later. It stops working at midnight UK time at the end of that day." },
         date: { type: "string", description: "For append_daily: the day as YYYY-MM-DD. Defaults to today." },
         meetings: { type: "boolean", description: "For append_daily: add the day's meetings from the calendar." },
       },

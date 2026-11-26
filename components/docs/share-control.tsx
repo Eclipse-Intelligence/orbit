@@ -3,13 +3,16 @@
 import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { folderSharingAction } from "@/app/(crm)/docs/manage-actions";
 import Button from "@/components/_ui/button";
+import { DatePicker } from "@/components/_ui/date-picker";
+import FilterChip from "@/components/_ui/filter-chip";
 import CopyButton from "@/components/_ui/copy-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popover";
 import { Radio } from "@/components/_ui/radio";
 import Switch from "@/components/_ui/switch";
 import { ParticipantAvatar } from "@/components/docs/presence";
 import { useDocsNav, useMedia } from "@/components/docs/use-docs";
-import type { Folder, PageSummary, Visibility } from "@/lib/docs/client-types";
+import type { Folder, PageSummary, PublicInput, Visibility } from "@/lib/docs/client-types";
+import { EXPIRY_PRESETS, expiryDayOf, expiryLabel, londonToday, presetDay, presetOf, type ExpiryPreset } from "@/lib/docs/public-expiry";
 import { listHref, pageHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -106,13 +109,33 @@ function PublicLink({ summary }: { summary: PageSummary }) {
   const agentMade = summary.owner.kind !== "person";
   const setPublic = useDocsStore((state) => state.setPublic);
   const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   const saving = useDocsStore((state) => state.publicSaving[summary.id] === true);
   const url = summary.publicUrl ? absolute(summary.publicUrl) : null;
+  const expiresAt = summary.publicExpiresAt;
+  const ranOut = !summary.public && expiresAt !== null;
+  const preset = presetOf(expiresAt);
+  const customDay = expiresAt && !preset ? expiryDayOf(expiresAt) : "";
+  const dateActive = picking || customDay !== "";
+  const who = `Only ${summary.owner.short}${agentMade ? " or the workspace owner" : ""} can turn it ${summary.public ? "off" : "on"}.`;
+  const caption = ranOut
+    ? `Turned off on ${expiryLabel(expiresAt)}, when its timer ran out.${owned ? "" : ` ${who}`}`
+    : `Anyone with the link can read it${summary.public && expiresAt ? ` until ${expiryLabel(expiresAt)}` : ""}.${owned ? "" : ` ${who}`}`;
 
-  async function change(input: { public?: boolean; allowDownload?: boolean }) {
+  async function change(input: PublicInput) {
     if (!owned) return;
     setError(null);
     setError(await setPublic(summary.id, input));
+  }
+
+  function choosePreset(key: ExpiryPreset) {
+    setPicking(false);
+    void change({ expiresAt: presetDay(key) });
+  }
+
+  function chooseNone() {
+    setPicking(false);
+    void change({ expiresAt: null });
   }
 
   return (
@@ -125,9 +148,7 @@ function PublicLink({ summary }: { summary: PageSummary }) {
           </span>
           <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
             <span className="text-foreground text-[13.5px] leading-5 font-medium">Public link</span>
-            <span className="caption-style text-subtle">
-              {owned ? "Anyone with the link can read it." : `Anyone with the link can read it. Only ${summary.owner.short}${agentMade ? " or the workspace owner" : ""} can turn it ${summary.public ? "off" : "on"}.`}
-            </span>
+            <span className="caption-style text-subtle">{caption}</span>
           </span>
           <Switch checked={summary.public} disabled={!owned || saving} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
         </div>
@@ -138,6 +159,39 @@ function PublicLink({ summary }: { summary: PageSummary }) {
             <Button variant="ghost" size="sm" href={url} target="_blank" aria-label="Open public link" className="hit">
               Open
             </Button>
+          </div>
+        )}
+        {summary.public && (
+          <div role="group" aria-label="Turns off" className="flex flex-col gap-2 pl-11">
+            <span className="text-foreground text-[13px] leading-5 font-medium">Turns off</span>
+            <div className="flex flex-wrap gap-0.5">
+              <FilterChip active={!dateActive && expiresAt === null} disabled={!owned || saving} onClick={chooseNone} className="hit">
+                No expiry
+              </FilterChip>
+              {EXPIRY_PRESETS.map((item) => (
+                <FilterChip key={item.key} active={!picking && preset === item.key} disabled={!owned || saving} onClick={() => choosePreset(item.key)} className="hit">
+                  {item.label}
+                </FilterChip>
+              ))}
+              <FilterChip active={dateActive} disabled={!owned || saving} onClick={() => setPicking(true)} className="hit">
+                Date
+              </FilterChip>
+            </div>
+            {dateActive && (
+              <DatePicker
+                id={`public-expiry-${summary.id}`}
+                aria-label="Turn off on"
+                value={customDay}
+                min={londonToday()}
+                disabled={!owned || saving}
+                placeholder="Pick a date"
+                onChange={(day) => {
+                  setPicking(false);
+                  void change({ expiresAt: day });
+                }}
+              />
+            )}
+            {expiresAt && !picking && <span className="caption-style text-subtle">Turns off at midnight on {expiryLabel(expiresAt)}.</span>}
           </div>
         )}
         {summary.public && (

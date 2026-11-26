@@ -48,6 +48,7 @@ import {
 import { DAILY_BODIES, DAILY_FILLER, DAILY_OFFSETS, Q4_ID, SAMPLE_FOLDERS, SAMPLE_NOTES, SAMPLE_PEOPLE, SAMPLE_RECORDS, type SampleAuthor } from "./docs-sample";
 import type { MentionKind } from "@/lib/mentions";
 import { viewerParticipant } from "@/lib/docs/participants";
+import { endOfDayInstant } from "@/lib/docs/public-expiry";
 
 function snippetOf(body: string, max = 200) {
   return excerptFrom(body.replace(/^\d{2}:\d{2}( |$)/gm, ""), max);
@@ -104,6 +105,7 @@ type Row = {
   assistantCanEdit: boolean;
   public: boolean;
   allowDownload: boolean;
+  publicExpiresAt: string | null;
   archived: boolean;
 };
 
@@ -171,6 +173,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       assistantCanEdit: false,
       public: false,
       allowDownload: false,
+      publicExpiresAt: null,
       archived: false,
     });
   }
@@ -192,6 +195,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       assistantCanEdit: false,
       public: false,
       allowDownload: false,
+      publicExpiresAt: null,
       archived: false,
     });
   }
@@ -216,6 +220,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       assistantCanEdit: false,
       public: false,
       allowDownload: false,
+      publicExpiresAt: null,
       archived: false,
     });
   });
@@ -262,7 +267,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
 
   function summary(row: Row): PageSummary {
     const shared = row.kind === "note" && (row.visibility === "shared" || folderShared(row.folderId));
-    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}:${row.public}:${row.allowDownload}`;
+    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}:${row.public}:${row.allowDownload}:${row.publicExpiresAt}`;
     const cached = summaryCache.get(row.id);
     if (cached?.key === key) return cached.value;
     const value: PageSummary = {
@@ -284,6 +289,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       public: row.public,
       allowDownload: row.allowDownload,
       publicUrl: row.public ? `https://orbit.test/d/${row.id}` : null,
+      publicExpiresAt: row.publicExpiresAt,
       canChangePublic: row.kind === "note",
     };
     summaryCache.set(row.id, { key, value });
@@ -545,6 +551,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
         assistantCanEdit: false,
         public: false,
       allowDownload: false,
+      publicExpiresAt: null,
         archived: false,
       };
       rows.set(id, row);
@@ -585,7 +592,10 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
     },
     async setPublic(id, input) {
       const row = require(id);
-      row.public = input.public ?? row.public;
+      const enabled = input.public ?? row.public;
+      if (input.expiresAt !== undefined) row.publicExpiresAt = input.expiresAt === null ? null : endOfDayInstant(input.expiresAt).toISOString();
+      else if (enabled !== row.public) row.publicExpiresAt = null;
+      row.public = enabled;
       row.allowDownload = input.allowDownload ?? row.allowDownload;
       return page(row);
     },
@@ -675,6 +685,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
           assistantCanEdit: false,
           public: false,
           allowDownload: false,
+          publicExpiresAt: null,
           archived: false,
         };
         rows.set(id, row);
