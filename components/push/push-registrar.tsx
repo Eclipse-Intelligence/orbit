@@ -80,6 +80,7 @@ export default function PushRegistrar({ workspaceId }: { workspaceId?: string })
       if (event.data?.type !== "orbit-open") return;
       pushTrail("page-message", { id: event.data.id ?? null, path: window.location.pathname });
       open(event.data.url, "message");
+      event.ports[0]?.postMessage("opened");
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") watchPending();
