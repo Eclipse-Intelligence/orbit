@@ -11,10 +11,16 @@ $$;
 create table if not exists crm.activity_contact_dismissals (
   activity_id uuid not null references crm.activities (id) on delete cascade,
   contact_id uuid not null references crm.contacts (id) on delete cascade,
+  kind text not null check (kind in ('removed', 'skipped')),
+  user_id uuid references crm.profiles (id) on delete cascade,
   created_at timestamptz not null default now(),
-  primary key (activity_id, contact_id)
+  constraint activity_contact_dismissals_user check ((kind = 'removed' and user_id is null) or (kind = 'skipped' and user_id is not null))
 );
 
+create unique index if not exists activity_contact_dismissals_removed_idx
+  on crm.activity_contact_dismissals (activity_id, contact_id) where kind = 'removed';
+create unique index if not exists activity_contact_dismissals_skipped_idx
+  on crm.activity_contact_dismissals (activity_id, contact_id, user_id) where kind = 'skipped';
 create index if not exists activity_contact_dismissals_contact_idx on crm.activity_contact_dismissals (contact_id, activity_id);
 
 alter table crm.activity_contact_dismissals enable row level security;
@@ -114,7 +120,7 @@ begin
       from crm.activity_contacts l
       join crm.contacts c on c.id = l.contact_id and c.workspace_id = dup.workspace_id and c.archived_at is null
       where l.activity_id = dup.id
-        and not exists (select 1 from crm.activity_contact_dismissals d where d.activity_id = dup.keep_id and d.contact_id = l.contact_id)
+        and not exists (select 1 from crm.activity_contact_dismissals d where d.activity_id = dup.keep_id and d.contact_id = l.contact_id and d.kind = 'removed')
       on conflict (activity_id, contact_id) do nothing;
       update crm.mail_tracking t set activity_id = dup.keep_id
       where t.activity_id = dup.id
@@ -224,7 +230,7 @@ begin
     linked_before := array(select l.contact_id from crm.activity_contacts l where l.activity_id = filed.id order by l.created_at, l.contact_id);
     insert into crm.activity_contacts (activity_id, contact_id, implicit)
     select filed.id, w.contact_id, false from unnest(filed.wanted) as w(contact_id)
-    where not exists (select 1 from crm.activity_contact_dismissals d where d.activity_id = filed.id and d.contact_id = w.contact_id)
+    where not exists (select 1 from crm.activity_contact_dismissals d where d.activity_id = filed.id and d.contact_id = w.contact_id and d.kind = 'removed')
     on conflict (activity_id, contact_id) do nothing;
     linked_after := array(select l.contact_id from crm.activity_contacts l where l.activity_id = filed.id order by l.created_at, l.contact_id);
     if linked_after is distinct from linked_before then

@@ -1,5 +1,5 @@
 import { createEmailActivityOnce, emailActivityFor } from "@/lib/crm/activities";
-import { dismissActivityContactsInDb, linkEmailPeopleInDb } from "@/lib/crm/activity-contacts";
+import { dismissActivityContactsInDb, linkEmailPeopleInDb, removedActivityContactIds } from "@/lib/crm/activity-contacts";
 import { companyHasOpenTask, createFollowUpUnlessOpen, isRecent } from "@/lib/crm/communications";
 import { withActor } from "@/lib/crm/context";
 import { recordAudit } from "@/lib/crm/mutate";
@@ -116,6 +116,7 @@ async function candidates(db: Db, actor: UserActor, workspaceIds: string[], filt
          join (
            select s.activity_id, s.contact_id from crm.activity_contacts s
            union all select d.activity_id, d.contact_id from crm.activity_contact_dismissals d
+             where d.kind = 'removed' or (d.kind = 'skipped' and d.user_id = $1)
          ) l on l.activity_id = a.id and l.contact_id = x.contact_id
          where a.workspace_id = x.workspace_id and a.type = 'email'
            and (${SAME_MESSAGE} or (${LOGGED_AT_SEND} and a.contact_id in (
@@ -402,15 +403,12 @@ export async function fileMailOnTimeline(
           main = row.contact_id ?? people.find((person) => !person.companyId || person.companyId === row.company_id)?.id ?? null;
         }
         const contactIds = [...new Set([...(main ? [main] : []), ...people.map((person) => person.id)])];
-        const settle = async (activityId: string) => {
-          const linked = new Set(
-            (await db.query<{ contact_id: string }>("select contact_id from crm.activity_contacts where activity_id = $1", [activityId])).rows.map((item) => item.contact_id),
-          );
-          await dismissActivityContactsInDb(db, target.workspaceId, activityId, [...routed, ...(row.contact_id ? [row.contact_id] : [])].filter((id) => !linked.has(id)));
-        };
+        const skip = (activityId: string, ids: string[]) => dismissActivityContactsInDb(db, target.workspaceId, activityId, ids, target.userId);
+        const settle = (activityId: string) =>
+          skip(activityId, [...routed, ...(row.contact_id ? [row.contact_id] : [])].filter((id) => !contactIds.includes(id)));
         const found = await existingActivity(db, target.workspaceId, row, contactIds);
         if (found?.archived_at) {
-          await dismissActivityContactsInDb(db, target.workspaceId, found.id, [...routed, ...contactIds]);
+          await skip(found.id, [...routed, ...contactIds]);
           return { created: false, who: null };
         }
         if (found) {
@@ -422,7 +420,8 @@ export async function fileMailOnTimeline(
                 )
               ).rows[0]?.id ?? null
             : null;
-          const newMain = found.contact_id === null ? main : replacement;
+          const removed = await removedActivityContactIds(db, found.id);
+          const newMain = found.contact_id === null ? ([main, ...contactIds].find((id) => id && !removed.has(id)) ?? null) : replacement && !removed.has(replacement) ? replacement : null;
           if (newMain) await relinkActivity(db, target, found, newMain, row);
           await linkEmailPeopleInDb(db, target, found.id, contactIds, provenance);
           await settle(found.id);

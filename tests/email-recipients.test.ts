@@ -9,6 +9,7 @@ import { saveMailbox } from "@/lib/crm/inbox";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { fileMailOnTimeline } from "@/lib/mail/timeline";
+import { scopesForRole } from "@/lib/crm/scopes";
 import { createUser, reapplyMigrationsFrom, resetDatabase, useServerlessPool } from "./helpers";
 
 const NOW = Date.parse("2026-10-23T09:00:00Z");
@@ -27,6 +28,9 @@ let carl: string;
 let ben: string;
 let priyaContact: string;
 let counter = 0;
+let member: UserActor;
+let memberSource: string;
+let memberFolders: Record<string, string>;
 
 async function admin<T extends Record<string, unknown>>(text: string, values: unknown[] = []) {
   return (await getAdminPool().query<T>(text, values)).rows;
@@ -36,18 +40,19 @@ async function person(input: Record<string, unknown>) {
   return (await createContact(owner, input)).body.contact.id as string;
 }
 
-async function addMessage(folder: string, values: { subject: string; from: string; to?: string[]; cc?: string[]; at?: string; internetId?: string }) {
+async function addMessage(folder: string, values: { subject: string; from: string; to?: string[]; cc?: string[]; at?: string; internetId?: string; by?: "member" }) {
   counter += 1;
+  const mailbox = values.by === "member" ? { actor: member, source: memberSource, folders: memberFolders } : { actor: owner, source: sourceId, folders };
   const id = `recipients-${counter}`;
   const rows = await admin<{ id: string }>(
     `insert into crm.mail_messages (workspace_id, user_id, source_id, folder_id, provider_message_id, internet_message_id, subject, snippet, body_text,
        from_email, to_recipients, cc_recipients, sent_at, received_at, is_draft)
      values ($1, $2, $3, $4, $5, $6, $7, 'Hello', 'Hello', $8, $9::jsonb, $10::jsonb, $11, $11, false) returning id`,
     [
-      owner.workspaceId,
-      owner.userId,
-      sourceId,
-      folders[folder],
+      mailbox.actor.workspaceId,
+      mailbox.actor.userId,
+      mailbox.source,
+      mailbox.folders[folder],
       id,
       values.internetId ?? `<${id}@mail.test>`,
       values.subject,
@@ -95,6 +100,24 @@ before(async () => {
   }
   const colleague = await createUser("priya@eclipse-recipients.test", "Priya Shah");
   await admin("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [owner.workspaceId, colleague.userId]);
+  member = { ...colleague, workspaceId: owner.workspaceId, workspaceName: owner.workspaceName, role: "member", scopes: scopesForRole("member") };
+  await saveMailbox(member, { email: "priya@box-recipients.test", refreshToken: "refresh", accessToken: "access", expiresAt: new Date(NOW + 3_600_000).toISOString() });
+  memberSource = (
+    await admin<{ id: string }>(
+      `insert into crm.mail_sources (workspace_id, user_id, email, connection_id)
+       select $1, $2, 'priya@box-recipients.test', id from crm.mailbox_connections where user_id = $2 returning id`,
+      [owner.workspaceId, member.userId],
+    )
+  )[0].id;
+  memberFolders = {};
+  for (const role of ["inbox", "sent", "drafts", "junk", "archive"]) {
+    memberFolders[role] = (
+      await admin<{ id: string }>(
+        "insert into crm.mail_folders (workspace_id, user_id, source_id, provider_folder_id, name, role) values ($1, $2, $3, $4, $4, $4) returning id",
+        [owner.workspaceId, member.userId, memberSource, role],
+      )
+    )[0].id;
+  }
   acme = (await createCompany(owner, { name: "Acme", domain: "acme-recipients.test" })).body.company.id;
   anna = await person({ firstName: "Anna", lastName: "Acme", email: "anna@acme-recipients.test", companyId: acme });
   carl = await person({ firstName: "Carl", lastName: "Cole", email: "carl@acme-recipients.test", companyId: acme });
@@ -290,6 +313,39 @@ describe("emails with several people", () => {
     assert.equal((await emailsFor(sent.internetId)).length, 1);
     assert.ok(!(await linkedIds(email.id)).includes(erin));
     assert.equal((await admin("select 1 from crm.activity_contact_dismissals where activity_id = $1 and contact_id = $2", [email.id, erin])).length, 1);
+  });
+
+  it("lets either member's run link a contact created after a shared message was filed", async () => {
+    for (const [first, second, tag] of [
+      [owner, member, "a"],
+      [member, owner, "b"],
+    ] as const) {
+      const internetId = `<shared-${tag}@mail.test>`;
+      const dee = `dee-${tag}@acme-recipients.test`;
+      await addMessage("sent", { subject: `Shared ${tag}`, from: "mark@other-recipients.test", to: ["anna@acme-recipients.test", dee], internetId });
+      await addMessage("sent", { subject: `Shared ${tag}`, from: "priya@box-recipients.test", to: ["anna@acme-recipients.test", dee], internetId, by: "member" });
+      await fileMailOnTimeline(first, { now: NOW });
+      const [email] = await emailsFor(internetId);
+      assert.deepEqual(await linkedIds(email.id), [anna]);
+      const created = await person({ firstName: "Dee", lastName: tag, email: dee, companyId: acme });
+      await fileMailOnTimeline(second, { now: NOW });
+      assert.deepEqual(await linkedIds(email.id), [anna, created].sort());
+      assert.equal((await emailsFor(internetId)).length, 1);
+    }
+  });
+
+  it("only skips a contact for the person it was internal to", async () => {
+    const bob = await person({ firstName: "Bob", lastName: "Bell", email: "bob@other-recipients.test" });
+    const internetId = "<skipped-user@mail.test>";
+    await addMessage("sent", { subject: "Skip scope", from: "mark@other-recipients.test", to: ["anna@acme-recipients.test"], cc: ["bob@other-recipients.test"], internetId });
+    await addMessage("sent", { subject: "Skip scope", from: "priya@box-recipients.test", to: ["anna@acme-recipients.test"], cc: ["bob@other-recipients.test"], internetId, by: "member" });
+    await fileMailOnTimeline(owner, { now: NOW });
+    const [email] = await emailsFor(internetId);
+    assert.deepEqual(await linkedIds(email.id), [anna]);
+    const skipped = await admin<{ user_id: string }>("select user_id from crm.activity_contact_dismissals where activity_id = $1 and contact_id = $2 and kind = 'skipped'", [email.id, bob]);
+    assert.deepEqual(skipped.map((row) => row.user_id), [owner.userId]);
+    await fileMailOnTimeline(member, { now: NOW });
+    assert.deepEqual(await linkedIds(email.id), [anna, bob].sort());
   });
 
   it("links the second contact to the activity an earlier send already logged, never a second copy", async () => {

@@ -84,7 +84,7 @@ export async function addActivityContactInDb(db: Db, actor: Actor, activityId: s
   const before = await currentIds(db, activityId);
   if (before.includes(contactId)) return { changed: false, contactIds: before };
   await linkActivityContactsInDb(db, actor.workspaceId, activityId, [contactId]);
-  await db.query("delete from crm.activity_contact_dismissals where activity_id = $1 and contact_id = $2", [activityId, contactId]);
+  await db.query("delete from crm.activity_contact_dismissals where activity_id = $1 and contact_id = $2 and kind = 'removed'", [activityId, contactId]);
   const after = await currentIds(db, activityId);
   await auditAttendees(db, actor, row, before, after, provenance);
   return { changed: true, contactIds: after };
@@ -99,21 +99,29 @@ export async function removeActivityContactInDb(db: Db, actor: Actor, activityId
   const before = await currentIds(db, activityId);
   if (!before.includes(contactId)) return { changed: false, contactIds: before };
   await db.query("delete from crm.activity_contacts where activity_id = $1 and contact_id = $2", [activityId, contactId]);
-  await dismissActivityContactsInDb(db, actor.workspaceId, activityId, [contactId]);
+  await dismissActivityContactsInDb(db, actor.workspaceId, activityId, [contactId], null);
   const after = await currentIds(db, activityId);
   await auditAttendees(db, actor, row, before, after, provenance);
   return { changed: true, contactIds: after };
 }
 
-export async function dismissActivityContactsInDb(db: Db, workspaceId: string, activityId: string, contactIds: string[]) {
+export async function dismissActivityContactsInDb(db: Db, workspaceId: string, activityId: string, contactIds: string[], skippedBy: string | null) {
   const wanted = [...new Set(contactIds.filter(isUuid))];
   if (wanted.length === 0) return;
   await db.query(
-    `insert into crm.activity_contact_dismissals (activity_id, contact_id)
-     select $1, c.id from crm.contacts c where c.id = any($2::uuid[]) and c.workspace_id = $3
+    `insert into crm.activity_contact_dismissals (activity_id, contact_id, kind, user_id)
+     select $1, c.id, $4, $5::uuid from crm.contacts c where c.id = any($2::uuid[]) and c.workspace_id = $3
      on conflict do nothing`,
-    [activityId, wanted, workspaceId],
+    [activityId, wanted, workspaceId, skippedBy ? "skipped" : "removed", skippedBy],
   );
+}
+
+export async function removedActivityContactIds(db: Db, activityId: string) {
+  const result = await db.query<{ contact_id: string }>(
+    "select contact_id from crm.activity_contact_dismissals where activity_id = $1 and kind = 'removed'",
+    [activityId],
+  );
+  return new Set(result.rows.map((row) => row.contact_id));
 }
 
 export async function linkEmailPeopleInDb(db: Db, actor: Actor, activityId: string, contactIds: (string | null | undefined)[], provenance: Provenance) {
@@ -121,23 +129,18 @@ export async function linkEmailPeopleInDb(db: Db, actor: Actor, activityId: stri
   if (wanted.length === 0) return [];
   const found = await db.query<AttendeeState>(
     `select id, type, title, occurred_at, company_id, contact_id, archived_at
-     from crm.activities where id = $1 and workspace_id = $2
-     for update`,
+     from crm.activities where id = $1 and workspace_id = $2`,
     [activityId, actor.workspaceId],
   );
   const row = found.rows[0];
   if (!row) return [];
   if (row.archived_at) {
-    await dismissActivityContactsInDb(db, actor.workspaceId, activityId, wanted);
+    if (actor.type === "user") await dismissActivityContactsInDb(db, actor.workspaceId, activityId, wanted, actor.userId);
     return [];
   }
   const before = await currentIds(db, activityId);
-  const dismissed = await db.query<{ contact_id: string }>(
-    "select contact_id from crm.activity_contact_dismissals where activity_id = $1 and contact_id = any($2::uuid[])",
-    [activityId, wanted],
-  );
-  const skipped = new Set(dismissed.rows.map((item) => item.contact_id));
-  const missing = wanted.filter((id) => !before.includes(id) && !skipped.has(id));
+  const removed = await removedActivityContactIds(db, activityId);
+  const missing = wanted.filter((id) => !before.includes(id) && !removed.has(id));
   if (missing.length === 0) return [];
   await linkActivityContactsInDb(db, actor.workspaceId, activityId, missing);
   const after = await currentIds(db, activityId);
