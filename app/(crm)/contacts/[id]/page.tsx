@@ -13,7 +13,7 @@ import { contactCampaignLines, contactCampaignTimeline } from "@/lib/campaigns/t
 import { getMeetings } from "@/lib/crm/calendar";
 import { getInsightsForActivities } from "@/lib/crm/call-insights";
 import { listCompanies, listMembers } from "@/lib/crm/companies";
-import { getContact } from "@/lib/crm/contacts";
+import { getContact, listContactsAtCompanies } from "@/lib/crm/contacts";
 import { CrmError } from "@/lib/crm/errors";
 import { getMailbox } from "@/lib/crm/inbox";
 import { getInviteSetup } from "@/lib/crm/invites";
@@ -74,6 +74,7 @@ export default async function ContactPage({
     campaignLines,
     campaignRows,
     suppression,
+    companyContacts,
   ] = await Promise.all([
     listCompanies(user, { limit: 100, sort: "name", order: "asc" }),
     listMembers(user),
@@ -99,6 +100,7 @@ export default async function ContactPage({
       console.error("Couldn't read the contact's do not contact status", error);
       return { doNotContact: null, caution: null, blockLine: null };
     }),
+    contact.companyId ? listContactsAtCompanies(user, [contact.companyId]) : Promise.resolve([]),
   ]);
   const available = enrichmentAvailability();
   const lookups = available.email || available.linkedin || available.phone ? await contactLookups(user, [contact.id]) : {};
@@ -156,6 +158,7 @@ export default async function ContactPage({
       blockLine={suppression.blockLine}
       canSetDoNotContact={user.scopes.includes("campaigns:write")}
       meetings={meetings}
+      colleagues={companyContacts.filter((colleague) => colleague.id !== contact.id)}
       tags={tags}
       invite={invite}
       enrichment={{ available, lookups: lookups[contact.id] ?? {}, canCheckEmail, emailCheck }}
