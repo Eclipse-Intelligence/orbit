@@ -39,28 +39,67 @@ function rememberPending(value) {
     .catch(() => undefined);
 }
 
+function trail(step, data) {
+  return fetch("/api/push/trail", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ step, data: { ...data, at: new Date().toISOString() } }),
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
+function pathOf(value) {
+  try {
+    const url = new URL(value);
+    if (url.searchParams.has("q")) url.searchParams.set("q", "search");
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return String(value);
+  }
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const target = new URL((event.notification.data && event.notification.data.url) || "/mail", self.location.origin).href;
+  const logged = [trail("sw-click", { id, url: pathOf(target) })];
   if (new URL(target).origin !== self.location.origin) {
-    event.waitUntil(self.clients.openWindow(target));
+    event.waitUntil(Promise.all([...logged, self.clients.openWindow(target)]));
     return;
   }
   event.waitUntil(
-    rememberPending({ url: target, at: Date.now() }).then(() => self.clients.matchAll({ type: "window", includeUncontrolled: true })).then((clients) => {
-      const client = clients.find((item) => new URL(item.url).origin === self.location.origin);
-      if (client) {
-        client.postMessage({ type: "orbit-open", url: target });
-        return "focus" in client ? client.focus() : undefined;
-      }
-      return self.clients.openWindow(target);
-    }),
+    rememberPending({ url: target, at: Date.now(), id })
+      .then(() => self.clients.matchAll({ type: "window", includeUncontrolled: true }))
+      .then((clients) => {
+        logged.push(
+          trail("sw-clients", {
+            id,
+            count: clients.length,
+            clients: clients.map((item) => ({ url: pathOf(item.url), visibility: item.visibilityState, focused: item.focused })),
+          }),
+        );
+        const client = clients.find((item) => new URL(item.url).origin === self.location.origin);
+        if (client) {
+          client.postMessage({ type: "orbit-open", url: target, id });
+          if (!("focus" in client)) return trail("sw-focus", { id, ok: false, reason: "no focus" });
+          return client.focus().then(
+            () => trail("sw-focus", { id, ok: true }),
+            (error) => trail("sw-focus", { id, ok: false, reason: String(error && error.name) }),
+          );
+        }
+        return self.clients.openWindow(target).then(
+          (opened) => trail("sw-open-window", { id, ok: Boolean(opened), url: opened ? pathOf(opened.url) : null }),
+          (error) => trail("sw-open-window", { id, ok: false, reason: String(error && error.name) }),
+        );
+      })
+      .then(() => Promise.all(logged)),
   );
 });
 
 self.addEventListener("message", (event) => {
   if (!event.data || event.data.type !== "orbit-pending" || !event.ports[0]) return;
   const fresh = pending && Date.now() - pending.at < 60000 ? pending.url : null;
+  if (pending) event.waitUntil(trail("sw-asked", { id: pending.id, fresh: Boolean(fresh), ageMs: Date.now() - pending.at }));
   pending = null;
   caches.delete(PENDING_CACHE).catch(() => undefined);
   event.ports[0].postMessage(fresh);
