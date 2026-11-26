@@ -1,3 +1,4 @@
+import "./svg-stub";
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { spawn } from "node:child_process";

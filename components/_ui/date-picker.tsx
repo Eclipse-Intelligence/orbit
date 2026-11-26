@@ -34,6 +34,7 @@ type PickerProps = {
   placeholder?: string;
   disabled?: boolean;
   min?: string;
+  onOpenChange?: (open: boolean) => void;
   className?: string;
   "aria-invalid"?: boolean;
   "aria-describedby"?: string;
@@ -63,6 +64,7 @@ function PickerField({
   placeholder,
   disabled,
   min,
+  onOpenChange,
   className,
   withTime,
   optionalTime = false,
@@ -107,6 +109,7 @@ function PickerField({
       onOpenChange={(next) => {
         if (next) setView(monthOf(selectedDate));
         setOpen(next);
+        onOpenChange?.(next);
       }}
     >
       <PopoverTrigger asChild>
@@ -188,7 +191,7 @@ function PickerField({
                       ? "bg-primary text-primary-foreground"
                       : day.inMonth
                         ? "text-foreground enabled:hover:bg-white/8"
-                        : "text-faint hover:bg-white/6",
+                        : "text-faint enabled:hover:bg-white/6",
                     !selected && day.value === today && "shadow-[inset_0px_0px_0px_1px_var(--line-strong)]",
                   )}
                 >
@@ -230,11 +233,16 @@ function PickerField({
               onClick={() => {
                 commit("");
                 setOpen(false);
+                onOpenChange?.(false);
               }}
             >
               Clear
             </Button>
-            <Button variant="primary" size="sm" type="button" onClick={() => setOpen(false)}>
+            <Button variant="primary" size="sm" type="button" onClick={() => {
+                setOpen(false);
+                onOpenChange?.(false);
+              }}
+            >
               Done
             </Button>
           </div>

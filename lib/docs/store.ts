@@ -29,7 +29,7 @@ import {
   type LiveCopy,
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
-import { PAST_EXPIRY_MESSAGE, endOfDayInstant, isExpiryDay, isPastDay } from "@/lib/docs/public-expiry";
+import { INVALID_EXPIRY_MESSAGE, PAST_EXPIRY_MESSAGE, endOfDayInstant, isExpiryDay, isPastDay } from "@/lib/docs/public-expiry";
 import { newPublicToken, publicUrlOf, sealPublicToken } from "@/lib/docs/public-link";
 import { pageHref } from "@/lib/docs/routes";
 import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
@@ -97,6 +97,7 @@ export type PageRow = {
   allow_download: boolean;
   public_token_enc: string | null;
   public_expires_at: Date | null;
+  public_stored: boolean;
 };
 
 export type FullPageRow = PageRow & { content: string };
@@ -110,7 +111,7 @@ const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text a
   p.edited_by_user_id, coalesce(nullif(editor.full_name, ''), editor.email) as editor_name, p.edited_by_agent_id,
   agent.name as agent_name, p.versioned_at, p.archived_at, p.created_by_agent_id, creator.name as creator_agent_name,
   coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags,
-  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.public_token_enc,
+  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.public_token_enc, p.public_enabled as public_stored,
   case when p.public_enabled then p.public_expires_at end as public_expires_at`;
 
 const PAGE_JOINS = `crm.pages p
@@ -1279,7 +1280,7 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
   const allowDownload = input.allowDownload ?? page.allow_download;
   let expiresAt: Date | null = page.public_expires_at;
   if (typeof input.expiresAt === "string") {
-    if (!isExpiryDay(input.expiresAt)) throw new CrmError("invalid_input", "Give the date as YYYY-MM-DD.", 400, { field: "expiresAt" });
+    if (!isExpiryDay(input.expiresAt)) throw new CrmError("invalid_input", INVALID_EXPIRY_MESSAGE, 400, { field: "expiresAt" });
     if (isPastDay(input.expiresAt)) throw new CrmError("invalid_input", PAST_EXPIRY_MESSAGE, 400, { field: "expiresAt" });
     if (!enabled) throw new CrmError("invalid_input", "Turn the public link on to set a timer.", 400, { field: "expiresAt" });
     expiresAt = endOfDayInstant(input.expiresAt);
@@ -1288,6 +1289,10 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
   }
   const timerChanged = (expiresAt?.getTime() ?? null) !== (page.public_expires_at?.getTime() ?? null);
   if (enabled === page.public_enabled && allowDownload === page.allow_download && !timerChanged) return page;
+  if (page.public_stored && !page.public_enabled && enabled === page.public_enabled && !timerChanged) {
+    await db.query("update crm.pages set allow_download = $2 where id = $1", [page.id, allowDownload]);
+    return loadPage(db, actor, page.id);
+  }
   if (enabled && !page.public_token_enc) {
     const sealed = sealPublicToken(newPublicToken());
     await db.query("update crm.pages set public_enabled = true, allow_download = $2, public_token_hash = $3, public_token_enc = $4, public_expires_at = $5 where id = $1", [page.id, allowDownload, sealed.hash, sealed.sealed, expiresAt]);

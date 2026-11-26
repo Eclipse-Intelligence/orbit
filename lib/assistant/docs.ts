@@ -14,7 +14,7 @@ import { searchDocs } from "@/lib/docs/search";
 import { archiveDoc, assistantMayEdit, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, setDocPublic, shareDoc } from "@/lib/docs/store";
 import { dailyHref, docHref, type DocDetail, type DocDiffLine, type DocEdit, type DocSummary } from "@/lib/docs/types";
 import { toolSource } from "@/lib/assistant/source";
-import { PAST_EXPIRY_MESSAGE, expiryDayLabel, isExpiryDay, isPastDay } from "@/lib/docs/public-expiry";
+import { INVALID_EXPIRY_MESSAGE, PAST_EXPIRY_MESSAGE, expiryDayLabel, isExpiryDay, isPastDay } from "@/lib/docs/public-expiry";
 
 type Args = Record<string, unknown>;
 type Names = (id: unknown) => string;
@@ -48,7 +48,7 @@ function actionOf(args: Args): SaveDocAction | null {
 function timerOf(args: Args): { day: string | null; problem: string | null } {
   const day = str(args.expiresAt);
   if (!day) return { day: null, problem: null };
-  if (!isExpiryDay(day)) return { day: null, problem: "Give the date as YYYY-MM-DD." };
+  if (!isExpiryDay(day)) return { day: null, problem: INVALID_EXPIRY_MESSAGE };
   return { day, problem: isPastDay(day) ? PAST_EXPIRY_MESSAGE : null };
 }
 
@@ -135,6 +135,7 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
         const { day, problem } = timerOf(args);
         if (problem) out[`${key}:problem`] = problem;
         else if (action === "set_timer" && day && !doc.public) out[`${key}:problem`] = "The public link is off. Turn it on first.";
+        else if (action === "set_timer" && !day && !str(args.expiresAt) && !doc.public) out[`${key}:problem`] = "The public link is off, so there is no timer to remove.";
       }
       if (action === "rename") out[`${key}:links`] = String((await listBacklinks(actor, docId).catch(() => [])).length);
     }
@@ -284,7 +285,7 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     }
     case "set_timer": {
       const { day } = timerOf(args);
-      if (!str(args.expiresAt)) return result("Remove the timer on the public link", [doc, "The link stays on until someone turns it off."]);
+      if (!str(args.expiresAt)) return result("Remove the timer on the public link", [doc, problem ? `This won't work yet: ${problem}` : "The link stays on until someone turns it off."]);
       return result(day && !problem ? `Turn off the public link on ${expiryDayLabel(day)}` : "Turn off the public link on a date", [
         doc,
         day && !problem ? `It stops working at midnight UK time at the end of ${expiryDayLabel(day)}.` : "",
@@ -457,8 +458,12 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
     return { saved: true, doc: summaryOf(result.doc), visibility: result.visibility };
   }
   if (action === "publish" || action === "unpublish" || action === "set_timer" || action === "allow_download" || action === "block_download") {
-    const timer = timerOf(args);
+    const timer = action === "publish" || action === "set_timer" ? timerOf(args) : { day: null, problem: null };
     if (timer.problem) throw new CrmError("invalid_input", timer.problem, 400, { field: "expiresAt" });
+    const docId = requireDoc(args);
+    if (action === "set_timer" && !timer.day && !(await getDoc(actor, docId)).public) {
+      throw new CrmError("invalid_input", "The public link is off, so there is no timer to remove.", 400, { field: "expiresAt" });
+    }
     const input =
       action === "publish"
         ? { public: true, ...(timer.day ? { expiresAt: timer.day } : {}) }
@@ -467,7 +472,7 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
           : action === "set_timer"
             ? { expiresAt: timer.day }
             : { allowDownload: action === "allow_download" };
-    return { saved: true, doc: summaryOf(await setDocPublic(actor, requireDoc(args), input, provenance())) };
+    return { saved: true, doc: summaryOf(await setDocPublic(actor, docId, input, provenance())) };
   }
   if (action === "archive") return { saved: true, doc: summaryOf(await archiveDoc(actor, requireDoc(args), provenance())) };
   const note = await appendToDailyNote(actor, { text: str(args.content), date: str(args.date) || undefined, meetings: args.meetings === true }, provenance());

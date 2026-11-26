@@ -6,6 +6,7 @@ import { PublicNote } from "@/components/docs/static-note";
 import { openPublicDoc } from "@/lib/docs/public";
 import { availabilityLabel } from "@/lib/docs/public-expiry";
 import { updatedLabel } from "@/lib/docs/public-link";
+import ClockIcon from "@/public/assets/images/docs/clock.svg";
 
 export const dynamic = "force-dynamic";
 
@@ -36,9 +37,7 @@ export default async function PublicDocPage({ params }: { params: Promise<{ toke
         </div>
         {doc.expiresAt && (
           <span className="caption-style text-soft bg-surface-raised flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1.5">
-            <svg aria-hidden width="14" height="14" viewBox="0 0 14 14" fill="none" className="size-3">
-              <path d="M7 3.5V7l2.33 1.17M12.83 7A5.83 5.83 0 1 1 1.17 7a5.83 5.83 0 0 1 11.66 0Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <ClockIcon aria-hidden className="size-3" />
             {availabilityLabel(doc.expiresAt)}
           </span>
         )}

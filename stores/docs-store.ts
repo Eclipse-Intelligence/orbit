@@ -22,7 +22,7 @@ import { entryCount, excerptFrom, parseTags, rewriteLinkTitle, wordCount } from 
 import { memberTagCount } from "@/lib/docs/people-tags";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import type { LiveStatus } from "@/lib/docs/live/session";
-import { endOfDayInstant } from "@/lib/docs/public-expiry";
+import { endOfDayInstant, isExpiryDay } from "@/lib/docs/public-expiry";
 import { listKey } from "@/lib/docs/routes";
 import { viewerParticipant } from "@/lib/docs/participants";
 
@@ -626,7 +626,15 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     if (before) {
       const enabled = input.public ?? before.public;
       const publicExpiresAt =
-        input.expiresAt === undefined ? (enabled === before.public ? before.publicExpiresAt : null) : input.expiresAt === null ? null : endOfDayInstant(input.expiresAt).toISOString();
+        input.expiresAt === undefined
+          ? enabled === before.public
+            ? before.publicExpiresAt
+            : null
+          : isExpiryDay(input.expiresAt)
+            ? endOfDayInstant(input.expiresAt).toISOString()
+            : input.expiresAt === null
+              ? null
+              : before.publicExpiresAt;
       patchPublic({ public: enabled, allowDownload: input.allowDownload ?? before.allowDownload, publicExpiresAt });
     }
     try {

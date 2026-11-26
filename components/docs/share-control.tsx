@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/_ui/popove
 import { Radio } from "@/components/_ui/radio";
 import Switch from "@/components/_ui/switch";
 import { ParticipantAvatar } from "@/components/docs/presence";
+import { usePublicLive } from "@/components/docs/use-public-live";
 import { useDocsNav, useMedia } from "@/components/docs/use-docs";
 import type { Folder, PageSummary, PublicInput, Visibility } from "@/lib/docs/client-types";
 import { EXPIRY_PRESETS, expiryDayOf, expiryLabel, londonToday, presetDay, presetOf, type ExpiryPreset } from "@/lib/docs/public-expiry";
@@ -113,14 +114,15 @@ function PublicLink({ summary }: { summary: PageSummary }) {
   const saving = useDocsStore((state) => state.publicSaving[summary.id] === true);
   const url = summary.publicUrl ? absolute(summary.publicUrl) : null;
   const expiresAt = summary.publicExpiresAt;
-  const ranOut = !summary.public && expiresAt !== null;
+  const live = usePublicLive(summary);
+  const ranOut = !live && expiresAt !== null;
   const preset = presetOf(expiresAt);
   const customDay = expiresAt && !preset ? expiryDayOf(expiresAt) : "";
   const dateActive = picking || customDay !== "";
-  const who = `Only ${summary.owner.short}${agentMade ? " or the workspace owner" : ""} can turn it ${summary.public ? "off" : "on"}.`;
+  const who = `Only ${summary.owner.short}${agentMade ? " or the workspace owner" : ""} can turn it ${live ? "off" : "on"}.`;
   const caption = ranOut
     ? `Turned off on ${expiryLabel(expiresAt)}, when its timer ran out.${owned ? "" : ` ${who}`}`
-    : `Anyone with the link can read it${summary.public && expiresAt ? ` until ${expiryLabel(expiresAt)}` : ""}.${owned ? "" : ` ${who}`}`;
+    : `Anyone with the link can read it${live && expiresAt ? ` until ${expiryLabel(expiresAt)}` : ""}.${owned ? "" : ` ${who}`}`;
 
   async function change(input: PublicInput) {
     if (!owned) return;
@@ -143,16 +145,16 @@ function PublicLink({ summary }: { summary: PageSummary }) {
       <div className="mx-4 mt-3 h-px bg-white/[0.05]" />
       <div className="flex flex-col gap-2.5 px-4 pt-3">
         <div className="flex items-center gap-3">
-          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]", summary.public ? "bg-(--tag-green-bg)" : "bg-secondary")}>
-            <GlobeIcon aria-hidden className={cn("size-3.5", summary.public ? "text-(--tag-green-text)" : "text-soft")} />
+          <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-lg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]", live ? "bg-(--tag-green-bg)" : "bg-secondary")}>
+            <GlobeIcon aria-hidden className={cn("size-3.5", live ? "text-(--tag-green-text)" : "text-soft")} />
           </span>
           <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
             <span className="text-foreground text-[13.5px] leading-5 font-medium">Public link</span>
             <span className="caption-style text-subtle">{caption}</span>
           </span>
-          <Switch checked={summary.public} disabled={!owned || saving} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
+          <Switch checked={live} disabled={!owned || saving} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
         </div>
-        {summary.public && url && (
+        {live && url && (
           <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.04] py-1.5 pr-1.5 pl-2.5">
             <span className="text-soft min-w-0 flex-1 truncate text-[12.5px]">{url.replace(/^https?:\/\//, "")}</span>
             <CopyButton text={url} label="Copy" ariaLabel="Copy public link" className="min-w-0" />
@@ -161,19 +163,19 @@ function PublicLink({ summary }: { summary: PageSummary }) {
             </Button>
           </div>
         )}
-        {summary.public && (
+        {live && (
           <div role="group" aria-label="Turns off" className="flex flex-col gap-2 pl-11">
             <span className="text-foreground text-[13px] leading-5 font-medium">Turns off</span>
-            <div className="flex flex-wrap gap-0.5">
-              <FilterChip active={!dateActive && expiresAt === null} disabled={!owned || saving} onClick={chooseNone} className="hit">
+            <div className="flex flex-wrap gap-0.5 pointer-coarse:gap-y-3">
+              <FilterChip active={!dateActive && expiresAt === null} aria-pressed={!dateActive && expiresAt === null} disabled={!owned || saving} onClick={chooseNone} className="hit">
                 No expiry
               </FilterChip>
               {EXPIRY_PRESETS.map((item) => (
-                <FilterChip key={item.key} active={!picking && preset === item.key} disabled={!owned || saving} onClick={() => choosePreset(item.key)} className="hit">
+                <FilterChip key={item.key} active={!picking && preset === item.key} aria-pressed={!picking && preset === item.key} disabled={!owned || saving} onClick={() => choosePreset(item.key)} className="hit">
                   {item.label}
                 </FilterChip>
               ))}
-              <FilterChip active={dateActive} disabled={!owned || saving} onClick={() => setPicking(true)} className="hit">
+              <FilterChip active={dateActive} aria-pressed={dateActive} disabled={!owned || saving} onClick={() => setPicking(true)} className="hit">
                 Date
               </FilterChip>
             </div>
@@ -185,16 +187,19 @@ function PublicLink({ summary }: { summary: PageSummary }) {
                 min={londonToday()}
                 disabled={!owned || saving}
                 placeholder="Pick a date"
+                onOpenChange={(open) => {
+                  if (!open && customDay === "") setPicking(false);
+                }}
                 onChange={(day) => {
                   setPicking(false);
-                  void change({ expiresAt: day });
+                  void change({ expiresAt: day === "" ? null : day });
                 }}
               />
             )}
             {expiresAt && !picking && <span className="caption-style text-subtle">Turns off at midnight on {expiryLabel(expiresAt)}.</span>}
           </div>
         )}
-        {summary.public && (
+        {live && (
           <div className="flex items-center gap-3 pl-11">
             <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
               <span className="text-foreground text-[13px] leading-5 font-medium">Allow download</span>
@@ -367,6 +372,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
   const [pending, setPending] = useState(false);
   const viewerId = useDocsStore((state) => state.viewer?.id ?? nav?.viewer.id);
   const groupLabel = useId();
+  const publicOn = usePublicLive(summary);
   const folder = summary.folderId ? nav?.folders.find((item) => item.id === summary.folderId) : undefined;
   const fromFolder = Boolean(folder?.shared);
   const owned = summary.owner.id === viewerId;
@@ -384,7 +390,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <ShareButton shared={summary.shared} publicOn={summary.public} compact={compact} />
+        <ShareButton shared={summary.shared} publicOn={publicOn} compact={compact} />
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={8} className={SHARE_POPOVER_CLASS}>
         <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">

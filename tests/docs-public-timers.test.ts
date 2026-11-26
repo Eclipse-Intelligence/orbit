@@ -1,3 +1,4 @@
+import "./svg-stub";
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -11,12 +12,18 @@ import { removeMember } from "@/lib/crm/team";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { isExpiryDay } from "@/lib/docs/public-expiry";
 import { toPage } from "@/lib/docs/view";
 import { addDays, addMonths, availabilityLabel, daysLeft, endOfDayInstant, expiryDayOf, expiryLabel, londonToday, presetDay, presetOf } from "@/lib/docs/public-expiry";
 import { openPublicDoc, publicDocPdf } from "@/lib/docs/public";
 import { createDoc, getDoc, listDocs, setDocPublic, updateDoc } from "@/lib/docs/store";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
 import { createCrmMcpServer } from "@/server/mcp/server";
 import { createAgent, createUser, queryAsUser, resetDatabase, useServerlessPool } from "./helpers";
+
+const NOW = new Date(Date.now() + 2 * 86_400_000);
 
 let mark: UserActor;
 let priya: UserActor;
@@ -181,14 +188,14 @@ describe("Public doc timers: the link and the PDF", () => {
 
   it("sets a timer with the link, replaces it, lengthens it and clears it", async () => {
     const doc = await createDoc(mark, { title: "Timer", content: "Body" });
-    const day = presetDay("30d");
+    const day = presetDay("30d", NOW);
     const made = await setDocPublic(mark, doc.id, { public: true, expiresAt: day });
     assert.equal(made.public, true);
     assert.equal(made.publicExpiresAt, endOfDayInstant(day).toISOString());
-    const shorter = await setDocPublic(mark, doc.id, { expiresAt: presetDay("7d") });
-    assert.equal(shorter.publicExpiresAt, endOfDayInstant(presetDay("7d")).toISOString());
-    const longer = await setDocPublic(mark, doc.id, { expiresAt: presetDay("12m") });
-    assert.equal(longer.publicExpiresAt, endOfDayInstant(presetDay("12m")).toISOString());
+    const shorter = await setDocPublic(mark, doc.id, { expiresAt: presetDay("7d", NOW) });
+    assert.equal(shorter.publicExpiresAt, endOfDayInstant(presetDay("7d", NOW)).toISOString());
+    const longer = await setDocPublic(mark, doc.id, { expiresAt: presetDay("12m", NOW) });
+    assert.equal(longer.publicExpiresAt, endOfDayInstant(presetDay("12m", NOW)).toISOString());
     assert.equal(longer.publicUrl, made.publicUrl);
     const cleared = await setDocPublic(mark, doc.id, { expiresAt: null });
     assert.equal(cleared.publicExpiresAt, null);
@@ -206,7 +213,7 @@ describe("Public doc timers: the link and the PDF", () => {
 
   it("returns not found for an expired page and PDF straight away, with nothing running in the background", async () => {
     const doc = await createDoc(mark, { title: "Expires", content: "Body" });
-    const made = await setDocPublic(mark, doc.id, { public: true, allowDownload: true, expiresAt: presetDay("7d") });
+    const made = await setDocPublic(mark, doc.id, { public: true, allowDownload: true, expiresAt: presetDay("7d", NOW) });
     const token = tokenOf(made.publicUrl);
     assert.ok(await openPublicDoc(token));
     assert.ok(await publicDocPdf(token));
@@ -234,7 +241,7 @@ describe("Public doc timers: the link and the PDF", () => {
 
   it("reads as off everywhere once it has run out, and shows when", async () => {
     const doc = await createDoc(mark, { title: "Reads off", content: "Body", shared: true });
-    const made = await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d") });
+    const made = await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d", NOW) });
     await setExpiry(doc.id, "now() - interval '1 day'");
     const read = await getDoc(mark, doc.id);
     assert.equal(read.public, false);
@@ -249,7 +256,7 @@ describe("Public doc timers: the link and the PDF", () => {
 
   it("turns back on with the same url and no timer", async () => {
     const doc = await createDoc(mark, { title: "Back on", content: "Body" });
-    const first = await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d") });
+    const first = await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d", NOW) });
     await setExpiry(doc.id, "now() - interval '1 hour'");
     assert.equal((await getDoc(mark, doc.id)).public, false);
     const back = await setDocPublic(mark, doc.id, { public: true });
@@ -261,7 +268,7 @@ describe("Public doc timers: the link and the PDF", () => {
 
   it("clears the timer when the link is turned off by hand, and starts again with none", async () => {
     const doc = await createDoc(mark, { title: "Off by hand", content: "Body" });
-    const first = await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("30d") });
+    const first = await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("30d", NOW) });
     const off = await setDocPublic(mark, doc.id, { public: false });
     assert.equal(off.public, false);
     assert.equal(off.publicExpiresAt, null);
@@ -273,21 +280,22 @@ describe("Public doc timers: the link and the PDF", () => {
   it("rejects past dates, bad dates and a timer on a link that is off", async () => {
     const doc = await createDoc(mark, { title: "Rejects", content: "Body" });
     await setDocPublic(mark, doc.id, { public: true });
-    const yesterday = addDays(londonToday(), -1);
+    const today = londonToday();
+    const yesterday = addDays(today, -1);
     await assert.rejects(setDocPublic(mark, doc.id, { expiresAt: yesterday }), /That date has passed\. Pick today or a later date\./);
     await assert.rejects(setDocPublic(mark, doc.id, { expiresAt: "2030-02-30" }), /YYYY-MM-DD/);
     await assert.rejects(setDocPublic(mark, doc.id, { expiresAt: "next week" }), /YYYY-MM-DD/);
     assert.equal((await getDoc(mark, doc.id)).publicExpiresAt, null);
-    const today = await setDocPublic(mark, doc.id, { expiresAt: londonToday() });
-    assert.equal(today.publicExpiresAt, endOfDayInstant(londonToday()).toISOString());
+    const onToday = await setDocPublic(mark, doc.id, { expiresAt: today });
+    assert.equal(onToday.publicExpiresAt, endOfDayInstant(today).toISOString());
     await setDocPublic(mark, doc.id, { public: false });
-    await assert.rejects(setDocPublic(mark, doc.id, { expiresAt: presetDay("7d") }), /Turn the public link on/);
-    await assert.rejects(setDocPublic(mark, doc.id, { public: false, expiresAt: presetDay("7d") }), /Turn the public link on/);
+    await assert.rejects(setDocPublic(mark, doc.id, { expiresAt: presetDay("7d", NOW) }), /Turn the public link on/);
+    await assert.rejects(setDocPublic(mark, doc.id, { public: false, expiresAt: presetDay("7d", NOW) }), /Turn the public link on/);
   });
 
   it("keeps the download choice across a timer running out", async () => {
     const doc = await createDoc(mark, { title: "Download kept", content: "Body" });
-    await setDocPublic(mark, doc.id, { public: true, allowDownload: true, expiresAt: presetDay("7d") });
+    await setDocPublic(mark, doc.id, { public: true, allowDownload: true, expiresAt: presetDay("7d", NOW) });
     await setExpiry(doc.id, "now() - interval '1 hour'");
     const back = await setDocPublic(mark, doc.id, { public: true });
     assert.equal(back.allowDownload, true);
@@ -295,7 +303,7 @@ describe("Public doc timers: the link and the PDF", () => {
 
   it("sets the timer through updateDoc and records it in the audit event", async () => {
     const doc = await createDoc(mark, { title: "Audited", content: "Body", shared: true });
-    const day = presetDay("30d");
+    const day = presetDay("30d", NOW);
     const result = await updateDoc(mark, doc.id, { public: true, expiresAt: day });
     assert.equal(result.doc.publicExpiresAt, endOfDayInstant(day).toISOString());
     const rows = await getAdminPool().query<{ changes: unknown }>("select changes from crm.audit_events where entity_id = $1 and event_type = 'page.public_changed'", [doc.id]);
@@ -317,21 +325,22 @@ describe("Public doc timers: the page", () => {
     const token = tokenOf((await setDocPublic(mark, doc.id, { public: true })).publicUrl);
     const render = async () => renderToStaticMarkup(await PublicDocPage(pageParams(token)));
 
-    const thirty = presetDay("30d");
+    const today = londonToday();
+    const thirty = addDays(today, 30);
     await setDocPublic(mark, doc.id, { expiresAt: thirty });
     assert.ok((await render()).includes(`Available for 30 more days, until ${expiryLabel(endOfDayInstant(thirty))}`));
 
-    const tomorrow = addDays(londonToday(), 1);
+    const tomorrow = addDays(today, 1);
     await setDocPublic(mark, doc.id, { expiresAt: tomorrow });
     assert.ok((await render()).includes(`Available for 1 more day, until ${expiryLabel(endOfDayInstant(tomorrow))}`));
 
-    await setDocPublic(mark, doc.id, { expiresAt: londonToday() });
+    await setDocPublic(mark, doc.id, { expiresAt: today });
     assert.ok((await render()).includes("Available until midnight tonight"));
   });
 
   it("leaves the line out of the PDF", async () => {
     const doc = await createDoc(mark, { title: "PDF without the line", content: "Body text" });
-    const made = await setDocPublic(mark, doc.id, { public: true, allowDownload: true, expiresAt: presetDay("30d") });
+    const made = await setDocPublic(mark, doc.id, { public: true, allowDownload: true, expiresAt: presetDay("30d", NOW) });
     const { extractText, getDocumentProxy } = await import("unpdf");
     const file = await publicDocPdf(tokenOf(made.publicUrl));
     assert.ok(file);
@@ -342,9 +351,9 @@ describe("Public doc timers: the page", () => {
 
   it("returns the expiry from the public function and nothing that identifies the doc", async () => {
     const doc = await createDoc(mark, { title: "Payload timer", content: "Text" });
-    const token = tokenOf((await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d") })).publicUrl);
+    const token = tokenOf((await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d", NOW) })).publicUrl);
     const opened = await openPublicDoc(token);
-    assert.equal(opened?.expiresAt, endOfDayInstant(presetDay("7d")).toISOString());
+    assert.equal(opened?.expiresAt, endOfDayInstant(presetDay("7d", NOW)).toISOString());
     assert.ok(!JSON.stringify(opened).includes(doc.id));
   });
 });
@@ -354,13 +363,13 @@ describe("Public doc timers: who can change them", () => {
 
   it("lets the owner set it and refuses a teammate in the app and the database", async () => {
     const doc = await createDoc(mark, { title: "Owner timer", content: "Body", shared: true });
-    await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("30d") });
-    await assert.rejects(setDocPublic(priya, doc.id, { expiresAt: presetDay("7d") }), /Only Mark Ridgeon can change this note's public link/);
-    await assert.rejects(setDocPublic(priya, doc.id, { public: true, expiresAt: presetDay("7d") }), /Only Mark Ridgeon can change/);
+    await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("30d", NOW) });
+    await assert.rejects(setDocPublic(priya, doc.id, { expiresAt: presetDay("7d", NOW) }), /Only Mark Ridgeon can change this note's public link/);
+    await assert.rejects(setDocPublic(priya, doc.id, { public: true, expiresAt: presetDay("7d", NOW) }), /Only Mark Ridgeon can change/);
     await assert.rejects(queryAsUser(priya.userId, "update crm.pages set public_expires_at = now() + interval '1 day' where id = $1 returning id", [doc.id]), /Only the doc's owner can change its public link/);
     await assert.rejects(queryAsUser(priya.userId, "update crm.pages set public_expires_at = null where id = $1 returning id", [doc.id]), /Only the doc's owner/);
     assert.equal((await getDoc(priya, doc.id)).canChangePublic, false);
-    assert.equal((await setDocPublic(mark, doc.id, { expiresAt: presetDay("7d") })).publicExpiresAt, endOfDayInstant(presetDay("7d")).toISOString());
+    assert.equal((await setDocPublic(mark, doc.id, { expiresAt: presetDay("7d", NOW) })).publicExpiresAt, endOfDayInstant(presetDay("7d", NOW)).toISOString());
     const own = await queryAsUser(mark.userId, "update crm.pages set public_expires_at = null where id = $1 returning id", [doc.id]);
     assert.equal(own.length, 1);
   });
@@ -368,33 +377,33 @@ describe("Public doc timers: who can change them", () => {
   it("refuses an agent that didn't make the doc, and lets the one that did", async () => {
     const doc = await createDoc(agent, { title: "Agent timer", content: "Body" });
     await setDocPublic(agent, doc.id, { public: true });
-    await assert.rejects(setDocPublic(otherAgent, doc.id, { expiresAt: presetDay("7d") }), /Only Claude Code or the workspace owner/);
+    await assert.rejects(setDocPublic(otherAgent, doc.id, { expiresAt: presetDay("7d", NOW) }), /Only Claude Code or the workspace owner/);
     await assert.rejects(asAgent(otherAgent, "update crm.pages set public_expires_at = now() + interval '1 day' where id = $1 returning id", [doc.id]), /Only the doc's owner can change its public link/);
     assert.equal((await asAgent(agent, "update crm.pages set public_expires_at = now() + interval '1 day' where id = $1 returning id", [doc.id])).length, 1);
-    assert.equal((await setDocPublic(agent, doc.id, { expiresAt: presetDay("30d") })).publicExpiresAt, endOfDayInstant(presetDay("30d")).toISOString());
+    assert.equal((await setDocPublic(agent, doc.id, { expiresAt: presetDay("30d", NOW) })).publicExpiresAt, endOfDayInstant(presetDay("30d", NOW)).toISOString());
     const marks = await createDoc(mark, { title: "Mark's for the agent", content: "Body", shared: true });
-    await assert.rejects(setDocPublic(agent, marks.id, { public: true, expiresAt: presetDay("7d") }), /Only Mark Ridgeon can change/);
+    await assert.rejects(setDocPublic(agent, marks.id, { public: true, expiresAt: presetDay("7d", NOW) }), /Only Mark Ridgeon can change/);
   });
 
   it("lets the workspace owner, but not an admin or a member, change an agent-made doc's timer", async () => {
     const admin = await addMember("admin@docs-timers.test", "Ada Admin", "admin");
     const doc = await createDoc(agent, { title: "Agent-made timer", content: "Body" });
     await setDocPublic(agent, doc.id, { public: true });
-    await assert.rejects(setDocPublic(admin, doc.id, { expiresAt: presetDay("7d") }), /Only Claude Code or the workspace owner/);
-    await assert.rejects(setDocPublic(priya, doc.id, { expiresAt: presetDay("7d") }), /Only Claude Code or the workspace owner/);
+    await assert.rejects(setDocPublic(admin, doc.id, { expiresAt: presetDay("7d", NOW) }), /Only Claude Code or the workspace owner/);
+    await assert.rejects(setDocPublic(priya, doc.id, { expiresAt: presetDay("7d", NOW) }), /Only Claude Code or the workspace owner/);
     await assert.rejects(queryAsUser(admin.userId, "update crm.pages set public_expires_at = now() + interval '1 day' where id = $1 returning id", [doc.id]), /Only the doc's owner/);
-    const set = await setDocPublic(mark, doc.id, { expiresAt: presetDay("7d") });
-    assert.equal(set.publicExpiresAt, endOfDayInstant(presetDay("7d")).toISOString());
+    const set = await setDocPublic(mark, doc.id, { expiresAt: presetDay("7d", NOW) });
+    assert.equal(set.publicExpiresAt, endOfDayInstant(presetDay("7d", NOW)).toISOString());
   });
 
   it("keeps the timer when a leaver's link is turned off by the nested trigger", async () => {
     const leaver = await addMember("leaver@docs-timers.test", "Lee Leaver", "member");
     const doc = await createDoc(leaver, { title: "Leaver timer", content: "Body", shared: true });
-    const url = (await setDocPublic(leaver, doc.id, { public: true, expiresAt: presetDay("30d") })).publicUrl;
+    const url = (await setDocPublic(leaver, doc.id, { public: true, expiresAt: presetDay("30d", NOW) })).publicUrl;
     await removeMember(mark, leaver.userId);
     const row = await getAdminPool().query<{ public_enabled: boolean; public_expires_at: Date | null }>("select public_enabled, public_expires_at from crm.pages where id = $1", [doc.id]);
     assert.equal(row.rows[0].public_enabled, false);
-    assert.equal(row.rows[0].public_expires_at?.toISOString(), endOfDayInstant(presetDay("30d")).toISOString());
+    assert.equal(row.rows[0].public_expires_at?.toISOString(), endOfDayInstant(presetDay("30d", NOW)).toISOString());
     assert.equal(await openPublicDoc(tokenOf(url)), null);
   });
 });
@@ -404,7 +413,7 @@ describe("Public doc timers: API, MCP and assistant", () => {
 
   it("sets, reads and clears the timer over the REST API", async () => {
     const own = await createDoc(agent, { title: "API timer", content: "Hello" });
-    const day = presetDay("30d");
+    const day = presetDay("30d", NOW);
     const patched = await patchRoute(request(`/docs/${own.id}`, "PATCH", { public: true, expiresAt: day }), params(own.id));
     assert.equal(patched.status, 200);
     const body = (await patched.json()) as { doc: { public: boolean; publicExpiresAt: string | null } };
@@ -412,8 +421,8 @@ describe("Public doc timers: API, MCP and assistant", () => {
     assert.equal(body.doc.publicExpiresAt, endOfDayInstant(day).toISOString());
     const read = (await (await readRoute(request(`/docs/${own.id}`), params(own.id))).json()) as { doc: { publicExpiresAt: string | null } };
     assert.equal(read.doc.publicExpiresAt, body.doc.publicExpiresAt);
-    const changed = await patchRoute(request(`/docs/${own.id}`, "PATCH", { expiresAt: presetDay("7d") }), params(own.id));
-    assert.equal(((await changed.json()) as { doc: { publicExpiresAt: string } }).doc.publicExpiresAt, endOfDayInstant(presetDay("7d")).toISOString());
+    const changed = await patchRoute(request(`/docs/${own.id}`, "PATCH", { expiresAt: presetDay("7d", NOW) }), params(own.id));
+    assert.equal(((await changed.json()) as { doc: { publicExpiresAt: string } }).doc.publicExpiresAt, endOfDayInstant(presetDay("7d", NOW)).toISOString());
     const cleared = await patchRoute(request(`/docs/${own.id}`, "PATCH", { expiresAt: null }), params(own.id));
     assert.equal(((await cleared.json()) as { doc: { publicExpiresAt: string | null } }).doc.publicExpiresAt, null);
   });
@@ -429,7 +438,7 @@ describe("Public doc timers: API, MCP and assistant", () => {
     const number = await patchRoute(request(`/docs/${own.id}`, "PATCH", { expiresAt: 5 }), params(own.id));
     assert.equal(number.status, 400);
     const marks = await createDoc(mark, { title: "Mark's API timer", content: "Hi", shared: true });
-    const refused = await patchRoute(request(`/docs/${marks.id}`, "PATCH", { public: true, expiresAt: presetDay("7d") }), params(marks.id));
+    const refused = await patchRoute(request(`/docs/${marks.id}`, "PATCH", { public: true, expiresAt: presetDay("7d", NOW) }), params(marks.id));
     assert.equal(refused.status, 403);
   });
 
@@ -438,14 +447,14 @@ describe("Public doc timers: API, MCP and assistant", () => {
     const workspace = await connect(agent);
     try {
       const doc = await createDoc(mark, { title: "MCP timer", content: "Body" });
-      const day = presetDay("3m");
+      const day = presetDay("3m", NOW);
       const on = (await personal.call("set_doc_public", { id: doc.id, public: true, expires_at: day })).value!.doc as { public: boolean; publicExpiresAt: string };
       assert.equal(on.public, true);
       assert.equal(on.publicExpiresAt, endOfDayInstant(day).toISOString());
       const read = (await personal.call("read_doc", { id: doc.id })).value!.doc as { publicExpiresAt: string };
       assert.equal(read.publicExpiresAt, on.publicExpiresAt);
-      const only = (await personal.call("set_doc_public", { id: doc.id, expires_at: presetDay("7d") })).value!.doc as { publicExpiresAt: string };
-      assert.equal(only.publicExpiresAt, endOfDayInstant(presetDay("7d")).toISOString());
+      const only = (await personal.call("set_doc_public", { id: doc.id, expires_at: presetDay("7d", NOW) })).value!.doc as { publicExpiresAt: string };
+      assert.equal(only.publicExpiresAt, endOfDayInstant(presetDay("7d", NOW)).toISOString());
       const cleared = (await personal.call("set_doc_public", { id: doc.id, expires_at: null })).value!.doc as { publicExpiresAt: string | null };
       assert.equal(cleared.publicExpiresAt, null);
       assert.match((await personal.call("set_doc_public", { id: doc.id, expires_at: addDays(londonToday(), -1) })).error ?? "", /That date has passed/);
@@ -463,7 +472,7 @@ describe("Public doc timers: API, MCP and assistant", () => {
 
   it("names the date on the assistant's approval card and runs it", async () => {
     const doc = await createDoc(mark, { title: "Assistant timer", content: "Body" });
-    const day = presetDay("30d");
+    const day = presetDay("30d", NOW);
     const label = expiryLabel(endOfDayInstant(day));
     const publish = { action: "publish", docId: doc.id, expiresAt: day };
     const publishCard = describeAction("save_doc", publish, await recordNames(mark, [publish], ["save_doc"]));
@@ -474,7 +483,7 @@ describe("Public doc timers: API, MCP and assistant", () => {
     assert.equal(published.doc.public, true);
     assert.equal(published.doc.publicExpiresAt, endOfDayInstant(day).toISOString());
 
-    const later = presetDay("3m");
+    const later = presetDay("3m", NOW);
     const timer = { action: "set_timer", docId: doc.id, expiresAt: later };
     const timerCard = describeAction("save_doc", timer, await recordNames(mark, [timer], ["save_doc"]));
     assert.equal(timerCard.title, `Turn off the public link on ${expiryLabel(endOfDayInstant(later))}`);
@@ -496,7 +505,7 @@ describe("Public doc timers: API, MCP and assistant", () => {
     assert.match(((await runTool(mark, "save_doc", publish)) as { error: string }).error, /That date has passed/);
     assert.equal((await getDoc(mark, doc.id)).public, false);
 
-    const off = { action: "set_timer", docId: doc.id, expiresAt: presetDay("7d") };
+    const off = { action: "set_timer", docId: doc.id, expiresAt: presetDay("7d", NOW) };
     const offCard = describeAction("save_doc", off, await recordNames(mark, [off], ["save_doc"]));
     assert.ok(offCard.lines.some((line) => line.includes("The public link is off")));
     assert.match(((await runTool(mark, "save_doc", off)) as { error: string }).error, /Turn the public link on/);
@@ -504,7 +513,189 @@ describe("Public doc timers: API, MCP and assistant", () => {
 
   it("refuses the assistant on a teammate's doc", async () => {
     const theirs = await createDoc(priya, { title: "Priya's timer doc", content: "Body", shared: true });
-    const timer = { action: "set_timer", docId: theirs.id, expiresAt: presetDay("7d") };
+    const timer = { action: "set_timer", docId: theirs.id, expiresAt: presetDay("7d", NOW) };
     assert.match(((await runTool(mark, "save_doc", timer)) as { error: string }).error, /Only Priya Shah can change/);
+  });
+});
+
+describe("Public doc timers: review fixes", () => {
+  useServerlessPool();
+
+  it("keeps the helpers in London time whatever the server's zone, and handles a leap day", () => {
+    const zone = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      assert.equal(londonToday(new Date("2027-06-10T23:30:00Z")), "2027-06-11");
+      assert.equal(endOfDayInstant("2027-03-27").toISOString(), "2027-03-28T00:00:00.000Z");
+      assert.equal(endOfDayInstant("2027-03-28").toISOString(), "2027-03-28T23:00:00.000Z");
+      assert.equal(presetDay("7d", new Date("2027-10-24T12:00:00Z")), "2027-10-31");
+      assert.equal(availabilityLabel(endOfDayInstant("2027-07-01"), new Date("2027-07-01T22:30:00Z")), "Available until midnight tonight");
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
+    assert.equal(addMonths("2028-02-29", 3), "2028-05-29");
+    assert.equal(addMonths("2027-11-29", 3), "2028-02-29");
+    assert.equal(addMonths("2027-11-30", 3), "2028-02-29");
+  });
+
+  it("only accepts real days in a sensible range", () => {
+    assert.equal(isExpiryDay("2100-12-31"), true);
+    assert.equal(isExpiryDay("9999-12-31"), false);
+    assert.equal(isExpiryDay("2101-01-01"), false);
+    assert.equal(isExpiryDay(""), false);
+    assert.equal(isExpiryDay("2030-02-30"), false);
+    assert.throws(() => endOfDayInstant(""), RangeError);
+    assert.throws(() => endOfDayInstant("9999-12-31"), RangeError);
+  });
+
+  it("rejects an empty or far-future day cleanly in the app, the API and MCP", async () => {
+    const doc = await createDoc(agent, { title: "Bad days", content: "Body" });
+    await setDocPublic(agent, doc.id, { public: true });
+    await assert.rejects(setDocPublic(agent, doc.id, { expiresAt: "" }), /YYYY-MM-DD/);
+    await assert.rejects(setDocPublic(agent, doc.id, { expiresAt: "9999-12-31" }), /no later than 2100/);
+    for (const bad of ["", "9999-12-31"]) {
+      const response = await patchRoute(request(`/docs/${doc.id}`, "PATCH", { expiresAt: bad }), params(doc.id));
+      assert.equal(response.status, 400);
+    }
+    const workspace = await connect(agent);
+    try {
+      assert.match((await workspace.call("set_doc_public", { id: doc.id, expires_at: "9999-12-31" })).error ?? "", /no later than 2100/);
+      assert.match((await workspace.call("set_doc_public", { id: doc.id, expires_at: "" })).error ?? "", /YYYY-MM-DD/);
+    } finally {
+      await workspace.close();
+    }
+    assert.equal((await getDoc(agent, doc.id)).publicExpiresAt, null);
+  });
+
+  it("changes download on an expired link without turning the stored link off or firing an event", async () => {
+    const doc = await createDoc(mark, { title: "Expired download", content: "Body", shared: true });
+    await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d", NOW) });
+    await setExpiry(doc.id, "now() - interval '1 hour'");
+    const events = async () => (await getAdminPool().query("select 1 from crm.audit_events where entity_id = $1 and event_type = 'page.public_changed'", [doc.id])).rowCount;
+    const before = await events();
+    const changed = await setDocPublic(mark, doc.id, { allowDownload: true });
+    assert.equal(changed.allowDownload, true);
+    assert.equal(changed.public, false);
+    assert.ok(changed.publicExpiresAt, "the ran-out timer is kept");
+    const stored = await getAdminPool().query<{ public_enabled: boolean }>("select public_enabled from crm.pages where id = $1", [doc.id]);
+    assert.equal(stored.rows[0].public_enabled, true);
+    assert.equal(await events(), before, "no event for a change nobody can see");
+    const workspace = await connect(mark);
+    try {
+      const viaMcp = (await workspace.call("set_doc_public", { id: doc.id, allow_download: false })).value!.doc as { public: boolean; publicExpiresAt: string | null };
+      assert.equal(viaMcp.public, false);
+      assert.ok(viaMcp.publicExpiresAt);
+    } finally {
+      await workspace.close();
+    }
+    assert.equal(await events(), before);
+    const noop = await setDocPublic(mark, doc.id, { public: false });
+    assert.equal(noop.public, false);
+    assert.ok(noop.publicExpiresAt);
+  });
+
+  it("reports an expired link as off on every reader", async () => {
+    const doc = await createDoc(mark, { title: "Readers", content: "Body", shared: true });
+    await setDocPublic(mark, doc.id, { public: true, expiresAt: presetDay("7d", NOW) });
+    await setExpiry(doc.id, "now() - interval '1 hour'");
+
+    const rest = (await (await readRoute(request(`/docs/${doc.id}`), params(doc.id))).json()) as { doc: { public: boolean; publicUrl: string | null; publicExpiresAt: string | null } };
+    assert.equal(rest.doc.public, false);
+    assert.equal(rest.doc.publicUrl, null);
+    assert.ok(rest.doc.publicExpiresAt);
+
+    const personal = await connect(mark);
+    try {
+      const read = (await personal.call("read_doc", { id: doc.id })).value!.doc as { public: boolean; publicUrl: string | null };
+      assert.equal(read.public, false);
+      assert.equal(read.publicUrl, null);
+      const listed = ((await personal.call("list_docs", {})).value!.docs as { id: string; public: boolean }[]).find((item) => item.id === doc.id);
+      assert.equal(listed?.public, false);
+    } finally {
+      await personal.close();
+    }
+
+    const assistant = (await runTool(mark, "read_knowledge", { docId: doc.id })) as { doc: { public: boolean; publicUrl: string | null } };
+    assert.equal(assistant.doc.public, false);
+    assert.equal(assistant.doc.publicUrl, null);
+  });
+
+  it("sends the timer in the webhook payload and nothing for a change nobody can see", async () => {
+    process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS = "1";
+    const bodies: string[] = [];
+    const server = createServer((incoming, response) => {
+      const chunks: Buffer[] = [];
+      incoming.on("data", (chunk) => chunks.push(chunk));
+      incoming.on("end", () => {
+        bodies.push(Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200);
+        response.end("ok");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const drain = async (count: number) => {
+      const until = Date.now() + 3000;
+      while (bodies.length < count && Date.now() < until) {
+        await deliverDueWebhooks();
+        if (bodies.length < count) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+    try {
+      await createWebhook(mark, { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/hook`, events: ["page.public_changed"] });
+      const doc = await createDoc(mark, { title: "Hooked timer", content: "Text", shared: true });
+      const day = presetDay("7d", NOW);
+      await setDocPublic(mark, doc.id, { public: true, expiresAt: day });
+      await drain(1);
+      const payload = JSON.parse(bodies[0]) as { type: string; data: { public: boolean; expiresAt: string } };
+      assert.equal(payload.type, "page.public_changed");
+      assert.equal(payload.data.public, true);
+      assert.equal(payload.data.expiresAt, endOfDayInstant(day).toISOString());
+      await setExpiry(doc.id, "now() - interval '1 hour'");
+      await setDocPublic(mark, doc.id, { allowDownload: true });
+      await drain(2);
+      assert.equal(bodies.length, 1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      delete process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS;
+    }
+  });
+
+  it("refuses a nested update that changes the timer for someone who can't change the link", async () => {
+    const doc = await createDoc(mark, { title: "Nested", content: "Body", shared: true });
+    await setDocPublic(mark, doc.id, { public: true });
+    const client = await getAdminPool().connect();
+    try {
+      await client.query("begin");
+      await client.query("create function public.zz_bump_expiry() returns trigger language plpgsql as $$ begin update crm.pages set public_expires_at = now() + interval '3 days' where id = new.id; return null; end $$");
+      await client.query("grant execute on function public.zz_bump_expiry() to authenticated");
+      await client.query("create trigger zz_bump after update of title on crm.pages for each row execute function public.zz_bump_expiry()");
+      await client.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: priya.userId, role: "authenticated" })]);
+      await client.query("set local role authenticated");
+      await assert.rejects(client.query("update crm.pages set title = 'Nested again' where id = $1", [doc.id]), /Only the doc's owner can change its public link/);
+    } finally {
+      await client.query("rollback").catch(() => undefined);
+      client.release();
+    }
+    assert.equal((await getDoc(mark, doc.id)).publicExpiresAt, null);
+  });
+
+  it("only reads the timer for publish and set_timer in the assistant", async () => {
+    const doc = await createDoc(mark, { title: "Assistant scope", content: "Body" });
+    const published = (await runTool(mark, "save_doc", { action: "publish", docId: doc.id })) as { saved: boolean };
+    assert.equal(published.saved, true);
+    const allow = (await runTool(mark, "save_doc", { action: "allow_download", docId: doc.id, expiresAt: "garbage" })) as { saved?: boolean; error?: string };
+    assert.equal(allow.saved, true);
+    const unpublish = { action: "unpublish", docId: doc.id, expiresAt: "garbage" };
+    const card = describeAction("save_doc", unpublish, await recordNames(mark, [unpublish], ["save_doc"]));
+    assert.equal(card.title, "Turn off the public link");
+    await runTool(mark, "save_doc", unpublish);
+    assert.equal((await getDoc(mark, doc.id)).public, false);
+    const none = { action: "set_timer", docId: doc.id };
+    const noneCard = describeAction("save_doc", none, await recordNames(mark, [none], ["save_doc"]));
+    assert.ok(noneCard.lines.some((line) => line.includes("no timer to remove")));
+    assert.match(((await runTool(mark, "save_doc", none)) as { error: string }).error, /no timer to remove/);
+    const far = (await runTool(mark, "save_doc", { action: "publish", docId: doc.id, expiresAt: "9999-12-31" })) as { error: string };
+    assert.match(far.error, /no later than 2100/);
   });
 });

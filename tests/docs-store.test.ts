@@ -409,6 +409,65 @@ describe("docs store public link", () => {
     assert.equal(store.getState().pages[page.id].publicExpiresAt, null, "turning the link off clears the timer");
   });
 
+  it("never leaves the link frozen when the day is empty or bad", async () => {
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      if (input.expiresAt === "" || input.expiresAt === "9999-12-31" || input.expiresAt === "nonsense") throw new Error("Give the date as YYYY-MM-DD, no later than 2100.");
+      return data.setPublic(id, input);
+    });
+    await store.getState().setPublic(page.id, { public: true });
+    await store.getState().setPublic(page.id, { expiresAt: "2030-03-30" });
+    for (const bad of ["", "9999-12-31", "nonsense"]) {
+      const result = await store.getState().setPublic(page.id, { expiresAt: bad });
+      assert.equal(result, "Give the date as YYYY-MM-DD, no later than 2100.");
+      assert.equal(store.getState().publicSaving[page.id], undefined, `no stuck saving after ${JSON.stringify(bad)}`);
+      assert.equal(store.getState().pages[page.id].publicExpiresAt, "2030-03-31T00:00:00.000Z");
+    }
+  });
+
+  it("clears the timer at once when an expired link is turned back on", async () => {
+    const gate = deferred<void>();
+    let hold = false;
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      const result = await data.setPublic(id, input);
+      if (hold) await gate.promise;
+      return result;
+    });
+    await store.getState().setPublic(page.id, { public: true });
+    await store.getState().setPublic(page.id, { expiresAt: "2030-03-30" });
+    useDocsStore.setState((state) => ({
+      pages: { ...state.pages, [page.id]: { ...state.pages[page.id], public: false, publicUrl: null } },
+      summaries: state.summaries[page.id] ? { ...state.summaries, [page.id]: { ...state.summaries[page.id], public: false, publicUrl: null } } : state.summaries,
+    }));
+    hold = true;
+    const saving = store.getState().setPublic(page.id, { public: true });
+    assert.equal(store.getState().pages[page.id].public, true);
+    assert.equal(store.getState().pages[page.id].publicExpiresAt, null);
+    gate.resolve();
+    assert.equal(await saving, null);
+  });
+
+  it("keeps a newer timer when an older save fails while it is in flight", async () => {
+    const gates = [deferred<void>(), deferred<void>(), deferred<void>()];
+    let call = 0;
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      const mine = gates[call++];
+      const result = await data.setPublic(id, input);
+      await mine.promise;
+      if (input.expiresAt === "2030-03-30") throw new Error("Couldn't change the public link. Try again.");
+      return result;
+    });
+    gates[0].resolve();
+    await store.getState().setPublic(page.id, { public: true });
+    const older = store.getState().setPublic(page.id, { expiresAt: "2030-03-30" });
+    const newer = store.getState().setPublic(page.id, { expiresAt: "2030-03-31" });
+    gates[2].resolve();
+    assert.equal(await newer, null);
+    gates[1].resolve();
+    assert.equal(await older, "Couldn't change the public link. Try again.");
+    assert.equal(store.getState().pages[page.id].publicExpiresAt, "2030-03-31T23:00:00.000Z", "the older failure didn't roll the newer timer back");
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+
   it("ignores an older timer reply that arrives after a newer choice", async () => {
     const gates = [deferred<void>(), deferred<void>(), deferred<void>()];
     let call = 0;

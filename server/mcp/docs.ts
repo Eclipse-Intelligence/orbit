@@ -282,7 +282,7 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
     async (args) =>
       run(async () => {
         if (args.public === undefined && args.allow_download === undefined && args.expires_at === undefined) {
-          throw new CrmError("invalid_input", "Send public, allow_download, expires_at or any of them together.", 400, { field: "public" });
+          throw new CrmError("invalid_input", "Send at least one of public, allow_download or expires_at.", 400, { field: "public" });
         }
         const doc = await setDocPublic(actor, args.id, { public: args.public, allowDownload: args.allow_download, expiresAt: args.expires_at }, provenance("set_doc_public", args.provenanceUrl));
         return { doc: summary(doc) };

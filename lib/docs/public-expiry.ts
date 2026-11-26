@@ -33,8 +33,17 @@ function dayString(time: number) {
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 }
 
+export const LAST_EXPIRY_YEAR = 2100;
+export const INVALID_EXPIRY_MESSAGE = `Give the date as YYYY-MM-DD, no later than ${LAST_EXPIRY_YEAR}.`;
+
 export function isExpiryDay(value: unknown): value is string {
-  return typeof value === "string" && dayParts(value) !== null;
+  if (typeof value !== "string") return false;
+  const parts = dayParts(value);
+  return parts !== null && parts.year >= 2000 && parts.year <= LAST_EXPIRY_YEAR;
+}
+
+export function publicLive(isPublic: boolean, expiresAt: string | null, now = Date.now()) {
+  return isPublic && (expiresAt === null || Date.parse(expiresAt) > now);
 }
 
 export function londonToday(now = new Date()) {
@@ -61,6 +70,7 @@ export function presetDay(preset: ExpiryPreset, now = new Date()) {
 }
 
 export function endOfDayInstant(day: string) {
+  if (!isExpiryDay(day)) throw new RangeError(INVALID_EXPIRY_MESSAGE);
   const next = dayParts(addDays(day, 1))!;
   return zonedTimeToDate({ year: next.year, month: next.month, day: next.date, hour: 0, minute: 0, second: 0 }, PUBLIC_ZONE);
 }
