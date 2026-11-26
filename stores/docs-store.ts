@@ -23,7 +23,7 @@ import { memberTagCount } from "@/lib/docs/people-tags";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
 import type { LiveStatus } from "@/lib/docs/live/session";
 import { endOfDayInstant, isExpiryDay } from "@/lib/docs/public-expiry";
-import type { EndingStatus } from "@/lib/docs/public-ending";
+import { ENDING_CHECK_FAILED, type EndingAnswer } from "@/lib/docs/public-ending";
 import { listKey } from "@/lib/docs/routes";
 import { viewerParticipant } from "@/lib/docs/participants";
 
@@ -97,7 +97,7 @@ type DocsState = {
   archive: (id: string) => Promise<void>;
   setAssistantCanEdit: (id: string, value: boolean) => Promise<void>;
   setPublic: (id: string, input: PublicInput) => Promise<string | null>;
-  checkEnding: (id: string, value: string) => Promise<EndingStatus | null>;
+  checkEnding: (id: string, value: string) => Promise<EndingAnswer>;
   publicSaving: Record<string, true>;
   listsVersion: number;
   createFolder: (name: string, parentId: string | null) => Promise<Folder | null>;
@@ -618,8 +618,8 @@ export const useDocsStore = create<DocsState>((set, get) => ({
   async checkEnding(id, value) {
     try {
       return await docsData().checkEnding(id, value);
-    } catch {
-      return null;
+    } catch (error) {
+      return { status: "failed", message: message(error, ENDING_CHECK_FAILED) };
     }
   },
 

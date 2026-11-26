@@ -315,7 +315,7 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
       return result("Stop downloads", [doc, "Readers can no longer download it as a PDF."]);
     case "set_public_ending": {
       const slug = str(args.slug).toLowerCase();
-      return result(`Change the public link to ${siteOrigin() ?? ""}${publicPath(slug)}`, [
+      return result(`Change the public link to ${(siteOrigin() ?? "").replace(/^https?:\/\//, "")}${publicPath(slug)}`, [
         doc,
         "The random link and earlier endings forward to it.",
         problem ? `This won't work yet: ${problem}` : "",

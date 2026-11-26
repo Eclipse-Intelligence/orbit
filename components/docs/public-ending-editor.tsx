@@ -1,41 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import type { PageSummary } from "@/lib/docs/client-types";
-import { ENDING_AVAILABLE, ENDING_TAKEN, endingProblem, settleEnding, typeEnding, type EndingStatus } from "@/lib/docs/public-ending";
+import { caretAfterTyping, endingCanSave, endingEnter, endingLine, endingView, typeEnding, type EndingAnswer } from "@/lib/docs/public-ending";
 import { cn } from "@/lib/utils";
 
 const CHECK_DELAY = 300;
-const CHECK_FAILED = "Couldn't check the ending. Try again.";
 
-type Remote = { value: string; status: EndingStatus | "failed" };
-type Line = { text: string; tone: "ok" | "bad" | "plain" };
-
-function lineOf(input: { error: string | null; problem: string | null; settled: string; current: string | null; needsCheck: boolean; answer: Remote["status"] | null }): Line {
-  if (input.error) return { text: input.error, tone: "bad" };
-  if (input.problem) return { text: input.problem, tone: "bad" };
-  if (input.settled === "") return { text: input.current ? "Save to go back to the random code." : "", tone: "plain" };
-  if (!input.needsCheck) return { text: ENDING_AVAILABLE, tone: "ok" };
-  if (input.answer === null) return { text: "", tone: "plain" };
-  if (input.answer === "failed") return { text: CHECK_FAILED, tone: "bad" };
-  if (input.answer.status === "available") return { text: ENDING_AVAILABLE, tone: "ok" };
-  return { text: input.answer.status === "taken" ? ENDING_TAKEN : input.answer.message, tone: "bad" };
-}
+type Remote = { value: string; answer: EndingAnswer };
 
 export function PublicEndingEditor({
   summary,
   prefix,
+  busy,
   onSave,
   onClose,
   check,
 }: {
   summary: Pick<PageSummary, "id" | "publicSlug">;
   prefix: string;
+  busy: boolean;
   onSave: (slug: string | null) => Promise<string | null>;
   onClose: () => void;
-  check: (id: string, value: string) => Promise<EndingStatus | null>;
+  check: (id: string, value: string) => Promise<EndingAnswer>;
 }) {
   const current = summary.publicSlug;
   const [value, setValue] = useState(current ?? "");
@@ -43,20 +32,26 @@ export function PublicEndingEditor({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  const settled = settleEnding(value);
-  const problem = settled === "" ? null : endingProblem(settled);
-  const needsCheck = settled !== "" && problem === null && settled !== current;
+  const caret = useRef<number | null>(null);
+  const checking = useRef(false);
+  const { settled, needsCheck, target } = endingView({ value, current });
 
   useEffect(() => {
     input.current?.focus();
   }, []);
 
+  useLayoutEffect(() => {
+    if (caret.current === null) return;
+    input.current?.setSelectionRange(caret.current, caret.current);
+    caret.current = null;
+  }, [value]);
+
   useEffect(() => {
     if (!needsCheck) return;
     let live = true;
     const timer = window.setTimeout(() => {
-      void check(summary.id, settled).then((status) => {
-        if (live) setRemote({ value: settled, status: status ?? "failed" });
+      void check(summary.id, settled).then((answer) => {
+        if (live) setRemote({ value: settled, answer });
       });
     }, CHECK_DELAY);
     return () => {
@@ -65,14 +60,11 @@ export function PublicEndingEditor({
     };
   }, [needsCheck, settled, summary.id, check]);
 
-  const answer = needsCheck && remote?.value === settled ? remote.status : null;
-  const line = lineOf({ error, problem, settled, current, needsCheck, answer });
-  const target = settled === "" ? null : settled;
-  const verified = !needsCheck || answer === "failed" || (answer !== null && answer.status === "available");
-  const canSave = !saving && target !== current && problem === null && verified;
+  const answer = needsCheck && remote?.value === settled ? remote.answer : null;
+  const state = { value, current, answer, error, saving, busy };
+  const line = endingLine(state);
 
-  async function save() {
-    if (!canSave) return;
+  async function store() {
     setSaving(true);
     setError(null);
     const failure = await onSave(target);
@@ -81,19 +73,31 @@ export function PublicEndingEditor({
     else onClose();
   }
 
+  async function submit() {
+    const next = endingEnter(state);
+    if (next === "save") return store();
+    if (next !== "check" || checking.current) return;
+    checking.current = true;
+    const result = await check(summary.id, settled);
+    checking.current = false;
+    setRemote({ value: settled, answer: result });
+    if (result.status === "available" || result.status === "failed") await store();
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void save();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    }
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    void submit();
   }
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="bg-surface-field focus-within:border-ring/50 focus-within:bg-surface-raised ease-power3-out flex h-9 min-w-0 items-center rounded-lg border border-transparent pl-2.5 text-[13px] transition-[background-color,border-color] duration-150">
+      <div
+        className={cn(
+          "bg-surface-field focus-within:bg-surface-raised ease-power3-out flex h-9 min-w-0 items-center rounded-lg border pl-2.5 text-[13px] transition-[background-color,border-color] duration-150",
+          line.tone === "bad" ? "border-danger focus-within:border-danger" : "focus-within:border-ring/50 border-transparent",
+        )}
+      >
         <span aria-hidden className="text-subtle min-w-0 shrink-[100] truncate">
           {prefix}
         </span>
@@ -101,8 +105,10 @@ export function PublicEndingEditor({
           ref={input}
           value={value}
           onChange={(event) => {
+            const raw = event.target.value;
+            caret.current = caretAfterTyping(raw, event.target.selectionStart ?? raw.length);
             setError(null);
-            setValue(typeEnding(event.target.value));
+            setValue(typeEnding(raw));
           }}
           onKeyDown={onKeyDown}
           aria-label="Link ending"
@@ -111,17 +117,17 @@ export function PublicEndingEditor({
           autoCorrect="off"
           spellCheck={false}
           disabled={saving}
-          className="h-full min-w-[12ch] flex-1 border-0 bg-transparent px-0 text-[13px] hover:bg-transparent focus-visible:border-0 focus-visible:bg-transparent"
+          className="h-full min-w-[12ch] flex-1 border-0 bg-transparent px-0 pr-2.5 text-[13px] hover:bg-transparent focus-visible:border-0 focus-visible:bg-transparent"
         />
       </div>
       <div className="flex items-start gap-2 pointer-coarse:gap-3">
-        <span role="status" className={cn("caption-style min-w-0 flex-1 pt-1.5", line.tone === "bad" ? "text-danger" : line.tone === "ok" ? "text-success" : "text-subtle")}>
+        <span role={error ? "alert" : "status"} className={cn("caption-style min-w-0 flex-1 pt-1.5", line.tone === "bad" ? "text-danger" : line.tone === "ok" ? "text-success" : "text-subtle")}>
           {line.text}
         </span>
         <Button variant="ghost" size="sm" onClick={onClose} className="hit">
           Cancel
         </Button>
-        <Button variant="primary" size="sm" disabled={!canSave} onClick={() => void save()} className="hit">
+        <Button variant="primary" size="sm" disabled={!endingCanSave(state)} onClick={() => void store()} className="hit">
           Save
         </Button>
       </div>

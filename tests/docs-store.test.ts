@@ -429,6 +429,48 @@ describe("docs store public link", () => {
     assert.equal(store.getState().publicSaving[page.id], undefined);
   });
 
+  it("keeps the server's answer when an ending save races a download or timer change", async () => {
+    const gate = deferred<void>();
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      if (input.slug) {
+        await gate.promise;
+        throw new Error("Taken. Pick another.");
+      }
+      return data.setPublic(id, input);
+    });
+    await store.getState().setPublic(page.id, { public: true });
+    const ending = store.getState().setPublic(page.id, { slug: "plan-race" });
+    assert.equal(store.getState().pages[page.id].publicSlug, "plan-race");
+    const download = store.getState().setPublic(page.id, { allowDownload: true });
+    const timer = store.getState().setPublic(page.id, { expiresAt: "2030-03-31" });
+    assert.equal(await download, null);
+    assert.equal(await timer, null);
+    gate.resolve();
+    assert.equal(await ending, "Taken. Pick another.");
+    const shown = store.getState().pages[page.id];
+    assert.equal(shown.allowDownload, true);
+    assert.equal(shown.publicExpiresAt, "2030-03-31T23:00:00.000Z");
+    assert.equal(shown.publicSlug, null, "the later replies came from the server, which never took the ending");
+    assert.doesNotMatch(shown.publicUrl ?? "", /plan-race/);
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+
+  it("passes the server's message through when a check can't run", async () => {
+    const harness = await open();
+    const data: DocsData = {
+      ...harness.data,
+      async checkEnding() {
+        throw new Error("Couldn't check the ending. Wait a minute and try again.");
+      },
+    };
+    connectDocs({}, data);
+    const page = await note({ ...harness, data }, "Plan", "one");
+    assert.deepEqual(await useDocsStore.getState().checkEnding(page.id, "free-ending"), {
+      status: "failed",
+      message: "Couldn't check the ending. Wait a minute and try again.",
+    });
+  });
+
   it("checks an ending through the data layer", async () => {
     const { page, store } = await withSetPublic(() => async () => {
       throw new Error("unused");

@@ -14,6 +14,7 @@ import { PublicEndingEditor } from "@/components/docs/public-ending-editor";
 import { usePublicLive } from "@/components/docs/use-public-live";
 import { useDocsNav, useMedia } from "@/components/docs/use-docs";
 import type { Folder, PageSummary, PublicInput, Visibility } from "@/lib/docs/client-types";
+import { escapeAction } from "@/lib/docs/public-ending";
 import { EXPIRY_PRESETS, expiryDayOf, expiryLabel, londonToday, presetDay, presetOf, type ExpiryPreset } from "@/lib/docs/public-expiry";
 import { listHref, pageHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
@@ -106,7 +107,7 @@ function absolute(url: string) {
   return url.startsWith("/") ? `${origin()}${url}` : url;
 }
 
-function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: { current: boolean } }) {
+function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: { current: (() => boolean) | null } }) {
   const owned = summary.canChangePublic;
   const agentMade = summary.owner.kind !== "person";
   const setPublic = useDocsStore((state) => state.setPublic);
@@ -114,6 +115,8 @@ function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: {
   const [picking, setPicking] = useState(false);
   const checkEnding = useDocsStore((state) => state.checkEnding);
   const [editing, setEditing] = useState(false);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
   const saving = useDocsStore((state) => state.publicSaving[summary.id] === true);
   const url = summary.publicUrl ? absolute(summary.publicUrl) : null;
   const expiresAt = summary.publicExpiresAt;
@@ -127,12 +130,31 @@ function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: {
     ? `Turned off on ${expiryLabel(expiresAt)}, when its timer ran out.${owned ? "" : ` ${who}`}`
     : `Anyone with the link can read it${live && expiresAt ? ` until ${expiryLabel(expiresAt)}` : ""}.${owned ? "" : ` ${who}`}`;
 
+  const editorOpen = editing && live && owned && url !== null;
+  if (editing && !editorOpen) setEditing(false);
+
+  function closeEditor() {
+    returnFocus.current = true;
+    setEditing(false);
+  }
+
   useEffect(() => {
-    escapeRef.current = editing;
-    return () => {
-      escapeRef.current = false;
+    if (!editorOpen) return;
+    escapeRef.current = () => {
+      returnFocus.current = true;
+      setEditing(false);
+      return true;
     };
-  }, [editing, escapeRef]);
+    return () => {
+      escapeRef.current = null;
+    };
+  }, [editorOpen, escapeRef]);
+
+  useEffect(() => {
+    if (editing || !returnFocus.current) return;
+    returnFocus.current = false;
+    editButton.current?.focus();
+  }, [editing]);
 
   async function change(input: PublicInput) {
     if (!owned) return;
@@ -164,13 +186,14 @@ function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: {
           </span>
           <Switch checked={live} disabled={!owned || saving} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
         </div>
-        {live && url && owned && editing ? (
+        {editorOpen && url ? (
           <PublicEndingEditor
             summary={summary}
             prefix={url.replace(/^https?:\/\//, "").replace(/[^/]*$/, "")}
+            busy={saving}
             check={checkEnding}
             onSave={(slug) => setPublic(summary.id, { slug })}
-            onClose={() => setEditing(false)}
+            onClose={closeEditor}
           />
         ) : (
           live &&
@@ -182,7 +205,7 @@ function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: {
                 </span>
                 <CopyButton text={url} label="Copy" ariaLabel="Copy public link" className="min-w-0" />
                 {owned && (
-                  <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(true)} aria-label="Edit the public link ending" className="hit">
+                  <Button ref={editButton} variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(true)} aria-label="Edit the public link ending" className="hit">
                     Edit
                   </Button>
                 )}
@@ -403,7 +426,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
   const [pending, setPending] = useState(false);
   const viewerId = useDocsStore((state) => state.viewer?.id ?? nav?.viewer.id);
   const groupLabel = useId();
-  const escapeRef = useRef(false);
+  const escapeRef = useRef<(() => boolean) | null>(null);
   const publicOn = usePublicLive(summary);
   const folder = summary.folderId ? nav?.folders.find((item) => item.id === summary.folderId) : undefined;
   const fromFolder = Boolean(folder?.shared);
@@ -429,7 +452,10 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
         sideOffset={8}
         className={SHARE_POPOVER_CLASS}
         onEscapeKeyDown={(event) => {
-          if (escapeRef.current) event.preventDefault();
+          if (escapeAction(escapeRef.current !== null) === "close-editor") {
+            escapeRef.current?.();
+            event.preventDefault();
+          }
         }}
       >
         <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">

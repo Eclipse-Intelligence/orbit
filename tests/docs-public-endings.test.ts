@@ -1,15 +1,21 @@
 import "./svg-stub";
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { GET as pdfRoute } from "@/app/api/d/[token]/pdf/route";
 import { PATCH as patchRoute } from "@/app/api/v1/docs/[id]/route";
 import PublicDocPage from "@/app/d/[token]/page";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
+import { removeMember } from "@/lib/crm/team";
+import { createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
+import { openDailyNote } from "@/lib/docs/daily-notes";
+import { takeOverFormerMemberDocs } from "@/lib/docs/admin";
 import { publicInputOf } from "@/lib/docs/http";
 import { openPublicDoc, publicDocPdf } from "@/lib/docs/public";
 import { settleEnding, typeEnding } from "@/lib/docs/public-ending";
@@ -77,6 +83,13 @@ async function asAgent(actor: AgentActor, sql: string, values: unknown[]) {
     await client.query("rollback").catch(() => undefined);
     client.release();
   }
+}
+
+async function addMember(email: string, name: string) {
+  const admin = getAdminPool();
+  const id = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
+  await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, id]);
+  return { ...mark, userId: id, email, fullName: name, role: "member", scopes: scopesForRole("member") } as UserActor;
 }
 
 async function publish(actor: UserActor | AgentActor, title = "Doc", extra: { shared?: boolean } = {}) {
@@ -201,6 +214,9 @@ describe("Public doc endings: old links", () => {
     const back = await setDocPublic(mark, id, { slug: "first-ending" });
     assert.equal(endingOf(back.publicUrl), "first-ending");
     assert.equal((await openPublicDoc("second-ending"))?.redirectTo, "/d/first-ending");
+    const served = await openPublicDoc("first-ending");
+    assert.equal(served?.redirectTo, null, "an earlier ending taken back serves directly");
+    assert.equal(served?.title, "History");
   });
 
   it("renders the canonical link and redirects every other form from the page", async () => {
@@ -325,6 +341,22 @@ describe("Public doc endings: old links", () => {
     }
   });
 
+  it("serves the PDF route itself for an upper-case ending, and stops after the timer runs out or archiving", async () => {
+    const { id, token } = await publish(mark, "Route doc");
+    await setDocPublic(mark, id, { slug: "route-ending" });
+    const hit = async (form: string) => (await pdfRoute(new Request(`http://crm.test/api/d/${form}/pdf`), pageParams(form))).status;
+    assert.equal(await hit("ROUTE-ENDING"), 200);
+    assert.equal(await hit("Route-Ending"), 200);
+    assert.equal(await hit(token), 200);
+    await setDocPublic(mark, id, { expiresAt: "2099-01-01" });
+    await getAdminPool().query("update crm.pages set public_expires_at = now() - interval '1 minute' where id = $1", [id]);
+    for (const form of ["ROUTE-ENDING", "route-ending", token]) assert.equal(await hit(form), 404);
+    await getAdminPool().query("update crm.pages set public_expires_at = null where id = $1", [id]);
+    assert.equal(await hit("ROUTE-ENDING"), 200);
+    await archiveDoc(mark, id);
+    for (const form of ["ROUTE-ENDING", "route-ending", token]) assert.equal(await hit(form), 404);
+  });
+
   it("exposes nothing from the lookup beyond the page, the current ending and the forward", async () => {
     const { id } = await publish(mark, "Narrow");
     await setDocPublic(mark, id, { slug: "narrow-ending" });
@@ -403,16 +435,59 @@ describe("Public doc endings: who can change them", () => {
     await assert.rejects(queryAsUser(mark.userId, "update crm.pages set public_slug = 'ab' where id = $1", [id]), /pages_public_slug_shape/);
   });
 
-  it("keeps an ending when a leaver's links are turned off and brings it back with the link", async () => {
-    const member = (await getAdminPool().query<{ id: string }>("select private.create_local_user('leaver@docs-endings.test', 'password-123', 'Lee Leaver') as id")).rows[0].id;
-    await getAdminPool().query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, member]);
-    const leaver: UserActor = { ...mark, userId: member, email: "leaver@docs-endings.test", fullName: "Lee Leaver", role: "member", scopes: scopesForRole("member") };
-    const { id } = await publish(leaver, "Leaver doc", { shared: true });
+  it("keeps an ending when a leaver's links are turned off, and brings it back with the link", async () => {
+    const leaver = await addMember("leaver@docs-endings.test", "Lee Leaver");
+    const { id, token } = await publish(leaver, "Leaver doc", { shared: true });
     await setDocPublic(leaver, id, { slug: "leaver-ending" });
-    await getAdminPool().query("delete from crm.workspace_members where user_id = $1 and workspace_id = $2", [member, mark.workspaceId]);
+    await removeMember(mark, leaver.userId);
     assert.equal(await openPublicDoc("leaver-ending"), null);
+    assert.equal(await openPublicDoc(token), null);
     const after = await getAdminPool().query("select public_enabled, public_slug from crm.pages where id = $1", [id]);
     assert.deepEqual(after.rows[0], { public_enabled: false, public_slug: "leaver-ending" });
+    await takeOverFormerMemberDocs(mark, leaver.userId);
+    const revived = await setDocPublic(mark, id, { public: true });
+    assert.equal(revived.publicSlug, "leaver-ending");
+    assert.equal(endingOf(revived.publicUrl), "leaver-ending");
+    assert.equal((await openPublicDoc("leaver-ending"))?.title, "Leaver doc");
+    assert.equal((await openPublicDoc(token))?.redirectTo, "/d/leaver-ending");
+  });
+
+  it("keeps an ending when a person leaves the workspace themselves", async () => {
+    const leaver = await addMember("self-leaver@docs-endings.test", "Sam Leaver");
+    const { id, token } = await publish(leaver, "Self leaver doc", { shared: true });
+    await setDocPublic(leaver, id, { slug: "self-leaver" });
+    const client = await getAdminPool().connect();
+    try {
+      await client.query("begin");
+      await client.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: leaver.userId, role: "authenticated" })]);
+      await client.query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [mark.workspaceId, leaver.userId]);
+      await client.query("commit");
+    } finally {
+      client.release();
+    }
+    assert.equal(await openPublicDoc("self-leaver"), null);
+    assert.equal(await openPublicDoc(token), null);
+    const after = await getAdminPool().query("select public_enabled, public_slug from crm.pages where id = $1", [id]);
+    assert.deepEqual(after.rows[0], { public_enabled: false, public_slug: "self-leaver" });
+    const taker = await publish(mark, "Wants it");
+    await assert.rejects(setDocPublic(mark, taker.id, { slug: "self-leaver" }), /Taken\. Pick another\./);
+  });
+
+  it("refuses an ending on a daily note, in the app and at the database", async () => {
+    const daily = (await openDailyNote(mark)).page;
+    await assert.rejects(setDocPublic(mark, daily.id, { slug: "daily-ending" }), /Daily notes are private/);
+    await assert.rejects(queryAsUser(mark.userId, "update crm.pages set public_slug = 'daily-ending' where id = $1", [daily.id]), /pages_public_slug_has_token|pages_daily_not_public/);
+  });
+
+  it("keeps the retired marker out of reach of agents, and sets it itself", async () => {
+    const { id } = await publish(agent, "Marker");
+    await assert.rejects(asAgent(agent, "update crm.pages set public_slug_retired = true where id = $1", [id]), /permission denied/);
+    const marker = async () => (await getAdminPool().query("select public_slug_retired from crm.pages where id = $1", [id])).rows[0].public_slug_retired;
+    assert.equal(await marker(), false);
+    await setDocPublic(agent, id, { slug: "marker-one" });
+    assert.equal(await marker(), false);
+    await setDocPublic(agent, id, { slug: "marker-two" });
+    assert.equal(await marker(), true);
   });
 });
 
@@ -526,7 +601,7 @@ describe("Public doc endings: API, MCP and assistant", () => {
     const { id } = await publish(mark, "Assistant ending");
     const set = { action: "set_public_ending", docId: id, slug: "assistant-ending" };
     const card = describeAction("save_doc", set, await recordNames(mark, [set], ["save_doc"]));
-    assert.equal(card.title, "Change the public link to https://orbit.test/d/assistant-ending");
+    assert.equal(card.title, "Change the public link to orbit.test/d/assistant-ending");
     assert.match(card.lines.join(" "), /Assistant ending/);
     assert.match(((await runTool(mark, "save_doc", set, { unattended: true })) as { error: string }).error, /Only edits to a doc's text/);
     const result = (await runTool(mark, "save_doc", set)) as { saved: boolean; doc: { publicUrl: string; publicSlug: string } };
@@ -556,5 +631,59 @@ describe("Public doc endings: API, MCP and assistant", () => {
     const shared = await publish(priya, "Priya's", { shared: true });
     const set = { action: "set_public_ending", docId: shared.id, slug: "not-yours" };
     assert.match(((await runTool(mark, "save_doc", set)) as { error: string }).error, /Only Priya Shah can change/);
+  });
+});
+
+describe("Public doc endings: audit and webhooks", () => {
+  useServerlessPool();
+
+  async function recorded(docId: string) {
+    const rows = await getAdminPool().query<{ changes: Record<string, unknown> }>("select changes from crm.audit_events where entity_id = $1 and event_type = 'page.public_changed' order by created_at", [docId]);
+    return rows.rows.map((row) => row.changes);
+  }
+
+  it("records the ending on a shared doc and nothing on a private one", async () => {
+    const shared = await createDoc(mark, { title: "Audited ending", content: "Text", shared: true });
+    await setDocPublic(mark, shared.id, { public: true });
+    await setDocPublic(mark, shared.id, { slug: "audited-ending" });
+    await setDocPublic(mark, shared.id, { slug: null });
+    assert.deepEqual((await recorded(shared.id)).map((changes) => changes.slug), [null, "audited-ending", null]);
+    const priv = await createDoc(mark, { title: "Private ending", content: "Text" });
+    await setDocPublic(mark, priv.id, { public: true, slug: "private-ending" });
+    assert.deepEqual(await recorded(priv.id), []);
+  });
+
+  it("sends the ending in the webhook for a shared doc only", async () => {
+    process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS = "1";
+    const bodies: string[] = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        bodies.push(Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200);
+        response.end("ok");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    try {
+      await createWebhook(mark, { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/hook`, events: ["page.public_changed"] });
+      const priv = await createDoc(mark, { title: "Hook private", content: "Text" });
+      await setDocPublic(mark, priv.id, { public: true, slug: "hook-private" });
+      const shared = await createDoc(mark, { title: "Hook shared", content: "Text", shared: true });
+      await setDocPublic(mark, shared.id, { public: true, slug: "hook-shared" });
+      const until = Date.now() + 5000;
+      while (bodies.length === 0 && Date.now() < until) {
+        await deliverDueWebhooks();
+        if (bodies.length === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await deliverDueWebhooks();
+      assert.equal(bodies.length, 1);
+      assert.match(bodies[0], /hook-shared/);
+      assert.ok(!bodies[0].includes("hook-private"));
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      delete process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS;
+    }
   });
 });

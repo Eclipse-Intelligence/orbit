@@ -15,11 +15,13 @@ alter table crm.pages drop constraint if exists pages_public_slug_shape;
 alter table crm.pages
   add constraint pages_public_slug_shape check (
     public_slug is null or (char_length(public_slug) between 3 and 40 and public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')
-  );
+  ) not valid;
+alter table crm.pages validate constraint pages_public_slug_shape;
 
 alter table crm.pages drop constraint if exists pages_public_slug_has_token;
 alter table crm.pages
-  add constraint pages_public_slug_has_token check (public_slug is null or (kind = 'note' and public_token_hash is not null));
+  add constraint pages_public_slug_has_token check (public_slug is null or (kind = 'note' and public_token_hash is not null)) not valid;
+alter table crm.pages validate constraint pages_public_slug_has_token;
 
 create table if not exists crm.page_public_slugs (
   slug text primary key,
