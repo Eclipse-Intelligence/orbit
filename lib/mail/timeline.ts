@@ -421,7 +421,8 @@ export async function fileMailOnTimeline(
               ).rows[0]?.id ?? null
             : null;
           const removed = await removedActivityContactIds(db, found.id);
-          const newMain = found.contact_id === null ? ([main, ...contactIds].find((id) => id && !removed.has(id)) ?? null) : replacement && !removed.has(replacement) ? replacement : null;
+          const candidate = found.contact_id === null ? main : replacement;
+          const newMain = candidate && !removed.has(candidate) ? candidate : null;
           if (newMain) await relinkActivity(db, target, found, newMain, row);
           await linkEmailPeopleInDb(db, target, found.id, contactIds, provenance);
           await settle(found.id);
