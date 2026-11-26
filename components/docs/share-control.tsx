@@ -135,7 +135,7 @@ function PublicLink({ summary }: { summary: PageSummary }) {
           <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.04] py-1.5 pr-1.5 pl-2.5">
             <span className="text-soft min-w-0 flex-1 truncate text-[12.5px]">{url.replace(/^https?:\/\//, "")}</span>
             <CopyButton text={url} label="Copy" ariaLabel="Copy public link" className="min-w-0" />
-            <Button variant="ghost" size="sm" href={url} target="_blank" className="hit">
+            <Button variant="ghost" size="sm" href={url} target="_blank" aria-label="Open public link" className="hit">
               Open
             </Button>
           </div>

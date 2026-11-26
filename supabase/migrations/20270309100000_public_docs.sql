@@ -36,7 +36,13 @@ begin
   end if;
   if (new.public_enabled, new.allow_download, new.public_token_hash, new.public_token_enc)
     is distinct from (old.public_enabled, old.allow_download, old.public_token_hash, old.public_token_enc) then
-    if acting_agent is not null then
+    if pg_trigger_depth() > 1
+      and old.public_enabled and not new.public_enabled
+      and new.allow_download is not distinct from old.allow_download
+      and new.public_token_hash is not distinct from old.public_token_hash
+      and new.public_token_enc is not distinct from old.public_token_enc then
+      null;
+    elsif acting_agent is not null then
       if old.created_by_agent_id is distinct from acting_agent then
         raise exception 'Only the doc''s owner can change its public link.' using errcode = '42501';
       end if;
@@ -44,7 +50,6 @@ begin
       if old.user_id is distinct from acting_user
         and not (
           old.user_id is null
-          and old.created_by_agent_id is not null
           and exists (
             select 1 from crm.workspace_members m
             where m.workspace_id = old.workspace_id and m.user_id = acting_user and m.role = 'owner'

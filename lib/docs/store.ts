@@ -161,7 +161,7 @@ function ownedBy(actor: Actor, userId: string | null) {
 function controlsPublic(actor: Actor, row: { kind: DocKind; user_id: string | null; created_by_agent_id: string | null }) {
   if (row.kind !== "note") return false;
   if (actor.type === "agent") return row.created_by_agent_id === actor.agentId;
-  if (row.user_id === null) return row.created_by_agent_id !== null && actor.role === "owner";
+  if (row.user_id === null) return actor.role === "owner";
   return ownedBy(actor, row.user_id);
 }
 
@@ -1263,7 +1263,9 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
       "forbidden",
       page.user_id
         ? `Only ${page.owner_name ?? "its owner"} can change this note's public link.`
-        : `Only ${page.creator_agent_name ?? "the agent that made it"} or the workspace owner can change this note's public link.`,
+        : page.created_by_agent_id
+          ? `Only ${page.creator_agent_name ?? "the agent that made it"} or the workspace owner can change this note's public link.`
+          : "Only the workspace owner can change this note's public link.",
       403,
     );
   }

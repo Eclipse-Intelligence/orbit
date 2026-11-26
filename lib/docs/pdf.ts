@@ -37,6 +37,7 @@ const CELL = 9;
 const CELL_PAD = 5;
 const CELL_VERTICAL = 4;
 const MIN_TEXT = 160;
+const MAX_DEPTH = 40;
 const MAX_INDENT = WIDTH - MARGIN * 2 - MIN_TEXT;
 const DEADLINE_MS = 20_000;
 const FAILED = "Couldn't make the PDF. Try again.";
@@ -120,6 +121,7 @@ export class DocPdfWriter {
   private known: Set<number>;
   private units = new Map<PDFFont, Map<string, number>>();
   private tables = new Map<string, Prepared>();
+  private depth = 0;
 
   constructor(
     private pdf: PDFDocument,
@@ -550,7 +552,21 @@ export class DocPdfWriter {
   }
 
   private block(node: SyntaxNode, context: Context) {
+    this.depth += 1;
+    try {
+      this.blockAt(node, context);
+    } finally {
+      this.depth -= 1;
+    }
+  }
+
+  private blockAt(node: SyntaxNode, context: Context) {
     const name = node.name;
+    const nested = name === "Blockquote" || name === "BulletList" || name === "OrderedList";
+    if (nested && this.depth > MAX_DEPTH) {
+      this.paragraph([plain(this.text.slice(node.from, node.to).replace(/^[\s>]+/gm, ""))], context, { after: 6 });
+      return;
+    }
     const level = /^(?:ATX|Setext)Heading(\d)$/.exec(name);
     if (level) return this.heading(node, Number(level[1]), context);
     if (name === "Paragraph") {
@@ -582,12 +598,11 @@ export class DocPdfWriter {
     const pages = this.pdf.getPages();
     const regular = this.fonts.regular;
     const flat = this.clean(title).replace(/\s+/g, " ");
+    const room = WIDTH - MARGIN * 2 - this.measure(regular, ` · Page ${pages.length} of ${pages.length}`, 8);
+    let head = flat;
+    while (head.length > 1 && this.measure(regular, head, 8) > room) head = `${head.slice(0, -2).trimEnd()}…`;
     pages.forEach((page, index) => {
-      const tail = ` · Page ${index + 1} of ${pages.length}`;
-      const room = WIDTH - MARGIN * 2 - this.measure(regular, tail, 8);
-      let head = flat;
-      while (head.length > 1 && this.measure(regular, head, 8) > room) head = `${head.slice(0, -2).trimEnd()}…`;
-      page.drawText(`${head}${tail}`, { x: MARGIN, y: 30, size: 8, font: regular, color: MUTED });
+      page.drawText(`${head} · Page ${index + 1} of ${pages.length}`, { x: MARGIN, y: 30, size: 8, font: regular, color: MUTED });
     });
   }
 }

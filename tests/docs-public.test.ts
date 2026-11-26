@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -598,5 +600,75 @@ describe("Public docs: roles, workspaces and races", () => {
     const revived = await setDocPublic(mark, doc.id, { public: true });
     assert.equal(revived.publicUrl, url);
     assert.equal((await openPublicDoc(tokenOf(url)))?.title, "Leaver's shared doc");
+  });
+});
+
+describe("Public docs: more roles and the not found head", () => {
+  useServerlessPool();
+
+  it("lets only the workspace owner change a doc with no owner and no agent left", async () => {
+    const admin = await addMember("admin2@docs-public.test", "Ann Admin", "admin");
+    const gone = (await createAgent(mark.workspaceId, ["docs:read", "docs:write"], "Short-lived")).actor;
+    const doc = await createDoc(gone, { title: "Orphaned doc", content: "Text" });
+    await getAdminPool().query("delete from crm.agents where id = $1", [gone.agentId]);
+    const row = await getAdminPool().query("select user_id, created_by_agent_id from crm.pages where id = $1", [doc.id]);
+    assert.deepEqual(row.rows[0], { user_id: null, created_by_agent_id: null });
+    assert.equal((await getDoc(mark, doc.id)).canChangePublic, true);
+    assert.equal((await getDoc(admin, doc.id)).canChangePublic, false);
+    await assert.rejects(setDocPublic(admin, doc.id, { public: true }), /Only the workspace owner can change/);
+    await assert.rejects(queryAsUser(admin.userId, "update crm.pages set allow_download = true where id = $1 returning id", [doc.id]), /Only the doc's owner/);
+    assert.equal((await setDocPublic(mark, doc.id, { public: true })).public, true);
+    assert.equal((await queryAsUser(mark.userId, "update crm.pages set allow_download = true where id = $1 returning id", [doc.id])).length, 1);
+  });
+
+  it("turns a leaver's links off even when the removal runs under another person's session", async () => {
+    const admin = await addMember("admin3@docs-public.test", "Abe Admin", "admin");
+    const leaver = await addMember("leaver2@docs-public.test", "Lou Leaver", "member");
+    const doc = await createDoc(leaver, { title: "Leaver under claims", content: "Text", shared: true });
+    const url = (await setDocPublic(leaver, doc.id, { public: true })).publicUrl;
+    const client = await getAdminPool().connect();
+    try {
+      await client.query("begin");
+      await client.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: admin.userId, role: "authenticated" })]);
+      await client.query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [mark.workspaceId, leaver.userId]);
+      await client.query("commit");
+    } finally {
+      client.release();
+    }
+    assert.equal(await openPublicDoc(tokenOf(url)), null);
+    assert.equal((await getDoc(mark, doc.id)).public, false);
+  });
+
+  it("serves a neutral head on the not found page for an off link and an unknown link", { timeout: 120_000, skip: !existsSync(".next/BUILD_ID") && "run next build first" }, async () => {
+    const doc = await createDoc(mark, { title: "Head check", content: "Text" });
+    const token = tokenOf((await setDocPublic(mark, doc.id, { public: true })).publicUrl);
+    await setDocPublic(mark, doc.id, { public: false });
+    const port = 3300 + Math.floor(Math.random() * 500);
+    const child = spawn("npx", ["next", "start", "-p", String(port)], { env: { ...process.env, SITE_URL: `http://localhost:${port}` }, stdio: "ignore" });
+    try {
+      const base = `http://localhost:${port}`;
+      const until = Date.now() + 60_000;
+      for (;;) {
+        const up = await fetch(`${base}/d/${"Z".repeat(32)}`).then(() => true, () => false);
+        if (up) break;
+        if (Date.now() > until) throw new Error("The production server didn't start.");
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      const heads: string[] = [];
+      for (const path of [token, "Z".repeat(32)]) {
+        const response = await fetch(`${base}/d/${path}`);
+        assert.equal(response.status, 404);
+        const html = await response.text();
+        assert.match(html, /This page doesn&#x27;t exist or isn&#x27;t public\.|This page doesn't exist or isn't public\./);
+        heads.push(html.slice(0, html.indexOf("</head>")).replace(/data:[^"]+/g, "data"));
+      }
+      for (const head of heads) {
+        assert.match(head, /<title>Not found<\/title>/);
+        assert.match(head, /name="robots" content="noindex, nofollow/);
+        assert.doesNotMatch(head, /Orbit|focused CRM|og:|twitter:|rel="canonical"|manifest|apple-mobile-web-app|name="description"/i);
+      }
+    } finally {
+      child.kill();
+    }
   });
 });

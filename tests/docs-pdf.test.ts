@@ -116,7 +116,7 @@ async function within<T>(work: Promise<T>, ms: number, label: string) {
 }
 
 describe("Docs PDF writer limits", () => {
-  it("finishes when a table header is taller than a page", async () => {
+  it("finishes when a table header is taller than a page", { timeout: 90_000 }, async () => {
     const wide = `| ${Array.from({ length: 30 }, (_, index) => `${index}`.padEnd(60, "h")).join(" | ")} |\n| ${Array.from({ length: 30 }, () => "---").join(" | ")} |\n| ${Array.from({ length: 30 }, () => "x").join(" | ")} |`;
     const long = `| ${Array.from({ length: 1500 }, (_, index) => `word${index}`).join(" ")} | B |\n| --- | --- |\n| row one | 1 |\n| row two | 2 |`;
     for (const content of [wide, long]) {
@@ -127,7 +127,7 @@ describe("Docs PDF writer limits", () => {
     }
   });
 
-  it("keeps other columns readable beside one unbreakable word, and survives 60 columns", async () => {
+  it("keeps other columns readable beside one unbreakable word, and survives 60 columns", { timeout: 90_000 }, async () => {
     const url = `https://example.com/${"a".repeat(270)}`;
     const content = `| Before | Link | After |\n| --- | --- | --- |\n| 12 | ${url} | 34 |`;
     const { text } = await read(await renderDocPdf({ title: "Url", content, updatedAt: UPDATED }));
@@ -140,7 +140,7 @@ describe("Docs PDF writer limits", () => {
     assert.ok((await read(wide)).pages >= 1);
   });
 
-  it("stops indenting deeply nested quotes and lists", async () => {
+  it("stops indenting deeply nested quotes and lists", { timeout: 90_000 }, async () => {
     const quotes = `${"> ".repeat(60)}deep quote words`;
     const lists = Array.from({ length: 40 }, (_, depth) => `${"  ".repeat(depth)}- level ${depth} words`).join("\n");
     const { text } = await read(await within(renderDocPdf({ title: "Deep", content: `${quotes}\n\n${lists}`, updatedAt: UPDATED }), 20_000, "deep nesting"));
@@ -149,7 +149,7 @@ describe("Docs PDF writer limits", () => {
     assert.match(all, /level 39 words/);
   });
 
-  it("never leaves a heading alone at the bottom of a page", async () => {
+  it("never leaves a heading alone at the bottom of a page", { timeout: 90_000 }, async () => {
     for (let filler = 36; filler <= 56; filler += 1) {
       const content = `${Array.from({ length: filler }, (_, index) => `Filler line ${index}\n`).join("\n")}\n## Lonely heading\n\n| Post | Count |\n| --- | --- |\n| One | 1 |\n| Two | 2 |\n\nAfter text`;
       const { text } = await read(await renderDocPdf({ title: "Keep", content, updatedAt: UPDATED }));
@@ -158,6 +158,13 @@ describe("Docs PDF writer limits", () => {
         assert.ok(!/Lonely heading\s*$/.test(body), `filler ${filler}: heading ended a page`);
       }
     }
+  });
+
+  it("renders 10,000 nested quotes flat without overflowing the stack", { timeout: 60_000 }, async () => {
+    const { text } = await read(await renderDocPdf({ title: "Nest", content: `${"> ".repeat(10_000)}bottom words`, updatedAt: UPDATED }));
+    assert.match(text.join(" "), /bottom words/);
+    const lists = Array.from({ length: 2_000 }, (_, depth) => `${"  ".repeat(Math.min(depth, 3))}- item ${depth}`).join("\n");
+    assert.ok((await read(await renderDocPdf({ title: "Lists", content: lists, updatedAt: UPDATED }))).pages >= 1);
   });
 
   it("drops emoji selectors and control characters, and writes strikethrough text", async () => {
@@ -172,7 +179,7 @@ describe("Docs PDF writer limits", () => {
     await assert.rejects(renderDocPdf({ title: "Late", content: "Text", updatedAt: UPDATED }, { deadline: Date.now() - 1 }), /Couldn't make the PDF\. Try again\./);
   });
 
-  it("builds the worst 1MB documents in a few seconds", async () => {
+  it("builds the worst 1MB documents in a few seconds", { timeout: 90_000 }, async () => {
     const code = `\`\`\`\n${Array.from({ length: 50_000 }, (_, index) => `const value${index} = compute(${index}); // x`).join("\n")}\n\`\`\``.slice(0, 1_000_000);
     const startedCode = Date.now();
     const codePdf = await within(renderDocPdf({ title: "Code", content: code, updatedAt: UPDATED }), 25_000, "1MB code block");
