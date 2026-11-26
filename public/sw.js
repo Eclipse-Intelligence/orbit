@@ -123,6 +123,8 @@ async function openFromTap(target, id) {
     return;
   }
   logged.push(focusClient(client, id));
+  pending = null;
+  logged.push(caches.delete(PENDING_CACHE).catch(() => undefined));
   const reply = await askPage(client, target, id);
   logged.push(trail("sw-answer", { id, answered: reply.answered, ms: reply.ms }));
   if (!reply.answered) logged.push(sendClientTo(client, target, id));
