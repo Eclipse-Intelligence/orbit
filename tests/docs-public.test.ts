@@ -477,6 +477,14 @@ describe("Public docs: API, MCP and assistant", () => {
   });
 });
 
+async function freePort() {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 async function addMember(email: string, name: string, role: "member" | "admin") {
   const admin = getAdminPool();
   const id = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
@@ -650,17 +658,25 @@ describe("Public docs: more roles and the not found head", () => {
     const doc = await createDoc(mark, { title: "Head check", content: "Text" });
     const token = tokenOf((await setDocPublic(mark, doc.id, { public: true })).publicUrl);
     await setDocPublic(mark, doc.id, { public: false });
-    const port = 3300 + Math.floor(Math.random() * 500);
-    const child = spawn("npx", ["next", "start", "-p", String(port)], { env: { ...process.env, SITE_URL: `http://localhost:${port}` }, stdio: "ignore" });
+    const port = await freePort();
+    const child = spawn("node_modules/.bin/next", ["start", "-p", String(port)], {
+      env: { ...process.env, SITE_URL: `http://localhost:${port}` },
+      stdio: ["ignore", "pipe", "ignore"],
+      detached: true,
+    });
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
     try {
       const base = `http://localhost:${port}`;
-      const until = Date.now() + 60_000;
-      for (;;) {
-        const up = await fetch(`${base}/d/${"Z".repeat(32)}`).then(() => true, () => false);
-        if (up) break;
-        if (Date.now() > until) throw new Error("The production server didn't start.");
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("The production server didn't start.")), 60_000);
+        child.once("exit", () => reject(new Error("The production server stopped early.")));
+        child.stdout?.on("data", (chunk: Buffer) => {
+          if (/Ready/.test(chunk.toString())) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+      });
       const heads: string[] = [];
       for (const path of [token, "Z".repeat(32)]) {
         const response = await fetch(`${base}/d/${path}`);
@@ -675,7 +691,14 @@ describe("Public docs: more roles and the not found head", () => {
         assert.doesNotMatch(head, /Orbit|focused CRM|og:|twitter:|rel="canonical"|manifest|apple-mobile-web-app|name="description"/i);
       }
     } finally {
-      child.kill();
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          child.kill();
+        }
+      }
+      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
     }
   });
 });

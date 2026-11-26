@@ -197,6 +197,26 @@ describe("Docs PDF writer limits", () => {
     assert.match(html, /note Ada Lovelace and Acme and Shown and Secret target and label and alt text/);
   });
 
+  it("prints brackets that are not real links as written, and keeps real and resolved links as their label", async () => {
+    const content = [
+      "I [note] this and arr[0](1) and [a] [b] and x[1][2].",
+      "",
+      "A [real](https://example.com/p) link, a [ref link][r] and a [short] one.",
+      "",
+      "[r]: https://example.com/r",
+      "[short]: https://example.com/s",
+      "",
+      "<div>",
+      "x<y and y>z and 3 < 4 > 2 <b>bold</b> <br/> end",
+      "</div>",
+    ].join("\n");
+    const all = (await read(await renderDocPdf({ title: "Brackets", content, updatedAt: UPDATED }))).text.join(" ");
+    assert.match(all, /I \[note\] this and arr\[0\]\(1\) and \[a\] \[b\] and x\[1\]\[2\]\./);
+    assert.match(all, /A real link, a ref link and a short one\./);
+    assert.ok(!all.includes("example.com"));
+    assert.match(all, /x<y and y>z and 3 < 4 > 2 bold end/);
+  });
+
   it("drops emoji selectors and control characters, and writes strikethrough text", async () => {
     const { text } = await read(await renderDocPdf({ title: "Marks", content: `Love ❤️${"\u007f\u0085"}ok ~~struck~~ words`, updatedAt: UPDATED }));
     const all = text.join(" ");

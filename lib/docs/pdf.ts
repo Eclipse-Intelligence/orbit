@@ -1,6 +1,7 @@
 import fontkit from "@pdf-lib/fontkit";
 import type { SyntaxNode } from "@lezer/common";
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { safeHref } from "@/lib/docs/editor/links";
 import { docsParser } from "@/lib/docs/editor/syntax";
 import { updatedLabel } from "@/lib/docs/public-link";
 import { loadFonts } from "@/lib/proposals/pdf";
@@ -65,14 +66,29 @@ function plain(text: string, style: Partial<Style> = {}): Run {
 
 const MENTION_SYNTAX = /@\[([^[\]\n]{1,200})\]\((?:contact|company|task|opportunity|proposal|member):[0-9a-f-]{36}\)/g;
 const WIKILINK_SYNTAX = /\[\[([^[\]\n]{1,400}?)\]\]/g;
-const LINK_SYNTAX = /!?\[([^\]\n]*)\]\([^)\n]*\)/g;
-const HTML_TAG = /<\/?[A-Za-z][^>\n]*>|<!--[\s\S]*?-->/g;
+const LINK_SYNTAX = /!?\[([^\]\n]*)\]\((?:https?:\/\/|mailto:|www\.)[^)\n]*\)/g;
+const HTML_TAG = /<\/?[A-Za-z][\w:-]*(?:\s+[A-Za-z_:][\w:.-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*\/?>|<!--[\s\S]*?-->|<![A-Za-z][^>\n]*>/g;
+const DEFINITION = /^ {0,3}\[([^\]\n]+)\]:/gm;
 
-function displayText(raw: string) {
-  return raw
+let definitions = new Set<string>();
+
+function referenceKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function displayText(raw: string, links = true) {
+  const shown = raw
     .replace(MENTION_SYNTAX, "$1")
-    .replace(WIKILINK_SYNTAX, (_, inner: string) => (inner.includes("|") ? inner.slice(inner.indexOf("|") + 1) : inner))
-    .replace(LINK_SYNTAX, "$1");
+    .replace(WIKILINK_SYNTAX, (_, inner: string) => (inner.includes("|") ? inner.slice(inner.indexOf("|") + 1) : inner));
+  return links ? shown.replace(LINK_SYNTAX, "$1") : shown;
+}
+
+function linkResolves(text: string, node: SyntaxNode, marks: SyntaxNode[]) {
+  const url = node.getChild("URL");
+  if (url) return safeHref(text.slice(url.from, url.to)) !== null;
+  const label = node.getChild("LinkLabel");
+  const key = label && label.to - label.from > 2 ? text.slice(label.from + 1, label.to - 1) : text.slice(marks[0].to, marks[1].from);
+  return definitions.has(referenceKey(key));
 }
 
 function inlineRuns(text: string, node: SyntaxNode, from: number, to: number, base: Style, out: Run[]) {
@@ -104,8 +120,8 @@ function inlineRuns(text: string, node: SyntaxNode, from: number, to: number, ba
       push(inner.replace(/\s+/g, " "), { ...base, code: true });
     } else if (name === "Link" || name === "Image") {
       const marks = child.getChildren("LinkMark");
-      if (marks.length >= 2) inlineRuns(text, child, marks[0].to, marks[1].from, base, out);
-      else push(displayText(text.slice(child.from, child.to)));
+      if (marks.length >= 2 && linkResolves(text, child, marks)) inlineRuns(text, child, marks[0].to, marks[1].from, base, out);
+      else push(displayText(text.slice(child.from, child.to), false));
     } else if (name === "WikiLink") {
       const inner = text.slice(child.from + 2, child.to - 2);
       const bar = inner.indexOf("|");
@@ -605,6 +621,7 @@ export class DocPdfWriter {
     const context: Context = { indent: 0, bars: [] };
     this.paragraph([plain(updatedLabel(input.updatedAt))], context, { size: 8.5, after: 4 });
     this.paragraph([plain(title, { bold: true })], context, { size: 21, after: 10 });
+    definitions = new Set([...this.text.matchAll(DEFINITION)].map((match) => referenceKey(match[1])));
     const tree = docsParser.parse(this.text);
     for (let child = tree.topNode.firstChild; child; child = child.nextSibling) this.block(child, context);
     const pages = this.pdf.getPages();
