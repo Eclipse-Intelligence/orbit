@@ -6,6 +6,7 @@ import {
   endingEnter,
   endingLine,
   escapeAction,
+  saveAfterCheck,
   typeEnding,
   type EndingAnswer,
   type EndingEditorState,
@@ -96,5 +97,23 @@ describe("public ending editor: Escape", () => {
   it("closes the editor first, wherever focus is, and the popover otherwise", () => {
     assert.equal(escapeAction(true), "close-editor");
     assert.equal(escapeAction(false), "close-popover");
+  });
+});
+
+describe("public ending editor: saving after the Enter check", () => {
+  const answer: EndingAnswer = { status: "available" };
+
+  it("saves only while the editor is open and the field still holds the checked value", () => {
+    assert.equal(saveAfterCheck({ open: true, checkedValue: "fresh-one", value: "fresh-one", answer }), true);
+    assert.equal(saveAfterCheck({ open: true, checkedValue: "fresh-one", value: "Fresh-One", answer }), true, "typing form of the same ending");
+    assert.equal(saveAfterCheck({ open: false, checkedValue: "fresh-one", value: "fresh-one", answer }), false, "cancelled or closed during the check");
+    assert.equal(saveAfterCheck({ open: true, checkedValue: "fresh-one", value: "fresh-one-two", answer }), false, "typed on during the check");
+    assert.equal(saveAfterCheck({ open: true, checkedValue: "fresh-one", value: "", answer }), false);
+  });
+
+  it("never saves a taken or invalid answer, and lets the server decide when the check couldn't run", () => {
+    assert.equal(saveAfterCheck({ open: true, checkedValue: "x-one", value: "x-one", answer: { status: "taken" } }), false);
+    assert.equal(saveAfterCheck({ open: true, checkedValue: "x-one", value: "x-one", answer: { status: "invalid", message: "No." } }), false);
+    assert.equal(saveAfterCheck({ open: true, checkedValue: "x-one", value: "x-one", answer: { status: "failed", message: "x" } }), true);
   });
 });

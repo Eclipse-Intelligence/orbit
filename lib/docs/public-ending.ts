@@ -79,6 +79,11 @@ export function endingEnter(state: EndingEditorState): "none" | "check" | "save"
   return state.answer.status === "available" || state.answer.status === "failed" ? "save" : "none";
 }
 
+export function saveAfterCheck(input: { open: boolean; checkedValue: string; value: string; answer: EndingAnswer }) {
+  if (!input.open || settleEnding(input.value) !== input.checkedValue) return false;
+  return input.answer.status === "available" || input.answer.status === "failed";
+}
+
 export function escapeAction(editing: boolean): "close-editor" | "close-popover" {
   return editing ? "close-editor" : "close-popover";
 }

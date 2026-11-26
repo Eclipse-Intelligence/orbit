@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 import Button from "@/components/_ui/button";
 import { Input } from "@/components/_ui/input";
 import type { PageSummary } from "@/lib/docs/client-types";
-import { caretAfterTyping, endingCanSave, endingEnter, endingLine, endingView, typeEnding, type EndingAnswer } from "@/lib/docs/public-ending";
+import { caretAfterTyping, endingCanSave, endingEnter, endingLine, endingView, saveAfterCheck, typeEnding, type EndingAnswer } from "@/lib/docs/public-ending";
 import { cn } from "@/lib/utils";
 
 const CHECK_DELAY = 300;
@@ -33,14 +33,21 @@ export function PublicEndingEditor({
   const [saving, setSaving] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const caret = useRef<number | null>(null);
-  const checking = useRef(false);
+  const [checking, setChecking] = useState(false);
+  const open = useRef(true);
+  const latest = useRef(value);
   const { settled, needsCheck, target } = endingView({ value, current });
 
   useEffect(() => {
+    open.current = true;
     input.current?.focus();
+    return () => {
+      open.current = false;
+    };
   }, []);
 
   useLayoutEffect(() => {
+    latest.current = value;
     if (caret.current === null) return;
     input.current?.setSelectionRange(caret.current, caret.current);
     caret.current = null;
@@ -61,7 +68,7 @@ export function PublicEndingEditor({
   }, [needsCheck, settled, summary.id, check]);
 
   const answer = needsCheck && remote?.value === settled ? remote.answer : null;
-  const state = { value, current, answer, error, saving, busy };
+  const state = { value, current, answer, error, saving: saving || checking, busy };
   const line = endingLine(state);
 
   async function store() {
@@ -76,12 +83,14 @@ export function PublicEndingEditor({
   async function submit() {
     const next = endingEnter(state);
     if (next === "save") return store();
-    if (next !== "check" || checking.current) return;
-    checking.current = true;
+    if (next !== "check") return;
+    setChecking(true);
     const result = await check(summary.id, settled);
-    checking.current = false;
+    if (!open.current) return;
+    setChecking(false);
     setRemote({ value: settled, answer: result });
-    if (result.status === "available" || result.status === "failed") await store();
+    if (saveAfterCheck({ open: open.current, checkedValue: settled, value: latest.current, answer: result })) await store();
+    else input.current?.focus();
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -116,7 +125,7 @@ export function PublicEndingEditor({
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
-          disabled={saving}
+          disabled={saving || checking}
           className="h-full min-w-[12ch] flex-1 border-0 bg-transparent px-0 pr-2.5 text-[13px] hover:bg-transparent focus-visible:border-0 focus-visible:bg-transparent"
         />
       </div>
