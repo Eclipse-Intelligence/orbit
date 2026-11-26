@@ -113,3 +113,9 @@ export function isPastDay(day: string, now = new Date()) {
 }
 
 export const PAST_EXPIRY_MESSAGE = "That date has passed. Pick today or a later date.";
+
+export function expiryProblem(day: string, now = new Date()) {
+  if (dayParts(day) === null) return INVALID_EXPIRY_MESSAGE;
+  if (isPastDay(day, now)) return PAST_EXPIRY_MESSAGE;
+  return isExpiryDay(day) ? null : INVALID_EXPIRY_MESSAGE;
+}

@@ -29,7 +29,7 @@ import {
   type LiveCopy,
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
-import { INVALID_EXPIRY_MESSAGE, PAST_EXPIRY_MESSAGE, endOfDayInstant, isExpiryDay, isPastDay } from "@/lib/docs/public-expiry";
+import { endOfDayInstant, expiryProblem } from "@/lib/docs/public-expiry";
 import { newPublicToken, publicUrlOf, sealPublicToken } from "@/lib/docs/public-link";
 import { pageHref } from "@/lib/docs/routes";
 import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
@@ -1278,18 +1278,19 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
   if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
   const enabled = input.public ?? page.public_enabled;
   const allowDownload = input.allowDownload ?? page.allow_download;
+  const ranOut = page.public_stored && !page.public_enabled;
   let expiresAt: Date | null = page.public_expires_at;
   if (typeof input.expiresAt === "string") {
-    if (!isExpiryDay(input.expiresAt)) throw new CrmError("invalid_input", INVALID_EXPIRY_MESSAGE, 400, { field: "expiresAt" });
-    if (isPastDay(input.expiresAt)) throw new CrmError("invalid_input", PAST_EXPIRY_MESSAGE, 400, { field: "expiresAt" });
+    const problem = expiryProblem(input.expiresAt);
+    if (problem) throw new CrmError("invalid_input", problem, 400, { field: "expiresAt" });
     if (!enabled) throw new CrmError("invalid_input", "Turn the public link on to set a timer.", 400, { field: "expiresAt" });
     expiresAt = endOfDayInstant(input.expiresAt);
-  } else if (input.expiresAt === null || enabled !== page.public_enabled) {
+  } else if ((input.expiresAt === null && !ranOut) || enabled !== page.public_enabled) {
     expiresAt = null;
   }
   const timerChanged = (expiresAt?.getTime() ?? null) !== (page.public_expires_at?.getTime() ?? null);
   if (enabled === page.public_enabled && allowDownload === page.allow_download && !timerChanged) return page;
-  if (page.public_stored && !page.public_enabled && enabled === page.public_enabled && !timerChanged) {
+  if (ranOut && enabled === page.public_enabled && !timerChanged) {
     await db.query("update crm.pages set allow_download = $2 where id = $1", [page.id, allowDownload]);
     return loadPage(db, actor, page.id);
   }

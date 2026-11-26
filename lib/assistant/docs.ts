@@ -14,7 +14,7 @@ import { searchDocs } from "@/lib/docs/search";
 import { archiveDoc, assistantMayEdit, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, setDocPublic, shareDoc } from "@/lib/docs/store";
 import { dailyHref, docHref, type DocDetail, type DocDiffLine, type DocEdit, type DocSummary } from "@/lib/docs/types";
 import { toolSource } from "@/lib/assistant/source";
-import { INVALID_EXPIRY_MESSAGE, PAST_EXPIRY_MESSAGE, expiryDayLabel, isExpiryDay, isPastDay } from "@/lib/docs/public-expiry";
+import { expiryDayLabel, expiryProblem } from "@/lib/docs/public-expiry";
 
 type Args = Record<string, unknown>;
 type Names = (id: unknown) => string;
@@ -48,8 +48,8 @@ function actionOf(args: Args): SaveDocAction | null {
 function timerOf(args: Args): { day: string | null; problem: string | null } {
   const day = str(args.expiresAt);
   if (!day) return { day: null, problem: null };
-  if (!isExpiryDay(day)) return { day: null, problem: INVALID_EXPIRY_MESSAGE };
-  return { day, problem: isPastDay(day) ? PAST_EXPIRY_MESSAGE : null };
+  const problem = expiryProblem(day);
+  return { day: problem ? null : day, problem };
 }
 
 function docIdOf(args: Args) {

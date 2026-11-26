@@ -593,6 +593,53 @@ describe("Public doc timers: review fixes", () => {
     const noop = await setDocPublic(mark, doc.id, { public: false });
     assert.equal(noop.public, false);
     assert.ok(noop.publicExpiresAt);
+
+    const stillStored = async () => (await getAdminPool().query<{ public_enabled: boolean; public_expires_at: Date | null }>("select public_enabled, public_expires_at from crm.pages where id = $1", [doc.id])).rows[0];
+    const kept = await stillStored();
+    const cleared = await setDocPublic(mark, doc.id, { expiresAt: null });
+    assert.equal(cleared.public, false);
+    assert.ok(cleared.publicExpiresAt, "removing the timer on a ran-out link keeps the caption");
+    const agentDoc = await createDoc(agent, { title: "Expired over REST", content: "Body" });
+    await setDocPublic(agent, agentDoc.id, { public: true, expiresAt: presetDay("7d", NOW) });
+    await setExpiry(agentDoc.id, "now() - interval '1 hour'");
+    const viaRest = await patchRoute(request(`/docs/${agentDoc.id}`, "PATCH", { expiresAt: null }), params(agentDoc.id));
+    assert.equal(viaRest.status, 200);
+    const restDoc = ((await viaRest.json()) as { doc: { public: boolean; publicExpiresAt: string | null } }).doc;
+    assert.equal(restDoc.public, false);
+    assert.ok(restDoc.publicExpiresAt);
+    const restStored = await getAdminPool().query<{ public_enabled: boolean }>("select public_enabled from crm.pages where id = $1", [agentDoc.id]);
+    assert.equal(restStored.rows[0].public_enabled, true);
+    const owner = await connect(mark);
+    try {
+      const viaMcp = (await owner.call("set_doc_public", { id: doc.id, expires_at: null })).value!.doc as { public: boolean; publicExpiresAt: string | null };
+      assert.equal(viaMcp.public, false);
+      assert.ok(viaMcp.publicExpiresAt);
+      const both = (await owner.call("set_doc_public", { id: doc.id, public: false, expires_at: null, allow_download: true })).value!.doc as { public: boolean; publicExpiresAt: string | null };
+      assert.equal(both.public, false);
+      assert.ok(both.publicExpiresAt);
+    } finally {
+      await owner.close();
+    }
+    assert.deepEqual(await stillStored(), kept);
+    assert.equal(await events(), before);
+    const back = await setDocPublic(mark, doc.id, { public: true });
+    assert.equal(back.public, true);
+    assert.equal(back.publicExpiresAt, null);
+    assert.equal(await events(), (before ?? 0) + 1, "turning it back on is the one visible change");
+  });
+
+  it("calls a date before 2000 past and a date after 2100 out of range", async () => {
+    const doc = await createDoc(mark, { title: "Old dates", content: "Body" });
+    await setDocPublic(mark, doc.id, { public: true });
+    await assert.rejects(setDocPublic(mark, doc.id, { expiresAt: "1999-12-31" }), /That date has passed\. Pick today or a later date\./);
+    await assert.rejects(setDocPublic(mark, doc.id, { expiresAt: "2101-01-01" }), /no later than 2100/);
+    const own = await createDoc(agent, { title: "Old dates API", content: "Body" });
+    await setDocPublic(agent, own.id, { public: true });
+    const past = await patchRoute(request(`/docs/${own.id}`, "PATCH", { expiresAt: "1999-12-31" }), params(own.id));
+    assert.equal(past.status, 400);
+    assert.match(JSON.stringify(await past.json()), /That date has passed/);
+    const card = { action: "set_timer", docId: doc.id, expiresAt: "1999-12-31" };
+    assert.ok(describeAction("save_doc", card, await recordNames(mark, [card], ["save_doc"])).lines.some((line) => line.includes("That date has passed")));
   });
 
   it("reports an expired link as off on every reader", async () => {
