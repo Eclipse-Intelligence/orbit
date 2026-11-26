@@ -5,7 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Button from "@/components/_ui/button";
 import RecordCombobox from "@/components/crm/record-combobox";
-import { addActivityPersonAction, removeActivityPersonAction } from "@/app/(crm)/records";
+import {
+  addActivityPersonAction,
+  removeActivityPersonAction,
+} from "@/app/(crm)/records";
 import { contactHref } from "@/lib/crm/hrefs";
 import type { ActivityPerson } from "@/lib/crm/types";
 import XIcon from "@/public/assets/images/companies/detail/x.svg";
@@ -14,10 +17,12 @@ export default function ActivityPeople({
   activityId,
   people,
   mainId,
+  editable,
 }: {
   activityId: string;
   people: ActivityPerson[];
   mainId: string | null;
+  editable: boolean;
 }) {
   const router = useRouter();
   const fieldId = useId();
@@ -28,7 +33,11 @@ export default function ActivityPeople({
   const [error, setError] = useState<string | null>(null);
   const shown = [
     ...people.filter((person) => !removed.includes(person.id)),
-    ...added.filter((person) => !people.some((item) => item.id === person.id) && !removed.includes(person.id)),
+    ...added.filter(
+      (person) =>
+        !people.some((item) => item.id === person.id) &&
+        !removed.includes(person.id),
+    ),
   ];
 
   async function add(person: { id: string; name: string }) {
@@ -65,11 +74,17 @@ export default function ActivityPeople({
       <span className="caption-style text-subtle">People</span>
       <ul className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pointer-coarse:gap-x-5 pointer-coarse:gap-y-4">
         {shown.map((person) => (
-          <li key={person.id} className="flex min-w-0 items-center gap-1 pointer-coarse:gap-3">
-            <Link href={contactHref(person.id)} className="text-[14px] leading-5 underline decoration-from-font underline-offset-2 hover:text-soft">
+          <li
+            key={person.id}
+            className="flex min-w-0 items-center gap-1 pointer-coarse:gap-3"
+          >
+            <Link
+              href={contactHref(person.id)}
+              className="hover:text-soft text-[14px] leading-5 underline decoration-from-font underline-offset-2"
+            >
               {person.name}
             </Link>
-            {person.id !== mainId && (
+            {editable && person.id !== mainId && (
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -84,32 +99,47 @@ export default function ActivityPeople({
             )}
           </li>
         ))}
-        <li>
-          {adding ? (
-            <div className="flex min-w-[14em] items-center gap-1.5 pointer-coarse:gap-4">
-              <RecordCombobox
-                id={fieldId}
-                kind="contact"
-                label="Add person"
-                placeholder="Find a person"
-                value={null}
-                onChange={(picked) => {
-                  if (picked) void add(picked);
-                }}
-                autoFocus
-                onCancel={() => setAdding(false)}
-                className="flex-1"
-              />
-              <Button variant="ghost" size="sm" type="button" className="hit" onClick={() => setAdding(false)}>
-                Cancel
+        {editable && (
+          <li>
+            {adding ? (
+              <div className="flex min-w-[14em] items-center gap-1.5 pointer-coarse:gap-4">
+                <RecordCombobox
+                  id={fieldId}
+                  kind="contact"
+                  label="Add person"
+                  placeholder="Find a person"
+                  value={null}
+                  onChange={(picked) => {
+                    if (picked) void add(picked);
+                  }}
+                  autoFocus
+                  onCancel={() => setAdding(false)}
+                  className="flex-1"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  className="hit"
+                  onClick={() => setAdding(false)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                className="hit"
+                disabled={pending}
+                onClick={() => setAdding(true)}
+              >
+                Add person
               </Button>
-            </div>
-          ) : (
-            <Button variant="ghost" size="sm" type="button" className="hit" disabled={pending} onClick={() => setAdding(true)}>
-              Add person
-            </Button>
-          )}
-        </li>
+            )}
+          </li>
+        )}
       </ul>
       {error && (
         <p role="alert" className="caption-style text-danger">

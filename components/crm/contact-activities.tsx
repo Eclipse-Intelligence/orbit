@@ -594,7 +594,7 @@ function ActivityRow({
           </div>
         )}
         {insightful && (
-          <ActivityPeople activityId={activity.id} people={activity.contacts} mainId={activity.contactId} />
+          <ActivityPeople activityId={activity.id} people={activity.contacts} mainId={activity.contactId} editable={editable} />
         )}
         {details.body && (
           <p className="text-[14px] leading-5 break-words whitespace-pre-wrap">
