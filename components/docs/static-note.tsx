@@ -151,7 +151,7 @@ export default function StaticNote({ body, daily = false }: { body: string; dail
 
 export function PublicNote({ body }: { body: string }) {
   return (
-    <div className="cm-editor note-editor">
+    <div className="cm-editor note-editor note-public">
       <div className="cm-scroller">
         <div className="cm-content cm-lineWrapping">
           <Lines lines={staticLines(body, { maxLines: Number.MAX_SAFE_INTEGER })} plain />

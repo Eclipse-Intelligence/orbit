@@ -51,6 +51,7 @@ export type PageSummary = {
   public: boolean;
   allowDownload: boolean;
   publicUrl: string | null;
+  canChangePublic: boolean;
 };
 
 export type Page = PageSummary & {

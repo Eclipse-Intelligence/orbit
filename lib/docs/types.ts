@@ -70,6 +70,7 @@ export type DocSummary = {
   public: boolean;
   allowDownload: boolean;
   publicUrl: string | null;
+  canChangePublic: boolean;
   excerpt: string;
   tags: string[];
   wordCount: number;
@@ -111,7 +112,6 @@ export type DocDetail = DocSummary & {
   mentions: DocMention[];
   canChangeSharing: boolean;
   canChangeAssistantEdit: boolean;
-  canChangePublic: boolean;
 };
 
 export type DocPublicInput = { public?: boolean; allowDownload?: boolean };

@@ -41,7 +41,15 @@ begin
         raise exception 'Only the doc''s owner can change its public link.' using errcode = '42501';
       end if;
     elsif acting_user is not null then
-      if old.user_id is distinct from acting_user then
+      if old.user_id is distinct from acting_user
+        and not (
+          old.user_id is null
+          and old.created_by_agent_id is not null
+          and exists (
+            select 1 from crm.workspace_members m
+            where m.workspace_id = old.workspace_id and m.user_id = acting_user and m.role = 'owner'
+          )
+        ) then
         raise exception 'Only the doc''s owner can change its public link.' using errcode = '42501';
       end if;
     end if;
@@ -72,6 +80,27 @@ $$;
 
 revoke all on function private.public_page(text) from public;
 grant execute on function private.public_page(text) to crm_app;
+
+create or replace function private.pages_public_off_on_leave()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update crm.pages
+  set public_enabled = false
+  where workspace_id = old.workspace_id and user_id = old.user_id and public_enabled;
+  return null;
+end;
+$$;
+
+revoke all on function private.pages_public_off_on_leave() from public;
+
+drop trigger if exists workspace_members_public_off on crm.workspace_members;
+create trigger workspace_members_public_off
+  after delete on crm.workspace_members
+  for each row execute function private.pages_public_off_on_leave();
 
 reset lock_timeout;
 

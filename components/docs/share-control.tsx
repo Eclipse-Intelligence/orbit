@@ -101,18 +101,18 @@ function absolute(url: string) {
   return url.startsWith("/") ? `${origin()}${url}` : url;
 }
 
-function PublicLink({ summary, owned }: { summary: PageSummary; owned: boolean }) {
+function PublicLink({ summary }: { summary: PageSummary }) {
+  const owned = summary.canChangePublic;
+  const agentMade = summary.owner.kind !== "person";
   const setPublic = useDocsStore((state) => state.setPublic);
   const [error, setError] = useState<string | null>(null);
-  const busy = useRef(false);
+  const saving = useDocsStore((state) => state.publicSaving[summary.id] === true);
   const url = summary.publicUrl ? absolute(summary.publicUrl) : null;
 
   async function change(input: { public?: boolean; allowDownload?: boolean }) {
-    if (busy.current || !owned) return;
-    busy.current = true;
+    if (!owned) return;
     setError(null);
     setError(await setPublic(summary.id, input));
-    busy.current = false;
   }
 
   return (
@@ -126,10 +126,10 @@ function PublicLink({ summary, owned }: { summary: PageSummary; owned: boolean }
           <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
             <span className="text-foreground text-[13.5px] leading-5 font-medium">Public link</span>
             <span className="caption-style text-subtle">
-              {owned ? "Anyone with the link can read it." : `Anyone with the link can read it. Only ${summary.owner.short} can turn it ${summary.public ? "off" : "on"}.`}
+              {owned ? "Anyone with the link can read it." : `Anyone with the link can read it. Only ${summary.owner.short}${agentMade ? " or the workspace owner" : ""} can turn it ${summary.public ? "off" : "on"}.`}
             </span>
           </span>
-          <Switch checked={summary.public} disabled={!owned} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
+          <Switch checked={summary.public} disabled={!owned || saving} onChange={(value) => void change({ public: value })} label="Public link" className="hit" />
         </div>
         {summary.public && url && (
           <div className="flex items-center gap-2 rounded-[10px] bg-white/[0.04] py-1.5 pr-1.5 pl-2.5">
@@ -146,7 +146,7 @@ function PublicLink({ summary, owned }: { summary: PageSummary; owned: boolean }
               <span className="text-foreground text-[13px] leading-5 font-medium">Allow download</span>
               <span className="caption-style text-subtle">Readers can download it as a PDF.</span>
             </span>
-            <Switch checked={summary.allowDownload} disabled={!owned} onChange={(value) => void change({ allowDownload: value })} label="Allow download" className="hit" />
+            <Switch checked={summary.allowDownload} disabled={!owned || saving} onChange={(value) => void change({ allowDownload: value })} label="Allow download" className="hit" />
           </div>
         )}
         {error && (
@@ -365,7 +365,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
             {error}
           </p>
         )}
-        <PublicLink summary={summary} owned={owned} />
+        <PublicLink summary={summary} />
         <ShareFooter link={() => `${origin()}${pageHref(summary.id)}`} />
       </PopoverContent>
     </Popover>

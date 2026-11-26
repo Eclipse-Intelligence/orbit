@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { extractText, getDocumentProxy } from "unpdf";
 import { renderDocPdf } from "@/lib/docs/pdf";
+import { pdfDisposition } from "@/lib/docs/public";
 
 async function read(buffer: Buffer) {
   const pdf = await getDocumentProxy(new Uint8Array(buffer));
@@ -99,5 +100,94 @@ describe("Docs PDF writer", () => {
     const empty = await read(await renderDocPdf({ title: "", content: "", updatedAt: UPDATED }));
     assert.match(empty.text[0], /Untitled/);
     assert.match(empty.text[0], /Page 1 of 1/);
+  });
+});
+
+async function within<T>(work: Promise<T>, ms: number, label: string) {
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} took longer than ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([work, limit]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+describe("Docs PDF writer limits", () => {
+  it("finishes when a table header is taller than a page", async () => {
+    const wide = `| ${Array.from({ length: 30 }, (_, index) => `${index}`.padEnd(60, "h")).join(" | ")} |\n| ${Array.from({ length: 30 }, () => "---").join(" | ")} |\n| ${Array.from({ length: 30 }, () => "x").join(" | ")} |`;
+    const long = `| ${Array.from({ length: 1500 }, (_, index) => `word${index}`).join(" ")} | B |\n| --- | --- |\n| row one | 1 |\n| row two | 2 |`;
+    for (const content of [wide, long]) {
+      const buffer = await within(renderDocPdf({ title: "Tall header", content, updatedAt: UPDATED }), 20_000, "tall header");
+      const { pages, text } = await read(buffer);
+      assert.ok(pages >= 1);
+      assert.ok(text.join(" ").includes("row one") || text.join(" ").includes(" x "));
+    }
+  });
+
+  it("keeps other columns readable beside one unbreakable word, and survives 60 columns", async () => {
+    const url = `https://example.com/${"a".repeat(270)}`;
+    const content = `| Before | Link | After |\n| --- | --- | --- |\n| 12 | ${url} | 34 |`;
+    const { text } = await read(await renderDocPdf({ title: "Url", content, updatedAt: UPDATED }));
+    const all = text.join(" ");
+    assert.match(all, /Before/);
+    assert.match(all, /After/);
+    assert.match(all, /\b12\b/);
+    const sixty = `| ${Array.from({ length: 60 }, (_, index) => `c${index}`).join(" | ")} |\n| ${Array.from({ length: 60 }, () => "-").join(" | ")} |\n| ${Array.from({ length: 60 }, (_, index) => `v${index}`).join(" | ")} |`;
+    const wide = await within(renderDocPdf({ title: "Sixty", content: sixty, updatedAt: UPDATED }), 20_000, "sixty columns");
+    assert.ok((await read(wide)).pages >= 1);
+  });
+
+  it("stops indenting deeply nested quotes and lists", async () => {
+    const quotes = `${"> ".repeat(60)}deep quote words`;
+    const lists = Array.from({ length: 40 }, (_, depth) => `${"  ".repeat(depth)}- level ${depth} words`).join("\n");
+    const { text } = await read(await within(renderDocPdf({ title: "Deep", content: `${quotes}\n\n${lists}`, updatedAt: UPDATED }), 20_000, "deep nesting"));
+    const all = text.join(" ");
+    assert.match(all, /deep quote words/);
+    assert.match(all, /level 39 words/);
+  });
+
+  it("never leaves a heading alone at the bottom of a page", async () => {
+    for (let filler = 36; filler <= 56; filler += 1) {
+      const content = `${Array.from({ length: filler }, (_, index) => `Filler line ${index}\n`).join("\n")}\n## Lonely heading\n\n| Post | Count |\n| --- | --- |\n| One | 1 |\n| Two | 2 |\n\nAfter text`;
+      const { text } = await read(await renderDocPdf({ title: "Keep", content, updatedAt: UPDATED }));
+      for (const page of text) {
+        const body = page.replace(/ Keep · Page \d+ of \d+\s*$/, "");
+        assert.ok(!/Lonely heading\s*$/.test(body), `filler ${filler}: heading ended a page`);
+      }
+    }
+  });
+
+  it("drops emoji selectors and control characters, and writes strikethrough text", async () => {
+    const { text } = await read(await renderDocPdf({ title: "Marks", content: `Love ❤️${"\u007f\u0085"}ok ~~struck~~ words`, updatedAt: UPDATED }));
+    const all = text.join(" ");
+    assert.match(all, /struck/);
+    assert.ok(!/\?\?/.test(all), all);
+    assert.ok(!all.includes("\u007f") && !all.includes("\u0085"));
+  });
+
+  it("ends with a clear error once its deadline passes", async () => {
+    await assert.rejects(renderDocPdf({ title: "Late", content: "Text", updatedAt: UPDATED }, { deadline: Date.now() - 1 }), /Couldn't make the PDF\. Try again\./);
+  });
+
+  it("builds the worst 1MB documents in a few seconds", async () => {
+    const code = `\`\`\`\n${Array.from({ length: 50_000 }, (_, index) => `const value${index} = compute(${index}); // x`).join("\n")}\n\`\`\``.slice(0, 1_000_000);
+    const startedCode = Date.now();
+    const codePdf = await within(renderDocPdf({ title: "Code", content: code, updatedAt: UPDATED }), 25_000, "1MB code block");
+    const codeMs = Date.now() - startedCode;
+    const startedWord = Date.now();
+    const wordPdf = await within(renderDocPdf({ title: "Word", content: "w".repeat(1_000_000), updatedAt: UPDATED }), 25_000, "1MB word");
+    const wordMs = Date.now() - startedWord;
+    console.log(`1MB code block ${codeMs}ms, ${(codePdf.length / 1e6).toFixed(1)}MB; 1MB word ${wordMs}ms, ${(wordPdf.length / 1e6).toFixed(1)}MB`);
+    assert.ok(codeMs < 15_000 && wordMs < 15_000);
+  });
+
+  it("names the download with the real title for any script", () => {
+    const header = pdfDisposition("Café 計画 plan");
+    assert.match(header, /filename="cafe-plan\.pdf"/);
+    assert.match(header, /filename\*=UTF-8''Caf%C3%A9%20%E8%A8%88%E7%94%BB%20plan\.pdf$/);
+    assert.match(pdfDisposition("計画"), /filename="document\.pdf"; filename\*=UTF-8''%E8%A8%88%E7%94%BB\.pdf$/);
   });
 });

@@ -103,6 +103,7 @@ export function toSummary(actor: UserActor, doc: DocSummary, entries = 0): PageS
     public: doc.public,
     allowDownload: doc.allowDownload,
     publicUrl: doc.publicUrl,
+    canChangePublic: doc.canChangePublic,
   };
 }
 

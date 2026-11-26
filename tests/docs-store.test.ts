@@ -324,3 +324,61 @@ describe("docs store", () => {
     assert.equal((await server(harness, page.id)).body, "two");
   });
 });
+
+describe("docs store public link", () => {
+  async function withSetPublic(handler: (data: DocsData) => DocsData["setPublic"]) {
+    const harness = await open();
+    const data: DocsData = { ...harness.data, setPublic: (id, input) => handler(harness.data)(id, input) };
+    connectDocs({}, data);
+    const page = await note({ ...harness, data }, "Plan", "one");
+    return { page, store: useDocsStore };
+  }
+
+  it("shows the change at once, keeps it when the server agrees and fills in the link", async () => {
+    const gate = deferred<void>();
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      const result = await data.setPublic(id, input);
+      await gate.promise;
+      return result;
+    });
+    const saving = store.getState().setPublic(page.id, { public: true });
+    assert.equal(store.getState().pages[page.id].public, true);
+    assert.equal(store.getState().publicSaving[page.id], true);
+    gate.resolve();
+    assert.equal(await saving, null);
+    assert.equal(store.getState().pages[page.id].public, true);
+    assert.match(store.getState().pages[page.id].publicUrl ?? "", /\/d\//);
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+
+  it("rolls back and returns the error when the save fails", async () => {
+    const { page, store } = await withSetPublic(() => async () => {
+      throw new Error("Only Mark can change this note's public link.");
+    });
+    const result = await store.getState().setPublic(page.id, { public: true });
+    assert.equal(result, "Only Mark can change this note's public link.");
+    assert.equal(store.getState().pages[page.id].public, false);
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+
+  it("ignores an older reply or rollback that arrives after a newer change", async () => {
+    const gates = [deferred<void>(), deferred<void>()];
+    let call = 0;
+    const { page, store } = await withSetPublic((data) => async (id, input) => {
+      const mine = gates[call++];
+      const result = await data.setPublic(id, input);
+      await mine.promise;
+      if (input.public === true) throw new Error("slow failure");
+      return result;
+    });
+    const older = store.getState().setPublic(page.id, { public: true });
+    const newer = store.getState().setPublic(page.id, { public: false });
+    assert.equal(store.getState().pages[page.id].public, false);
+    gates[1].resolve();
+    assert.equal(await newer, null);
+    gates[0].resolve();
+    assert.equal(await older, "slow failure");
+    assert.equal(store.getState().pages[page.id].public, false, "the older failure didn't roll the newer change back");
+    assert.equal(store.getState().publicSaving[page.id], undefined);
+  });
+});

@@ -1,6 +1,6 @@
 import { query } from "@/lib/db/pool";
-import { hashPublicToken, isPublicToken } from "@/lib/docs/public-link";
 import { renderDocPdf } from "@/lib/docs/pdf";
+import { hashPublicToken, isPublicToken } from "@/lib/docs/public-link";
 
 export type PublicDoc = { title: string; content: string; updatedAt: string; allowDownload: boolean };
 
@@ -14,7 +14,7 @@ export async function openPublicDoc(token: string): Promise<PublicDoc | null> {
   return { title: row.title.trim() || "Untitled", content: row.content, updatedAt: row.edited_at.toISOString(), allowDownload: row.allow_download };
 }
 
-function fileName(title: string) {
+function asciiName(title: string) {
   const slug = title
     .normalize("NFKD")
     .replace(/[^\x20-\x7e]/g, "")
@@ -25,8 +25,17 @@ function fileName(title: string) {
   return `${slug || "document"}.pdf`;
 }
 
+function encodedName(title: string) {
+  const clean = title.replace(/[\u0000-\u001f\u007f/\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100) || "document";
+  return encodeURIComponent(`${clean}.pdf`).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+export function pdfDisposition(title: string) {
+  return `attachment; filename="${asciiName(title)}"; filename*=UTF-8''${encodedName(title)}`;
+}
+
 export async function publicDocPdf(token: string) {
   const doc = await openPublicDoc(token);
   if (!doc || !doc.allowDownload) return null;
-  return { data: await renderDocPdf(doc), filename: fileName(doc.title) };
+  return { data: await renderDocPdf(doc), disposition: pdfDisposition(doc.title) };
 }

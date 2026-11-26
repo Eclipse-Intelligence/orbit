@@ -284,6 +284,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       public: row.public,
       allowDownload: row.allowDownload,
       publicUrl: row.public ? `https://orbit.test/d/${row.id}` : null,
+      canChangePublic: row.kind === "note",
     };
     summaryCache.set(row.id, { key, value });
     return value;

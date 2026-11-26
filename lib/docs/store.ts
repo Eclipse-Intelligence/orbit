@@ -160,7 +160,9 @@ function ownedBy(actor: Actor, userId: string | null) {
 
 function controlsPublic(actor: Actor, row: { kind: DocKind; user_id: string | null; created_by_agent_id: string | null }) {
   if (row.kind !== "note") return false;
-  return actor.type === "agent" ? row.created_by_agent_id === actor.agentId : ownedBy(actor, row.user_id);
+  if (actor.type === "agent") return row.created_by_agent_id === actor.agentId;
+  if (row.user_id === null) return row.created_by_agent_id !== null && actor.role === "owner";
+  return ownedBy(actor, row.user_id);
 }
 
 export function mapPage(actor: Actor, row: PageRow): DocSummary {
@@ -180,6 +182,7 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
     public: row.public_enabled,
     allowDownload: row.allow_download,
     publicUrl: publicUrlOf(row),
+    canChangePublic: controlsPublic(actor, row),
     excerpt: excerptFrom(row.head),
     tags: row.tags ?? [],
     wordCount: row.word_count,
@@ -690,7 +693,6 @@ async function detail(db: Db, actor: Actor, row: FullPageRow): Promise<DocDetail
     mentions,
     canChangeSharing: row.kind === "note" && (row.shared ? owner : true),
     canChangeAssistantEdit: owner,
-    canChangePublic: controlsPublic(actor, row),
   };
 }
 
@@ -1259,7 +1261,9 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
   if (!controlsPublic(actor, page)) {
     throw new CrmError(
       "forbidden",
-      page.user_id ? `Only ${page.owner_name ?? "its owner"} can change this note's public link.` : `Only ${page.creator_agent_name ?? "the agent that made it"} can change this note's public link.`,
+      page.user_id
+        ? `Only ${page.owner_name ?? "its owner"} can change this note's public link.`
+        : `Only ${page.creator_agent_name ?? "the agent that made it"} or the workspace owner can change this note's public link.`,
       403,
     );
   }

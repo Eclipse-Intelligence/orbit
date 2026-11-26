@@ -15,7 +15,7 @@ const loadDoc = cache((token: string) => openPublicDoc(token));
 export async function generateMetadata({ params }: { params: Promise<{ token: string }> }): Promise<Metadata> {
   const { token } = await params;
   const doc = await loadDoc(token);
-  return { title: doc?.title ?? "Not found", robots: ROBOTS, alternates: null, openGraph: null, twitter: null };
+  return { title: doc?.title ?? "Not found", description: null, robots: ROBOTS, alternates: null, openGraph: null, twitter: null, appleWebApp: null, manifest: null, applicationName: null };
 }
 
 export default async function PublicDocPage({ params }: { params: Promise<{ token: string }> }) {
@@ -33,7 +33,7 @@ export default async function PublicDocPage({ params }: { params: Promise<{ toke
             </Button>
           )}
         </div>
-        <h1 className="note-title">{doc.title}</h1>
+        <h1 className="note-title note-public-title">{doc.title}</h1>
         <PublicNote body={doc.content} />
       </article>
     </main>

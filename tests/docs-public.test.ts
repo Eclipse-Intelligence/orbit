@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -7,10 +9,13 @@ import { GET as pdfRoute } from "@/app/api/d/[token]/pdf/route";
 import { GET as readRoute, PATCH as patchRoute } from "@/app/api/v1/docs/[id]/route";
 import PublicDocPage, { generateMetadata } from "@/app/d/[token]/page";
 import { describeAction, recordNames, runTool } from "@/lib/assistant/tools";
+import { removeMember } from "@/lib/crm/team";
+import { createWebhook, deliverDueWebhooks } from "@/lib/crm/webhooks";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { Actor, AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
 import { openDailyNote } from "@/lib/docs/daily-notes";
+import { takeOverFormerMemberDocs } from "@/lib/docs/admin";
 import { hashPublicToken } from "@/lib/docs/public-link";
 import { openPublicDoc, publicDocPdf } from "@/lib/docs/public";
 import { archiveDoc, createDoc, getDoc, restoreDoc, setDocPublic } from "@/lib/docs/store";
@@ -324,8 +329,7 @@ describe("Public docs: who can change it", () => {
     assert.equal(made.public, true);
     assert.ok(await publicDocPdf(tokenOf(made.publicUrl)));
 
-    await assert.rejects(setDocPublic(otherAgent, own.id, { public: false }), /Only Claude Code can change this note's public link/);
-    await assert.rejects(setDocPublic(mark, own.id, { public: false }), /Only Claude Code can change/);
+    await assert.rejects(setDocPublic(otherAgent, own.id, { public: false }), /Only Claude Code or the workspace owner can change this note's public link/);
 
     const marks = await createDoc(mark, { title: "Mark's shared doc", content: "Hi", shared: true });
     assert.equal((await getDoc(agent, marks.id)).canChangePublic, false);
@@ -468,5 +472,131 @@ describe("Public docs: API, MCP and assistant", () => {
     const daily = (await openDailyNote(priya)).page;
     const dailyRefused = (await runTool(priya, "save_doc", { action: "publish", docId: daily.id })) as { error: string };
     assert.match(dailyRefused.error, /Daily notes are private/);
+  });
+});
+
+async function addMember(email: string, name: string, role: "member" | "admin") {
+  const admin = getAdminPool();
+  const id = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
+  await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, $3)", [mark.workspaceId, id, role]);
+  return { ...mark, userId: id, email, fullName: name, role, scopes: scopesForRole(role) } as UserActor;
+}
+
+async function asAgent(actor: AgentActor, sql: string, values: unknown[]) {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    await client.query("select set_config('app.workspace_id', $1, true), set_config('app.agent_id', $2, true), set_config('app.actor_type', 'agent', true)", [actor.workspaceId, actor.agentId]);
+    await client.query("set local role crm_agent");
+    return (await client.query(sql, values)).rows;
+  } finally {
+    await client.query("rollback").catch(() => undefined);
+    client.release();
+  }
+}
+
+describe("Public docs: roles, workspaces and races", () => {
+  useServerlessPool();
+
+  it("lets the workspace owner, but not an admin or a member, change an agent-made doc's link", async () => {
+    const admin = await addMember("admin@docs-public.test", "Ada Admin", "admin");
+    const member = await addMember("member@docs-public.test", "Mo Member", "member");
+    const doc = await createDoc(agent, { title: "Agent-made for roles", content: "Text" });
+    assert.equal((await getDoc(mark, doc.id)).canChangePublic, true);
+    assert.equal((await getDoc(admin, doc.id)).canChangePublic, false);
+    assert.equal((await getDoc(member, doc.id)).canChangePublic, false);
+    await assert.rejects(setDocPublic(admin, doc.id, { public: true }), /Only Claude Code or the workspace owner/);
+    await assert.rejects(setDocPublic(member, doc.id, { allowDownload: true }), /Only Claude Code or the workspace owner/);
+    await assert.rejects(queryAsUser(admin.userId, "update crm.pages set allow_download = true where id = $1 returning id", [doc.id]), /Only the doc's owner/);
+    assert.equal((await getDoc(agent, doc.id)).public, false);
+    const made = await setDocPublic(mark, doc.id, { public: true, allowDownload: true });
+    assert.equal(made.public, true);
+    assert.equal(made.allowDownload, true);
+    assert.equal((await getDoc(admin, doc.id)).publicUrl, made.publicUrl);
+    assert.equal((await setDocPublic(agent, doc.id, { public: false })).public, false);
+    const humanDoc = await createDoc(member, { title: "Member's own", content: "Text", shared: true });
+    await assert.rejects(setDocPublic(mark, humanDoc.id, { public: true }), /Only Mo Member can change/);
+  });
+
+  it("refuses a crm_agent that didn't make the doc at the database, and lets the one that did", async () => {
+    const doc = await createDoc(agent, { title: "SQL agent doc", content: "Text" });
+    await assert.rejects(asAgent(otherAgent, "update crm.pages set public_enabled = false, allow_download = true where id = $1 returning id", [doc.id]), /Only the doc's owner can change its public link/);
+    await assert.rejects(asAgent(otherAgent, "update crm.pages set allow_download = true where id = $1 returning id", [doc.id]), /Only the doc's owner/);
+    assert.equal((await asAgent(agent, "update crm.pages set allow_download = true where id = $1 returning id", [doc.id])).length, 1);
+  });
+
+  it("keeps a doc's link out of reach of someone in another workspace", async () => {
+    const outsider = await createUser("outsider@docs-public.test", "Olive Outsider");
+    const doc = await createDoc(mark, { title: "Mark's secret", content: "Text", shared: true });
+    await setDocPublic(mark, doc.id, { public: true });
+    await assert.rejects(setDocPublic(outsider, doc.id, { public: false }), /doesn't exist, or it's private/);
+    await assert.rejects(getDoc(outsider, doc.id), /doesn't exist, or it's private/);
+    assert.deepEqual(await queryAsUser(outsider.userId, "update crm.pages set public_enabled = false where id = $1 returning id", [doc.id]), []);
+    assert.equal((await getDoc(mark, doc.id)).public, true);
+  });
+
+  it("makes one token when two first publishes race", async () => {
+    const doc = await createDoc(mark, { title: "Race", content: "Text" });
+    const [first, second] = await Promise.all([setDocPublic(mark, doc.id, { public: true }), setDocPublic(mark, doc.id, { public: true })]);
+    assert.equal(first.publicUrl, second.publicUrl);
+    const hashes = await getAdminPool().query("select public_token_hash from crm.pages where id = $1 and public_token_hash is not null", [doc.id]);
+    assert.equal(hashes.rowCount, 1);
+    assert.equal((await audited(doc.id)).length, 0, "a private doc records nothing");
+    const shared = await createDoc(mark, { title: "Race shared", content: "Text", shared: true });
+    await Promise.all([setDocPublic(mark, shared.id, { public: true }), setDocPublic(mark, shared.id, { public: true })]);
+    assert.equal((await audited(shared.id)).length, 1, "only the first change counts");
+  });
+
+  it("sends page.public_changed to a webhook", async () => {
+    process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS = "1";
+    const bodies: string[] = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => {
+        bodies.push(Buffer.concat(chunks).toString("utf8"));
+        response.writeHead(200);
+        response.end("ok");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    try {
+      await createWebhook(mark, { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/hook`, events: ["page.public_changed"] });
+      const doc = await createDoc(mark, { title: "Hooked", content: "Text", shared: true });
+      await setDocPublic(mark, doc.id, { public: true });
+      const until = Date.now() + 5000;
+      while (bodies.length === 0 && Date.now() < until) {
+        await deliverDueWebhooks();
+        if (bodies.length === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.equal(bodies.length, 1);
+      const payload = JSON.parse(bodies[0]) as { type: string; data: Record<string, unknown> };
+      assert.equal(payload.type, "page.public_changed");
+      assert.ok(!bodies[0].includes("/d/"));
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      delete process.env.WEBHOOKS_ALLOW_PRIVATE_TARGETS;
+    }
+  });
+
+  it("turns off a leaver's public links, keeps the token, and lets whoever takes over bring the same link back", async () => {
+    const leaver = await addMember("leaver@docs-public.test", "Lee Leaver", "member");
+    const doc = await createDoc(leaver, { title: "Leaver's shared doc", content: "Hello", shared: true });
+    const mine = await createDoc(mark, { title: "Mark's own public", content: "Stays", shared: true });
+    const url = (await setDocPublic(leaver, doc.id, { public: true, allowDownload: true })).publicUrl;
+    const markUrl = (await setDocPublic(mark, mine.id, { public: true })).publicUrl;
+    assert.ok(await openPublicDoc(tokenOf(url)));
+    await removeMember(mark, leaver.userId);
+    assert.equal(await openPublicDoc(tokenOf(url)), null);
+    assert.equal((await pdfRoute(new Request("http://crm.test/x"), pageParams(tokenOf(url)))).status, 404);
+    assert.ok(await openPublicDoc(tokenOf(markUrl)), "other people's links stay on");
+    const after = await getDoc(mark, doc.id);
+    assert.equal(after.public, false);
+    assert.equal(after.allowDownload, true);
+    await takeOverFormerMemberDocs(mark, leaver.userId);
+    assert.equal((await getDoc(mark, doc.id)).canChangePublic, true);
+    const revived = await setDocPublic(mark, doc.id, { public: true });
+    assert.equal(revived.publicUrl, url);
+    assert.equal((await openPublicDoc(tokenOf(url)))?.title, "Leaver's shared doc");
   });
 });

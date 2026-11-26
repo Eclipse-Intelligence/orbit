@@ -53,7 +53,12 @@ let fontFiles: Promise<{ regular: Buffer; bold: Buffer; italic: Buffer }> | null
 let glyphs: Set<number> = new Set();
 
 export function loadFonts() {
-  fontFiles ??= Promise.all(["Regular", "Bold", "Italic"].map((style) => readFile(path.join(FONT_DIR, `NotoSans-${style}.ttf`)))).then(([regular, bold, italic]) => ({ regular, bold, italic }));
+  fontFiles ??= Promise.all(["Regular", "Bold", "Italic"].map((style) => readFile(path.join(FONT_DIR, `NotoSans-${style}.ttf`))))
+    .then(([regular, bold, italic]) => ({ regular, bold, italic }))
+    .catch((error: unknown) => {
+      fontFiles = null;
+      throw error;
+    });
   return fontFiles;
 }
 
