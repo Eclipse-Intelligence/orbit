@@ -513,4 +513,32 @@ describe("docs store lists after sharing", () => {
     assert.deepEqual(shown(), ids, "an agent's edit leaves the list in place while it refreshes");
     assert.equal(store.getState().listsVersion, version + 2);
   });
+
+  it("keeps the newest list when an older load finishes last", async () => {
+    const harness = await open();
+    await note(harness, "Plan", "one");
+    const gate = deferred<void>();
+    let calls = 0;
+    const data: DocsData = {
+      ...harness.data,
+      async listPages(list, sort) {
+        calls += 1;
+        const first = calls === 1;
+        const rows = await harness.data.listPages(list, sort);
+        if (first) {
+          await gate.promise;
+          return [];
+        }
+        return rows;
+      },
+    };
+    connectDocs({}, data);
+    const store = useDocsStore;
+    const older = store.getState().loadList({ kind: "all" }, true);
+    const newer = await store.getState().loadList({ kind: "all" }, true);
+    gate.resolve();
+    await older;
+    const kept = Object.values(store.getState().lists).find((ids) => ids.length > 0);
+    assert.deepEqual(kept, newer, "the late, older reply didn't replace the newer list");
+  });
 });

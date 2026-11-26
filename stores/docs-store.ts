@@ -293,7 +293,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       .listPages(list, get().sort)
       .then((rows) => {
         const ids = rows.map((row) => row.id);
-        if (current !== session) return ids;
+        if (current !== session || listRequests.get(key) !== request) return ids;
         set((state) => {
           const summaries = { ...state.summaries };
           for (const row of rows) summaries[row.id] = row;
