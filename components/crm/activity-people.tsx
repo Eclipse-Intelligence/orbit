@@ -63,9 +63,9 @@ export default function ActivityPeople({
   return (
     <div className="flex flex-col gap-1.5">
       <span className="caption-style text-subtle">People</span>
-      <ul className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <ul className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pointer-coarse:gap-x-5 pointer-coarse:gap-y-4">
         {shown.map((person) => (
-          <li key={person.id} className="flex min-w-0 items-center gap-1">
+          <li key={person.id} className="flex min-w-0 items-center gap-1 pointer-coarse:gap-3">
             <Link href={contactHref(person.id)} className="text-[14px] leading-5 underline decoration-from-font underline-offset-2 hover:text-soft">
               {person.name}
             </Link>
@@ -86,7 +86,7 @@ export default function ActivityPeople({
         ))}
         <li>
           {adding ? (
-            <div className="flex min-w-[14em] items-center gap-1.5">
+            <div className="flex min-w-[14em] items-center gap-1.5 pointer-coarse:gap-4">
               <RecordCombobox
                 id={fieldId}
                 kind="contact"

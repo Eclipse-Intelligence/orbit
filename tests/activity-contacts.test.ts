@@ -231,6 +231,32 @@ describe("meeting attendees", () => {
     assert.equal(rows[0].contact_id, ben);
   });
 
+  it("promotes a named attendee to the main contact when only the company matched by email", async () => {
+    const eve = await person(owner, { firstName: "Eve", lastName: "Eden", email: "eve@eden-links.test" });
+    await fileGranolaNote(
+      owner,
+      granolaNote("links-g4", [
+        { name: "Unknown Acme", email: "unknown@acme-links.test" },
+        { name: "Eve Eden", email: null },
+      ]),
+    );
+    const meeting = await granolaActivity("links-g4");
+    assert.equal(meeting.contact_id, eve);
+    assert.deepEqual(await linkedIds(meeting.id), [eve]);
+  });
+
+  it("does not keep the person a meeting was filed to once the meeting moves to someone else", async () => {
+    const importId = await unfiled("granola", [{ name: "Ben Brook", email: "ben@brook-links.test" }], "Wrong person");
+    const filed = await fileImport(owner, importId, carl, { summarise: false });
+    assert.deepEqual(await linkedIds(filed.activityId), [ben, carl].sort());
+    assert.deepEqual(
+      (await linked(filed.activityId)).find((row) => row.contact_id === carl),
+      { contact_id: carl, implicit: true },
+    );
+    await admin("update crm.activities set contact_id = $2 where id = $1", [filed.activityId, ben]);
+    assert.deepEqual(await linkedIds(filed.activityId), [ben]);
+  });
+
   it("counts a linked meeting in the relationship of each attendee", async () => {
     const zoe = await person(owner, { firstName: "Zoe", lastName: "Zero", email: "zoe@zero-links.test" });
     const found = await relationshipsFor(owner, "contact", [ben, carl, zoe]);

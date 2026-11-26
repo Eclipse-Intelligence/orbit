@@ -24,12 +24,12 @@ alter table crm.activity_contacts force row level security;
 drop policy if exists activity_contacts_select_member on crm.activity_contacts;
 create policy activity_contacts_select_member on crm.activity_contacts
   for select to authenticated
-  using (activity_id in (select a.id from crm.activities a));
+  using (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id));
 
 drop policy if exists activity_contacts_select_agent on crm.activity_contacts;
 create policy activity_contacts_select_agent on crm.activity_contacts
   for select to crm_agent
-  using (activity_id in (select a.id from crm.activities a));
+  using (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id));
 
 drop policy if exists activity_contacts_insert_member on crm.activity_contacts;
 create policy activity_contacts_insert_member on crm.activity_contacts
@@ -58,24 +58,24 @@ create policy activity_contacts_insert_agent on crm.activity_contacts
 drop policy if exists activity_contacts_update_member on crm.activity_contacts;
 create policy activity_contacts_update_member on crm.activity_contacts
   for update to authenticated
-  using (activity_id in (select a.id from crm.activities a))
-  with check (activity_id in (select a.id from crm.activities a));
+  using (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id))
+  with check (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id));
 
 drop policy if exists activity_contacts_update_agent on crm.activity_contacts;
 create policy activity_contacts_update_agent on crm.activity_contacts
   for update to crm_agent
-  using (activity_id in (select a.id from crm.activities a))
-  with check (activity_id in (select a.id from crm.activities a));
+  using (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id))
+  with check (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id));
 
 drop policy if exists activity_contacts_delete_member on crm.activity_contacts;
 create policy activity_contacts_delete_member on crm.activity_contacts
   for delete to authenticated
-  using (activity_id in (select a.id from crm.activities a));
+  using (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id));
 
 drop policy if exists activity_contacts_delete_agent on crm.activity_contacts;
 create policy activity_contacts_delete_agent on crm.activity_contacts
   for delete to crm_agent
-  using (activity_id in (select a.id from crm.activities a));
+  using (exists (select 1 from crm.activities a where a.id = activity_contacts.activity_id));
 
 revoke all on crm.activity_contacts from anon, authenticated, crm_agent;
 grant select, insert, delete on crm.activity_contacts to authenticated, crm_agent;
@@ -418,6 +418,13 @@ $$;
 
 reset lock_timeout;
 
+create or replace function private.activity_contacts_free_mail(p_domain text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$ select p_domain = any (array['gmail.com', 'googlemail.com', 'outlook.com', 'outlook.co.uk', 'outlook.fr', 'outlook.de', 'outlook.ie', 'hotmail.com', 'hotmail.co.uk', 'hotmail.fr', 'hotmail.de', 'hotmail.it', 'hotmail.es', 'live.com', 'live.co.uk', 'live.fr', 'live.de', 'live.ie', 'msn.com', 'windowslive.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.fr', 'yahoo.de', 'yahoo.ie', 'yahoo.it', 'yahoo.es', 'ymail.com', 'rocketmail.com', 'btinternet.com', 'btopenworld.com', 'talk21.com', 'sky.com', 'virginmedia.com', 'virgin.net', 'ntlworld.com', 'blueyonder.co.uk', 'talktalk.net', 'tiscali.co.uk', 'plus.com', 'freeserve.co.uk', 'orange.fr', 'wanadoo.fr', 'wanadoo.co.uk', 'free.fr', 'laposte.net', 'sfr.fr', 't-online.de', 'freenet.de', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'aol.co.uk', 'aim.com', 'proton.me', 'protonmail.com', 'protonmail.ch', 'pm.me', 'gmx.com', 'gmx.net', 'gmx.de', 'gmx.co.uk', 'gmx.fr', 'web.de', 'mail.com', 'email.com', 'zoho.com', 'zohomail.com', 'yandex.com', 'yandex.ru', 'mail.ru', 'fastmail.com', 'fastmail.fm', 'hey.com', 'tutanota.com', 'tuta.io', 'qq.com', '163.com', 'hushmail.com']) $$;
+
 insert into crm.activity_contacts (activity_id, contact_id, implicit)
 select distinct a.id, c.id, false
 from crm.conversation_imports i
@@ -425,23 +432,47 @@ join crm.activities a on a.id = i.activity_id
 cross join lateral jsonb_array_elements(
   case when jsonb_typeof(i.participants) = 'array' then i.participants else '[]'::jsonb end
 ) p
+cross join lateral (select lower(btrim(p ->> 'email')) as email) x
 join crm.contacts c
   on c.workspace_id = a.workspace_id
  and c.archived_at is null
- and c.normalized_email = lower(btrim(p ->> 'email'))
+ and c.normalized_email = x.email
 where i.status = 'filed'
   and i.activity_id is not null
   and jsonb_typeof(p) = 'object'
-  and nullif(btrim(p ->> 'email'), '') is not null
+  and nullif(x.email, '') is not null
   and not exists (
     select 1
     from crm.workspace_members m
     join crm.profiles pr on pr.id = m.user_id
     where m.workspace_id = a.workspace_id
       and (
-        lower(pr.email) = lower(btrim(p ->> 'email'))
-        or lower(btrim(p ->> 'email')) = any (select lower(o) from unnest(pr.other_emails) o)
+        lower(pr.email) = x.email
+        or x.email = any (select lower(o) from unnest(pr.other_emails) o)
+        or (
+          split_part(lower(pr.email), '@', 2) = split_part(x.email, '@', 2)
+          and not private.activity_contacts_free_mail(split_part(x.email, '@', 2))
+        )
+        or exists (
+          select 1 from unnest(pr.other_emails) o
+          where split_part(lower(o), '@', 2) = split_part(x.email, '@', 2)
+            and not private.activity_contacts_free_mail(split_part(lower(o), '@', 2))
+        )
       )
+  )
+  and not exists (
+    select 1
+    from crm.workspace_brands b
+    where (b.workspace_id = a.workspace_id or b.workspace_id in (select m.workspace_id from crm.workspace_members m where m.user_id = i.user_id))
+      and split_part(x.email, '@', 2) = any (b.own_domains)
+  )
+  and x.email not in (
+    select lower(e) from (
+      select email as e from crm.mail_sources where user_id = i.user_id
+      union select email from crm.send_identities where user_id = i.user_id
+      union select email from crm.mailbox_connections where user_id = i.user_id and email is not null
+      union select email from crm.calendar_accounts where user_id = i.user_id and email is not null
+    ) own where e is not null
   )
 on conflict (activity_id, contact_id) do nothing;
 
@@ -450,3 +481,5 @@ select a.id, a.contact_id, true
 from crm.activities a
 where a.contact_id is not null
 on conflict (activity_id, contact_id) do nothing;
+
+drop function if exists private.activity_contacts_free_mail(text);

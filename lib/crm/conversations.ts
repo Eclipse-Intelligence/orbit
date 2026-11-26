@@ -798,7 +798,7 @@ async function fileLockedImport(db: Db, actor: UserActor, row: LockedImport, con
       contactName: contact.name,
     }),
     provenance ?? { operation: "file_conversation", source: row.source === "granola" ? "granola" : "microsoft" },
-    { attendeeIds: [contact.id, ...(await recognisedAttendeeIds(db, actor, mapParticipants(row.participants)))] },
+    { attendeeIds: await recognisedAttendeeIds(db, actor, mapParticipants(row.participants)) },
   );
   await db.query(
     `update crm.conversation_imports

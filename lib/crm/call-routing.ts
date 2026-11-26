@@ -133,18 +133,39 @@ export async function routeCallInDb(
   }
   const targets = actors
     .map((actor) => matched.get(actor.workspaceId))
-    .filter((target): target is CallTarget => Boolean(target))
-    .map((target) => ({
-      ...target,
-      attendeeIds: [
-        ...new Set([
-          ...(target.match.contactId ? [target.match.contactId] : []),
-          ...(emailed.get(target.actor.workspaceId) ?? []),
-          ...(named.get(target.actor.workspaceId) ?? []),
-        ]),
-      ],
-    }));
-  return { targets, ruled, suggested };
+    .filter((target): target is CallTarget => Boolean(target));
+  const withAttendees: CallTarget[] = [];
+  for (const target of targets) {
+    const attendeeIds = [
+      ...new Set([
+        ...(target.match.contactId ? [target.match.contactId] : []),
+        ...(emailed.get(target.actor.workspaceId) ?? []),
+        ...(named.get(target.actor.workspaceId) ?? []),
+      ]),
+    ];
+    if (target.match.contactId || attendeeIds.length === 0) {
+      withAttendees.push({ ...target, attendeeIds });
+      continue;
+    }
+    const first = await db.query<{ id: string; company_id: string | null; name: string | null; company_name: string | null }>(
+      `select c.id, c.company_id, co.name as company_name,
+              coalesce(nullif(trim(concat_ws(' ', c.first_name, c.last_name)), ''), c.email) as name
+       from crm.contacts c left join crm.companies co on co.id = c.company_id
+       where c.id = $1 and c.workspace_id = $2 and c.archived_at is null`,
+      [attendeeIds[0], target.actor.workspaceId],
+    );
+    const found = first.rows[0];
+    const match: PartyMatch = found
+      ? {
+          contactId: found.id,
+          contactName: found.name,
+          companyId: found.company_id ?? target.match.companyId,
+          companyName: found.company_id ? found.company_name : target.match.companyName,
+        }
+      : target.match;
+    withAttendees.push({ ...target, match, attendeeIds });
+  }
+  return { targets: withAttendees, ruled, suggested };
 }
 
 export async function suggestByTitleInDb(

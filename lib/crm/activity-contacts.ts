@@ -39,7 +39,15 @@ async function lockedActivity(db: Db, actor: Actor, activityId: string) {
   );
   const row = result.rows[0];
   if (!row || row.archived_at) throw notFound("activity");
-  return row;
+  const locked = await db.query<AttendeeState>(
+    `select id, type, title, occurred_at, company_id, contact_id, archived_at
+     from crm.activities where id = $1 and workspace_id = $2
+     for update`,
+    [activityId, actor.workspaceId],
+  );
+  if (!locked.rows[0]) throw new CrmError("forbidden", "Only its author, owners and admins can change who is on this.", 403);
+  if (locked.rows[0].archived_at) throw notFound("activity");
+  return locked.rows[0];
 }
 
 async function currentIds(db: Db, activityId: string) {
