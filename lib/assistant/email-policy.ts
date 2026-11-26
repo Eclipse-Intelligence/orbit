@@ -36,7 +36,7 @@ function changesOwnerOrMany(args: Args, many: string) {
 }
 
 const MAIL_ACTIONS_WITHOUT_CONFIRM = new Set(["read", "unread", "flag", "unflag", "snooze", "remind_if_no_reply", "inbox"]);
-const DOC_ACTIONS_TO_CONFIRM = new Set(["archive", "share", "unshare", "rename"]);
+const DOC_ACTIONS_TO_CONFIRM = new Set(["archive", "share", "unshare", "publish", "unpublish", "allow_download", "block_download", "rename"]);
 const CONTACT_ROUTES = ["email", "phone", "linkedinUrl"];
 
 function docNeedsConfirm(args: Args, context: EmailPolicyContext) {

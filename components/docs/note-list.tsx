@@ -13,6 +13,7 @@ import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
+import GlobeIcon from "@/public/assets/images/docs/globe.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 
 const SORTS: { value: PageSort; label: string }[] = [
@@ -51,6 +52,15 @@ export function SharedGlyph({ label = "Shared with workspace" }: { label?: strin
     <span title={label} className="flex shrink-0 items-center">
       <UsersIcon aria-hidden className="size-3 text-(--tag-blue-text)/80" />
       <span className="sr-only">{label}</span>
+    </span>
+  );
+}
+
+function PublicGlyph() {
+  return (
+    <span title="Public link on" className="flex shrink-0 items-center">
+      <GlobeIcon aria-hidden className="size-3 text-(--tag-green-text)" />
+      <span className="sr-only">Public link on</span>
     </span>
   );
 }
@@ -118,6 +128,7 @@ export const NoteRow = memo(function NoteRow({
           </span>
           {sharedAlone && <SharedGlyph label="Shared on its own" />}
           {!summary.shared && folderShared && <PrivateGlyph />}
+          {summary.public && <PublicGlyph />}
           <span className={cn("ml-auto shrink-0 text-[12px] tabular-nums", agent ? "text-[#b9b0ff]" : "text-subtle")}>{agent ? "Now" : when}</span>
         </span>
         {summary.snippet && <span className="text-subtle line-clamp-2 text-[13px] leading-[1.45] max-md:text-[14px]">{summary.snippet}</span>}

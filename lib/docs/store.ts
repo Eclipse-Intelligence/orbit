@@ -29,6 +29,7 @@ import {
   type LiveCopy,
 } from "@/lib/docs/live/persist";
 import { liveText, pendingLiveDoc, plainLiveDoc, setLiveText } from "@/lib/docs/live/ydoc";
+import { newPublicToken, publicUrlOf, sealPublicToken } from "@/lib/docs/public-link";
 import { pageHref } from "@/lib/docs/routes";
 import { cleanTitle, excerptFrom, lineAround, linkKey, maskCode, parseDoc, parseLinks, rewriteLinkTitle, wordCount } from "@/lib/docs/markdown";
 import {
@@ -48,6 +49,7 @@ import {
   type DocListQuery,
   type DocMention,
   type DocMoveResult,
+  type DocPublicInput,
   type DocReference,
   type DocSaveInput,
   type DocSummary,
@@ -90,6 +92,9 @@ export type PageRow = {
   created_by_agent_id: string | null;
   creator_agent_name: string | null;
   tags: string[];
+  public_enabled: boolean;
+  allow_download: boolean;
+  public_token_enc: string | null;
 };
 
 export type FullPageRow = PageRow & { content: string };
@@ -102,7 +107,8 @@ const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text a
   left(p.content, 800) as head, p.word_count, p.revision, p.created_at, p.updated_at, p.edited_at, p.edited_by,
   p.edited_by_user_id, coalesce(nullif(editor.full_name, ''), editor.email) as editor_name, p.edited_by_agent_id,
   agent.name as agent_name, p.versioned_at, p.archived_at, p.created_by_agent_id, creator.name as creator_agent_name,
-  coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags`;
+  coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags,
+  p.public_enabled, p.allow_download, p.public_token_enc`;
 
 const PAGE_JOINS = `crm.pages p
   left join crm.profiles owner on owner.id = p.user_id
@@ -152,6 +158,11 @@ function ownedBy(actor: Actor, userId: string | null) {
   return actor.type === "user" && userId === actor.userId;
 }
 
+function controlsPublic(actor: Actor, row: { kind: DocKind; user_id: string | null; created_by_agent_id: string | null }) {
+  if (row.kind !== "note") return false;
+  return actor.type === "agent" ? row.created_by_agent_id === actor.agentId : ownedBy(actor, row.user_id);
+}
+
 export function mapPage(actor: Actor, row: PageRow): DocSummary {
   return {
     id: row.id,
@@ -166,6 +177,9 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
     effectiveShared: row.effective_shared,
     visibility: visibilityOf(row.shared, row.effective_shared),
     assistantCanEdit: row.assistant_can_edit,
+    public: row.public_enabled,
+    allowDownload: row.allow_download,
+    publicUrl: publicUrlOf(row),
     excerpt: excerptFrom(row.head),
     tags: row.tags ?? [],
     wordCount: row.word_count,
@@ -676,6 +690,7 @@ async function detail(db: Db, actor: Actor, row: FullPageRow): Promise<DocDetail
     mentions,
     canChangeSharing: row.kind === "note" && (row.shared ? owner : true),
     canChangeAssistantEdit: owner,
+    canChangePublic: controlsPublic(actor, row),
   };
 }
 
@@ -1118,6 +1133,8 @@ export type DocUpdateInput = {
   folderId?: string | null;
   allowVisibilityChange?: boolean;
   shared?: boolean;
+  public?: boolean;
+  allowDownload?: boolean;
   baseRevision?: number;
 };
 
@@ -1136,6 +1153,9 @@ export async function updateDoc(actor: Actor, id: string, input: DocUpdateInput,
       visibility = (await moveIn(db, actor, await loadPage(db, actor, id, { lock: true }), { folderId: input.folderId, allowVisibilityChange: input.allowVisibilityChange }, provenance)).visibility;
     }
     if (input.shared !== undefined) visibility = (await shareIn(db, actor, await loadPage(db, actor, id, { lock: true }), input.shared, provenance)).visibility;
+    if (input.public !== undefined || input.allowDownload !== undefined) {
+      await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), { public: input.public, allowDownload: input.allowDownload }, provenance);
+    }
     return { doc: await docDetail(db, actor, id), visibility, linksUpdated };
   });
 }
@@ -1230,6 +1250,38 @@ export async function setAssistantCanEdit(actor: Actor, id: string, allowed: boo
       );
     }
     await db.query("update crm.pages set assistant_can_edit = $2 where id = $1", [page.id, allowed]);
+    return docDetail(db, actor, id);
+  });
+}
+
+async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPublicInput, provenance?: Provenance) {
+  if (page.kind === "daily") throw new CrmError("forbidden", "Daily notes are private, so they can't have a public link.", 403);
+  if (!controlsPublic(actor, page)) {
+    throw new CrmError(
+      "forbidden",
+      page.user_id ? `Only ${page.owner_name ?? "its owner"} can change this note's public link.` : `Only ${page.creator_agent_name ?? "the agent that made it"} can change this note's public link.`,
+      403,
+    );
+  }
+  if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
+  const enabled = input.public ?? page.public_enabled;
+  const allowDownload = input.allowDownload ?? page.allow_download;
+  if (enabled === page.public_enabled && allowDownload === page.allow_download) return page;
+  if (enabled && !page.public_token_enc) {
+    const sealed = sealPublicToken(newPublicToken());
+    await db.query("update crm.pages set public_enabled = true, allow_download = $2, public_token_hash = $3, public_token_enc = $4 where id = $1", [page.id, allowDownload, sealed.hash, sealed.sealed]);
+  } else {
+    await db.query("update crm.pages set public_enabled = $2, allow_download = $3 where id = $1", [page.id, enabled, allowDownload]);
+  }
+  const after = await loadPage(db, actor, page.id);
+  await auditDoc(db, actor, "page.public_changed", after, provenance, { public: after.public_enabled, allowDownload: after.allow_download });
+  return after;
+}
+
+export async function setDocPublic(actor: Actor, id: string, input: DocPublicInput, provenance?: Provenance) {
+  assertDocsWrite(actor);
+  return withActor(actor, async (db) => {
+    await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), input, provenance);
     return docDetail(db, actor, id);
   });
 }

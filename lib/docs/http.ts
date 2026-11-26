@@ -1,7 +1,7 @@
 import { CrmError } from "@/lib/crm/errors";
 import { listDocTasks } from "@/lib/crm/task-docs";
 import type { Provenance, UserActor } from "@/lib/crm/types";
-import type { CreateInput, Folder, Page, PageFilter, PageSort, ShareTarget, Visibility } from "@/lib/docs/client-types";
+import type { CreateInput, Folder, Page, PageFilter, PageSort, PublicInput, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { isDailyDate } from "@/lib/docs/daily";
 import { createFolder, listFolders, moveFolder, renameFolder, shareFolder } from "@/lib/docs/folders";
 import { liveTransport } from "@/lib/docs/live/broadcast";
@@ -18,6 +18,7 @@ import {
   restoreVersion,
   saveDoc,
   setAssistantCanEdit,
+  setDocPublic,
   shareDoc,
   syncLiveDoc,
 } from "@/lib/docs/store";
@@ -273,6 +274,9 @@ export const docsChanges = {
   },
   async assistantCanEdit(actor: UserActor, id: string, value: boolean): Promise<Page> {
     return toPage(actor, await setAssistantCanEdit(actor, id, value));
+  },
+  async setPublic(actor: UserActor, id: string, input: PublicInput): Promise<Page> {
+    return toPage(actor, await setDocPublic(actor, id, input, PROVENANCE));
   },
   async createFolder(actor: UserActor, name: string, parentId: string | null): Promise<Folder> {
     return toFolder(actor, await createFolder(actor, { name, parentId }, PROVENANCE));

@@ -100,6 +100,9 @@ export function toSummary(actor: UserActor, doc: DocSummary, entries = 0): PageS
     updatedBy: editorParticipant(actor, doc.lastEditor, doc.owner),
     wordCount: doc.wordCount,
     entryCount: entries,
+    public: doc.public,
+    allowDownload: doc.allowDownload,
+    publicUrl: doc.publicUrl,
   };
 }
 

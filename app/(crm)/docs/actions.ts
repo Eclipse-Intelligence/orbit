@@ -1,7 +1,7 @@
 "use server";
 
 import { getUserActor } from "@/lib/auth/user";
-import type { CreateInput, ShareTarget, Visibility } from "@/lib/docs/client-types";
+import type { CreateInput, PublicInput, ShareTarget, Visibility } from "@/lib/docs/client-types";
 import { docsAction, docsChanges } from "@/lib/docs/http";
 
 export async function createDocAction(input: CreateInput) {
@@ -26,6 +26,10 @@ export async function restoreDocAction(id: string) {
 
 export async function setAssistantCanEditAction(id: string, value: boolean) {
   return docsAction(await getUserActor(), (actor) => docsChanges.assistantCanEdit(actor, id, value));
+}
+
+export async function setDocPublicAction(id: string, input: PublicInput) {
+  return docsAction(await getUserActor(), (actor) => docsChanges.setPublic(actor, id, input));
 }
 
 export async function createFolderAction(name: string, parentId: string | null) {

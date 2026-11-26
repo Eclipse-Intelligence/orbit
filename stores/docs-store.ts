@@ -11,6 +11,7 @@ import {
   type PageSort,
   type PageSummary,
   type Participant,
+  type PublicInput,
   type SaveResult,
   type ShareTarget,
   type Visibility,
@@ -35,6 +36,8 @@ export type VisibilityPrompt = {
   after: Visibility;
   retry: () => Promise<void>;
 };
+
+type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "publicUrl"> | Pick<PageSummary, "public" | "allowDownload">;
 
 type DocsState = {
   ready: boolean;
@@ -85,6 +88,7 @@ type DocsState = {
   share: (target: ShareTarget, visibility: Visibility, onShared?: () => void) => Promise<string | null>;
   archive: (id: string) => Promise<void>;
   setAssistantCanEdit: (id: string, value: boolean) => Promise<void>;
+  setPublic: (id: string, input: PublicInput) => Promise<string | null>;
   createFolder: (name: string, parentId: string | null) => Promise<Folder | null>;
   renameFolder: (id: string, name: string) => Promise<string | null>;
   moveFolder: (id: string, parentId: string | null, position: number, allowVisibilityChange?: boolean) => Promise<void>;
@@ -173,6 +177,9 @@ function summaryFrom(page: Page): PageSummary {
     updatedBy: page.updatedBy,
     wordCount: page.wordCount,
     entryCount: page.entryCount,
+    public: page.public,
+    allowDownload: page.allowDownload,
+    publicUrl: page.publicUrl,
   };
 }
 
@@ -588,6 +595,28 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       set((state) => ({ pages: { ...state.pages, [id]: { ...(state.pages[id] ?? page), assistantCanEdit: page.assistantCanEdit } } }));
     } catch (error) {
       get().notify(message(error, "Couldn't change the setting. Try again."), { tone: "alert" });
+    }
+  },
+
+  async setPublic(id, input) {
+    const current = session;
+    const before = get().summaries[id] ?? get().pages[id];
+    const patchPublic = (patch: PublicPatch) =>
+      set((state) => ({
+        pages: state.pages[id] ? { ...state.pages, [id]: { ...state.pages[id], ...patch } } : state.pages,
+        summaries: state.summaries[id] ? { ...state.summaries, [id]: { ...state.summaries[id], ...patch } } : state.summaries,
+      }));
+    if (before) patchPublic({ public: input.public ?? before.public, allowDownload: input.allowDownload ?? before.allowDownload });
+    try {
+      const page = await docsData().setPublic(id, input);
+      if (current === session) {
+        patchPublic({ public: page.public, allowDownload: page.allowDownload, publicUrl: page.publicUrl });
+        set({ lists: {} });
+      }
+      return null;
+    } catch (error) {
+      if (before && current === session) patchPublic({ public: before.public, allowDownload: before.allowDownload, publicUrl: before.publicUrl });
+      return message(error, "Couldn't change the public link. Try again.");
     }
   },
 

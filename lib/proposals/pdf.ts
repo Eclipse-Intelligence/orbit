@@ -52,7 +52,7 @@ const FONT_DIR = path.join(process.cwd(), "lib", "proposals", "fonts");
 let fontFiles: Promise<{ regular: Buffer; bold: Buffer; italic: Buffer }> | null = null;
 let glyphs: Set<number> = new Set();
 
-function loadFonts() {
+export function loadFonts() {
   fontFiles ??= Promise.all(["Regular", "Bold", "Italic"].map((style) => readFile(path.join(FONT_DIR, `NotoSans-${style}.ttf`)))).then(([regular, bold, italic]) => ({ regular, bold, italic }));
   return fontFiles;
 }

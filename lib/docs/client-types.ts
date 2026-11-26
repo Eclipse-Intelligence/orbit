@@ -28,6 +28,8 @@ export type Folder = {
 
 export type TagNode = TagTreeNode;
 
+export type PublicInput = { public?: boolean; allowDownload?: boolean };
+
 export type PageKind = "note" | "daily";
 
 export type PageSummary = {
@@ -46,6 +48,9 @@ export type PageSummary = {
   updatedBy: Participant;
   wordCount: number;
   entryCount: number;
+  public: boolean;
+  allowDownload: boolean;
+  publicUrl: string | null;
 };
 
 export type Page = PageSummary & {
@@ -222,6 +227,7 @@ export interface DocsData {
   archivePage(id: string): Promise<void>;
   restorePage(id: string): Promise<Page>;
   setAssistantCanEdit(id: string, value: boolean): Promise<Page>;
+  setPublic(id: string, input: PublicInput): Promise<Page>;
   createFolder(name: string, parentId: string | null): Promise<Folder>;
   renameFolder(id: string, name: string): Promise<Folder>;
   moveFolder(id: string, parentId: string | null, position: number, options?: MoveOptions): Promise<Folder[]>;

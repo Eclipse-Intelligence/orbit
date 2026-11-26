@@ -62,6 +62,7 @@ export const WEBHOOK_EVENTS = [
   "page.updated",
   "page.moved",
   "page.shared",
+  "page.public_changed",
   "page.archived",
   "page.restored",
   "page_folder.created",

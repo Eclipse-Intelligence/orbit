@@ -23,7 +23,8 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/auth/") ||
     pathname === "/book" ||
     pathname.startsWith("/book/") ||
-    pathname.startsWith("/p/")
+    pathname.startsWith("/p/") ||
+    pathname.startsWith("/d/")
   ) {
     return NextResponse.next();
   }
