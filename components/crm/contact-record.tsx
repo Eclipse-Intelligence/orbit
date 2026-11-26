@@ -13,6 +13,7 @@ import CheckEmailButton from "@/components/crm/check-email";
 import { contactRecipient } from "@/lib/crm/personalise";
 import InviteDialog, { InviteNotice } from "@/components/crm/invite-dialog";
 import MeetingsCard from "@/components/crm/meetings-card";
+import CompanyColleagues from "@/components/crm/company-colleagues";
 import ProposalsCard from "@/components/proposals/proposals-card";
 import type { DocumentSummary } from "@/lib/proposals/documents";
 import type { Relationship } from "@/lib/crm/relationship-score";
@@ -83,6 +84,7 @@ export default function ContactRecord({
   proposals = [],
   relationship,
   moveTargets = [],
+  colleagues = [],
 }: {
   viewer: Viewer;
   contact: Contact;
@@ -113,6 +115,7 @@ export default function ContactRecord({
   proposals?: DocumentSummary[];
   relationship?: Relationship;
   moveTargets?: WorkspaceRef[];
+  colleagues?: Pick<Contact, "id" | "name" | "jobTitle" | "email">[];
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
@@ -408,6 +411,13 @@ export default function ContactRecord({
                   </div>
                 )}
               </DetailSection>
+            )}
+            {shown.companyName && (
+              <CompanyColleagues
+                companyName={shown.companyName}
+                colleagues={colleagues}
+                className="shadow-[inset_0_1px_0_var(--border)]"
+              />
             )}
             <DetailSection title="Tasks" className="shadow-[inset_0_1px_0_var(--border)]">
               <RecordTasks tasks={tasks} viewer={viewer} members={members} here={{ kind: "contact", id: contact.id }} />
