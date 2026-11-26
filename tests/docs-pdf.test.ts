@@ -167,6 +167,36 @@ describe("Docs PDF writer limits", () => {
     assert.ok((await read(await renderDocPdf({ title: "Lists", content: lists, updatedAt: UPDATED }))).pages >= 1);
   });
 
+  it("never prints mention, wikilink or link markup, whatever path the text takes", { timeout: 90_000 }, async () => {
+    const id = "11111111-2222-4333-8444-555555555555";
+    const mention = `@[Ada Lovelace](contact:${id})`;
+    const inline = `${mention} and @[Acme](company:${id}) and [[Wiki|Shown]] and [[Secret target]] and [label](https://example.com/x) and ![alt text](https://example.com/i.png)`;
+    const nestedLists = Array.from({ length: 45 }, (_, depth) => `${"  ".repeat(depth)}- level ${depth}`).join("\n");
+    const inputs: Record<string, string> = {
+      "deep quotes": `${"> ".repeat(45)}${inline}`,
+      "huge quotes": `${"> ".repeat(10_000)}${inline}`,
+      "deep lists": `${nestedLists}\n${"  ".repeat(45)}- ${inline}`,
+      "html block": `<div>\nnote ${inline}\n</div>`,
+      "html comment": `<!-- hidden ${inline} -->\n\nafter`,
+      table: `| Head | ${inline} |\n| --- | --- |\n| ${inline} | cell |`,
+      quote: `> ${inline}`,
+      list: `- ${inline}\n- [ ] ${inline}`,
+      heading: `# ${inline}\n\nSetext ${inline}\n---`,
+      emphasis: `**${inline}** and *${inline}* and ~~${inline}~~`,
+      "link label": `[${mention} and [[Wiki|Shown]]](https://example.com)`,
+      reference: `[text][ref] ${inline}\n\n[ref]: https://example.com`,
+    };
+    for (const [name, content] of Object.entries(inputs)) {
+      const all = (await read(await renderDocPdf({ title: "Rule", content, updatedAt: UPDATED }))).text.join(" ");
+      assert.ok(!/\]\((?:contact|company|task|opportunity|proposal|member):/.test(all), `${name}: mention markup printed`);
+      assert.ok(!all.includes("[["), `${name}: wikilink markup printed`);
+      assert.ok(!all.includes(id), `${name}: an id was printed`);
+      assert.ok(!all.includes("example.com"), `${name}: a link target was printed`);
+    }
+    const html = (await read(await renderDocPdf({ title: "Rule", content: inputs["html block"], updatedAt: UPDATED }))).text.join(" ");
+    assert.match(html, /note Ada Lovelace and Acme and Shown and Secret target and label and alt text/);
+  });
+
   it("drops emoji selectors and control characters, and writes strikethrough text", async () => {
     const { text } = await read(await renderDocPdf({ title: "Marks", content: `Love ❤️${"\u007f\u0085"}ok ~~struck~~ words`, updatedAt: UPDATED }));
     const all = text.join(" ");

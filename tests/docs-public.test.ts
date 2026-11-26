@@ -606,6 +606,13 @@ describe("Public docs: roles, workspaces and races", () => {
 describe("Public docs: more roles and the not found head", () => {
   useServerlessPool();
 
+  it("gives a doc with no title the title Untitled in the page head", async () => {
+    const doc = await createDoc(mark, { title: "", content: "Body" });
+    const token = tokenOf((await setDocPublic(mark, doc.id, { public: true })).publicUrl);
+    assert.equal((await generateMetadata(pageParams(token))).title, "Untitled");
+    assert.match(renderToStaticMarkup(await PublicDocPage(pageParams(token))), /Untitled/);
+  });
+
   it("lets only the workspace owner change a doc with no owner and no agent left", async () => {
     const admin = await addMember("admin2@docs-public.test", "Ann Admin", "admin");
     const gone = (await createAgent(mark.workspaceId, ["docs:read", "docs:write"], "Short-lived")).actor;

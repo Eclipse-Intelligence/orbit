@@ -63,6 +63,18 @@ function plain(text: string, style: Partial<Style> = {}): Run {
   return { ...NO_STYLE, ...style, text };
 }
 
+const MENTION_SYNTAX = /@\[([^[\]\n]{1,200})\]\((?:contact|company|task|opportunity|proposal|member):[0-9a-f-]{36}\)/g;
+const WIKILINK_SYNTAX = /\[\[([^[\]\n]{1,400}?)\]\]/g;
+const LINK_SYNTAX = /!?\[([^\]\n]*)\]\([^)\n]*\)/g;
+const HTML_TAG = /<\/?[A-Za-z][^>\n]*>|<!--[\s\S]*?-->/g;
+
+function displayText(raw: string) {
+  return raw
+    .replace(MENTION_SYNTAX, "$1")
+    .replace(WIKILINK_SYNTAX, (_, inner: string) => (inner.includes("|") ? inner.slice(inner.indexOf("|") + 1) : inner))
+    .replace(LINK_SYNTAX, "$1");
+}
+
 function inlineRuns(text: string, node: SyntaxNode, from: number, to: number, base: Style, out: Run[]) {
   const push = (value: string, style: Style = base) => {
     if (value) out.push({ ...style, text: value });
@@ -71,7 +83,7 @@ function inlineRuns(text: string, node: SyntaxNode, from: number, to: number, ba
   for (let child = node.firstChild; child; child = child.nextSibling) {
     if (child.to <= from) continue;
     if (child.from >= to) break;
-    if (child.from > at) push(text.slice(at, child.from).replace(/\n[ \t]*/g, "\n"));
+    if (child.from > at) push(displayText(text.slice(at, child.from)).replace(/\n[ \t]*/g, "\n"));
     at = Math.max(at, child.to);
     const name = child.name;
     if (MARK.test(name) && !MARK_KEPT.has(name)) continue;
@@ -93,7 +105,7 @@ function inlineRuns(text: string, node: SyntaxNode, from: number, to: number, ba
     } else if (name === "Link" || name === "Image") {
       const marks = child.getChildren("LinkMark");
       if (marks.length >= 2) inlineRuns(text, child, marks[0].to, marks[1].from, base, out);
-      else push(text.slice(child.from, child.to));
+      else push(displayText(text.slice(child.from, child.to)));
     } else if (name === "WikiLink") {
       const inner = text.slice(child.from + 2, child.to - 2);
       const bar = inner.indexOf("|");
@@ -103,10 +115,10 @@ function inlineRuns(text: string, node: SyntaxNode, from: number, to: number, ba
     } else if (child.firstChild && name !== "Hashtag" && name !== "URL") {
       inlineRuns(text, child, child.from, child.to, base, out);
     } else {
-      push(text.slice(child.from, child.to));
+      push(displayText(text.slice(child.from, child.to)));
     }
   }
-  if (at < to) push(text.slice(at, to).replace(/\n[ \t]*/g, "\n"));
+  if (at < to) push(displayText(text.slice(at, to)).replace(/\n[ \t]*/g, "\n"));
 }
 
 function runsOf(text: string, node: SyntaxNode, bold = false) {
@@ -564,7 +576,7 @@ export class DocPdfWriter {
     const name = node.name;
     const nested = name === "Blockquote" || name === "BulletList" || name === "OrderedList";
     if (nested && this.depth > MAX_DEPTH) {
-      this.paragraph([plain(this.text.slice(node.from, node.to).replace(/^[\s>]+/gm, ""))], context, { after: 6 });
+      this.paragraph([plain(displayText(this.text.slice(node.from, node.to).replace(/^[\s>]+/gm, "")))], context, { after: 6 });
       return;
     }
     const level = /^(?:ATX|Setext)Heading(\d)$/.exec(name);
@@ -584,7 +596,7 @@ export class DocPdfWriter {
     } else if (name === "Table") {
       this.table(node, context);
     } else if (name === "HTMLBlock") {
-      this.paragraph([plain(this.text.slice(node.from, node.to))], context, { after: 6 });
+      this.paragraph([plain(displayText(this.text.slice(node.from, node.to).replace(HTML_TAG, "")).replace(/\n[ \t]*/g, "\n").trim())], context, { after: 6 });
     }
   }
 
