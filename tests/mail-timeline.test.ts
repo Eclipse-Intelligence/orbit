@@ -97,8 +97,8 @@ describe("mail on the contact timeline", () => {
     const events = async () => Number((await getAdminPool().query("select count(*) from crm.workflow_events")).rows[0].count);
     const before = await events();
     const first = await fileMailOnTimeline(owner, { now: NOW });
-    assert.equal(first.filed, 4);
-    assert.equal(await events(), before + 3);
+    assert.equal(first.filed, 3);
+    assert.equal(await events(), before + 2);
     assert.equal((await fileMailOnTimeline(owner, { now: NOW })).filed, 0);
 
     const jane = (await listActivities(owner, { contactId: janeId, type: "email" })).data;
@@ -108,8 +108,12 @@ describe("mail on the contact timeline", () => {
     assert.equal(reply.body, "Sounds good.");
     assert.equal(reply.metadata.from, "jane@acme.test");
     assert.equal(reply.metadata.internetMessageId, "<in-1@mail.test>");
-    const raj = await getAdminPool().query("select title from crm.activities a join crm.contacts c on c.id = a.contact_id where c.normalized_email = 'raj@acme.test'");
+    const raj = await getAdminPool().query(
+      "select a.title from crm.activities a join crm.activity_contacts l on l.activity_id = a.id join crm.contacts c on c.id = l.contact_id where c.normalized_email = 'raj@acme.test'",
+    );
     assert.deepEqual(raj.rows.map((row) => row.title), ["Pilot"]);
+    const pilot = await getAdminPool().query("select 1 from crm.activities where type = 'email' and title = 'Pilot'");
+    assert.equal(pilot.rowCount, 1);
   });
 
   it("keeps one activity per email when its sender becomes a contact, or the contact is archived", async () => {

@@ -508,9 +508,10 @@ function ActivityRow({
   const party = activity.type === "email" ? emailParty(activity) : null;
   const attached = activity.type === "email" ? emailAttachments(activity) : [];
   const insightful = activity.type === "call" || activity.type === "meeting";
+  const withPeople = insightful || activity.type === "email";
   const reads = read?.opens.length ?? 0;
   const emptyPanel =
-    !details.body && !details.attendees && !granola && !party && !read && !insightful && !trail;
+    !details.body && !details.attendees && !granola && !party && !read && !withPeople && !trail;
 
   return (
     <li id={`activity-${activity.id}`} className="flex scroll-mt-10 flex-col">
@@ -593,7 +594,7 @@ function ActivityRow({
             <p className="text-[14px] leading-5">{details.attendees}</p>
           </div>
         )}
-        {insightful && (
+        {withPeople && (
           <ActivityPeople activityId={activity.id} people={activity.contacts} mainId={activity.contactId} editable={editable} />
         )}
         {details.body && (

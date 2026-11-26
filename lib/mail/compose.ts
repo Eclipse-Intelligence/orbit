@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { after } from "next/server";
 import { createEmailActivityOnce } from "@/lib/crm/activities";
+import { externalContactIdsInDb } from "@/lib/mail/email-people";
 import { withActor } from "@/lib/crm/context";
 import { attachmentSummary, discardAttachments, loadAttachments } from "@/lib/crm/email-attachments";
 import { CrmError } from "@/lib/crm/errors";
@@ -523,36 +524,32 @@ async function logReply(actor: UserActor, input: DraftInput, subject: string, fr
   if (addresses.length === 0) return;
   for (const target of await replyWorkspaces(actor, input, sent)) {
     await withActor(target, async (db) => {
-      const contacts = await db.query<{ id: string; company_id: string | null; normalized_email: string }>(
-        `select id, company_id, normalized_email from crm.contacts
-         where workspace_id = $1 and archived_at is null and normalized_email = any($2::text[])
-         limit 10`,
-        [target.workspaceId, addresses],
-      );
-      for (const contact of contacts.rows) {
-        await createEmailActivityOnce(
-          db,
-          target,
-          {
-            type: "email",
-            title: subject.slice(0, 200) || "(no subject)",
-            body: input.body.trim().slice(0, 8000) || null,
-            companyId: contact.company_id,
-            contactId: contact.id,
-            metadata: {
-              source: "microsoft",
-              direction: "outbound",
-              to: contact.normalized_email,
-              from,
-              mode: input.mode,
-              ...(sent.internetMessageId ? { internetMessageId: sent.internetMessageId } : {}),
-              ...(attachments.length ? { attachments } : {}),
-            },
+      const people = await externalContactIdsInDb(db, target, addresses);
+      const main = people[0];
+      if (!main) return;
+      await createEmailActivityOnce(
+        db,
+        target,
+        {
+          type: "email",
+          title: subject.slice(0, 200) || "(no subject)",
+          body: input.body.trim().slice(0, 8000) || null,
+          companyId: main.companyId,
+          contactId: main.id,
+          metadata: {
+            source: "microsoft",
+            direction: "outbound",
+            to: main.email,
+            from,
+            mode: input.mode,
+            ...(sent.internetMessageId ? { internetMessageId: sent.internetMessageId } : {}),
+            ...(attachments.length ? { attachments } : {}),
           },
-          { internetMessageId: sent.internetMessageId },
-          { operation: "send_email", source: "microsoft" },
-        );
-      }
+        },
+        { internetMessageId: sent.internetMessageId },
+        { operation: "send_email", source: "microsoft" },
+        { contactIds: people.map((person) => person.id) },
+      );
     });
   }
 }

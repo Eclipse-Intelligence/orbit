@@ -103,6 +103,28 @@ export async function removeActivityContactInDb(db: Db, actor: Actor, activityId
   return { changed: true, contactIds: after };
 }
 
+export async function linkEmailPeopleInDb(db: Db, actor: Actor, activityId: string, contactIds: (string | null | undefined)[], provenance: Provenance) {
+  const wanted = [...new Set(contactIds.filter((id): id is string => Boolean(id) && isUuid(id as string)))];
+  if (wanted.length === 0) return [];
+  const found = await db.query<AttendeeState>(
+    `select id, type, title, occurred_at, company_id, contact_id, archived_at
+     from crm.activities where id = $1 and workspace_id = $2 and archived_at is null
+     for update`,
+    [activityId, actor.workspaceId],
+  );
+  const row = found.rows[0];
+  if (!row) return [];
+  const before = await currentIds(db, activityId);
+  const missing = wanted.filter((id) => !before.includes(id));
+  if (missing.length === 0) return [];
+  await linkActivityContactsInDb(db, actor.workspaceId, activityId, missing);
+  const after = await currentIds(db, activityId);
+  const added = after.filter((id) => !before.includes(id));
+  if (added.length === 0) return [];
+  await auditAttendees(db, actor, row, before, after, provenance);
+  return added;
+}
+
 export async function addActivityContact(actor: Actor, activityId: string, contactId: string, provenance: Provenance) {
   assertScope(actor.scopes, "activities:write");
   return withActor(actor, (db) => addActivityContactInDb(db, actor, activityId, contactId, provenance));
