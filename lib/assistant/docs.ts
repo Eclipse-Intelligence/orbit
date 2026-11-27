@@ -115,7 +115,10 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
   if (docId && isUuid(commentId)) {
     const found = await listDocComments(actor, docId).catch(() => null);
     const comment = found?.comments.find((item) => item.id === commentId);
-    if (comment) out[commentId] = `${comment.authorName}: ${comment.body.replace(/\s+/g, " ").slice(0, 160)}`;
+    if (comment) {
+      out[commentId] = `${comment.authorName}: ${comment.body.replace(/\s+/g, " ").slice(0, 160)}`;
+      out[`${commentId}:first`] = comment.parentId === null ? "yes" : "no";
+    }
   }
   if (docId) {
     const doc = await getDoc(actor, docId).catch(() => null);
@@ -340,7 +343,7 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     case "reopen_comment":
       return result(`Reopen a comment on ${doc}`, [known(name, str(args.commentId)) ?? "", "It comes back to the margin of the public page."]);
     case "delete_comment":
-      return result(`Delete a comment on ${doc}`, [known(name, str(args.commentId)) ?? "", "It is removed from the public page too, with its replies, and can't be brought back."]);
+      return result(`Delete a comment on ${doc}`, [known(name, str(args.commentId)) ?? "", `It is removed from the public page too${known(name, `${str(args.commentId)}:first`) === "yes" ? ", with its replies," : ""} and can't be brought back.`]);
     case "set_public_ending": {
       const slug = str(args.slug).toLowerCase();
       return result(`Change the public link to ${(siteOrigin() ?? "").replace(/^https?:\/\//, "")}${publicPath(slug)}`, [

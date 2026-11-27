@@ -493,3 +493,73 @@ describe("Orbit comments: agents", () => {
     assert.match(((await runTool(mark, "save_doc", { action: "reply_comment", docId: doc.id, content: "No id" })) as { error: string }).error, /commentId/);
   });
 });
+
+describe("Orbit comments: one person's change never blocks the next", () => {
+  useServerlessPool();
+
+  it("lets a second member and an agent delete and reopen a thread someone else resolved", async () => {
+    const doc = await publish(mark, "Handover", { shared: true });
+    const actors: [string, UserActor | AgentActor][] = [["a second member", priya], ["an agent", agent], ["the owner", mark]];
+    for (const [label, who] of actors) {
+      const resolver = who === mark ? priya : mark;
+      const gone = await visitorRoot(doc.token, `Delete by ${label}`);
+      await replyToDocComment(resolver, doc.id, gone.id, { body: "Reply" });
+      await setDocCommentResolved(resolver, doc.id, gone.id, true);
+      assert.deepEqual(await deleteDocComment(who, doc.id, gone.id), { id: gone.id, deleted: true });
+      assert.equal((await publicList(doc.token)).some((item) => item.id === gone.id), false, label);
+      const back = await visitorRoot(doc.token, `Reopen by ${label}`);
+      await setDocCommentResolved(resolver, doc.id, back.id, true);
+      assert.equal((await setDocCommentResolved(who, doc.id, back.id, false)).resolved, false, label);
+      assert.equal((await setDocCommentResolved(who, doc.id, back.id, true)).resolved, true, label);
+      assert.equal((await setDocCommentResolved(resolver, doc.id, back.id, false)).resolved, false, label);
+    }
+  });
+
+  it("lets a person delete or reopen a thread an agent resolved, and still refuses to undelete", async () => {
+    const doc = await publish(agent, "Agent resolved");
+    const one = await visitorRoot(doc.token);
+    await setDocCommentResolved(agent, doc.id, one.id, true);
+    assert.equal((await setDocCommentResolved(mark, doc.id, one.id, false)).resolved, false);
+    await setDocCommentResolved(agent, doc.id, one.id, true);
+    await deleteDocComment(mark, doc.id, one.id);
+    assert.equal((await queryAsUser(mark.userId, "update crm.page_comments set deleted_at = null where id = $1 returning id", [one.id])).length, 0);
+    assert.equal((await asAgent(agent, "update crm.page_comments set deleted_at = null where id = $1 returning id", [one.id])).length, 0);
+    await assert.rejects(deleteDocComment(mark, doc.id, one.id), /no longer there/);
+  });
+
+  it("works through REST and MCP for an agent deleting a person's resolved thread", async () => {
+    const doc = await publish(agent, "Cross route");
+    const one = await visitorRoot(doc.token);
+    await setDocCommentResolved(mark, doc.id, one.id, true);
+    const removed = await restDelete(rest(`${doc.id}/comments/${one.id}`, "DELETE"), { params: Promise.resolve({ id: doc.id, commentId: one.id }) });
+    assert.equal(removed.status, 200);
+    const two = await visitorRoot(doc.token);
+    await setDocCommentResolved(mark, doc.id, two.id, true);
+    const bot = await connect(agent);
+    try {
+      assert.equal((await bot.call("delete_doc_comment", { id: doc.id, comment_id: two.id })).error, null);
+      const three = await visitorRoot(doc.token);
+      await setDocCommentResolved(mark, doc.id, three.id, true);
+      assert.equal(((await bot.call("resolve_doc_comment", { id: doc.id, comment_id: three.id, reopen: true })).value as { comment: { resolved: boolean } }).comment.resolved, false);
+    } finally {
+      await bot.close();
+    }
+    const four = await visitorRoot(doc.token);
+    await setDocCommentResolved(mark, doc.id, four.id, true);
+    const card = { action: "delete_comment", docId: doc.id, commentId: four.id };
+    assert.equal(((await runTool(mark, "save_doc", card)) as { deleted: boolean }).deleted, true);
+  });
+
+  it("says whether a delete takes replies with it on the assistant's card", async () => {
+    const doc = await publish(mark, "Card text");
+    const root = await visitorRoot(doc.token, "Question");
+    const reply = await replyToDocComment(mark, doc.id, root.id, { body: "Answer" });
+    const first = { action: "delete_comment", docId: doc.id, commentId: root.id };
+    const second = { action: "delete_comment", docId: doc.id, commentId: reply.id };
+    const rootCard = describeAction("save_doc", first, await recordNames(mark, [first], ["save_doc"]));
+    const replyCard = describeAction("save_doc", second, await recordNames(mark, [second], ["save_doc"]));
+    assert.match(rootCard.lines.join(" "), /with its replies, and can't be brought back/);
+    assert.doesNotMatch(replyCard.lines.join(" "), /replies/);
+    assert.match(replyCard.lines.join(" "), /can't be brought back/);
+  });
+});

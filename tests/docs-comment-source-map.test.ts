@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { EditorState } from "@codemirror/state";
 import { createAnchor } from "@/lib/docs/comment-anchor";
 import { placeThreads } from "@/lib/docs/comment-layout";
+import { commentHighlights, commentMarksIn, setCommentMarks, withoutCommentMarks } from "@/lib/docs/editor/comment-highlights";
 import { sourceMap, sourceRange } from "@/lib/docs/editor/source-map";
 
 const MENTION = "@[Sam Lee](member:11111111-1111-1111-1111-111111111111)";
@@ -112,5 +114,17 @@ describe("placing comment threads in the editor text", () => {
   it("treats a doc with no anchored threads as all orphaned without reading it", () => {
     assert.deepEqual(placeThreads(body, [{ id: "x", anchor: null }]), { placed: [], orphaned: ["x"] });
     assert.deepEqual(placeThreads(body, []), { placed: [], orphaned: [] });
+  });
+});
+
+describe("comment highlights in remembered editor states", () => {
+  it("carry no marks once cleared, and leave the text alone", () => {
+    const state = EditorState.create({ doc: "Some text with two marked words here", extensions: [commentHighlights] });
+    const marked = state.update({ effects: setCommentMarks.of([{ from: 0, to: 4, active: false }, { from: 10, to: 14, active: true }]) }).state;
+    assert.deepEqual(commentMarksIn(marked), [{ from: 0, to: 4, active: false }, { from: 10, to: 14, active: true }]);
+    const remembered = withoutCommentMarks(marked);
+    assert.deepEqual(commentMarksIn(remembered), []);
+    assert.equal(remembered.doc.toString(), state.doc.toString());
+    assert.deepEqual(commentMarksIn(withoutCommentMarks(state)), []);
   });
 });

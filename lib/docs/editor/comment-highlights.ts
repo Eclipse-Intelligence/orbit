@@ -1,4 +1,4 @@
-import { StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
+import { StateEffect, StateField, type EditorState, type Extension, type Range } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 
 export type CommentMark = { from: number; to: number; active: boolean };
@@ -41,3 +41,15 @@ export const commentHighlights: Extension = [
     for (const listener of listeners) listener();
   }),
 ];
+
+export function withoutCommentMarks(state: EditorState) {
+  return state.update({ effects: setCommentMarks.of([]) }).state;
+}
+
+export function commentMarksIn(state: EditorState) {
+  const found: CommentMark[] = [];
+  state.field(marks).between(0, state.doc.length, (from, to, value) => {
+    found.push({ from, to, active: String(value.spec.class).includes("active") });
+  });
+  return found;
+}

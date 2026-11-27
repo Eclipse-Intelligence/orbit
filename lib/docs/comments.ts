@@ -1,5 +1,5 @@
 import { withActor } from "@/lib/crm/context";
-import { CrmError } from "@/lib/crm/errors";
+import { CrmError, isPgError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { resolveAnchor, type CommentAnchor } from "@/lib/docs/comment-anchor";
@@ -85,6 +85,15 @@ function checkBody(value: unknown) {
   return body;
 }
 
+async function guarded<T>(failure: string, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (isPgError(error) && (error.code === "42501" || error.code === "23514")) throw new CrmError("forbidden", failure, 403);
+    throw error;
+  }
+}
+
 async function openPage(db: Db, actor: Actor, pageId: string) {
   const page = await loadPage(db, actor, pageId);
   if (page.kind !== "note") throw new CrmError("invalid_input", "Daily notes can't have comments.", 400);
@@ -121,7 +130,7 @@ export async function listDocComments(actor: Actor, pageId: string): Promise<{ c
 export async function replyToDocComment(actor: Actor, pageId: string, commentId: string, input: { body: string }, provenance?: Provenance): Promise<DocComment> {
   assertDocsWrite(actor);
   const body = checkBody(input.body);
-  return withActor(actor, async (db) => {
+  return guarded("Couldn't reply. Try again.", () => withActor(actor, async (db) => {
     const page = await openPage(db, actor, pageId);
     const target = await loadComment(db, page.id, commentId);
     const rootId = target.parent_id ?? target.id;
@@ -133,12 +142,12 @@ export async function replyToDocComment(actor: Actor, pageId: string, commentId:
     const made = await loadComment(db, page.id, inserted.rows[0].id);
     await auditDoc(db, actor, "page.comment_replied", page, provenance, { commentId: made.id, parentId: rootId });
     return mapComment(made);
-  });
+  }));
 }
 
 export async function setDocCommentResolved(actor: Actor, pageId: string, commentId: string, resolved: boolean, provenance?: Provenance): Promise<DocComment> {
   assertDocsWrite(actor);
-  return withActor(actor, async (db) => {
+  return guarded(resolved ? "Couldn't resolve the comment. Try again." : "Couldn't reopen the comment. Try again.", () => withActor(actor, async (db) => {
     const page = await openPage(db, actor, pageId);
     const target = await loadComment(db, page.id, commentId, true);
     const rootId = target.parent_id ?? target.id;
@@ -147,18 +156,18 @@ export async function setDocCommentResolved(actor: Actor, pageId: string, commen
     await db.query("update crm.page_comments set resolved_at = $2, resolved_by = $3 where id = $1", [rootId, resolved ? new Date() : null, resolved && actor.type === "user" ? actor.userId : null]);
     await auditDoc(db, actor, resolved ? "page.comment_resolved" : "page.comment_reopened", page, provenance, { commentId: rootId });
     return mapComment(await loadComment(db, page.id, rootId));
-  });
+  }));
 }
 
 export async function deleteDocComment(actor: Actor, pageId: string, commentId: string, provenance?: Provenance): Promise<{ id: string; deleted: true }> {
   assertDocsWrite(actor);
-  return withActor(actor, async (db) => {
+  return guarded("Couldn't delete the comment. Try again.", () => withActor(actor, async (db) => {
     const page = await openPage(db, actor, pageId);
     const target = await loadComment(db, page.id, commentId, true);
     await db.query("update crm.page_comments set deleted_at = now() where id = $1", [target.id]);
     await auditDoc(db, actor, "page.comment_deleted", page, provenance, { commentId: target.id, parentId: target.parent_id });
     return { id: target.id, deleted: true };
-  });
+  }));
 }
 
 export type DocCommentView = {

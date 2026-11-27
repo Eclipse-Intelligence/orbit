@@ -86,7 +86,7 @@ create policy page_comments_member_update on crm.page_comments
     and exists (select 1 from crm.pages p where p.id = page_comments.page_id and p.workspace_id = page_comments.workspace_id)
   )
   with check (
-    (resolved_by is null or resolved_by = (select private.session_user_id()))
+    (resolved_by is null or resolved_by = (select private.session_user_id()) or deleted_at is not null)
     and (parent_id is null or resolved_at is null)
     and exists (select 1 from crm.pages p where p.id = page_comments.page_id and p.workspace_id = page_comments.workspace_id)
   );
@@ -99,7 +99,7 @@ create policy page_comments_agent_update on crm.page_comments
     and exists (select 1 from crm.pages p where p.id = page_comments.page_id and p.workspace_id = page_comments.workspace_id)
   )
   with check (
-    resolved_by is null
+    (resolved_by is null or deleted_at is not null)
     and (parent_id is null or resolved_at is null)
     and exists (select 1 from crm.pages p where p.id = page_comments.page_id and p.workspace_id = page_comments.workspace_id)
   );

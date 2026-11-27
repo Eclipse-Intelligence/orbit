@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { EditorSelection, EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { setCommentMarks, type CommentMark } from "@/lib/docs/editor/comment-highlights";
+import { setCommentMarks, withoutCommentMarks, type CommentMark } from "@/lib/docs/editor/comment-highlights";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import NotePicker, { type PickerHandle } from "@/components/docs/note-picker";
 import PhoneToolbar from "@/components/docs/phone-toolbar";
@@ -55,7 +55,7 @@ onDocsReset(() => {
 
 function remember(id: string, state: EditorState, epoch: number, live: CachedLive | null) {
   if (useDocsStore.getState().unavailable[id]) return;
-  states.remember(id, { state, live }, epoch, liveId);
+  states.remember(id, { state: withoutCommentMarks(state), live }, epoch, liveId);
 }
 
 function classicReader(id: string, fallback: { title: string; body: string }) {
