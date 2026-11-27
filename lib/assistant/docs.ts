@@ -22,7 +22,7 @@ import { siteOrigin } from "@/lib/site-url";
 type Args = Record<string, unknown>;
 type Names = (id: unknown) => string;
 
-export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "publish", "unpublish", "set_timer", "allow_download", "block_download", "set_public_ending", "clear_public_ending", "archive", "append_daily"] as const;
+export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "publish", "unpublish", "set_timer", "allow_download", "block_download", "allow_comments", "block_comments", "set_public_ending", "clear_public_ending", "archive", "append_daily"] as const;
 export type SaveDocAction = (typeof SAVE_DOC_ACTIONS)[number];
 
 export const UNATTENDED_DOC_ACTIONS: readonly SaveDocAction[] = ["replace", "append", "edit", "tag"];
@@ -313,6 +313,12 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     }
     case "block_download":
       return result("Stop downloads", [doc, "Readers can no longer download it as a PDF."]);
+    case "allow_comments": {
+      const live = docId ? known(name, `${docId}:public`) === "yes" : true;
+      return result("Allow comments", [doc, "Readers can comment and reply. Everyone on the link sees them.", live ? "" : "The public link is off, so nobody can read it yet."]);
+    }
+    case "block_comments":
+      return result("Stop comments", [doc, "Readers can no longer comment or reply. Existing comments are kept."]);
     case "set_public_ending": {
       const slug = str(args.slug).toLowerCase();
       return result(`Change the public link to ${(siteOrigin() ?? "").replace(/^https?:\/\//, "")}${publicPath(slug)}`, [
@@ -344,6 +350,7 @@ function summaryOf(doc: DocSummary) {
     visibility: doc.visibility,
     public: doc.public,
     allowDownload: doc.allowDownload,
+    allowComments: doc.allowComments,
     publicUrl: doc.publicUrl,
     publicSlug: doc.publicSlug,
     publicExpiresAt: doc.publicExpiresAt,
@@ -481,7 +488,7 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
     const result = await shareDoc(actor, requireDoc(args), action === "share", provenance());
     return { saved: true, doc: summaryOf(result.doc), visibility: result.visibility };
   }
-  if (action === "publish" || action === "unpublish" || action === "set_timer" || action === "allow_download" || action === "block_download") {
+  if (action === "publish" || action === "unpublish" || action === "set_timer" || action === "allow_download" || action === "block_download" || action === "allow_comments" || action === "block_comments") {
     const timer = action === "publish" || action === "set_timer" ? timerOf(args) : { day: null, problem: null };
     if (timer.problem) throw new CrmError("invalid_input", timer.problem, 400, { field: "expiresAt" });
     const docId = requireDoc(args);
@@ -495,7 +502,9 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
           ? { public: false }
           : action === "set_timer"
             ? { expiresAt: timer.day }
-            : { allowDownload: action === "allow_download" };
+            : action === "allow_download" || action === "block_download"
+              ? { allowDownload: action === "allow_download" }
+              : { allowComments: action === "allow_comments" };
     return { saved: true, doc: summaryOf(await setDocPublic(actor, docId, input, provenance())) };
   }
   if (action === "set_public_ending" || action === "clear_public_ending") {

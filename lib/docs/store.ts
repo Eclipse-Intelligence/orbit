@@ -97,6 +97,7 @@ export type PageRow = {
   tags: string[];
   public_enabled: boolean;
   allow_download: boolean;
+  allow_comments: boolean;
   public_token_enc: string | null;
   public_slug: string | null;
   public_slug_retired: boolean;
@@ -115,7 +116,7 @@ const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text a
   p.edited_by_user_id, coalesce(nullif(editor.full_name, ''), editor.email) as editor_name, p.edited_by_agent_id,
   agent.name as agent_name, p.versioned_at, p.archived_at, p.created_by_agent_id, creator.name as creator_agent_name,
   coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags,
-  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.public_token_enc, p.public_slug, p.public_slug_retired, p.public_enabled as public_stored,
+  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.allow_comments, p.public_token_enc, p.public_slug, p.public_slug_retired, p.public_enabled as public_stored,
   case when p.public_enabled then p.public_expires_at end as public_expires_at`;
 
 const PAGE_JOINS = `crm.pages p
@@ -189,6 +190,7 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
     assistantCanEdit: row.assistant_can_edit,
     public: row.public_enabled,
     allowDownload: row.allow_download,
+    allowComments: row.allow_comments,
     publicUrl: publicUrlOf(row),
     publicSlug: row.public_slug,
     publicOldLinks: row.public_slug_retired,
@@ -1148,6 +1150,7 @@ export type DocUpdateInput = {
   shared?: boolean;
   public?: boolean;
   allowDownload?: boolean;
+  allowComments?: boolean;
   expiresAt?: string | null;
   slug?: string | null;
   baseRevision?: number;
@@ -1168,8 +1171,8 @@ export async function updateDoc(actor: Actor, id: string, input: DocUpdateInput,
       visibility = (await moveIn(db, actor, await loadPage(db, actor, id, { lock: true }), { folderId: input.folderId, allowVisibilityChange: input.allowVisibilityChange }, provenance)).visibility;
     }
     if (input.shared !== undefined) visibility = (await shareIn(db, actor, await loadPage(db, actor, id, { lock: true }), input.shared, provenance)).visibility;
-    if (input.public !== undefined || input.allowDownload !== undefined || input.expiresAt !== undefined || input.slug !== undefined) {
-      await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), { public: input.public, allowDownload: input.allowDownload, expiresAt: input.expiresAt, slug: input.slug }, provenance);
+    if (input.public !== undefined || input.allowDownload !== undefined || input.allowComments !== undefined || input.expiresAt !== undefined || input.slug !== undefined) {
+      await publicIn(db, actor, await loadPage(db, actor, id, { lock: true }), { public: input.public, allowDownload: input.allowDownload, allowComments: input.allowComments, expiresAt: input.expiresAt, slug: input.slug }, provenance);
     }
     return { doc: await docDetail(db, actor, id), visibility, linksUpdated };
   });
@@ -1285,6 +1288,7 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
   if (page.archived_at) throw new CrmError("invalid_input", "This note is archived. Restore it first.", 400);
   const enabled = input.public ?? page.public_enabled;
   const allowDownload = input.allowDownload ?? page.allow_download;
+  const allowComments = input.allowComments ?? page.allow_comments;
   const ranOut = page.public_stored && !page.public_enabled;
   let expiresAt: Date | null = page.public_expires_at;
   if (typeof input.expiresAt === "string") {
@@ -1306,27 +1310,27 @@ async function publicIn(db: Db, actor: Actor, page: FullPageRow, input: DocPubli
   }
   const slugChanged = slug !== page.public_slug;
   if (slugChanged && !enabled) throw new CrmError("invalid_input", "Turn the public link on to change its ending.", 400, { field: "slug" });
-  if (enabled === page.public_enabled && allowDownload === page.allow_download && !timerChanged && !slugChanged) return page;
+  if (enabled === page.public_enabled && allowDownload === page.allow_download && allowComments === page.allow_comments && !timerChanged && !slugChanged) return page;
   if (ranOut && enabled === page.public_enabled && !timerChanged) {
-    await db.query("update crm.pages set allow_download = $2 where id = $1", [page.id, allowDownload]);
+    await db.query("update crm.pages set allow_download = $2, allow_comments = $3 where id = $1", [page.id, allowDownload, allowComments]);
     return loadPage(db, actor, page.id);
   }
   try {
     if (enabled && !page.public_token_enc) {
       const sealed = sealPublicToken(newPublicToken());
       await db.query(
-        "update crm.pages set public_enabled = true, allow_download = $2, public_token_hash = $3, public_token_enc = $4, public_expires_at = $5, public_slug = $6 where id = $1",
-        [page.id, allowDownload, sealed.hash, sealed.sealed, expiresAt, slug],
+        "update crm.pages set public_enabled = true, allow_download = $2, allow_comments = $7, public_token_hash = $3, public_token_enc = $4, public_expires_at = $5, public_slug = $6 where id = $1",
+        [page.id, allowDownload, sealed.hash, sealed.sealed, expiresAt, slug, allowComments],
       );
     } else {
-      await db.query("update crm.pages set public_enabled = $2, allow_download = $3, public_expires_at = $4, public_slug = $5 where id = $1", [page.id, enabled, allowDownload, expiresAt, slug]);
+      await db.query("update crm.pages set public_enabled = $2, allow_download = $3, allow_comments = $6, public_expires_at = $4, public_slug = $5 where id = $1", [page.id, enabled, allowDownload, expiresAt, slug, allowComments]);
     }
   } catch (error) {
     if (isPgError(error) && error.code === "23505") throw new CrmError("conflict", ENDING_TAKEN, 409, { field: "slug" });
     throw error;
   }
   const after = await loadPage(db, actor, page.id);
-  await auditDoc(db, actor, "page.public_changed", after, provenance, { public: after.public_enabled, allowDownload: after.allow_download, expiresAt: iso(after.public_expires_at), slug: after.public_slug });
+  await auditDoc(db, actor, "page.public_changed", after, provenance, { public: after.public_enabled, allowDownload: after.allow_download, allowComments: after.allow_comments, expiresAt: iso(after.public_expires_at), slug: after.public_slug });
   return after;
 }
 

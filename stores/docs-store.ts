@@ -41,7 +41,7 @@ export type VisibilityPrompt = {
 
 const publicSeq = new Map<string, number>();
 
-type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "publicExpiresAt"> & Partial<Pick<PageSummary, "publicUrl" | "publicSlug" | "publicOldLinks">>;
+type PublicPatch = Pick<PageSummary, "public" | "allowDownload" | "allowComments" | "publicExpiresAt"> & Partial<Pick<PageSummary, "publicUrl" | "publicSlug" | "publicOldLinks">>;
 
 function withEnding(url: string | null, slug: string) {
   return url ? url.replace(/\/d\/[^/]*$/, `/d/${slug}`) : url;
@@ -190,6 +190,7 @@ function summaryFrom(page: Page): PageSummary {
     entryCount: page.entryCount,
     public: page.public,
     allowDownload: page.allowDownload,
+    allowComments: page.allowComments,
     publicUrl: page.publicUrl,
     publicSlug: page.publicSlug,
     publicOldLinks: page.publicOldLinks,
@@ -657,6 +658,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       patchPublic({
         public: enabled,
         allowDownload: input.allowDownload ?? before.allowDownload,
+        allowComments: input.allowComments ?? before.allowComments,
         publicExpiresAt,
         ...(endingChanged
           ? {
@@ -673,6 +675,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         patchPublic({
           public: page.public,
           allowDownload: page.allowDownload,
+          allowComments: page.allowComments,
           publicUrl: page.publicUrl,
           publicSlug: page.publicSlug,
           publicOldLinks: page.publicOldLinks,
@@ -687,6 +690,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
           patchPublic({
             public: before.public,
             allowDownload: before.allowDownload,
+            allowComments: before.allowComments,
             publicUrl: before.publicUrl,
             publicSlug: before.publicSlug,
             publicOldLinks: before.publicOldLinks,

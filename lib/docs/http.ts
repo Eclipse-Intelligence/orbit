@@ -261,13 +261,14 @@ export function publicInputOf(value: unknown): PublicInput {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalid();
   const input = value as Record<string, unknown>;
   const keys = Object.keys(input);
-  if (keys.length === 0 || keys.some((key) => key !== "public" && key !== "allowDownload" && key !== "expiresAt" && key !== "slug")) throw invalid();
+  if (keys.length === 0 || keys.some((key) => key !== "public" && key !== "allowDownload" && key !== "allowComments" && key !== "expiresAt" && key !== "slug")) throw invalid();
   const badValue = (key: string) =>
     key === "expiresAt" ? input[key] !== null && !isExpiryDay(input[key]) : key === "slug" ? input[key] !== null && typeof input[key] !== "string" : typeof input[key] !== "boolean";
   if (keys.some(badValue)) throw invalid();
   return {
     public: input.public as boolean | undefined,
     allowDownload: input.allowDownload as boolean | undefined,
+    allowComments: input.allowComments as boolean | undefined,
     expiresAt: input.expiresAt as string | null | undefined,
     slug: input.slug as string | null | undefined,
   };

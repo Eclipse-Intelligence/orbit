@@ -262,6 +262,15 @@ function PublicLink({ summary, escapeRef }: { summary: PageSummary; escapeRef: {
             <Switch checked={summary.allowDownload} disabled={!owned || saving} onChange={(value) => void change({ allowDownload: value })} label="Allow download" className="hit" />
           </div>
         )}
+        {live && (
+          <div className="flex items-center gap-3 pl-11">
+            <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+              <span className="text-foreground text-[13px] leading-5 font-medium">Allow comments</span>
+              <span className="caption-style text-subtle">Readers can comment and reply. Everyone on the link sees them.</span>
+            </span>
+            <Switch checked={summary.allowComments} disabled={!owned || saving} onChange={(value) => void change({ allowComments: value })} label="Allow comments" className="hit" />
+          </div>
+        )}
         {error && (
           <p role="alert" className="caption-style text-danger">
             {error}

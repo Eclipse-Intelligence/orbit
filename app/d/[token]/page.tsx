@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 import Button from "@/components/_ui/button";
+import PublicComments from "@/components/docs/public-comments";
 import { PublicNote } from "@/components/docs/static-note";
 import { openPublicDoc } from "@/lib/docs/public";
 import { availabilityLabel } from "@/lib/docs/public-expiry";
@@ -25,26 +26,33 @@ export default async function PublicDocPage({ params }: { params: Promise<{ toke
   const doc = await loadDoc(token);
   if (!doc) notFound();
   if (doc.redirectTo) redirect(doc.redirectTo);
+  const content = (
+    <>
+      <div className="flex items-center gap-3">
+        <span className="caption-style text-subtle flex-1">{updatedLabel(doc.updatedAt)}</span>
+        {doc.allowDownload && (
+          <Button variant="secondary" size="sm" href={`/api/d/${token}/pdf`} className="hit">
+            Download PDF
+          </Button>
+        )}
+      </div>
+      {doc.expiresAt && (
+        <span className="caption-style text-soft bg-surface-raised flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1.5">
+          <ClockIcon aria-hidden className="size-3" />
+          {availabilityLabel(doc.expiresAt)}
+        </span>
+      )}
+      <h1 className="note-title note-public-title">{doc.title}</h1>
+      <PublicNote body={doc.content} />
+    </>
+  );
   return (
     <main className="bg-background min-h-dvh">
-      <article className="note-surface mx-auto flex w-full max-w-[46em] flex-col gap-4 px-4 pt-8 pb-20 md:px-6 md:pt-14">
-        <div className="flex items-center gap-3">
-          <span className="caption-style text-subtle flex-1">{updatedLabel(doc.updatedAt)}</span>
-          {doc.allowDownload && (
-            <Button variant="secondary" size="sm" href={`/api/d/${token}/pdf`} className="hit">
-              Download PDF
-            </Button>
-          )}
-        </div>
-        {doc.expiresAt && (
-          <span className="caption-style text-soft bg-surface-raised flex w-fit items-center gap-1.5 rounded-lg px-2.5 py-1.5">
-            <ClockIcon aria-hidden className="size-3" />
-            {availabilityLabel(doc.expiresAt)}
-          </span>
-        )}
-        <h1 className="note-title note-public-title">{doc.title}</h1>
-        <PublicNote body={doc.content} />
-      </article>
+      {doc.allowComments ? (
+        <PublicComments token={token}>{content}</PublicComments>
+      ) : (
+        <article className="note-surface mx-auto flex w-full max-w-[46em] flex-col gap-4 px-4 pt-8 pb-20 md:px-6 md:pt-14">{content}</article>
+      )}
     </main>
   );
 }

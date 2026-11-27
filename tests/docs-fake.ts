@@ -105,6 +105,7 @@ type Row = {
   assistantCanEdit: boolean;
   public: boolean;
   allowDownload: boolean;
+  allowComments: boolean;
   publicExpiresAt: string | null;
   publicSlug: string | null;
   publicOldLinks: boolean;
@@ -175,6 +176,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       assistantCanEdit: false,
       public: false,
       allowDownload: false,
+      allowComments: false,
       publicExpiresAt: null,
       publicSlug: null,
       publicOldLinks: false,
@@ -199,6 +201,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       assistantCanEdit: false,
       public: false,
       allowDownload: false,
+      allowComments: false,
       publicExpiresAt: null,
       publicSlug: null,
       publicOldLinks: false,
@@ -226,6 +229,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       assistantCanEdit: false,
       public: false,
       allowDownload: false,
+      allowComments: false,
       publicExpiresAt: null,
       publicSlug: null,
       publicOldLinks: false,
@@ -275,7 +279,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
 
   function summary(row: Row): PageSummary {
     const shared = row.kind === "note" && (row.visibility === "shared" || folderShared(row.folderId));
-    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}:${row.public}:${row.allowDownload}:${row.publicExpiresAt}:${row.publicSlug}`;
+    const key = `${row.id}:${row.revision}:${row.title}:${row.folderId}:${row.visibility}:${shared}:${row.updatedAt}:${row.public}:${row.allowDownload}:${row.allowComments}:${row.publicExpiresAt}:${row.publicSlug}`;
     const cached = summaryCache.get(row.id);
     if (cached?.key === key) return cached.value;
     const value: PageSummary = {
@@ -296,6 +300,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       entryCount: entryCount(row.body),
       public: row.public,
       allowDownload: row.allowDownload,
+      allowComments: row.allowComments,
       publicUrl: row.public ? `https://orbit.test/d/${row.publicSlug ?? row.id}` : null,
       publicSlug: row.publicSlug,
       publicOldLinks: row.publicOldLinks,
@@ -561,6 +566,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
         assistantCanEdit: false,
         public: false,
       allowDownload: false,
+      allowComments: false,
       publicExpiresAt: null,
       publicSlug: null,
       publicOldLinks: false,
@@ -609,6 +615,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       else if (enabled !== row.public) row.publicExpiresAt = null;
       row.public = enabled;
       row.allowDownload = input.allowDownload ?? row.allowDownload;
+      row.allowComments = input.allowComments ?? row.allowComments;
       if (input.slug !== undefined && input.slug !== row.publicSlug) {
         if (row.publicSlug) row.publicOldLinks = true;
         row.publicSlug = input.slug;
@@ -704,6 +711,7 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
           assistantCanEdit: false,
           public: false,
           allowDownload: false,
+      allowComments: false,
           publicExpiresAt: null,
           publicSlug: null,
           publicOldLinks: false,
