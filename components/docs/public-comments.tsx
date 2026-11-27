@@ -38,6 +38,10 @@ function subscribeWide(notify: () => void) {
   return () => media.removeEventListener("change", notify);
 }
 
+function stopAt(blocks: HTMLElement[], block: HTMLElement) {
+  for (const other of blocks) other.tabIndex = other === block ? 0 : -1;
+}
+
 function startOf(placed: Placed) {
   return placed.match.status === "found" ? placed.match.start : Number.MAX_SAFE_INTEGER;
 }
@@ -66,6 +70,8 @@ export default function PublicComments({ token, children }: { token: string; chi
   const articleRef = useRef<HTMLElement>(null);
   const asideRef = useRef<HTMLElement>(null);
   const visitorRef = useRef<Visitor | null>(null);
+  const blocksRef = useRef<HTMLElement[]>([]);
+  const returnRef = useRef<HTMLElement | null>(null);
   const rangesRef = useRef<Map<string, Range>>(new Map());
   const [name, setName] = useState("");
   const [comments, setComments] = useState<PublicComment[] | null>(null);
@@ -121,11 +127,13 @@ export default function PublicComments({ token, children }: { token: string; chi
   useEffect(() => {
     if (!map) return;
     const blocks = Array.from(articleRef.current?.querySelectorAll<HTMLElement>(`.note-public ${BLOCK_SELECTOR}`) ?? []).filter((block) => blockOffsets(map, block));
-    for (const block of blocks) {
-      block.tabIndex = 0;
+    blocksRef.current = blocks;
+    blocks.forEach((block, position) => {
+      block.tabIndex = position === 0 ? 0 : -1;
       block.classList.add(...FOCUS_CLASSES);
-    }
+    });
     return () => {
+      blocksRef.current = [];
       for (const block of blocks) {
         block.removeAttribute("tabindex");
         block.classList.remove(...FOCUS_CLASSES);
@@ -245,6 +253,13 @@ export default function PublicComments({ token, children }: { token: string; chi
   }, [map]);
 
   useEffect(() => {
+    if (draft || !returnRef.current) return;
+    const block = returnRef.current;
+    returnRef.current = null;
+    block.focus();
+  }, [draft]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setActiveId(null);
@@ -300,15 +315,28 @@ export default function PublicComments({ token, children }: { token: string; chi
 
   function onArticleFocus(event: ReactFocusEvent) {
     const block = event.target as HTMLElement;
-    if (block.matches?.(BLOCK_SELECTOR) && articleRef.current?.querySelector(".note-public")?.contains(block)) hover(block);
+    if (!blocksRef.current.includes(block) || !block.matches(":focus-visible")) return;
+    stopAt(blocksRef.current, block);
+    hover(block);
   }
 
   function onArticleKey(event: ReactKeyboardEvent) {
     const block = event.target as HTMLElement;
-    if (event.key !== "Enter" || !block.matches?.(BLOCK_SELECTOR) || !map || draft) return;
+    const position = blocksRef.current.indexOf(block);
+    if (position === -1 || !map || draft) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const next = blocksRef.current[position + (event.key === "ArrowDown" ? 1 : -1)];
+      if (!next) return;
+      event.preventDefault();
+      stopAt(blocksRef.current, next);
+      next.focus();
+      return;
+    }
+    if (event.key !== "Enter") return;
     const offsets = blockOffsets(map, block);
     if (!offsets) return;
     event.preventDefault();
+    returnRef.current = block;
     beginDraft(offsets.start, offsets.end);
   }
 

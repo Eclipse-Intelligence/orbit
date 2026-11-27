@@ -95,6 +95,12 @@ function occurrences(text: string, needle: string) {
   return found;
 }
 
+function bothSidesMatch(text: string, start: number, end: number, anchor: CommentAnchor) {
+  const before = commonSuffix(text.slice(Math.max(0, start - anchor.prefix.length), start), anchor.prefix);
+  const after = commonPrefix(text.slice(end, end + anchor.suffix.length), anchor.suffix);
+  return before >= Math.min(SHORT_QUOTE_SCORE, anchor.prefix.length) && after >= Math.min(SHORT_QUOTE_SCORE, anchor.suffix.length);
+}
+
 function contextScore(text: string, start: number, end: number, anchor: CommentAnchor) {
   return (
     commonSuffix(text.slice(Math.max(0, start - anchor.prefix.length), start), anchor.prefix) +
@@ -184,14 +190,12 @@ function approximateMatch(text: string, anchor: CommentAnchor): AnchorMatch | nu
     column = next;
     originColumn = nextOrigin;
   }
-  const needed = Math.min(SHORT_QUOTE_SCORE, anchor.prefix.length + anchor.suffix.length);
-  if (needed === 0) return null;
   let best: { start: number; end: number; distance: number; gap: number } | null = null;
   for (const candidate of candidates) {
     const start = from + candidate.begin;
     const end = from + candidate.end;
     if (end <= start || text.slice(start, end).trim().length === 0) continue;
-    if (contextScore(text, start, end, anchor) < needed) continue;
+    if (!bothSidesMatch(text, start, end, anchor)) continue;
     const gap = Math.abs(start - anchor.at);
     if (!best || candidate.distance < best.distance || (candidate.distance === best.distance && gap < best.gap)) best = { start, end, distance: candidate.distance, gap };
   }

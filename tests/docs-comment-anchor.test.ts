@@ -275,12 +275,11 @@ describe("resolving anchors", () => {
     assert.equal(edited.slice(result.start, result.end), "said hello to the whole room");
   });
 
-  it("keeps a comment when one side of the context and a typo both changed", () => {
+  it("orphans a comment when one side of the context and the quote both changed", () => {
     const text = "We expect the quartely results to arrive soon after the board meeting ends.";
     const { anchor } = anchorFor(text, "quartely results to arrive");
     const edited = "Rewritten opening, then the quarterly results to arrive soon after the board meeting ends.";
-    const result = found(edited, anchor);
-    assert.ok(edited.slice(result.start, result.end).includes("quarterly"));
+    assert.deepEqual(resolveAnchor(edited, anchor), { status: "orphaned" });
   });
 
   it("orphans a comment whose text was deleted", () => {
@@ -312,6 +311,36 @@ describe("resolving anchors", () => {
     assert.equal(kept.status, "found");
     const moved = "Other opening.\nA new place: will receive the proposal tomorrow, they said.\nOther closing.";
     assert.deepEqual(resolveAnchor(moved, anchor), { status: "orphaned" });
+  });
+
+  it("deleting a block never moves its comment to the next similar block", () => {
+    const legal = "Notes.\nAction: send the contract to legal by Friday.\nAction: send the contract to sales by Monday.\nEnd.";
+    const first = anchorFor(legal, "Action: send the contract to legal by Friday.");
+    assert.deepEqual(resolveAnchor("Notes.\nAction: send the contract to sales by Monday.\nEnd.", first.anchor), { status: "orphaned" });
+    const calls = "Call Alice\nCall Bob\nCall Carl about the invoice";
+    const bob = anchorFor(calls, "Call Bob");
+    assert.deepEqual(resolveAnchor("Call Alice\nCall Carl about the invoice", bob.anchor), { status: "orphaned" });
+  });
+
+  it("keeps a typo fix attached in a one-block doc with no context", () => {
+    const single = createAnchor("recieve the parcel", 0, 18);
+    assert.ok(single);
+    const result = found("receive the parcel", single);
+    assert.equal(result.fuzzy, true);
+    assert.equal(result.start, 0);
+  });
+
+  it("keeps typo fixes at the start and end of a block attached", () => {
+    const text = "Intro paragraph here.\nrecieve the parcel on Friday morning please\nClosing paragraph here.";
+    const start = anchorFor(text, "recieve the parcel on Friday");
+    const fixedStart = text.replace("recieve", "receive");
+    const startMatch = found(fixedStart, start.anchor);
+    assert.ok(fixedStart.slice(startMatch.start, startMatch.end).startsWith("receive"));
+    const endText = "Intro paragraph here.\nPlease check the parcel on Friday recieve\nClosing paragraph here.";
+    const end = anchorFor(endText, "check the parcel on Friday recieve");
+    const fixedEnd = endText.replace("recieve", "receive");
+    const endMatch = found(fixedEnd, end.anchor);
+    assert.ok(fixedEnd.slice(endMatch.start, endMatch.end).endsWith("receive"));
   });
 
   it("orphans a comment whose text was rewritten completely", () => {
