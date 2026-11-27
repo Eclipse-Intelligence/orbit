@@ -102,6 +102,7 @@ export function toSummary(actor: UserActor, doc: DocSummary, entries = 0): PageS
     entryCount: entries,
     public: doc.public,
     allowDownload: doc.allowDownload,
+    allowComments: doc.allowComments,
     publicUrl: doc.publicUrl,
     publicSlug: doc.publicSlug,
     publicOldLinks: doc.publicOldLinks,

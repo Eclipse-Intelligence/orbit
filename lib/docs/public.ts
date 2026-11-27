@@ -3,13 +3,14 @@ import { renderDocPdf } from "@/lib/docs/pdf";
 import { decryptSecret } from "@/lib/crypto/secret";
 import { publicPath } from "@/lib/docs/public-link";
 
-export type PublicDoc = { title: string; content: string; updatedAt: string; allowDownload: boolean; expiresAt: string | null; redirectTo: string | null };
+export type PublicDoc = { title: string; content: string; updatedAt: string; allowDownload: boolean; allowComments: boolean; expiresAt: string | null; redirectTo: string | null };
 
 type PublicRow = {
   title: string;
   content: string;
   edited_at: Date;
   allow_download: boolean;
+  allow_comments: boolean;
   expires_at: Date | null;
   public_slug: string | null;
   forward_token_enc: string | null;
@@ -32,6 +33,7 @@ export async function openPublicDoc(value: string): Promise<PublicDoc | null> {
     content: row.content,
     updatedAt: row.edited_at.toISOString(),
     allowDownload: row.allow_download,
+    allowComments: row.allow_comments,
     expiresAt: row.expires_at ? row.expires_at.toISOString() : null,
     redirectTo: redirectOf(value, row),
   };

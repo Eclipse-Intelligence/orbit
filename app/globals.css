@@ -1560,3 +1560,12 @@ html[data-sidebar-resizing] * {
     display: none;
   }
 }
+
+::highlight(doc-comment) {
+  background-color: rgb(250 204 21 / 0.16);
+}
+
+::highlight(doc-comment-active),
+::highlight(doc-comment-draft) {
+  background-color: rgb(250 204 21 / 0.32);
+}

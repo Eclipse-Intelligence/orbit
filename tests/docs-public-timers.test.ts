@@ -477,7 +477,7 @@ describe("Public doc timers: API, MCP and assistant", () => {
     const publish = { action: "publish", docId: doc.id, expiresAt: day };
     const publishCard = describeAction("save_doc", publish, await recordNames(mark, [publish], ["save_doc"]));
     assert.equal(publishCard.title, `Turn on the public link until ${label}`);
-    assert.deepEqual(publishCard.lines, ["Assistant timer", `Anyone with the link can read it until ${label}. Download stays off.`]);
+    assert.deepEqual(publishCard.lines, ["Assistant timer", `Anyone with the link can read it until ${label}. Download stays off. Comments stay off.`]);
     const published = (await runTool(mark, "save_doc", publish)) as { saved: boolean; doc: { public: boolean; publicExpiresAt: string } };
     assert.equal(published.saved, true);
     assert.equal(published.doc.public, true);

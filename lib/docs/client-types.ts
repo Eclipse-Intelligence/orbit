@@ -29,7 +29,7 @@ export type Folder = {
 
 export type TagNode = TagTreeNode;
 
-export type PublicInput = { public?: boolean; allowDownload?: boolean; expiresAt?: string | null; slug?: string | null };
+export type PublicInput = { public?: boolean; allowDownload?: boolean; allowComments?: boolean; expiresAt?: string | null; slug?: string | null };
 
 export type PageKind = "note" | "daily";
 
@@ -51,6 +51,7 @@ export type PageSummary = {
   entryCount: number;
   public: boolean;
   allowDownload: boolean;
+  allowComments: boolean;
   publicUrl: string | null;
   publicSlug: string | null;
   publicOldLinks: boolean;

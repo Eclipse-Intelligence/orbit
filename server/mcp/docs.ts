@@ -56,6 +56,7 @@ function summary(doc: DocSummary) {
     visibility: doc.visibility,
     public: doc.public,
     allowDownload: doc.allowDownload,
+    allowComments: doc.allowComments,
     publicUrl: doc.publicUrl,
     publicSlug: doc.publicSlug,
     publicExpiresAt: doc.publicExpiresAt,
@@ -277,15 +278,15 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
     "set_doc_public",
     {
       description:
-        "Turns a doc's public read-only link on or off, whether readers can download it as a PDF, and when it turns itself off. The random link never changes: turning it off makes it show not found, and turning it on again brings the same link back with no timer. slug gives it a readable ending (/d/<slug>) while the link is on: 3 to 40 lowercase letters, numbers and single hyphens, unique across Orbit and not a reserved word like admin; send null to go back to the random link. The random link and every earlier ending keep working and forward to the current one, and an earlier ending can never be taken by another doc. Docs report publicUrl with the current ending and publicSlug. expires_at is a date as YYYY-MM-DD (today or later): the link stops working at midnight UK time at the end of that day. Send it with public true to set it when turning the link on, or alone to change it while the link is on, and send null to remove it. Docs report publicExpiresAt, and once the timer runs out they report public false. Anyone with the link can read the doc's current text, with @mentions shown as plain names and [[links]] and #tags as plain text. Only the owner can change it (a workspace agent token only on docs it made); daily notes can't be public. Download is off until you turn it on.",
-      inputSchema: { id: z.uuid(), public: z.boolean().optional(), allow_download: z.boolean().optional(), expires_at: z.string().max(10).nullable().optional(), slug: z.string().max(200).nullable().optional(), provenanceUrl },
+        "Turns a doc's public read-only link on or off, whether readers can download it as a PDF, whether readers can comment and reply (allow_comments, off to start with and kept when the link goes off and on), and when it turns itself off. The random link never changes: turning it off makes it show not found, and turning it on again brings the same link back with no timer. slug gives it a readable ending (/d/<slug>) while the link is on: 3 to 40 lowercase letters, numbers and single hyphens, unique across Orbit and not a reserved word like admin; send null to go back to the random link. The random link and every earlier ending keep working and forward to the current one, and an earlier ending can never be taken by another doc. Docs report publicUrl with the current ending and publicSlug. expires_at is a date as YYYY-MM-DD (today or later): the link stops working at midnight UK time at the end of that day. Send it with public true to set it when turning the link on, or alone to change it while the link is on, and send null to remove it. Docs report publicExpiresAt, and once the timer runs out they report public false. Anyone with the link can read the doc's current text, with @mentions shown as plain names and [[links]] and #tags as plain text. Only the owner can change it (a workspace agent token only on docs it made); daily notes can't be public. Download is off until you turn it on.",
+      inputSchema: { id: z.uuid(), public: z.boolean().optional(), allow_download: z.boolean().optional(), allow_comments: z.boolean().optional(), expires_at: z.string().max(10).nullable().optional(), slug: z.string().max(200).nullable().optional(), provenanceUrl },
     },
     async (args) =>
       run(async () => {
-        if (args.public === undefined && args.allow_download === undefined && args.expires_at === undefined && args.slug === undefined) {
-          throw new CrmError("invalid_input", "Send at least one of public, allow_download, expires_at or slug.", 400, { field: "public" });
+        if (args.public === undefined && args.allow_download === undefined && args.allow_comments === undefined && args.expires_at === undefined && args.slug === undefined) {
+          throw new CrmError("invalid_input", "Send at least one of public, allow_download, allow_comments, expires_at or slug.", 400, { field: "public" });
         }
-        const doc = await setDocPublic(actor, args.id, { public: args.public, allowDownload: args.allow_download, expiresAt: args.expires_at, slug: args.slug }, provenance("set_doc_public", args.provenanceUrl));
+        const doc = await setDocPublic(actor, args.id, { public: args.public, allowDownload: args.allow_download, allowComments: args.allow_comments, expiresAt: args.expires_at, slug: args.slug }, provenance("set_doc_public", args.provenanceUrl));
         return { doc: summary(doc) };
       }),
   );

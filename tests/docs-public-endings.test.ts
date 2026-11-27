@@ -361,7 +361,7 @@ describe("Public doc endings: old links", () => {
     const { id } = await publish(mark, "Narrow");
     await setDocPublic(mark, id, { slug: "narrow-ending" });
     const columns = await getAdminPool().query("select * from private.public_page_link('narrow-ending')");
-    assert.deepEqual(columns.fields.map((field) => field.name), ["title", "content", "edited_at", "allow_download", "expires_at", "public_slug", "forward_token_enc"]);
+    assert.deepEqual(columns.fields.map((field) => field.name), ["title", "content", "edited_at", "allow_download", "expires_at", "public_slug", "forward_token_enc", "allow_comments"]);
     assert.equal(columns.rows[0].forward_token_enc, null);
     const opened = await openPublicDoc("narrow-ending");
     assert.ok(!JSON.stringify(opened).includes(id));
@@ -582,7 +582,7 @@ describe("Public doc endings: API, MCP and assistant", () => {
       const cleared = (await personal.call("set_doc_public", { id: doc.id, slug: null })).value!.doc as { publicSlug: string | null; publicUrl: string };
       assert.equal(cleared.publicSlug, null);
       assert.match(cleared.publicUrl, /\/d\/[A-Za-z0-9_-]{32}$/);
-      assert.match((await personal.call("set_doc_public", { id: doc.id })).error ?? "", /Send at least one of public, allow_download, expires_at or slug\./);
+      assert.match((await personal.call("set_doc_public", { id: doc.id })).error ?? "", /Send at least one of public, allow_download, allow_comments, expires_at or slug\./);
     } finally {
       await personal.close();
       await workspace.close();
