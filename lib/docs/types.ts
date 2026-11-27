@@ -70,6 +70,8 @@ export type DocSummary = {
   public: boolean;
   allowDownload: boolean;
   allowComments: boolean;
+  openComments: number;
+  commentCount: number;
   publicUrl: string | null;
   publicSlug: string | null;
   publicOldLinks: boolean;

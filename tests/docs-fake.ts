@@ -301,6 +301,8 @@ export function createFakeDocs(options: FakeOptions): DocsData & { snapshot(limi
       public: row.public,
       allowDownload: row.allowDownload,
       allowComments: row.allowComments,
+      openComments: 0,
+      commentCount: 0,
       publicUrl: row.public ? `https://orbit.test/d/${row.publicSlug ?? row.id}` : null,
       publicSlug: row.publicSlug,
       publicOldLinks: row.publicOldLinks,

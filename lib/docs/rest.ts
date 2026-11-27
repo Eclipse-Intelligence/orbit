@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import type { Actor, Provenance } from "@/lib/crm/types";
 import { integerParam, parseInput } from "@/lib/crm/validation";
+import { deleteDocComment, readDocComments, replyToDocComment, setDocCommentResolved } from "@/lib/docs/comments";
 import { searchDocs } from "@/lib/docs/search";
 import { archiveDoc, createDoc, getDoc, listDocs, readDoc, updateDoc } from "@/lib/docs/store";
 import { DOC_SORTS, type DocEdit, type DocSort } from "@/lib/docs/types";
@@ -108,4 +109,29 @@ export async function patchDocFromBody(actor: Actor, id: string, body: unknown) 
 
 export async function archiveDocById(actor: Actor, id: string) {
   return { doc: await archiveDoc(actor, id, { operation: "archive_doc", source: "api" }) };
+}
+
+const replySchema = z.object({ body: z.string().max(10_000), provenance: provenanceSchema.optional() }).strict();
+const resolveSchema = z.object({ resolved: z.boolean(), provenance: provenanceSchema.optional() }).strict();
+const removeSchema = z.object({ provenance: provenanceSchema.optional() }).strict();
+
+export async function listCommentsFromRest(actor: Actor, id: string) {
+  return readDocComments(actor, id);
+}
+
+export async function replyFromBody(actor: Actor, id: string, commentId: string, body: unknown) {
+  const input = parseInput(replySchema, body);
+  const comment = await replyToDocComment(actor, id, commentId, { body: input.body }, provenanceOf("reply_to_doc_comment", input.provenance));
+  return { comment };
+}
+
+export async function resolveFromBody(actor: Actor, id: string, commentId: string, body: unknown) {
+  const input = parseInput(resolveSchema, body);
+  const comment = await setDocCommentResolved(actor, id, commentId, input.resolved, provenanceOf(input.resolved ? "resolve_doc_comment" : "reopen_doc_comment", input.provenance));
+  return { comment };
+}
+
+export async function deleteCommentFromRest(actor: Actor, id: string, commentId: string, body: unknown) {
+  const input = parseInput(removeSchema, body ?? {});
+  return deleteDocComment(actor, id, commentId, provenanceOf("delete_doc_comment", input.provenance));
 }

@@ -526,11 +526,11 @@ describe("Public doc comments: reading and writing", () => {
 describe("Public doc comments: the database", () => {
   useServerlessPool();
 
-  it("gives signed-in roles no access to the table or the functions", async () => {
+  it("gives signed-in roles no way to read key hashes or write a root comment, and no access to the functions", async () => {
     const { id, token } = await publish(mark, "Closed");
     await root(token, newKey());
     await assert.rejects(queryAsUser(mark.userId, "select * from crm.page_comments"), /permission denied/);
-    await assert.rejects(queryAsUser(mark.userId, "insert into crm.page_comments (workspace_id, page_id, author_name, body) values ($1, $2, 'x', 'y')", [mark.workspaceId, id]), /permission denied/);
+    await assert.rejects(queryAsUser(mark.userId, "insert into crm.page_comments (workspace_id, page_id, author_name, body) values ($1, $2, 'x', 'y')", [mark.workspaceId, id]), /row-level security/);
     await assert.rejects(queryAsUser(mark.userId, "select * from private.public_comments_list($1, null)", [token]), /permission denied/);
     await assert.rejects(queryAsUser(mark.userId, "select * from private.public_comment_add($1, $2, 'x', 'y', null, '{}'::jsonb)", [token, "0".repeat(64)]), /permission denied/);
     await assert.rejects(queryAsUser(mark.userId, "select private.public_comment_delete($1, $2, gen_random_uuid())", [token, "0".repeat(64)]), /permission denied/);

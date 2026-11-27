@@ -46,7 +46,7 @@ const noLoneSurrogate = (value: string) => !/[\ud800-\udbff](?![\udc00-\udfff])|
 const WELL_FORMED = "Couldn't comment. Try again.";
 const clean = z.string().refine(noLoneSurrogate, WELL_FORMED);
 
-const anchorSchema = z.object({
+export const anchorSchema = z.object({
   quote: clean.min(1).max(ANCHOR_QUOTE_LIMIT),
   prefix: clean.max(ANCHOR_CONTEXT),
   suffix: clean.max(ANCHOR_CONTEXT),

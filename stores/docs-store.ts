@@ -108,6 +108,7 @@ type DocsState = {
   restoreVersion: (pageId: string, versionId: string) => Promise<string | null>;
   setSort: (sort: PageSort) => void;
   setRail: (rail: Rail | null) => void;
+  setCommentCounts: (id: string, open: number, total: number) => void;
   setFocus: (focus: boolean) => void;
   notify: (message: string, options?: { tone?: "status" | "alert"; undo?: () => void }) => void;
   dismissNotice: () => void;
@@ -191,6 +192,8 @@ function summaryFrom(page: Page): PageSummary {
     public: page.public,
     allowDownload: page.allowDownload,
     allowComments: page.allowComments,
+    openComments: page.openComments,
+    commentCount: page.commentCount,
     publicUrl: page.publicUrl,
     publicSlug: page.publicSlug,
     publicOldLinks: page.publicOldLinks,
@@ -793,6 +796,19 @@ export const useDocsStore = create<DocsState>((set, get) => ({
 
   setSort(sort) {
     set({ sort });
+  },
+
+  setCommentCounts(id, open, total) {
+    set((state) => {
+      const patch = { openComments: open, commentCount: total };
+      const summary = state.summaries[id];
+      const page = state.pages[id];
+      if ((!summary || (summary.openComments === open && summary.commentCount === total)) && (!page || (page.openComments === open && page.commentCount === total))) return state;
+      return {
+        summaries: summary ? { ...state.summaries, [id]: { ...summary, ...patch } } : state.summaries,
+        pages: page ? { ...state.pages, [id]: { ...page, ...patch } } : state.pages,
+      };
+    });
   },
 
   setRail(rail) {

@@ -1,6 +1,7 @@
 import { CrmError } from "@/lib/crm/errors";
 import { listDocTasks } from "@/lib/crm/task-docs";
 import type { Provenance, UserActor } from "@/lib/crm/types";
+import { deleteDocComment, listDocComments, replyToDocComment, setDocCommentResolved } from "@/lib/docs/comments";
 import { isExpiryDay } from "@/lib/docs/public-expiry";
 import type { EndingStatus } from "@/lib/docs/public-ending";
 import type { CreateInput, Folder, Page, PageFilter, PageSort, PublicInput, ShareTarget, Visibility } from "@/lib/docs/client-types";
@@ -319,5 +320,18 @@ export const docsChanges = {
   },
   async restoreVersion(actor: UserActor, pageId: string, versionId: string): Promise<Page> {
     return toPage(actor, await restoreVersion(actor, pageId, versionId, PROVENANCE));
+  },
+  async comments(actor: UserActor, pageId: string) {
+    const { comments, allowComments } = await listDocComments(actor, pageId);
+    return { comments, allowComments };
+  },
+  async replyToComment(actor: UserActor, pageId: string, commentId: string, body: string) {
+    return replyToDocComment(actor, pageId, commentId, { body }, PROVENANCE);
+  },
+  async resolveComment(actor: UserActor, pageId: string, commentId: string, resolved: boolean) {
+    return setDocCommentResolved(actor, pageId, commentId, resolved, PROVENANCE);
+  },
+  async deleteComment(actor: UserActor, pageId: string, commentId: string) {
+    return deleteDocComment(actor, pageId, commentId, PROVENANCE);
   },
 };

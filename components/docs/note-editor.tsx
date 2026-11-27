@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { EditorSelection, EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { setCommentMarks, type CommentMark } from "@/lib/docs/editor/comment-highlights";
 import ConfirmDialog from "@/components/_ui/confirm-dialog";
 import NotePicker, { type PickerHandle } from "@/components/docs/note-picker";
 import PhoneToolbar from "@/components/docs/phone-toolbar";
@@ -135,6 +136,14 @@ export function shownBody(id: string) {
 
 export function editorView() {
   return liveView;
+}
+
+export function paintComments(id: string, marks: CommentMark[], scrollTo: number | null) {
+  const view = liveView;
+  if (!view || liveId !== id) return false;
+  const reach = view.state.doc.length;
+  view.dispatch({ effects: [setCommentMarks.of(marks), ...(scrollTo !== null && scrollTo <= reach ? [EditorView.scrollIntoView(scrollTo, { y: "center" })] : [])] });
+  return true;
 }
 
 export function focusNoteText(at: "start" | "end" = "start") {
