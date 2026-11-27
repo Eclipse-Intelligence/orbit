@@ -52,6 +52,22 @@ export async function shareDocsAction(target: ShareTarget, visibility: Visibilit
   return docsAction(await getUserActor(), (actor) => docsChanges.share(actor, target, visibility));
 }
 
+export async function docCommentsAction(pageId: string) {
+  return docsAction(await getUserActor(), (actor) => docsChanges.comments(actor, pageId));
+}
+
+export async function replyToCommentAction(pageId: string, commentId: string, body: string) {
+  return docsAction(await getUserActor(), (actor) => docsChanges.replyToComment(actor, pageId, commentId, body));
+}
+
+export async function resolveCommentAction(pageId: string, commentId: string, resolved: boolean) {
+  return docsAction(await getUserActor(), (actor) => docsChanges.resolveComment(actor, pageId, commentId, resolved));
+}
+
+export async function deleteCommentAction(pageId: string, commentId: string) {
+  return docsAction(await getUserActor(), (actor) => docsChanges.deleteComment(actor, pageId, commentId));
+}
+
 export async function restoreVersionAction(pageId: string, versionId: string) {
   return docsAction(await getUserActor(), (actor) => docsChanges.restoreVersion(actor, pageId, versionId));
 }

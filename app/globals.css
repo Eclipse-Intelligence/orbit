@@ -1569,3 +1569,12 @@ html[data-sidebar-resizing] * {
 ::highlight(doc-comment-draft) {
   background-color: rgb(250 204 21 / 0.32);
 }
+
+.note-comment-mark {
+  background-color: rgb(250 204 21 / 0.16);
+  border-radius: 2px;
+}
+
+.note-comment-mark-active {
+  background-color: rgb(250 204 21 / 0.32);
+}

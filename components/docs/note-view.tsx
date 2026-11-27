@@ -7,6 +7,7 @@ import Button from "@/components/_ui/button";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetTitle } from "@/components/_ui/sheet";
 import { useShortcut } from "@/components/shortcuts/shortcuts-provider";
 import { useDiscussion } from "@/components/chat/use-discussion";
+import { CommentsButton, DocCommentsPanel, PhoneCommentsSheet } from "@/components/docs/doc-comments";
 import { DiscussionButton, DocDiscussionPanel, PhoneDiscussionSheet } from "@/components/docs/doc-discussion";
 import DailyStream from "@/components/docs/daily-stream";
 import { HistoryRail, VersionBanner, VersionPreview, useVersions, type Selected } from "@/components/docs/history";
@@ -23,6 +24,7 @@ import { docsData } from "@/lib/docs/connection";
 import { shiftDate } from "@/lib/docs/daily";
 import { clockTime, createdLabel, editedLabel, longDay, shortDay } from "@/lib/docs/format";
 import { DISCUSSION_PARAM } from "@/lib/chat/discussions";
+import { COMMENT_PARAM, COMMENTS_PARAM } from "@/lib/docs/comment-params";
 import { dailyHref, listHref } from "@/lib/docs/routes";
 import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
@@ -344,7 +346,11 @@ export default function NoteView({
   const daily = Boolean(dailyDate) || (page?.kind ?? summary?.kind) === "daily";
   const discussable = Boolean(page && viewer && !daily && summary?.shared);
   const discussion = useDiscussion("doc", pageId, { id: viewer?.id ?? "", name: viewer?.name ?? "" }, { enabled: discussable });
-  const discussionAsked = useSearchParams().get(DISCUSSION_PARAM) === "1";
+  const searchParams = useSearchParams();
+  const discussionAsked = searchParams.get(DISCUSSION_PARAM) === "1";
+  const commentsAsked = searchParams.get(COMMENTS_PARAM) === "1";
+  const commentsOpen = Boolean(page && viewer && !daily && summary) && commentsAsked;
+  const commentsShown = Boolean(page && viewer && !daily && summary && (summary.commentCount > 0 || summary.allowComments)) || commentsOpen;
   const [bodyWidth, setBodyWidth] = useState(0);
   const observer = useRef<ResizeObserver | null>(null);
   const bodyRef = useCallback((node: HTMLDivElement | null) => {
@@ -356,7 +362,7 @@ export default function NoteView({
     observer.current.observe(node);
   }, []);
   const roomy = bodyWidth >= ROOMY_DISCUSSION_PX;
-  const discussionOpen = discussable && discussionAsked;
+  const discussionOpen = discussable && discussionAsked && !commentsAsked;
   const discussionPushed = useRef(false);
 
   useEffect(() => {
@@ -376,8 +382,10 @@ export default function NoteView({
   function setDiscussing(open: boolean) {
     const params = new URLSearchParams(window.location.search);
     if (open) {
-      if (params.get(DISCUSSION_PARAM) === "1") return;
+      if (params.get(DISCUSSION_PARAM) === "1" && !params.has(COMMENTS_PARAM)) return;
       params.set(DISCUSSION_PARAM, "1");
+      params.delete(COMMENTS_PARAM);
+      params.delete(COMMENT_PARAM);
       discussionPushed.current = true;
       window.history.pushState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
       return;
@@ -395,6 +403,19 @@ export default function NoteView({
 
   function toggleDiscussion() {
     setDiscussing(!discussionOpen);
+  }
+
+  function setComments(open: boolean) {
+    const params = new URLSearchParams(window.location.search);
+    if (open) {
+      params.set(COMMENTS_PARAM, "1");
+      params.delete(DISCUSSION_PARAM);
+    } else {
+      params.delete(COMMENTS_PARAM);
+      params.delete(COMMENT_PARAM);
+    }
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
   }
 
   useEffect(() => {
@@ -427,12 +448,14 @@ export default function NoteView({
 
   function toggleDetails() {
     setDiscussing(false);
-    setRail(detailsPressed && !discussionOpen ? null : "details");
+    setComments(false);
+    setRail(detailsPressed && !discussionOpen && !commentsOpen ? null : "details");
   }
 
   function toggleHistory() {
     setDiscussing(false);
-    if (historyOpen && !discussionOpen) {
+    setComments(false);
+    if (historyOpen && !discussionOpen && !commentsOpen) {
       setSelected(null);
       setRail(wide ? "details" : null);
     } else setRail("history");
@@ -489,7 +512,7 @@ export default function NoteView({
     <NoteRail page={shownPage} steady={streaming} />
   ) : null;
 
-  const railVisible = !focus && !phone && !discussionOpen && (railChosen ? Boolean(rail) : true);
+  const railVisible = !focus && !phone && !discussionOpen && !commentsOpen && (railChosen ? Boolean(rail) : true);
 
   const editor = (current: Page) => (
     <NoteEditor
@@ -539,6 +562,7 @@ export default function NoteView({
         <span className="flex-1" />
         {!focus && <PresenceStack participants={stack} max={3} />}
         {!focus && (daily ? <OnlyYou /> : summary && <PageShare summary={summary} compact />)}
+        {!focus && commentsShown && summary && <CommentsButton open={summary.openComments} total={summary.commentCount} pressed={commentsOpen} compact onClick={() => setComments(!commentsOpen)} />}
         {!focus && discussable && <DiscussionButton discussion={discussion} pressed={discussionOpen} compact onClick={toggleDiscussion} />}
         {focus ? (
           <Button variant="secondary" size="icon" aria-label="Leave focus mode" onClick={() => setFocus(false)}>
@@ -598,13 +622,14 @@ export default function NoteView({
             </span>
           )}
           {!daily && summary && !focus && <PageShare summary={summary} />}
+          {!focus && commentsShown && summary && <CommentsButton open={summary.openComments} total={summary.commentCount} pressed={commentsOpen} onClick={() => setComments(!commentsOpen)} />}
           {!focus && discussable && <DiscussionButton discussion={discussion} pressed={discussionOpen} onClick={toggleDiscussion} />}
           {!focus && (
             <>
-              <ToolButton label="Version history" pressed={historyOpen && !discussionOpen} onClick={toggleHistory}>
+              <ToolButton label="Version history" pressed={historyOpen && !discussionOpen && !commentsOpen} onClick={toggleHistory}>
                 <HistoryIcon aria-hidden className="size-3.5" />
               </ToolButton>
-              <ToolButton label="Backlinks and details" pressed={detailsPressed && !historyOpen && !discussionOpen} onClick={toggleDetails} shortcut="⌘\">
+              <ToolButton label="Backlinks and details" pressed={detailsPressed && !historyOpen && !discussionOpen && !commentsOpen} onClick={toggleDetails} shortcut="⌘\">
                 <SidebarPanelIcon aria-hidden className="size-3.5 -scale-x-100" />
               </ToolButton>
             </>
@@ -708,6 +733,18 @@ export default function NoteView({
             {railContent}
           </aside>
         )}
+        {commentsOpen && page && !focus && !phone && (
+          <aside
+            aria-label="Comments"
+            data-quick-add-hide=""
+            className={cn(
+              "border-border flex min-h-0 w-[22rem] shrink-0 flex-col border-l",
+              !roomy && "bg-background absolute inset-y-0 right-0 z-10 max-w-[calc(100%-2rem)] shadow-[-24px_0_48px_rgba(0,0,0,0.45)]",
+            )}
+          >
+            <DocCommentsPanel key={page.id} pageId={page.id} fallbackBody={page.body} viewerName={viewer?.name ?? ""} onClose={() => setComments(false)} />
+          </aside>
+        )}
         {discussionOpen && !focus && !phone && (
           <aside
             aria-label="Discussion"
@@ -721,6 +758,8 @@ export default function NoteView({
           </aside>
         )}
       </div>
+
+      {page && viewer && <PhoneCommentsSheet open={phone && commentsOpen} pageId={page.id} fallbackBody={page.body} viewerName={viewer.name} onClose={() => setComments(false)} />}
 
       <PhoneDiscussionSheet open={phone && discussionOpen} discussion={discussion} title={title} onClose={() => setDiscussing(false)} />
 

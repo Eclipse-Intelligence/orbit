@@ -14,6 +14,7 @@ import { useDocsStore } from "@/stores/docs-store";
 import { cn } from "@/lib/utils";
 import ChevronDownIcon from "@/public/assets/images/_common/chevron-down.svg";
 import UsersIcon from "@/public/assets/images/companies/sidebar/users.svg";
+import CommentIcon from "@/public/assets/images/docs/comment.svg";
 import GlobeIcon from "@/public/assets/images/docs/globe.svg";
 import LockIcon from "@/public/assets/images/docs/lock.svg";
 
@@ -62,6 +63,16 @@ function PublicGlyph() {
     <span title="Public link on" className="flex shrink-0 items-center">
       <GlobeIcon aria-hidden className="size-3 text-(--tag-green-text)" />
       <span className="sr-only">Public link on</span>
+    </span>
+  );
+}
+
+function CommentGlyph({ count }: { count: number }) {
+  return (
+    <span title={`${count} open ${count === 1 ? "comment" : "comments"}`} className="text-subtle flex shrink-0 items-center gap-0.5 text-[12px] tabular-nums">
+      <CommentIcon aria-hidden className="size-3" />
+      {count}
+      <span className="sr-only">open {count === 1 ? "comment" : "comments"}</span>
     </span>
   );
 }
@@ -131,6 +142,7 @@ export const NoteRow = memo(function NoteRow({
           {sharedAlone && <SharedGlyph label="Shared on its own" />}
           {!summary.shared && folderShared && <PrivateGlyph />}
           {publicOn && <PublicGlyph />}
+          {summary.openComments > 0 && <CommentGlyph count={summary.openComments} />}
           <span className={cn("ml-auto shrink-0 text-[12px] tabular-nums", agent ? "text-[#b9b0ff]" : "text-subtle")}>{agent ? "Now" : when}</span>
         </span>
         {summary.snippet && <span className="text-subtle line-clamp-2 text-[13px] leading-[1.45] max-md:text-[14px]">{summary.snippet}</span>}

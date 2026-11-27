@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import type { Actor, Provenance } from "@/lib/crm/types";
+import { deleteDocComment, readDocComments, replyToDocComment, setDocCommentResolved } from "@/lib/docs/comments";
 import { appendToDailyNote, listDailyNotes, openDailyNote } from "@/lib/docs/daily-notes";
 import { createFolder, listFolders } from "@/lib/docs/folders";
 import { searchDocs } from "@/lib/docs/search";
@@ -57,6 +58,7 @@ function summary(doc: DocSummary) {
     public: doc.public,
     allowDownload: doc.allowDownload,
     allowComments: doc.allowComments,
+    openComments: doc.openComments,
     publicUrl: doc.publicUrl,
     publicSlug: doc.publicSlug,
     publicExpiresAt: doc.publicExpiresAt,
@@ -289,6 +291,46 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
         const doc = await setDocPublic(actor, args.id, { public: args.public, allowDownload: args.allow_download, allowComments: args.allow_comments, expiresAt: args.expires_at, slug: args.slug }, provenance("set_doc_public", args.provenanceUrl));
         return { doc: summary(doc) };
       }),
+  );
+
+  server.registerTool(
+    "list_doc_comments",
+    {
+      description:
+        "Comments on a doc, as threads. Readers of its public link write them on a quote of the text, and teammates and agents reply, resolve and delete them. Each thread has its id, the quote it was written on (null if it has none), status (open or resolved), orphaned (true when the quoted text has since been changed or removed), the author's name and kind (visitor, person or agent), the text, and its replies. Docs report openComments, the number of open threads. Replies from people and agents show on the public link under their names. Covers every doc you can open.",
+      inputSchema: { id: z.uuid() },
+    },
+    async (args) => run(async () => readDocComments(actor, args.id)),
+  );
+
+  server.registerTool(
+    "reply_to_doc_comment",
+    {
+      description: "Replies to a comment on a doc. The reply is public: readers of the doc's public link see it under your name (a workspace agent token's reply shows under the agent's name). Send the id of the thread, or of any comment in it. Up to 2000 characters.",
+      inputSchema: { id: z.uuid(), comment_id: z.uuid(), body: z.string().max(10_000), provenanceUrl },
+    },
+    async (args) => run(async () => ({ comment: await replyToDocComment(actor, args.id, args.comment_id, { body: args.body }, provenance("reply_to_doc_comment", args.provenanceUrl)) })),
+  );
+
+  server.registerTool(
+    "resolve_doc_comment",
+    {
+      description: "Resolves a comment thread on a doc, or with reopen true opens it again. A resolved thread leaves the margin of the public page. Send the id of the thread, or of any comment in it.",
+      inputSchema: { id: z.uuid(), comment_id: z.uuid(), reopen: z.boolean().optional(), provenanceUrl },
+    },
+    async (args) =>
+      run(async () => ({
+        comment: await setDocCommentResolved(actor, args.id, args.comment_id, !args.reopen, provenance(args.reopen ? "reopen_doc_comment" : "resolve_doc_comment", args.provenanceUrl)),
+      })),
+  );
+
+  server.registerTool(
+    "delete_doc_comment",
+    {
+      description: "Deletes a comment from a doc, whoever wrote it. Deleting a thread's first comment removes the whole thread from the public page too. It can't be brought back.",
+      inputSchema: { id: z.uuid(), comment_id: z.uuid(), provenanceUrl },
+    },
+    async (args) => run(async () => deleteDocComment(actor, args.id, args.comment_id, provenance("delete_doc_comment", args.provenanceUrl))),
   );
 
   server.registerTool(

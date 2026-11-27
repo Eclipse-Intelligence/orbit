@@ -9,6 +9,7 @@ import { safeHref } from "@/lib/docs/editor/links";
 import { docsLanguage } from "@/lib/docs/editor/syntax";
 import { activeLines, livePreview } from "@/lib/docs/editor/preview";
 import { external, liveSlot } from "@/lib/docs/editor/live-slot";
+import { commentHighlights } from "@/lib/docs/editor/comment-highlights";
 import { presenceField } from "@/lib/docs/editor/presence";
 import { richPaste } from "@/lib/docs/editor/paste";
 import { noteTables } from "@/lib/docs/editor/tables";
@@ -250,6 +251,7 @@ export function noteExtensions(options: NoteExtensionOptions = {}): Extension[] 
     livePreview({ daily: Boolean(options.daily), resolve: (target) => bridge.resolve(target) }),
     noteTables({ resolve: (target) => bridge.resolve(target) }),
     presenceField,
+    commentHighlights,
     EditorView.lineWrapping,
     editable ? Prec.highest(keymap.of(pickerKeymap)) : [],
     keymap.of([...(editable ? [...markdownKeymap, ...editingKeymap] : []), ...historyKeymap, ...defaultKeymap]),

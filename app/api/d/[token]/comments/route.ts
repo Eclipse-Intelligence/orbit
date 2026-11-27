@@ -1,3 +1,4 @@
+import { scheduleDocAlert } from "@/lib/docs/comment-alerts";
 import { addCommentSchema, addPublicComment, listPublicComments } from "@/lib/docs/public-comments";
 import { badRequest, COMMENT_HEADERS, failure, notFound, readJson, visitor } from "@/lib/docs/public-comments-http";
 
@@ -24,6 +25,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
   try {
     const comment = await addPublicComment(token, key, client, parsed.data);
     if (!comment) return notFound();
+    await scheduleDocAlert(comment.id);
     return Response.json({ comment }, { status: 201, headers: COMMENT_HEADERS });
   } catch (error) {
     return failure(error, "Couldn't comment. Try again.");

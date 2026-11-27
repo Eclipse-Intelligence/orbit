@@ -5,6 +5,7 @@ import { isUuid } from "@/lib/crm/mutate";
 import type { Provenance, UserActor } from "@/lib/crm/types";
 import { appendDailyEntry, localTime } from "@/lib/docs/daily";
 import { appendToDailyNote, getDailyNote } from "@/lib/docs/daily-notes";
+import { commentViews, deleteDocComment, listDocComments, replyToDocComment, setDocCommentResolved } from "@/lib/docs/comments";
 import { changeCounts, lineDiff } from "@/lib/docs/diff";
 import { applyDocEdit } from "@/lib/docs/edits";
 import { getFolder } from "@/lib/docs/folders";
@@ -22,7 +23,7 @@ import { siteOrigin } from "@/lib/site-url";
 type Args = Record<string, unknown>;
 type Names = (id: unknown) => string;
 
-export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "publish", "unpublish", "set_timer", "allow_download", "block_download", "allow_comments", "block_comments", "set_public_ending", "clear_public_ending", "archive", "append_daily"] as const;
+export const SAVE_DOC_ACTIONS = ["create", "replace", "append", "edit", "rename", "move", "tag", "share", "unshare", "publish", "unpublish", "set_timer", "allow_download", "block_download", "allow_comments", "block_comments", "reply_comment", "resolve_comment", "reopen_comment", "delete_comment", "set_public_ending", "clear_public_ending", "archive", "append_daily"] as const;
 export type SaveDocAction = (typeof SAVE_DOC_ACTIONS)[number];
 
 export const UNATTENDED_DOC_ACTIONS: readonly SaveDocAction[] = ["replace", "append", "edit", "tag"];
@@ -110,6 +111,15 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
   const action = actionOf(args);
   const key = diffKey(args);
   const docId = docIdOf(args);
+  const commentId = str(args.commentId);
+  if (docId && isUuid(commentId)) {
+    const found = await listDocComments(actor, docId).catch(() => null);
+    const comment = found?.comments.find((item) => item.id === commentId);
+    if (comment) {
+      out[commentId] = `${comment.authorName}: ${comment.body.replace(/\s+/g, " ").slice(0, 160)}`;
+      out[`${commentId}:first`] = comment.parentId === null ? "yes" : "no";
+    }
+  }
   if (docId) {
     const doc = await getDoc(actor, docId).catch(() => null);
     if (doc) {
@@ -321,6 +331,19 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
     }
     case "block_comments":
       return result("Stop comments", [doc, "Readers can no longer comment or reply. Existing comments are kept."]);
+    case "reply_comment": {
+      const said = str(args.content).replace(/\s+/g, " ");
+      return result(`Reply to a comment on ${doc}`, [
+        said ? `"${said.length > 200 ? `${said.slice(0, 200)}...` : said}"` : "",
+        "Everyone with the public link sees the reply under your name.",
+      ]);
+    }
+    case "resolve_comment":
+      return result(`Resolve a comment on ${doc}`, [known(name, str(args.commentId)) ?? "", "It leaves the margin of the public page."]);
+    case "reopen_comment":
+      return result(`Reopen a comment on ${doc}`, [known(name, str(args.commentId)) ?? "", "It comes back to the margin of the public page."]);
+    case "delete_comment":
+      return result(`Delete a comment on ${doc}`, [known(name, str(args.commentId)) ?? "", `It is removed from the public page too${known(name, `${str(args.commentId)}:first`) === "yes" ? ", with its replies," : ""} and can't be brought back.`]);
     case "set_public_ending": {
       const slug = str(args.slug).toLowerCase();
       return result(`Change the public link to ${(siteOrigin() ?? "").replace(/^https?:\/\//, "")}${publicPath(slug)}`, [
@@ -353,6 +376,7 @@ function summaryOf(doc: DocSummary) {
     public: doc.public,
     allowDownload: doc.allowDownload,
     allowComments: doc.allowComments,
+    openComments: doc.openComments,
     publicUrl: doc.publicUrl,
     publicSlug: doc.publicSlug,
     publicExpiresAt: doc.publicExpiresAt,
@@ -490,6 +514,14 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
     const result = await shareDoc(actor, requireDoc(args), action === "share", provenance());
     return { saved: true, doc: summaryOf(result.doc), visibility: result.visibility };
   }
+  if (action === "reply_comment" || action === "resolve_comment" || action === "reopen_comment" || action === "delete_comment") {
+    const docId = requireDoc(args);
+    const commentId = str(args.commentId);
+    if (!isUuid(commentId)) throw new CrmError("invalid_input", "Say which comment with commentId, from read_knowledge.", 400, { field: "commentId" });
+    if (action === "reply_comment") return { saved: true, comment: await replyToDocComment(actor, docId, commentId, { body: raw(args.content) }, provenance()) };
+    if (action === "delete_comment") return { saved: true, ...(await deleteDocComment(actor, docId, commentId, provenance())) };
+    return { saved: true, comment: await setDocCommentResolved(actor, docId, commentId, action === "resolve_comment", provenance()) };
+  }
   if (action === "publish" || action === "unpublish" || action === "set_timer" || action === "allow_download" || action === "block_download" || action === "allow_comments" || action === "block_comments") {
     const timer = action === "publish" || action === "set_timer" ? timerOf(args) : { day: null, problem: null };
     if (timer.problem) throw new CrmError("invalid_input", timer.problem, 400, { field: "expiresAt" });
@@ -536,10 +568,12 @@ export async function searchDocsForAssistant(actor: UserActor, query: string, li
 
 export async function readDocForAssistant(actor: UserActor, docId: string, offset: number) {
   const result = await readDoc(actor, docId, offset);
+  const comments = result.offset === 0 && result.doc.commentCount > 0 ? await listDocComments(actor, docId) : null;
   return {
     doc: { ...summaryOf(result.doc), owner: result.doc.owner?.name ?? null, mine: result.doc.ownedByMe, editedAt: result.doc.editedAt, characters: result.characters },
     offset: result.offset,
     text: result.text,
     nextOffset: result.nextOffset,
+    ...(comments ? { comments: commentViews(comments.comments, comments.text) } : {}),
   };
 }

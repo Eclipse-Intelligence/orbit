@@ -4,7 +4,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType, keymap, type Decoration
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { previewPlan } from "@/lib/docs/editor/plan";
 import { refreshPreview } from "@/lib/docs/editor/preview";
-import { segmentsBetween, type InlineItem, type StaticSegment } from "@/lib/docs/editor/segments";
+import { segmentRanges, segmentsBetween, type InlineItem, type SegmentRange, type StaticSegment } from "@/lib/docs/editor/segments";
 import { MentionWidget } from "@/lib/docs/editor/widgets";
 
 export type TableAlign = "left" | "center" | "right" | null;
@@ -115,14 +115,25 @@ function unescapePipes(segments: StaticSegment[]): StaticSegment[] {
   return segments.map((segment) => ("text" in segment ? { ...segment, text: segment.text.replace(/\\\|/g, "|") } : segment));
 }
 
+function tableInline(doc: Text, tree: Tree, block: TableBlock, resolve: (target: string) => boolean) {
+  return previewPlan({ doc, tree, from: block.from, to: block.to, active: new Set(), daily: false, resolve }).filter((item): item is InlineItem => item.type !== "line");
+}
+
 export function tableViews({ doc, tree, from = 0, to = doc.length, resolve }: { doc: Text; tree: Tree; from?: number; to?: number; resolve: (target: string) => boolean }): TableView[] {
   const text = doc.toString();
   return findTables(doc, tree, from, to).map((block) => {
-    const items = previewPlan({ doc, tree, from: block.from, to: block.to, active: new Set(), daily: false, resolve }).filter(
-      (item): item is InlineItem => item.type !== "line",
-    );
+    const items = tableInline(doc, tree, block, resolve);
     const cell = (range: CellRange): TableCell => ({ segments: unescapePipes(segmentsBetween(text, items, range.from, range.to)) });
     return { from: block.from, to: block.to, align: block.align, header: block.header.map(cell), rows: block.rows.map((row) => row.map(cell)) };
+  });
+}
+
+export function tableCellRanges({ doc, tree, resolve }: { doc: Text; tree: Tree; resolve: (target: string) => boolean }): { from: number; to: number; cells: SegmentRange[][] }[] {
+  const text = doc.toString();
+  return findTables(doc, tree).map((block) => {
+    const items = tableInline(doc, tree, block, resolve);
+    const cells = [block.header, ...block.rows].flat().map((range) => segmentRanges(text, items, range.from, range.to));
+    return { from: block.from, to: block.to, cells };
   });
 }
 

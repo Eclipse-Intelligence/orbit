@@ -4,7 +4,13 @@ export type StaticSegment = { text: string; className: string; attributes?: Reco
 
 export type InlineItem = Exclude<PlanItem, { type: "line" }>;
 
+export type SegmentRange = { segment: StaticSegment; from: number; to: number };
+
 export function segmentsBetween(text: string, items: InlineItem[], from: number, to: number): StaticSegment[] {
+  return segmentRanges(text, items, from, to).map((range) => range.segment);
+}
+
+export function segmentRanges(text: string, items: InlineItem[], from: number, to: number): SegmentRange[] {
   const within = items.filter((item) => item.from < to && item.to > from);
   const cuts = new Set<number>([from, to]);
   for (const item of within) {
@@ -12,7 +18,7 @@ export function segmentsBetween(text: string, items: InlineItem[], from: number,
     cuts.add(Math.min(to, item.to));
   }
   const points = [...cuts].sort((left, right) => left - right);
-  const segments: StaticSegment[] = [];
+  const segments: SegmentRange[] = [];
   const emitted = new Set<PlanItem>();
   for (let index = 0; index < points.length - 1; index += 1) {
     const start = points[index];
@@ -21,14 +27,14 @@ export function segmentsBetween(text: string, items: InlineItem[], from: number,
     const cover = within.find((item) => (item.type === "hide" || item.type === "widget") && item.from <= start && item.to >= end);
     if (cover) {
       if (cover.type === "widget" && !emitted.has(cover)) {
-        segments.push({ widget: cover.widget });
+        segments.push({ segment: { widget: cover.widget }, from: cover.from, to: cover.to });
         emitted.add(cover);
       }
       continue;
     }
     const marks = within.filter((item): item is Extract<PlanItem, { type: "mark" }> => item.type === "mark" && item.from <= start && item.to >= end);
     const attributes = marks.reduce<Record<string, string> | undefined>((all, item) => (item.attributes ? { ...(all ?? {}), ...item.attributes } : all), undefined);
-    segments.push({ text: text.slice(start, end), className: marks.map((item) => item.className).join(" "), ...(attributes ? { attributes } : {}) });
+    segments.push({ segment: { text: text.slice(start, end), className: marks.map((item) => item.className).join(" "), ...(attributes ? { attributes } : {}) }, from: start, to: end });
   }
   return segments;
 }

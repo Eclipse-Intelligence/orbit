@@ -98,6 +98,8 @@ export type PageRow = {
   public_enabled: boolean;
   allow_download: boolean;
   allow_comments: boolean;
+  open_comments: number;
+  comment_count: number;
   public_token_enc: string | null;
   public_slug: string | null;
   public_slug_retired: boolean;
@@ -116,7 +118,10 @@ const PAGE_FIELDS = `p.id, p.workspace_id, p.kind, p.title, p.daily_date::text a
   p.edited_by_user_id, coalesce(nullif(editor.full_name, ''), editor.email) as editor_name, p.edited_by_agent_id,
   agent.name as agent_name, p.versioned_at, p.archived_at, p.created_by_agent_id, creator.name as creator_agent_name,
   coalesce((select array_agg(t.tag order by t.tag) from crm.page_tags t where t.page_id = p.id), '{}') as tags,
-  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.allow_comments, p.public_token_enc, p.public_slug, p.public_slug_retired, p.public_enabled as public_stored,
+  (p.public_enabled and (p.public_expires_at is null or p.public_expires_at > now())) as public_enabled, p.allow_download, p.allow_comments,
+  (select count(*)::int from crm.page_comments c where c.page_id = p.id and c.parent_id is null and c.deleted_at is null and c.resolved_at is null) as open_comments,
+  (select count(*)::int from crm.page_comments c where c.page_id = p.id and c.parent_id is null and c.deleted_at is null) as comment_count,
+  p.public_token_enc, p.public_slug, p.public_slug_retired, p.public_enabled as public_stored,
   case when p.public_enabled then p.public_expires_at end as public_expires_at`;
 
 const PAGE_JOINS = `crm.pages p
@@ -191,6 +196,8 @@ export function mapPage(actor: Actor, row: PageRow): DocSummary {
     public: row.public_enabled,
     allowDownload: row.allow_download,
     allowComments: row.allow_comments,
+    openComments: row.open_comments,
+    commentCount: row.comment_count,
     publicUrl: publicUrlOf(row),
     publicSlug: row.public_slug,
     publicOldLinks: row.public_slug_retired,
