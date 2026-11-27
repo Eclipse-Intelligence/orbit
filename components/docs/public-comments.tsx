@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import Button from "@/components/_ui/button";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import { Composer, ThreadCard, type CommentActions } from "@/components/docs/comment-cards";
@@ -25,6 +25,7 @@ const GAP = 8;
 const GROUP_GAP = 24;
 const FALLBACK_HEIGHT = 140;
 const HIGHLIGHTS = ["doc-comment", "doc-comment-active", "doc-comment-draft"];
+const FOCUS_CLASSES = ["rounded-md", "outline-none", "focus-visible:ring-2", "focus-visible:ring-ring/60"];
 const ORPHANED: AnchorMatch = { status: "orphaned" };
 
 type Draft = { anchor: CommentAnchor; start: number; end: number };
@@ -116,6 +117,21 @@ export default function PublicComments({ token, children }: { token: string; chi
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [load]);
+
+  useEffect(() => {
+    if (!map) return;
+    const blocks = Array.from(articleRef.current?.querySelectorAll<HTMLElement>(`.note-public ${BLOCK_SELECTOR}`) ?? []).filter((block) => blockOffsets(map, block));
+    for (const block of blocks) {
+      block.tabIndex = 0;
+      block.classList.add(...FOCUS_CLASSES);
+    }
+    return () => {
+      for (const block of blocks) {
+        block.removeAttribute("tabindex");
+        block.classList.remove(...FOCUS_CLASSES);
+      }
+    };
+  }, [map]);
 
   useEffect(() => {
     const article = articleRef.current;
@@ -282,6 +298,20 @@ export default function PublicComments({ token, children }: { token: string; chi
     if (block && note?.contains(block)) hover(block);
   }
 
+  function onArticleFocus(event: ReactFocusEvent) {
+    const block = event.target as HTMLElement;
+    if (block.matches?.(BLOCK_SELECTOR) && articleRef.current?.querySelector(".note-public")?.contains(block)) hover(block);
+  }
+
+  function onArticleKey(event: ReactKeyboardEvent) {
+    const block = event.target as HTMLElement;
+    if (event.key !== "Enter" || !block.matches?.(BLOCK_SELECTOR) || !map || draft) return;
+    const offsets = blockOffsets(map, block);
+    if (!offsets) return;
+    event.preventDefault();
+    beginDraft(offsets.start, offsets.end);
+  }
+
   function onArticleClick(event: ReactMouseEvent) {
     const target = event.target as Element;
     if (target.closest("a, button")) return;
@@ -417,6 +447,8 @@ export default function PublicComments({ token, children }: { token: string; chi
         ref={articleRef}
         onMouseMove={onPointerMove}
         onClick={onArticleClick}
+        onFocus={onArticleFocus}
+        onKeyDown={onArticleKey}
         className="note-surface flex w-full max-w-[46em] min-w-0 flex-col gap-4 px-4 pt-8 pb-20 md:px-6 md:pt-14"
       >
         {children}
@@ -458,6 +490,7 @@ export default function PublicComments({ token, children }: { token: string; chi
           variant="ghost"
           size="icon-sm"
           aria-label="Comment on this block"
+          tabIndex={-1}
           onClick={() => beginDraft(hovered.start, hovered.end)}
           style={{ top: hovered.top, left: hovered.left }}
           className={wide ? "hit text-subtle absolute z-20" : "hit text-subtle bg-popover absolute z-20 ring-1 ring-white/10"}
@@ -486,7 +519,13 @@ export default function PublicComments({ token, children }: { token: string; chi
         </Button>
       )}
       {!wide && (
-        <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <Sheet
+          open={sheetOpen}
+          onOpenChange={(open) => {
+            setSheetOpen(open);
+            if (!open) setDraft(null);
+          }}
+        >
           <SheetContent side="bottom" className="h-[85dvh]">
             <SheetHeader>
               <SheetTitle>Comments</SheetTitle>

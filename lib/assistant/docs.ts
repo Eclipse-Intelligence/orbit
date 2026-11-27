@@ -118,6 +118,7 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
       out[`${docId}:revision`] = String(doc.revision);
       out[`${docId}:public`] = doc.public ? "yes" : "no";
       out[`${docId}:download`] = doc.allowDownload ? "yes" : "no";
+      out[`${docId}:comments`] = doc.allowComments ? "yes" : "no";
       const edit = editFrom(args);
       if (edit) {
         try {
@@ -288,11 +289,12 @@ export function describeDocAction(args: Args, name: Names): { title: string; lin
       return result(`Make ${doc} private`, ["Teammates and agents will no longer see it, unless its folder is shared."]);
     case "publish": {
       const download = docId ? known(name, `${docId}:download`) === "yes" : false;
+      const comments = docId ? known(name, `${docId}:comments`) === "yes" : false;
       const { day } = timerOf(args);
       const until = day && !problem ? expiryDayLabel(day) : null;
       return result(until ? `Turn on the public link until ${until}` : "Turn on the public link", [
         doc,
-        `Anyone with the link can read it${until ? ` until ${until}` : ""}. ${download ? "Download is on." : "Download stays off."}`,
+        `Anyone with the link can read it${until ? ` until ${until}` : ""}. ${download ? "Download is on." : "Download stays off."} ${comments ? "Comments are on." : "Comments stay off."}`,
         problem ? `This won't work yet: ${problem}` : "",
       ]);
     }

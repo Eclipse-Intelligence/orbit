@@ -16,6 +16,7 @@ const KEY_SHAPE = /^[A-Za-z0-9_-]{22,64}$/;
 const MINUTE = 60;
 const DAY = 86_400;
 const INVALID_INPUT = "22023";
+const INVALID_TEXT = new Set(["22P02", "22021", "22P05", "22026"]);
 
 export type PublicComment = {
   id: string;
@@ -41,15 +42,19 @@ type CommentRow = {
   mine: boolean;
 };
 
+const noLoneSurrogate = (value: string) => !/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(value);
+const WELL_FORMED = "Couldn't comment. Try again.";
+const clean = z.string().refine(noLoneSurrogate, WELL_FORMED);
+
 const anchorSchema = z.object({
-  quote: z.string().min(1).max(ANCHOR_QUOTE_LIMIT),
-  prefix: z.string().max(ANCHOR_CONTEXT),
-  suffix: z.string().max(ANCHOR_CONTEXT),
+  quote: clean.min(1).max(ANCHOR_QUOTE_LIMIT),
+  prefix: clean.max(ANCHOR_CONTEXT),
+  suffix: clean.max(ANCHOR_CONTEXT),
   at: z.number().int().min(0).max(10_000_000),
 });
 
-const nameSchema = z.string().trim().min(1, "Add your name.").max(COMMENT_NAME_LIMIT, `Use a name of ${COMMENT_NAME_LIMIT} characters or fewer.`);
-const bodySchema = z.string().trim().min(1, "Write a comment.").max(COMMENT_BODY_LIMIT, `A comment is ${COMMENT_BODY_LIMIT} characters at most.`);
+const nameSchema = z.string().refine(noLoneSurrogate, WELL_FORMED).trim().min(1, "Add your name.").max(COMMENT_NAME_LIMIT, `Use a name of ${COMMENT_NAME_LIMIT} characters or fewer.`);
+const bodySchema = z.string().refine(noLoneSurrogate, WELL_FORMED).trim().min(1, "Write a comment.").max(COMMENT_BODY_LIMIT, `A comment is ${COMMENT_BODY_LIMIT} characters at most.`);
 
 export const addCommentSchema = z.object({
   name: nameSchema,
@@ -110,15 +115,16 @@ export async function listPublicComments(value: string, key: string | null, clie
   return result.rows.map(mapRow);
 }
 
-async function chargePost(value: string, client: string) {
+async function chargePost(value: string, client: string, adding: boolean) {
   const pageId = await commentsPageId(value);
   if (!pageId) return false;
   if (!(await allow(`doc-comments-ip:${client}`, COMMENT_POSTS_PER_MINUTE_PER_IP, MINUTE))) throw new CrmError("rate_limited", "Too many comments. Wait a minute and try again.", 429);
-  if (!(await allow(`doc-comments-page:${pageId}`, COMMENT_POSTS_PER_DAY_PER_PAGE, DAY))) throw new CrmError("rate_limited", "This doc has had too many comments today. Try again tomorrow.", 429);
+  if (adding && !(await allow(`doc-comments-page:${pageId}`, COMMENT_POSTS_PER_DAY_PER_PAGE, DAY))) throw new CrmError("rate_limited", "This doc has had too many comments today. Try again tomorrow.", 429);
   return true;
 }
 
 function refused(error: unknown): never {
+  if (isPgError(error) && INVALID_TEXT.has(error.code)) throw new CrmError("invalid_input", WELL_FORMED, 400);
   if (isPgError(error) && error.code === INVALID_INPUT) throw new CrmError("invalid_input", error.message, 400);
   throw error;
 }
@@ -129,7 +135,7 @@ export async function addPublicComment(
   client: string,
   input: z.infer<typeof addCommentSchema>,
 ): Promise<PublicComment | null> {
-  if (!isLinkValue(value) || !(await chargePost(value, client))) return null;
+  if (!isLinkValue(value) || !(await chargePost(value, client, true))) return null;
   try {
     const result = await query<CommentRow>("select * from private.public_comment_add($1, $2, $3, $4, $5, $6)", [
       value,
@@ -146,7 +152,7 @@ export async function addPublicComment(
 }
 
 export async function editPublicComment(value: string, key: string, client: string, id: string, body: string): Promise<PublicComment | null> {
-  if (!isLinkValue(value) || !(await chargePost(value, client))) return null;
+  if (!isLinkValue(value) || !(await chargePost(value, client, false))) return null;
   try {
     const result = await query<CommentRow>("select * from private.public_comment_edit($1, $2, $3, $4)", [value, hashVisitorKey(key), id, body]);
     return result.rows[0] ? mapRow(result.rows[0]) : null;
@@ -156,7 +162,7 @@ export async function editPublicComment(value: string, key: string, client: stri
 }
 
 export async function deletePublicComment(value: string, key: string, client: string, id: string): Promise<boolean> {
-  if (!isLinkValue(value) || !(await chargePost(value, client))) return false;
+  if (!isLinkValue(value) || !(await chargePost(value, client, false))) return false;
   const result = await query<{ deleted: boolean }>("select private.public_comment_delete($1, $2, $3) as deleted", [value, hashVisitorKey(key), id]);
   return result.rows[0]?.deleted === true;
 }

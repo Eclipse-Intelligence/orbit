@@ -1,5 +1,13 @@
 set lock_timeout = '5s';
 
+do $$
+begin
+  if not exists (select 1 from pg_roles r where r.rolname = current_user and (r.rolsuper or r.rolbypassrls)) then
+    raise exception 'Run this as a role that bypasses row-level security: the guard trigger and the comment functions read and write crm.pages and crm.page_comments.';
+  end if;
+end;
+$$;
+
 alter table crm.pages add column if not exists allow_comments boolean not null default false;
 
 grant update (allow_comments) on crm.pages to authenticated, crm_agent;

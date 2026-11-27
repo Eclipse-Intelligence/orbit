@@ -180,6 +180,19 @@ describe("creating anchors", () => {
     assert.ok(JSON.stringify(anchor).length < 4000);
   });
 
+  it("never leaves a lone surrogate in any anchor field", () => {
+    const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+    const text = "😀".repeat(40) + " plain words in the middle " + "🎉x".repeat(40) + "😀".repeat(ANCHOR_QUOTE_LIMIT);
+    for (let start = 0; start < 200; start += 1) {
+      for (const length of [1, 2, 3, 31, 32, 33, 64, 65, ANCHOR_QUOTE_LIMIT - 1, ANCHOR_QUOTE_LIMIT, ANCHOR_QUOTE_LIMIT + 1]) {
+        const anchor = createAnchor(text, start, start + length);
+        if (!anchor) continue;
+        for (const field of [anchor.quote, anchor.prefix, anchor.suffix]) assert.ok(!lone.test(field), `lone surrogate at ${start}+${length}`);
+        assert.ok(anchor.quote.length > 0 && anchor.quote.length <= ANCHOR_QUOTE_LIMIT);
+      }
+    }
+  });
+
   it("anchors a whole table and a whole list item from real markup", () => {
     const flat = flatOf(SAMPLE);
     const from = flat.text.indexOf("Name\nAmount");
@@ -274,6 +287,31 @@ describe("resolving anchors", () => {
     const text = "Keep this line.\nThe budget needs another review before launch.\nKeep this too.";
     const { anchor } = anchorFor(text, "budget needs another review before launch");
     assert.deepEqual(resolveAnchor("Keep this line.\nKeep this too.", anchor), { status: "orphaned" });
+  });
+
+  it("does not attach deleted text to similar text with different surroundings", () => {
+    const text = "Intro line.\nPlease send the contract to legal before Friday.\nOutro line.";
+    const { anchor } = anchorFor(text, "send the contract to legal");
+    const elsewhere = "Intro line.\nOutro line.\nSeparately we send the contract to the client on Monday.";
+    assert.deepEqual(resolveAnchor(elsewhere, anchor), { status: "orphaned" });
+    const same = "Intro line.\nOutro line.\nQuite different: send the contract to legal, eventually, maybe.";
+    assert.equal(resolveAnchor(same, anchor).status, "found");
+  });
+
+  it("does not move a short quote to another copy of it after its line is deleted", () => {
+    const text = "Fill in the form carefully now.\nSomething else entirely here.\nWe store the form in a drawer.";
+    const { anchor } = anchorFor(text, "the form");
+    assert.deepEqual(resolveAnchor("Something else entirely here.\nWe store the form in a drawer.", anchor), { status: "orphaned" });
+  });
+
+  it("only accepts an approximate match whose surroundings still match", () => {
+    const text = "Opening paragraph about nothing much.\nThe committee will recieve the proposal tomorrow morning at ten.\nClosing words.";
+    const { anchor } = anchorFor(text, "will recieve the proposal tomorrow");
+    const fixed = text.replace("recieve", "receive");
+    const kept = resolveAnchor(fixed, anchor);
+    assert.equal(kept.status, "found");
+    const moved = "Other opening.\nA new place: will receive the proposal tomorrow, they said.\nOther closing.";
+    assert.deepEqual(resolveAnchor(moved, anchor), { status: "orphaned" });
   });
 
   it("orphans a comment whose text was rewritten completely", () => {

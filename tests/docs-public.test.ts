@@ -440,7 +440,7 @@ describe("Public docs: API, MCP and assistant", () => {
   it("goes through an approval card in the assistant", async () => {
     const doc = await createDoc(mark, { title: "Assistant doc", content: "Body" });
     const publish = { action: "publish", docId: doc.id };
-    assert.deepEqual(describeAction("save_doc", publish, await recordNames(mark, [publish], ["save_doc"])).lines, ["Assistant doc", "Anyone with the link can read it. Download stays off."]);
+    assert.deepEqual(describeAction("save_doc", publish, await recordNames(mark, [publish], ["save_doc"])).lines, ["Assistant doc", "Anyone with the link can read it. Download stays off. Comments stay off."]);
     assert.equal(describeAction("save_doc", publish, await recordNames(mark, [publish], ["save_doc"])).title, "Turn on the public link");
     assert.match(((await runTool(mark, "save_doc", publish, { unattended: true })) as { error: string }).error, /Only edits to a doc's text/);
 
@@ -455,7 +455,7 @@ describe("Public docs: API, MCP and assistant", () => {
     assert.deepEqual(allowCard.lines, ["Assistant doc", "Readers can download it as a PDF."]);
     assert.equal(((await runTool(mark, "save_doc", allow)) as { doc: { allowDownload: boolean } }).doc.allowDownload, true);
     const publishedAgain = { action: "publish", docId: doc.id };
-    assert.deepEqual(describeAction("save_doc", publishedAgain, await recordNames(mark, [publishedAgain], ["save_doc"])).lines[1], "Anyone with the link can read it. Download is on.");
+    assert.deepEqual(describeAction("save_doc", publishedAgain, await recordNames(mark, [publishedAgain], ["save_doc"])).lines[1], "Anyone with the link can read it. Download is on. Comments stay off.");
 
     const block = { action: "block_download", docId: doc.id };
     assert.equal(describeAction("save_doc", block, await recordNames(mark, [block], ["save_doc"])).title, "Stop downloads");

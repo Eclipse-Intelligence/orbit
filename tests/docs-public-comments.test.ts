@@ -227,6 +227,8 @@ describe("Public doc comments: the switch", () => {
     await runTool(mark, "save_doc", { action: "publish", docId: doc.id });
     const allow = { action: "allow_comments", docId: doc.id };
     const card = describeAction("save_doc", allow, await recordNames(mark, [allow], ["save_doc"]));
+    const publishCard = { action: "publish", docId: doc.id };
+    assert.equal(describeAction("save_doc", publishCard, await recordNames(mark, [publishCard], ["save_doc"])).lines[1], "Anyone with the link can read it. Download stays off. Comments stay off.");
     assert.equal(card.title, "Allow comments");
     assert.deepEqual(card.lines, ["Assistant doc", "Readers can comment and reply. Everyone on the link sees them."]);
     assert.match(((await runTool(mark, "save_doc", allow, { unattended: true })) as { error: string }).error, /Only edits to a doc's text/);
@@ -234,6 +236,9 @@ describe("Public doc comments: the switch", () => {
     const block = { action: "block_comments", docId: doc.id };
     assert.equal(describeAction("save_doc", block, await recordNames(mark, [block], ["save_doc"])).title, "Stop comments");
     assert.equal(((await runTool(mark, "save_doc", block)) as { doc: { allowComments: boolean } }).doc.allowComments, false);
+    await runTool(mark, "save_doc", allow);
+    const again = describeAction("save_doc", publishCard, await recordNames(mark, [publishCard], ["save_doc"]));
+    assert.equal(again.lines[1], "Anyone with the link can read it. Download stays off. Comments are on.");
     assert.equal((await getDoc(mark, doc.id)).allowDownload, false);
   });
 
@@ -400,6 +405,18 @@ describe("Public doc comments: reading and writing", () => {
     assert.equal(bad.status, 400);
   });
 
+  it("refuses malformed text with a 400 instead of failing", async () => {
+    const key = newKey();
+    const { token } = await publish(mark, "Surrogates");
+    const lone = "broken \ud83d text";
+    assert.equal((await post(token, key, { name: "Rae", body: lone, anchor: ANCHOR })).status, 400);
+    assert.equal((await post(token, key, { name: lone, body: "Hi", anchor: ANCHOR })).status, 400);
+    assert.equal((await post(token, key, { name: "Rae", body: "Hi", anchor: { ...ANCHOR, prefix: "x\udc00" } })).status, 400);
+    const emoji = await post(token, key, { name: "Rae 😀", body: "Fine 🎉", anchor: { ...ANCHOR, prefix: "😀", suffix: "🎉" } });
+    assert.equal(emoji.status, 201);
+    assert.equal((await post(token, key, { name: "Rae", body: "Still works", anchor: ANCHOR })).status, 201);
+  });
+
   it("keeps comments plain text", async () => {
     const key = newKey();
     const { token } = await publish(mark, "Plain");
@@ -498,6 +515,11 @@ describe("Public doc comments: reading and writing", () => {
     assert.equal(day.status, 429);
     assert.match(day.error ?? "", /too many comments today/);
     assert.equal((await list(token, key, "198.51.100.10")).status, 200);
+
+    const mine = (await list(token, key, "198.51.100.11")).comments[0];
+    const edited = await call("PATCH", token, { key, id: mine.id, body: { body: "Edited after the daily limit" }, ip: "198.51.100.11" });
+    assert.equal(edited.status, 200);
+    assert.equal((await call("DELETE", token, { key, id: mine.id, ip: "198.51.100.11" })).status, 200);
   });
 });
 
