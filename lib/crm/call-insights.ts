@@ -1,6 +1,6 @@
 import { scheduleIndexing } from "@/lib/knowledge/background";
 import { addCallToKnowledge } from "@/lib/knowledge/calls";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
@@ -29,7 +29,9 @@ import { appTimeZone, zonedParts } from "@/lib/time";
 export const TRANSCRIPT_PAGE_LENGTH = 80_000;
 const TRANSCRIPT_OFFSET_MAX = 2_000_000_000;
 const PART_CONCURRENCY = 3;
-const PART_NOTES_TOKENS = 16_000;
+const PART_SIZE = 40_000;
+const PART_NOTES_TOKENS = 4_000;
+const PART_START_MARGIN_MS = 10_000;
 const DEADLINE_SLACK_MS = 8_000;
 export const TRANSCRIPT_TOOL = "get_call_transcript";
 const PROMPT_ROOM = 8_000;
@@ -306,6 +308,10 @@ type LlmSummary = z.infer<typeof llmSchema>;
 
 type Reading = { text: string; notes: boolean };
 
+const LONG_CALL_LABEL = "The transcript:";
+
+const LONG_CALL_NOTE = "(This transcript is too long to read again. The summary, key points and actions below were written from every part of it, so judge from them.)";
+
 const NOTES_LABEL = "Notes on the transcript, in order:";
 
 const NOTES_RULE = `
@@ -318,7 +324,7 @@ Reply with a single JSON object and nothing else: {"notes": string}
 Rules:
 - Write in British English. Use only what this part says; never invent names, figures, dates or commitments.
 - Keep everything a summary could need, in the order it was said: who spoke, the topics, decisions, needs, objections, figures and dates, every commitment (who will do what, with any timing in the speaker's words), and any sign of how the other party feels about the relationship.
-- Plain text in short lines, no Markdown, under 6,000 words.
+- Plain text in short lines, no Markdown, under 1,500 words.
 - Lines may be labelled "Name: text" or unlabelled. The part may start or end in the middle of a conversation.`;
 
 const notesSchema = z.object({ notes: z.string().trim().min(1) });
@@ -346,24 +352,28 @@ export function splitTranscript(text: string, size: number) {
   return parts;
 }
 
-async function inPool<T, R>(items: T[], size: number, run: (item: T, index: number) => Promise<R>) {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(size, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await run(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 function ranOutOfTime(error: unknown, deadline: number | undefined) {
   if (!(error instanceof LlmError)) return false;
   if (error.message === OUT_OF_TIME) return true;
   return error.retryable && deadline !== undefined && Date.now() >= deadline - DEADLINE_SLACK_MS;
+}
+
+type Progress = { hash: string; size: number; levels: (string | null)[][] };
+
+type Report = { progressed: boolean };
+
+function timeShort(deadline: number | undefined) {
+  return deadline !== undefined && deadline - Date.now() < PART_START_MARGIN_MS;
+}
+
+function savedProgress(value: unknown, hash: string): Progress | null {
+  if (!value || typeof value !== "object") return null;
+  const saved = value as Partial<Progress>;
+  if (saved.hash !== hash || saved.size !== PART_SIZE || !Array.isArray(saved.levels)) return null;
+  const levels = saved.levels.map((level) =>
+    Array.isArray(level) ? level.map((note) => (typeof note === "string" && note ? note : null)) : [],
+  );
+  return { hash, size: PART_SIZE, levels };
 }
 
 async function readTranscript(
@@ -371,27 +381,71 @@ async function readTranscript(
   transcript: string,
   actor: Actor,
   options: { fetchImpl?: typeof fetch; deadline?: number },
-): Promise<Reading> {
+  saved: unknown,
+  save: (progress: Progress) => Promise<void>,
+  report: Report,
+): Promise<Reading | null> {
   if (transcript.length <= PART_LENGTH) return { text: transcript, notes: false };
-  let parts = splitTranscript(transcript, PART_LENGTH);
+  const hash = createHash("sha256").update(transcript).digest("hex");
+  const progress = savedProgress(saved, hash) ?? { hash, size: PART_SIZE, levels: [] };
+  let queue: Promise<void> = Promise.resolve();
+  const persist = () => {
+    const snapshot = structuredClone(progress);
+    queue = queue.then(() => save(snapshot));
+  };
+  let input = transcript;
   let size = transcript.length;
-  for (;;) {
-    const notes = await inPool(parts, PART_CONCURRENCY, async (part, index) => {
-      const result = await completeJson({
-        system: PART_PROMPT,
-        user: buildPrompt(call, part, actorName(actor), `Part ${index + 1} of ${parts.length}:`),
-        schema: notesSchema,
-        maxTokens: PART_NOTES_TOKENS,
-        fetchImpl: options.fetchImpl,
-        deadline: options.deadline,
-      });
-      return result.data.notes;
+  for (let level = 0; ; level += 1) {
+    const parts = splitTranscript(input, PART_SIZE);
+    let slots = progress.levels[level];
+    if (!slots || slots.length !== parts.length) {
+      slots = parts.map(() => null);
+      progress.levels[level] = slots;
+      progress.levels.length = level + 1;
+    }
+    const todo = slots.flatMap((note, index) => (note === null ? [index] : []));
+    let next = 0;
+    let stopped = false;
+    let failed = false;
+    let failure: unknown;
+    const workers = Array.from({ length: Math.min(PART_CONCURRENCY, todo.length) }, async () => {
+      while (next < todo.length && !stopped && !failed) {
+        if (timeShort(options.deadline)) {
+          stopped = true;
+          return;
+        }
+        const index = todo[next];
+        next += 1;
+        try {
+          const result = await completeJson({
+            system: PART_PROMPT,
+            user: buildPrompt(call, parts[index], actorName(actor), `Part ${index + 1} of ${parts.length}:`),
+            schema: notesSchema,
+            maxTokens: PART_NOTES_TOKENS,
+            fetchImpl: options.fetchImpl,
+            deadline: options.deadline,
+          });
+          slots[index] = result.data.notes;
+          report.progressed = true;
+          persist();
+        } catch (error) {
+          if (ranOutOfTime(error, options.deadline)) stopped = true;
+          else {
+            failed = true;
+            failure = error;
+          }
+        }
+      }
     });
-    const joined = notes.map((note, index) => `Part ${index + 1} of ${notes.length}:\n${note}`).join("\n\n");
+    await Promise.all(workers);
+    await queue;
+    if (failed) throw failure;
+    if (stopped || slots.some((note) => note === null)) return null;
+    const joined = slots.map((note, index) => `Part ${index + 1} of ${slots.length}:\n${note}`).join("\n\n");
     if (joined.length <= PART_LENGTH) return { text: joined, notes: true };
     if (joined.length >= size) throw new CrmError("internal_error", "Couldn't summarise the call. Try again.", 500);
     size = joined.length;
-    parts = splitTranscript(joined, PART_LENGTH);
+    input = joined;
   }
 }
 
@@ -487,8 +541,8 @@ async function lockInsight(db: Db, where: string, values: unknown[]) {
 }
 
 async function lockInsightWithTranscript(db: Db, activityId: string, workspaceId: string) {
-  const result = await db.query<InsightRow & { transcript: string }>(
-    `select ${INSIGHT_COLUMNS}, i.transcript
+  const result = await db.query<InsightRow & { transcript: string; part_notes: unknown }>(
+    `select ${INSIGHT_COLUMNS}, i.transcript, i.part_notes
      from crm.call_insights i
      where i.activity_id = $1 and i.workspace_id = $2
      for update`,
@@ -521,7 +575,8 @@ async function finishInsight(
          error = $7,
          sentiment = case when $2 = 'ready' then $8 else i.sentiment end,
          sentiment_reason = case when $2 = 'ready' then $9 else i.sentiment_reason end,
-         sentiment_checked_at = case when $2 = 'ready' then now() else i.sentiment_checked_at end
+         sentiment_checked_at = case when $2 = 'ready' then now() else i.sentiment_checked_at end,
+         part_notes = case when $2 = 'ready' then null else i.part_notes end
      where i.id = $1
      returning ${INSIGHT_COLUMNS}`,
     [
@@ -602,15 +657,26 @@ export async function judgeCallSentiment(
     return { call, insight };
   });
   const { call, insight } = prepared;
-  const reading = await readTranscript(call, insight.transcript, actor, options);
+  const long = insight.transcript.length > PART_LENGTH;
+  const written = mapInsight(insight);
   const user = [
-    buildPrompt(call, reading.text, actorName(actor), reading.notes ? NOTES_LABEL : undefined),
+    buildPrompt(call, long ? LONG_CALL_NOTE : insight.transcript, actorName(actor), long ? LONG_CALL_LABEL : undefined),
     "",
     "Summary already written:",
     insight.summary ?? "",
+    ...(long
+      ? [
+          "",
+          "Key points:",
+          ...written.keyPoints.map((point) => `- ${point}`),
+          "",
+          "Actions:",
+          ...written.actionItems.map((item) => `- ${item.title}`),
+        ]
+      : []),
   ].join("\n");
   const result = await completeJson({
-    system: reading.notes ? SENTIMENT_PROMPT + NOTES_RULE : SENTIMENT_PROMPT,
+    system: SENTIMENT_PROMPT,
     user,
     schema: sentimentSchema,
     maxTokens: 400,
@@ -665,15 +731,31 @@ function reusedOutcome(reuse: ReusedSummary) {
   };
 }
 
+async function saveProgress(actor: Actor, insightId: string, progress: Progress) {
+  await withActor(actor, async (db) => {
+    await db.query("update crm.call_insights set part_notes = $2::jsonb where id = $1", [insightId, JSON.stringify(progress)]);
+  });
+}
+
 async function summaryOutcome(
   actor: Actor,
   call: Parameters<typeof buildPrompt>[0],
   transcript: string,
   occurredAt: string,
   options: { fetchImpl?: typeof fetch; deadline?: number },
+  progress: { insightId: string; saved: unknown; report: Report },
 ): Promise<Parameters<typeof finishInsight>[2]> {
   try {
-    const reading = await readTranscript(call, transcript, actor, options);
+    const reading = await readTranscript(
+      call,
+      transcript,
+      actor,
+      options,
+      progress.saved,
+      (snapshot) => saveProgress(actor, progress.insightId, snapshot),
+      progress.report,
+    );
+    if (!reading || timeShort(options.deadline)) return { status: "pending", error: null };
     const result = await completeJson({
       system: reading.notes ? SYSTEM_PROMPT + NOTES_RULE : SYSTEM_PROMPT,
       user: buildPrompt(call, reading.text, actorName(actor), reading.notes ? NOTES_LABEL : undefined),
@@ -704,6 +786,7 @@ export async function summariseCall(
     deadline?: number;
     autoAccept?: boolean;
     reuse?: ReusedSummary | null;
+    report?: Report;
   } = {},
 ): Promise<CallInsight> {
   assertScope(actor.scopes, "activities:write");
@@ -738,7 +821,7 @@ export async function summariseCall(
       );
       current = await lockInsightWithTranscript(db, activityId, actor.workspaceId);
       if (!current) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
-      if (inserted.rows[0]) return { call, insight: mapInsight(current), transcript: text, run: true };
+      if (inserted.rows[0]) return { call, insight: mapInsight(current), transcript: text, saved: null as unknown, run: true };
     }
     if (text && text !== current.transcript) {
       throw new CrmError("conflict", "This call already has a transcript.", 409, {
@@ -746,18 +829,22 @@ export async function summariseCall(
       });
     }
     const stored = current.transcript;
-    if (current.status === "ready") return { call, insight: mapInsight(current), transcript: stored, run: false };
+    if (current.status === "ready") return { call, insight: mapInsight(current), transcript: stored, saved: null as unknown, run: false };
     const updatedAt = new Date(iso(current.updated_at) ?? 0).getTime();
     if (current.status === "pending" && Date.now() - updatedAt < PENDING_STALE_MS) {
-      return { call, insight: mapInsight(current), transcript: stored, run: false };
+      return { call, insight: mapInsight(current), transcript: stored, saved: null as unknown, run: false };
     }
     const insight = await finishInsight(db, current.id, { status: "pending" });
-    return { call, insight, transcript: stored, run: true };
+    return { call, insight, transcript: stored, saved: current.part_notes as unknown, run: true };
   });
   if (!prepared.run) return prepared.insight;
 
   const occurredAt = iso(prepared.call.occurred_at) ?? new Date().toISOString();
-  const outcome = options.reuse ? reusedOutcome(options.reuse) : await summaryOutcome(actor, prepared.call, prepared.transcript, occurredAt, options);
+  const outcome = options.reuse ? reusedOutcome(options.reuse) : await summaryOutcome(actor, prepared.call, prepared.transcript, occurredAt, options, {
+        insightId: prepared.insight.id,
+        saved: prepared.saved,
+        report: options.report ?? { progressed: false },
+      });
   const finished = await withActor(actor, async (db) => {
     const saved = await finishInsight(db, prepared.insight.id, outcome);
     if (saved.status === "ready") {

@@ -1,5 +1,8 @@
 set lock_timeout = '5s';
 
+alter table crm.call_insights add column if not exists part_notes jsonb;
+grant update (part_notes) on crm.call_insights to authenticated, crm_agent;
+
 alter table crm.conversation_imports drop constraint if exists conversation_imports_transcript_length;
 alter table crm.call_insights drop constraint if exists call_insights_transcript_length;
 

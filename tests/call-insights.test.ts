@@ -557,7 +557,7 @@ describe("call insights", () => {
       assert.equal(peak, 3);
     });
 
-    it("asks for enough output for a part's notes", async () => {
+    it("asks for a notes reply that fits a small part", async () => {
       const { owner, callId } = await setup("tokens@example.com");
       const seen: number[] = [];
       const inner = routed(20).fetchImpl;
@@ -568,7 +568,142 @@ describe("call insights", () => {
       };
       await summariseCall(owner, callId, longTranscript(1500), { fetchImpl, autoAccept: false });
       assert.ok(seen.length >= 3);
-      assert.ok(seen.every((tokens) => tokens >= 16_000));
+      assert.ok(seen.every((tokens) => tokens === 4_000));
+    });
+
+    describe("progress across runs", () => {
+      async function importFor(owner: UserActor, callId: string, contactId: string, companyId: string, text: string, key: string) {
+        const result = await getAdminPool().query<{ id: string }>(
+          `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, status, activity_id, contact_id, company_id, transcript)
+           values ($1, $2, 'granola', $3, 'meeting', 'filed', $4, $5, $6, $7) returning id`,
+          [owner.workspaceId, owner.userId, key, callId, contactId, companyId, text],
+        );
+        return result.rows[0].id;
+      }
+
+      async function makeStale(callId: string) {
+        await getAdminPool().query(
+          `begin;
+           alter table crm.call_insights disable trigger call_insights_set_updated_at;
+           update crm.call_insights set updated_at = now() - interval '10 minutes' where activity_id = '${callId}';
+           alter table crm.call_insights enable trigger call_insights_set_updated_at;
+           commit`,
+        );
+      }
+
+      async function attemptsOf(importId: string) {
+        const result = await getAdminPool().query<{ attempts: number }>("select attempts from crm.conversation_imports where id = $1", [importId]);
+        return result.rows[0].attempts;
+      }
+
+      async function savedNotes(callId: string) {
+        const result = await getAdminPool().query<{ part_notes: { hash: string; levels: (string | null)[][] } | null; status: string }>(
+          "select part_notes, status from crm.call_insights where activity_id = $1",
+          [callId],
+        );
+        return result.rows[0];
+      }
+
+      function slowGateway(secondsPerCall: number) {
+        const inner = routed(20);
+        const realNow = Date.now;
+        let skew = 0;
+        const fetchImpl: typeof fetch = async (input, init) => {
+          skew += secondsPerCall * 1000;
+          return inner.fetchImpl(input, init);
+        };
+        return {
+          calls: inner.calls,
+          fetchImpl,
+          withClock: async <T,>(run: (deadline: number) => Promise<T>) => {
+            const start = realNow();
+            Date.now = () => realNow() + skew;
+            try {
+              return await run(start + 25_000);
+            } finally {
+              Date.now = realNow;
+              skew = 0;
+            }
+          },
+        };
+      }
+
+      it("summarises a many-part call over several short runs, saving progress and reading every line once", async () => {
+        const { owner, callId, contactId, companyId } = await setup("progress@example.com");
+        const text = longTranscript(2200);
+        const total = splitTranscript(text, 40_000).length;
+        assert.ok(total >= 12);
+        const importId = await importFor(owner, callId, contactId, companyId, text, "progress-note");
+        const gateway = slowGateway(4);
+        let runs = 0;
+        let previous = 0;
+        for (;;) {
+          runs += 1;
+          assert.ok(runs <= 10, "finishes in a bounded number of runs");
+          const insight = await gateway.withClock((deadline) => summariseImport(owner, importId, { fetchImpl: gateway.fetchImpl, deadline }));
+          if (insight?.status === "ready") break;
+          assert.equal(insight?.status, "pending");
+          const saved = await savedNotes(callId);
+          const done = (saved.part_notes?.levels[0] ?? []).filter((note) => note !== null).length;
+          assert.ok(done > previous, "each run saves new notes");
+          previous = done;
+          assert.ok((await attemptsOf(importId)) < 3);
+          await makeStale(callId);
+        }
+        assert.ok(runs >= 2);
+        const partCalls = gateway.calls.filter(isPart);
+        assert.equal(partCalls.length, total);
+        const sent = partCalls.map((call) => call.user).join("\n");
+        for (let index = 0; index < 2200; index += 1) {
+          assert.equal(sent.split(`marker-${index}-end`).length - 1, 1, `line ${index} reached a part call exactly once`);
+        }
+        const final = gateway.calls[gateway.calls.length - 1];
+        assert.ok(!isPart(final));
+        assert.match(final.user, new RegExp(`Part ${total} of ${total}:`));
+        const saved = await savedNotes(callId);
+        assert.equal(saved.status, "ready");
+        assert.equal(saved.part_notes, null);
+        assert.equal(await attemptsOf(importId), 1);
+      });
+
+      it("discards saved notes when the transcript changes", async () => {
+        const { owner, callId, contactId, companyId } = await setup("changed@example.com");
+        const text = longTranscript(1500);
+        const importId = await importFor(owner, callId, contactId, companyId, text, "changed-note");
+        const gateway = slowGateway(4);
+        const first = await gateway.withClock((deadline) => summariseImport(owner, importId, { fetchImpl: gateway.fetchImpl, deadline }));
+        assert.equal(first?.status, "pending");
+        const before = (await savedNotes(callId)).part_notes;
+        assert.ok(before);
+        const edited = text.replace("marker-0-end", "marker-0-edited");
+        await getAdminPool().query(
+          `begin;
+           alter table crm.call_insights disable trigger call_insights_set_updated_at;
+           update crm.call_insights set transcript = $1, updated_at = now() - interval '10 minutes' where activity_id = $2;
+           alter table crm.call_insights enable trigger call_insights_set_updated_at;
+           commit`.replace("$1", `'${edited}'`).replace("$2", `'${callId}'`),
+        );
+        const again = routed(20);
+        const done = await summariseImport(owner, importId, { fetchImpl: again.fetchImpl, deadline: Date.now() + 120_000 });
+        assert.equal(done?.status, "ready");
+        assert.equal(again.calls.filter(isPart).length, splitTranscript(edited, 40_000).length);
+        assert.ok(again.calls.some((call) => call.user.includes("marker-0-edited")));
+      });
+
+      it("still spends an attempt on a run that saves nothing, so a broken call stops", async () => {
+        const { owner, callId, contactId, companyId } = await setup("noprogress@example.com");
+        const importId = await importFor(owner, callId, contactId, companyId, longTranscript(1500), "noprogress-note");
+        const idle = routed(20);
+        for (let run = 1; run <= 3; run += 1) {
+          const insight = await summariseImport(owner, importId, { fetchImpl: idle.fetchImpl, deadline: Date.now() + 3000 });
+          assert.equal(insight?.status, "pending");
+          assert.equal(await attemptsOf(importId), run);
+          await makeStale(callId);
+        }
+        assert.equal(idle.calls.length, 0);
+        assert.equal(await summarisePendingImports(owner, { fetchImpl: idle.fetchImpl, deadline: Date.now() + 120_000 }), 0);
+        assert.equal(idle.calls.length, 0);
+      });
     });
 
     it("never saves a summary of only part of the call", async () => {
@@ -585,19 +720,21 @@ describe("call insights", () => {
       assert.equal(await getInsightTranscript(owner, again.id), text);
     });
 
-    it("judges the sentiment of a long call from every part", async () => {
+    it("judges the sentiment of a long call from its summary without reading the parts again", async () => {
       const { owner, callId } = await setup("sentiment@example.com");
       const text = longTranscript(1500);
       const first = routed(20);
       const insight = await summariseCall(owner, callId, text, { fetchImpl: first.fetchImpl, autoAccept: false });
+      assert.equal(insight.sentiment, null);
       const judging = routed(20);
       const judged = await judgeCallSentiment(owner, callId, { fetchImpl: judging.fetchImpl });
       assert.equal(judged.id, insight.id);
       assert.equal(judged.sentiment, "watch");
-      const sent = judging.calls.filter(isPart).map((call) => call.user).join("\n");
-      for (let index = 0; index < 1500; index += 1) assert.ok(sent.includes(`marker-${index}-end`));
-      const final = judging.calls[judging.calls.length - 1];
-      assert.match(final.system, /notes, in order, from consecutive parts/);
+      assert.equal(judging.calls.length, 1);
+      assert.ok(!isPart(judging.calls[0]));
+      assert.ok(!judging.calls[0].user.includes("marker-"));
+      assert.match(judging.calls[0].user, new RegExp(GOOD.summary.slice(0, 20)));
+      assert.match(judging.calls[0].user, /Send the revised quote/);
     });
 
     it("splits on line boundaries and loses nothing", () => {

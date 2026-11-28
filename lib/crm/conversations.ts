@@ -1133,6 +1133,7 @@ export async function summariseImport(
   });
   if (!claimed) return null;
   let error: string | null = null;
+  const report = { progressed: false };
   try {
     const insight = await summariseCall(
       actor,
@@ -1143,8 +1144,14 @@ export async function summariseImport(
         fetchImpl: options.fetchImpl,
         deadline: options.deadline,
         reuse: claimed.sibling,
+        report,
       },
     );
+    if (report.progressed && insight.status === "pending") {
+      await withActor(actor, async (db) => {
+        await db.query("update crm.conversation_imports set attempts = greatest(attempts - 1, 0) where id = $1", [importId]);
+      });
+    }
     if (insight.status === "failed") error = insight.error ?? "Couldn't summarise the conversation.";
     await withActor(actor, async (db) => {
       await db.query("update crm.conversation_imports set error = $2 where id = $1", [
