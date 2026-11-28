@@ -4,6 +4,7 @@ import { clientIp } from "@/lib/booking/book";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { query } from "@/lib/db/pool";
 import { ANCHOR_CONTEXT, ANCHOR_QUOTE_LIMIT } from "@/lib/docs/comment-anchor";
+import { renderedText } from "@/lib/docs/editor/source-map";
 
 export const COMMENT_POSTS_PER_MINUTE_PER_IP = 10;
 export const COMMENT_POSTS_PER_DAY_PER_PAGE = 200;
@@ -18,10 +19,13 @@ const DAY = 86_400;
 const INVALID_INPUT = "22023";
 const INVALID_TEXT = new Set(["22P02", "22021", "22P05", "22026"]);
 
+export type PublicAuthorKind = "team" | "visitor";
+
 export type PublicComment = {
   id: string;
   parentId: string | null;
   authorName: string;
+  authorKind: PublicAuthorKind;
   body: string;
   anchor: { quote: string; prefix: string; suffix: string; at: number } | null;
   createdAt: string;
@@ -34,6 +38,7 @@ type CommentRow = {
   id: string;
   parent_id: string | null;
   author_name: string;
+  author_kind?: string;
   body: string;
   anchor: unknown;
   created_at: Date;
@@ -83,6 +88,7 @@ function mapRow(row: CommentRow): PublicComment {
     id: row.id,
     parentId: row.parent_id,
     authorName: row.author_name,
+    authorKind: row.author_kind === "team" ? "team" : "visitor",
     body: row.body,
     anchor: parsed.success ? parsed.data : null,
     createdAt: row.created_at.toISOString(),
@@ -123,6 +129,14 @@ async function chargePost(value: string, client: string, adding: boolean) {
   return true;
 }
 
+const TEXT_CHANGED = "That text has changed. Reload and try again.";
+
+async function quoteIsInDoc(value: string, quote: string) {
+  const result = await query<{ content: string }>("select content from private.public_page_link($1)", [value]);
+  const content = result.rows[0]?.content;
+  return content !== undefined && renderedText(content).includes(quote);
+}
+
 function refused(error: unknown): never {
   if (isPgError(error) && INVALID_TEXT.has(error.code)) throw new CrmError("invalid_input", WELL_FORMED, 400);
   if (isPgError(error) && error.code === INVALID_INPUT) throw new CrmError("invalid_input", error.message, 400);
@@ -136,6 +150,7 @@ export async function addPublicComment(
   input: z.infer<typeof addCommentSchema>,
 ): Promise<PublicComment | null> {
   if (!isLinkValue(value) || !(await chargePost(value, client, true))) return null;
+  if (input.anchor && !input.parentId && !(await quoteIsInDoc(value, input.anchor.quote))) throw new CrmError("invalid_input", TEXT_CHANGED, 400);
   try {
     const result = await query<CommentRow>("select * from private.public_comment_add($1, $2, $3, $4, $5, $6)", [
       value,

@@ -438,7 +438,7 @@ describe("Public doc comments: reading and writing", () => {
     }
     const comments = (JSON.parse(text) as { comments: Wire[] }).comments;
     assert.deepEqual(comments.map((comment) => [comment.body, comment.mine]), [["From the first reader", true], ["From the second reader", false]]);
-    assert.deepEqual(Object.keys(comments[0]).sort(), ["anchor", "authorName", "body", "createdAt", "editedAt", "id", "mine", "parentId", "resolved"]);
+    assert.deepEqual(Object.keys(comments[0]).sort(), ["anchor", "authorKind", "authorName", "body", "createdAt", "editedAt", "id", "mine", "parentId", "resolved"]);
     assert.deepEqual((await list(token)).comments.map((comment) => comment.mine), [false, false]);
     assert.deepEqual((await list(token, "x".repeat(30))).comments.map((comment) => comment.mine), [false, false]);
     const raw = await getAdminPool().query("select visitor_key_hash from crm.page_comments where body = 'From the first reader'");

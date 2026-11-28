@@ -5,6 +5,16 @@ const SHORT_QUOTE = 12;
 const SHORT_QUOTE_SCORE = 6;
 const FUZZY_SHARE = 0.25;
 const FUZZY_CELLS = 6_000_000;
+const MATCH_WORK = 60_000_000;
+const HIT_COST = 32;
+
+export type AnchorBudget = { left: number };
+
+export type ResolveOptions = { budget?: AnchorBudget; fuzzy?: boolean };
+
+export function anchorBudget(): AnchorBudget {
+  return { left: MATCH_WORK };
+}
 
 export type CommentAnchor = { quote: string; prefix: string; suffix: string; at: number };
 
@@ -84,14 +94,17 @@ function commonPrefix(after: string, suffix: string) {
   return count;
 }
 
-function occurrences(text: string, needle: string) {
+function occurrences(text: string, needle: string, budget: AnchorBudget) {
   const found: number[] = [];
   if (!needle) return found;
+  const most = Math.floor(budget.left / HIT_COST);
   let from = text.indexOf(needle);
   while (from !== -1) {
     found.push(from);
+    if (found.length > most) break;
     from = text.indexOf(needle, from + 1);
   }
+  budget.left -= found.length * HIT_COST;
   return found;
 }
 
@@ -108,9 +121,9 @@ function contextScore(text: string, start: number, end: number, anchor: CommentA
   );
 }
 
-function exactMatch(text: string, anchor: CommentAnchor): AnchorMatch | null {
-  const hits = occurrences(text, anchor.quote);
-  if (hits.length === 0) return null;
+function exactMatch(text: string, anchor: CommentAnchor, budget: AnchorBudget): AnchorMatch | null {
+  const hits = occurrences(text, anchor.quote, budget);
+  if (hits.length === 0 || budget.left < 0) return null;
   const hasContext = anchor.prefix.length + anchor.suffix.length > 0;
   let best: { start: number; score: number; distance: number } | null = null;
   for (const start of hits) {
@@ -124,18 +137,19 @@ function exactMatch(text: string, anchor: CommentAnchor): AnchorMatch | null {
   return { status: "found", start: best.start, end: best.start + anchor.quote.length, fuzzy: false };
 }
 
-function contextMatch(text: string, anchor: CommentAnchor): AnchorMatch | null {
+function contextMatch(text: string, anchor: CommentAnchor, budget: AnchorBudget): AnchorMatch | null {
   const prefixTail = anchor.prefix.slice(-TAIL_MATCH);
   const suffixHead = anchor.suffix.slice(0, TAIL_MATCH);
   if (!prefixTail && !suffixHead) return null;
-  const starts = prefixTail ? occurrences(text, prefixTail).map((index) => index + prefixTail.length) : [0];
+  const starts = prefixTail ? occurrences(text, prefixTail, budget).map((index) => index + prefixTail.length) : [0];
+  if (budget.left < 0) return null;
   const reach = anchor.quote.length * 3 + 40;
   let best: { start: number; end: number; distance: number } | null = null;
   for (const start of starts) {
     let end: number | null = null;
     if (suffixHead) {
-      const next = text.indexOf(suffixHead, start);
-      if (next !== -1 && next - start <= reach) end = next;
+      const next = text.slice(start, start + reach + suffixHead.length).indexOf(suffixHead);
+      if (next !== -1 && next <= reach) end = start + next;
     } else if (text.length - start <= reach) {
       end = text.length;
     }
@@ -148,7 +162,7 @@ function contextMatch(text: string, anchor: CommentAnchor): AnchorMatch | null {
   return { status: "found", start: best.start, end: best.end, fuzzy: true };
 }
 
-function approximateMatch(text: string, anchor: CommentAnchor): AnchorMatch | null {
+function approximateMatch(text: string, anchor: CommentAnchor, budget: AnchorBudget): AnchorMatch | null {
   const pattern = anchor.quote;
   const length = pattern.length;
   if (length < 8) return null;
@@ -162,6 +176,8 @@ function approximateMatch(text: string, anchor: CommentAnchor): AnchorMatch | nu
     to = Math.min(text.length, anchor.at + window);
   }
   const slice = text.slice(from, to);
+  if (slice.length * length > budget.left) return null;
+  budget.left -= slice.length * length;
   let column = Array.from({ length: length + 1 }, (_, row) => row);
   const origin = new Array<number>(length + 1).fill(0);
   let originColumn = origin.slice();
@@ -202,9 +218,14 @@ function approximateMatch(text: string, anchor: CommentAnchor): AnchorMatch | nu
   return best ? { status: "found", start: best.start, end: best.end, fuzzy: true } : null;
 }
 
-export function resolveAnchor(text: string, anchor: CommentAnchor): AnchorMatch {
+export function resolveAnchor(text: string, anchor: CommentAnchor, options: ResolveOptions = {}): AnchorMatch {
   if (!anchor.quote) return { status: "orphaned" };
-  return exactMatch(text, anchor) ?? contextMatch(text, anchor) ?? approximateMatch(text, anchor) ?? { status: "orphaned" };
+  const budget = options.budget ?? anchorBudget();
+  if (budget.left <= 0) return { status: "orphaned" };
+  const found = exactMatch(text, anchor, budget) ?? contextMatch(text, anchor, budget);
+  if (found) return found;
+  if (options.fuzzy === false || budget.left <= 0) return { status: "orphaned" };
+  return approximateMatch(text, anchor, budget) ?? { status: "orphaned" };
 }
 
 export type CardSlot = { key: string; top: number; height: number };

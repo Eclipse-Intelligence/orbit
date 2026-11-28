@@ -2,6 +2,7 @@ import fontkit from "@pdf-lib/fontkit";
 import type { SyntaxNode } from "@lezer/common";
 import { PDFDocument, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import { safeHref } from "@/lib/docs/editor/links";
+import { MENTION_ID } from "@/lib/docs/markdown";
 import { docsParser } from "@/lib/docs/editor/syntax";
 import { updatedLabel } from "@/lib/docs/public-link";
 import { loadFonts } from "@/lib/proposals/pdf";
@@ -41,6 +42,7 @@ const MIN_TEXT = 160;
 const MAX_DEPTH = 40;
 const MAX_INDENT = WIDTH - MARGIN * 2 - MIN_TEXT;
 const DEADLINE_MS = 20_000;
+const LONG_LINE = 8000;
 const FAILED = "Couldn't make the PDF. Try again.";
 const INK = rgb(0.11, 0.11, 0.13);
 const MUTED = rgb(0.42, 0.43, 0.47);
@@ -64,16 +66,28 @@ function plain(text: string, style: Partial<Style> = {}): Run {
   return { ...NO_STYLE, ...style, text };
 }
 
-const MENTION_SYNTAX = /@\[([^[\]\n]{1,200})\]\((?:contact|company|task|opportunity|proposal|member):[0-9a-f-]{36}\)/g;
+const MENTION_SYNTAX = new RegExp(String.raw`@\[([^[\]\n]{1,200})\]\((?:contact|company|task|opportunity|proposal|member):${MENTION_ID}\)`, "g");
 const WIKILINK_SYNTAX = /\[\[([^[\]\n]{1,400}?)\]\]/g;
-const LINK_SYNTAX = /!?\[([^\]\n]*)\]\((?:https?:\/\/|mailto:|www\.)[^)\n]*\)/g;
-const HTML_TAG = /<\/?[A-Za-z][\w:-]*(?:\s+[A-Za-z_:][\w:.-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*\/?>|<!--[\s\S]*?-->|<![A-Za-z][^>\n]*>/g;
+const LINK_SYNTAX = /!?\[([^[\]\n]*)\]\((?:https?:\/\/|mailto:|www\.)[^[)\n]*\)/g;
+const HTML_TAG = /<\/?[A-Za-z][\w:-]*(?:\s+[A-Za-z_:][\w:.-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*\/?>|<![A-Za-z][^<>\n]*>/g;
 const DEFINITION = /^ {0,3}\[([^\]\n]+)\]:/gm;
 
 let definitions = new Set<string>();
 
 function referenceKey(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function withoutComments(value: string) {
+  let output = "";
+  let last = 0;
+  for (let open = value.indexOf("<!--"); open >= 0; open = value.indexOf("<!--", last)) {
+    const close = value.indexOf("-->", open + 4);
+    if (close < 0) break;
+    output += value.slice(last, open);
+    last = close + 3;
+  }
+  return last === 0 ? value : output + value.slice(last);
 }
 
 function displayText(raw: string, links = true) {
@@ -143,6 +157,28 @@ function runsOf(text: string, node: SyntaxNode, bold = false) {
   return out;
 }
 
+function breakLongLines(content: string) {
+  if (content.length <= LONG_LINE) return content;
+  return content
+    .split("\n")
+    .map((line) => {
+      if (line.length <= LONG_LINE) return line;
+      const pieces: string[] = [];
+      let from = 0;
+      while (line.length - from > LONG_LINE) {
+        let cut = from + LONG_LINE;
+        while (cut > from + LONG_LINE / 2 && !/\s/.test(line[cut])) cut -= 1;
+        if (!/\s/.test(line[cut])) cut = from + LONG_LINE;
+        pieces.push(line.slice(from, cut));
+        from = cut;
+        while (from < line.length && /\s/.test(line[from])) from += 1;
+      }
+      pieces.push(line.slice(from));
+      return pieces.join("\n");
+    })
+    .join("\n");
+}
+
 export class DocPdfWriter {
   private page: PDFPage;
   private y = TOP;
@@ -150,6 +186,7 @@ export class DocPdfWriter {
   private units = new Map<PDFFont, Map<string, number>>();
   private tables = new Map<string, Prepared>();
   private depth = 0;
+  private steps = 0;
 
   constructor(
     private pdf: PDFDocument,
@@ -163,6 +200,11 @@ export class DocPdfWriter {
 
   private tick() {
     if (Date.now() > this.deadline) throw new PdfDeadlineError();
+  }
+
+  private pulse() {
+    this.steps += 1;
+    if (this.steps % 256 === 0) this.tick();
   }
 
   private addPage() {
@@ -229,6 +271,7 @@ export class DocPdfWriter {
   layout(runs: Run[], size: number, width: number): Word[][] {
     const words: (Word | "\n")[] = [];
     for (const run of runs) {
+      this.tick();
       const font = this.fontFor(run);
       this.clean(run.text)
         .split("\n")
@@ -236,6 +279,7 @@ export class DocPdfWriter {
           if (index > 0) words.push("\n");
           for (const piece of line.split(/(\s+)/)) {
             if (!piece) continue;
+            this.pulse();
             const whole = this.word(piece, font, run);
             if ((whole.units * size) / 1000 <= width) {
               words.push(whole);
@@ -267,6 +311,7 @@ export class DocPdfWriter {
       used = 0;
     };
     for (const word of words) {
+      this.pulse();
       if (word === "\n") {
         close();
         continue;
@@ -356,7 +401,7 @@ export class DocPdfWriter {
     const leading = CODE * 1.5;
     const font = this.fonts.regular;
     this.gap(4);
-    for (const raw of source.replace(/\s+$/, "").split("\n")) {
+    for (const raw of source.trimEnd().split("\n")) {
       const rows: string[] = [];
       let row = "";
       let rowUnits = 0;
@@ -457,8 +502,10 @@ export class DocPdfWriter {
     const natural = new Array<number>(count).fill(0);
     const least = new Array<number>(count).fill(0);
     for (const row of rows) {
+      this.tick();
       row.forEach((cell, column) => {
         for (const line of this.layout(cell, CELL, Number.MAX_SAFE_INTEGER)) {
+          this.pulse();
           natural[column] = Math.max(natural[column], this.lineWidth(line, CELL));
           for (const word of line) if (word.text.trim()) least[column] = Math.max(least[column], this.width(word, CELL));
         }
@@ -612,7 +659,7 @@ export class DocPdfWriter {
     } else if (name === "Table") {
       this.table(node, context);
     } else if (name === "HTMLBlock") {
-      this.paragraph([plain(displayText(this.text.slice(node.from, node.to).replace(HTML_TAG, "")).replace(/\n[ \t]*/g, "\n").trim())], context, { after: 6 });
+      this.paragraph([plain(displayText(withoutComments(this.text.slice(node.from, node.to)).replace(HTML_TAG, "")).replace(/\n[ \t]*/g, "\n").trim())], context, { after: 6 });
     }
   }
 
@@ -646,7 +693,7 @@ export async function renderDocPdf(input: DocPdfInput, options: { deadline?: num
     bold: await pdf.embedFont(files.bold, { subset: true }),
     italic: await pdf.embedFont(files.italic, { subset: true }),
   };
-  const writer = new DocPdfWriter(pdf, fonts, input.content, deadline);
+  const writer = new DocPdfWriter(pdf, fonts, breakLongLines(input.content), deadline);
   const title = input.title.trim() || "Untitled";
   pdf.setTitle(writer.clean(title));
   pdf.setCreator("Orbit");

@@ -14,21 +14,31 @@ export type ParsedDoc = { links: ParsedLink[]; tags: string[]; mentions: Mention
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const WIKILINK = /\[\[([^[\]\n]{1,400}?)\]\]/g;
-const MENTION = /@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):([0-9a-f-]{36})\)/g;
+export const MENTION_ID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const MENTION = new RegExp(String.raw`@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):(${MENTION_ID})\)`, "g");
 const TAG = /#([\p{L}\p{N}_\-/]+)/gu;
 const PARAGRAPH_BREAK = /\n[ \t]*\n/g;
 const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/;
 const PLAIN_TEXT_MAX = 1_000_000;
-const TABLE_RULE = /^[ \t]*\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/gm;
+const TABLE_RULE = /^(?:[ \t]*\|)?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/gm;
 const TABLE_ROW = /^[ \t]*\|.*$/gm;
-const TABLE_PIPE = /\[\[[^\]\n]*\]\]|\\\||\|/g;
+const TABLE_PIPE = /\[\[[^[\]\n]*\]\]|\\\||\|/g;
 const INLINE_MARKUP = /[[<]/;
 export const TAG_BODY = /^#([\p{L}\p{N}_\-/]+)/u;
 export const ENTRY_TIME = /^([01]\d|2[0-3]):([0-5]\d)(?= |$)/;
 export const ENTRY_HEADING = /^(#{1,6})(?:[ \t]+|$)/;
 const ENTRY_BLOCK_START = /^(?:#{1,6}(?:[ \t]|$)|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)|>|`{3,}|~{3,}|\||(?:[-*_][ \t]*){3,}$)/;
 const LETTER = /\p{L}/u;
+const HEADING_START = /^\s{0,3}(#{1,6})(\s+)/;
+
+function stripTagEdges(value: string, leading: boolean) {
+  let start = 0;
+  let end = value.length;
+  while (end > start && (value[end - 1] === "-" || value[end - 1] === "/")) end -= 1;
+  if (leading) while (start < end && value[start] === "/") start += 1;
+  return value.slice(start, end);
+}
 
 function blank(text: string) {
   return text.includes("\n") ? text.replace(/[^\n]/g, " ") : " ".repeat(text.length);
@@ -197,12 +207,7 @@ export function parseMentions(content: string, masked = maskCode(content)): Ment
 }
 
 export function normaliseTag(value: string) {
-  const tag = value
-    .trim()
-    .replace(/^#+/, "")
-    .toLowerCase()
-    .replace(/\/{2,}/g, "/")
-    .replace(/^\/+|[-/]+$/g, "");
+  const tag = stripTagEdges(value.trim().replace(/^#+/, "").toLowerCase().replace(/\/{2,}/g, "/"), true);
   if (!tag || tag.length > DOC_TAG_MAX) return null;
   if (!/^[\p{L}\p{N}_\-/]+$/u.test(tag)) return null;
   if (!LETTER.test(tag)) return null;
@@ -221,7 +226,7 @@ export function findTags(content: string, masked = maskCode(content)): TagMatch[
   for (const match of text.matchAll(TAG)) {
     const start = match.index ?? 0;
     if (!isTagBoundary(start === 0 ? "" : content[start - 1])) continue;
-    const body = match[1].replace(/[-/]+$/, "");
+    const body = stripTagEdges(match[1], false);
     const tag = body ? normaliseTag(body) : null;
     if (!tag) continue;
     found.push({ start, end: start + 1 + body.length, tag });
@@ -320,7 +325,7 @@ export function isTagBoundary(char: string) {
 export function tagAt(text: string) {
   const match = TAG_BODY.exec(text);
   if (!match) return null;
-  const path = match[1].replace(/[-/]+$/, "");
+  const path = stripTagEdges(match[1], false);
   const tag = normaliseTag(path);
   return tag ? { tag, length: 1 + path.length } : null;
 }
@@ -394,8 +399,14 @@ export function headingsIn(content: string): Heading[] {
   maskFences(content)
     .split("\n")
     .forEach((line, index) => {
-      const match = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
-      if (match) found.push({ level: match[1].length, text: plainText(match[2]), line: index });
+      const match = HEADING_START.exec(line);
+      if (!match) return;
+      const rest = line.slice(match[0].length);
+      if (!rest && match[2].length < 2) return;
+      let end = rest.trimEnd().length;
+      while (end > 0 && rest[end - 1] === "#") end -= 1;
+      end = rest.slice(0, end).trimEnd().length;
+      found.push({ level: match[1].length, text: plainText(rest.slice(0, Math.max(end, Math.min(1, rest.length)))), line: index });
     });
   return found;
 }

@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
-import { resolveAnchor, type CommentAnchor } from "@/lib/docs/comment-anchor";
+import { anchorBudget, resolveAnchor, type CommentAnchor } from "@/lib/docs/comment-anchor";
 import { renderedText } from "@/lib/docs/editor/source-map";
 import { anchorSchema, COMMENT_BODY_LIMIT, COMMENT_NAME_LIMIT } from "@/lib/docs/public-comments";
 import { assertDocsRead, assertDocsWrite, auditDoc, loadPage } from "@/lib/docs/store";
@@ -60,12 +60,20 @@ function mapComment(row: CommentRow): DocComment {
 }
 
 function threadsOf(comments: DocComment[], text: string | null = null): DocCommentThread[] {
+  const budget = anchorBudget();
+  const replies = new Map<string, DocComment[]>();
+  for (const comment of comments) {
+    if (comment.parentId === null) continue;
+    const list = replies.get(comment.parentId);
+    if (list) list.push(comment);
+    else replies.set(comment.parentId, [comment]);
+  }
   return comments
     .filter((comment) => comment.parentId === null)
     .map((root) => ({
       root,
-      replies: comments.filter((comment) => comment.parentId === root.id),
-      orphaned: text !== null && root.anchor !== null ? resolveAnchor(text, root.anchor).status === "orphaned" : false,
+      replies: replies.get(root.id) ?? [],
+      orphaned: text !== null && root.anchor !== null ? resolveAnchor(text, root.anchor, { budget, fuzzy: !root.resolved }).status === "orphaned" : false,
     }));
 }
 

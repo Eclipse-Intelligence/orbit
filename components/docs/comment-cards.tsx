@@ -148,8 +148,9 @@ function OneComment({ comment, actions }: { comment: PublicComment; actions: Com
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
         <Avatar name={comment.authorName} />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{comment.authorName}</span>
-        <span className="text-subtle shrink-0 text-[11px]">
+        <span className="min-w-0 truncate text-[13px] font-medium">{comment.authorName}</span>
+        {comment.authorKind === "team" && <span className="bg-white/6 text-soft shrink-0 rounded-md px-1.5 py-0.5 text-[11px] leading-none">Team</span>}
+        <span className="text-subtle ml-auto shrink-0 text-[11px]">
           {agoLabel(comment.createdAt)}
           {comment.editedAt ? " (edited)" : ""}
         </span>
