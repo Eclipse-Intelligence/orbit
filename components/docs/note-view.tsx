@@ -17,7 +17,7 @@ import NoteEditor, { focusNoteText, noteTitle, scheduleNoteSave, setNoteTitle } 
 import NoteRail from "@/components/docs/note-rail";
 import { ParticipantAvatar, PresenceStack } from "@/components/docs/presence";
 import { OnlyYou, PageShare } from "@/components/docs/share-control";
-import { remoteTitleToAdopt } from "@/components/docs/remote-title";
+import { liveRemoteTitle } from "@/components/docs/remote-title";
 import { TITLE_FORBIDDEN, TITLE_RULE, useTitleRename } from "@/components/docs/title-rename";
 import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia, useToday } from "@/components/docs/use-docs";
 import type { Meeting, Page, PageFilter, PageSummary, Participant, Presence } from "@/lib/docs/client-types";
@@ -74,36 +74,25 @@ function contextFor(page: { kind: string; folderId: string | null; dailyDate: st
 }
 
 function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObject<HTMLTextAreaElement | null>; replaced: boolean }) {
-  const remote = useDocsStore((state) => state.remoteTitles[page.id]);
-  const editedAt = useDocsStore((state) => state.titleEdits[page.id] ?? 0);
-  const titleEdited = useDocsStore((state) => state.titleEdited);
-  const [value, setValue] = useState(() => {
-    const shown = replaced ? page.title : (noteTitle(page.id) ?? page.title);
-    return remoteTitleToAdopt(remote, editedAt, shown) ?? shown;
-  });
+  const remote = useDocsStore((state) => liveRemoteTitle(state, page.id));
+  const clearRemoteTitle = useDocsStore((state) => state.clearRemoteTitle);
+  const [value, setValue] = useState(() => remote ?? (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
   const fresh = useDocsStore((state) => state.fresh === page.id);
   const unavailable = useDocsStore((state) => Boolean(state.unavailable[page.id]));
   const [seenRemote, setSeenRemote] = useState(remote);
   const [editing, setEditing] = useState(false);
-  const [waiting, setWaiting] = useState<string | null>(null);
   if (remote !== seenRemote) {
     setSeenRemote(remote);
-    const next = remoteTitleToAdopt(remote, editedAt, value);
-    if (next) {
-      if (editing) setWaiting(next);
-      else setValue(next);
-    }
+    if (remote !== undefined && remote !== value && !editing) setValue(remote);
   }
   const clearFresh = useDocsStore((state) => state.clearFresh);
   const rename = useTitleRename(page.id, page.title, page.kind === "note");
   const adopt = rename.adopt;
-  const adoptedAt = useRef(0);
   useEffect(() => {
-    if (!remote || editing || remote.at <= editedAt || adoptedAt.current >= remote.at) return;
-    adoptedAt.current = remote.at;
-    adopt(remote.title);
-    if (noteTitle(page.id) !== remote.title) setNoteTitle(page.id, remote.title);
-  }, [remote, editedAt, page.id, editing, adopt]);
+    if (remote === undefined || editing) return;
+    adopt(remote);
+    if (noteTitle(page.id) !== remote) setNoteTitle(page.id, remote);
+  }, [remote, page.id, editing, adopt]);
   const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     if (!fresh) return;
@@ -138,8 +127,7 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
           const next = typed.replace(TITLE_FORBIDDEN, "");
           setBlocked(next !== typed);
           setValue(next);
-          setWaiting(null);
-          titleEdited(page.id);
+          clearRemoteTitle(page.id);
           setNoteTitle(page.id, next);
           scheduleNoteSave(page.id, page);
           rename.typed(next);
@@ -147,13 +135,11 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
         onFocus={() => setEditing(true)}
         onBlur={() => {
           setEditing(false);
-          if (waiting !== null && waiting !== value) {
-            setValue(waiting);
-            setNoteTitle(page.id, waiting);
-            adopt(waiting);
-            if (remote) adoptedAt.current = remote.at;
+          if (remote !== undefined && remote !== value) {
+            setValue(remote);
+            setNoteTitle(page.id, remote);
+            adopt(remote);
           }
-          setWaiting(null);
           rename.settle();
         }}
         onKeyDown={(event) => {

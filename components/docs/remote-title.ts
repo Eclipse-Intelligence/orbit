@@ -1,3 +1,4 @@
-export function remoteTitleToAdopt(remote: { title: string; at: number } | undefined, editedAt: number, current: string) {
-  return remote && remote.at > editedAt && remote.title !== current ? remote.title : null;
+export function liveRemoteTitle(state: { remoteTitles: Record<string, string>; pages: Record<string, { title: string }> }, id: string) {
+  const remote = state.remoteTitles[id];
+  return remote !== undefined && state.pages[id]?.title === remote ? remote : undefined;
 }

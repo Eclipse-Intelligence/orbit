@@ -72,8 +72,7 @@ type DocsState = {
   visibilityPrompt: VisibilityPrompt | null;
   liveKind: LiveTransportKind | null;
   live: Record<string, LiveStatus>;
-  remoteTitles: Record<string, { title: string; at: number }>;
-  titleEdits: Record<string, number>;
+  remoteTitles: Record<string, string>;
   unavailable: Record<string, true>;
   init: (seed: DocsSeed, nav: DocsNav) => void;
   seed: (initial: { list: PageFilter; summaries: PageSummary[]; page: Page | null }) => void;
@@ -90,7 +89,7 @@ type DocsState = {
   setLive: (id: string, status: LiveStatus | null) => void;
   liveSaved: (id: string, summary: PageSummary, revision: number) => void;
   remoteTitle: (id: string, title: string) => void;
-  titleEdited: (id: string) => void;
+  clearRemoteTitle: (id: string) => void;
   setUnavailable: (id: string, value: boolean) => void;
   replaceBody: (page: Page, options?: { untracked?: boolean }) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
@@ -208,6 +207,13 @@ function summaryFrom(page: Page): PageSummary {
   };
 }
 
+function withoutKey<T>(record: Record<string, T>, key: string) {
+  if (!(key in record)) return record;
+  const rest = { ...record };
+  delete rest[key];
+  return rest;
+}
+
 function gone(error: unknown) {
   return error instanceof DocsError && (error.code === "not_found" || error.code === "forbidden");
 }
@@ -266,7 +272,6 @@ function blank() {
     liveKind: null,
     live: {},
     remoteTitles: {},
-    titleEdits: {},
     unavailable: {},
   };
 }
@@ -358,7 +363,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         if (current !== session) return page;
         if (page) {
           if (idle(id)) acked.delete(id);
-          set((state) => ((state.pages[id]?.revision ?? 0) > page.revision ? state : { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
+          set((state) => ((state.pages[id]?.revision ?? 0) > page.revision ? state : { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) }, remoteTitles: withoutKey(state.remoteTitles, id) }));
         } else get().forget(id);
         return page;
       })
@@ -477,6 +482,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       pages: { ...state.pages, [page.id]: page },
       summaries: { ...state.summaries, [page.id]: summaryFrom(page) },
       epochs: { ...state.epochs, [page.id]: (state.epochs[page.id] ?? 0) + 1 },
+      remoteTitles: withoutKey(state.remoteTitles, page.id),
     }));
   },
 
@@ -503,12 +509,8 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     });
   },
 
-  titleEdited(id) {
-    set((state) => {
-      const remoteTitles = { ...state.remoteTitles };
-      delete remoteTitles[id];
-      return { remoteTitles, titleEdits: { ...state.titleEdits, [id]: Date.now() } };
-    });
+  clearRemoteTitle(id) {
+    set((state) => (id in state.remoteTitles ? { remoteTitles: withoutKey(state.remoteTitles, id) } : {}));
   },
 
   remoteTitle(id, title) {
@@ -516,7 +518,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       const page = state.pages[id];
       const summary = state.summaries[id];
       return {
-        remoteTitles: { ...state.remoteTitles, [id]: { title, at: Date.now() } },
+        remoteTitles: { ...state.remoteTitles, [id]: title },
         pages: page && page.kind !== "daily" ? { ...state.pages, [id]: { ...page, title } } : state.pages,
         summaries: summary && summary.kind !== "daily" ? { ...state.summaries, [id]: { ...summary, title } } : state.summaries,
       };
@@ -663,7 +665,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
             .restorePage(id)
             .then((page) => {
               if (idle(id)) acked.delete(id);
-              set((state) => ({ summaries: { ...state.summaries, [id]: summaryFrom(page) }, pages: { ...state.pages, [id]: page }, listsVersion: state.listsVersion + 1 }));
+              set((state) => ({ summaries: { ...state.summaries, [id]: summaryFrom(page) }, pages: { ...state.pages, [id]: page }, remoteTitles: withoutKey(state.remoteTitles, id), listsVersion: state.listsVersion + 1 }));
               void get().refreshNav();
               void get().refreshTitles();
               get().notify(`Restored ${title}.`);

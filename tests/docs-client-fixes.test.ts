@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { EditorState } from "@codemirror/state";
 import { threadHolding, threadsOf } from "@/components/docs/comment-threads";
-import { remoteTitleToAdopt } from "@/components/docs/remote-title";
+import { liveRemoteTitle } from "@/components/docs/remote-title";
 import { queueRename, renameIfLatest } from "@/components/docs/rename-queue";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
@@ -119,28 +119,64 @@ describe("comment threads", () => {
 });
 
 describe("remote titles", () => {
-  it("never applies a remote title older than the person's own rename, across remounts", async () => {
-    const { ids } = await open();
-    const id = ids[0];
+  const live = (id: string) => liveRemoteTitle(useDocsStore.getState(), id);
+
+  it("adopts a live title only while it is still the note's own title", async () => {
+    const { ids } = await open(2);
     const store = useDocsStore.getState();
-    store.remoteTitle(id, "R");
-    const remoteAt = useDocsStore.getState().remoteTitles[id].at;
-    assert.equal(remoteTitleToAdopt(useDocsStore.getState().remoteTitles[id], 0, "Note 0"), "R");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    store.titleEdited(id);
-    const edited = useDocsStore.getState().titleEdits[id];
-    assert.ok(edited > remoteAt);
-    assert.equal(useDocsStore.getState().remoteTitles[id], undefined);
-    for (let mount = 0; mount < 3; mount += 1) {
-      const state = useDocsStore.getState();
-      assert.equal(remoteTitleToAdopt(state.remoteTitles[id], state.titleEdits[id] ?? 0, "S"), null);
+    await store.loadPage(ids[0]);
+    store.remoteTitle(ids[0], "R");
+    assert.equal(live(ids[0]), "R");
+    store.clearRemoteTitle(ids[0]);
+    assert.equal(live(ids[0]), undefined);
+    store.remoteTitle(ids[0], "T");
+    assert.equal(live(ids[0]), "T");
+    await store.loadPage(ids[1]);
+    store.remoteTitle(ids[1], "U");
+    useDocsStore.setState((state) => ({ pages: { ...state.pages, [ids[1]]: { ...state.pages[ids[1]], title: "Server title" } } }));
+    assert.equal(live(ids[1]), undefined);
+  });
+
+  it("never adopts a stale live title after a refresh, a kept conflict or a restore, so nothing is sent on remount", async () => {
+    const { data, ids } = await open(3);
+    const store = useDocsStore.getState();
+    for (const id of ids) {
+      await store.loadPage(id);
+      store.remoteTitle(id, "R");
+      assert.equal(live(id), "R");
     }
-    assert.equal(remoteTitleToAdopt({ title: "R", at: remoteAt }, edited, "S"), null);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    store.remoteTitle(id, "T");
-    const later = useDocsStore.getState();
-    assert.equal(remoteTitleToAdopt(later.remoteTitles[id], later.titleEdits[id] ?? 0, "S"), "T");
-    assert.equal(remoteTitleToAdopt(later.remoteTitles[id], later.titleEdits[id] ?? 0, "T"), null);
+
+    await data.renamePage(ids[0], "Q");
+    await store.refreshPage(ids[0]);
+    assert.equal(useDocsStore.getState().pages[ids[0]].title, "Q");
+    assert.equal(live(ids[0]), undefined);
+    assert.equal(useDocsStore.getState().remoteTitles[ids[0]], undefined);
+
+    const theirs = await data.renamePage(ids[1], "Theirs");
+    useDocsStore.setState((state) => ({ conflicts: { ...state.conflicts, [ids[1]]: theirs } }));
+    store.resolveConflict(ids[1], "theirs");
+    assert.equal(useDocsStore.getState().pages[ids[1]].title, "Theirs");
+    assert.equal(live(ids[1]), undefined);
+    assert.equal(useDocsStore.getState().remoteTitles[ids[1]], undefined);
+
+    const versions = await data.listVersions(ids[2]);
+    await data.savePage(ids[2], { title: "V2", body: "changed", baseRevision: useDocsStore.getState().pages[ids[2]].revision });
+    const older = (await data.listVersions(ids[2])).at(-1) ?? versions[0];
+    store.remoteTitle(ids[2], "R");
+    assert.equal(await store.restoreVersion(ids[2], older.id), null);
+    assert.equal(live(ids[2]), undefined);
+    assert.equal(useDocsStore.getState().remoteTitles[ids[2]], undefined);
+  });
+
+  it("drops a remembered remote title when the person types, and takes a later one", async () => {
+    const { ids } = await open();
+    const store = useDocsStore.getState();
+    await store.loadPage(ids[0]);
+    store.remoteTitle(ids[0], "R");
+    store.clearRemoteTitle(ids[0]);
+    for (let mount = 0; mount < 3; mount += 1) assert.equal(live(ids[0]), undefined);
+    store.remoteTitle(ids[0], "T");
+    assert.equal(live(ids[0]), "T");
   });
 });
 
