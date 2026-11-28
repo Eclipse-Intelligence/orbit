@@ -99,11 +99,14 @@ export function diffKey(args: Args) {
   return `doc-diff:${createHash("sha256").update(JSON.stringify(args)).digest("hex").slice(0, 16)}`;
 }
 
+const PUBLIC_LINE = "Anyone with the public link will see this change.";
+
 function whereLine(doc: DocDetail) {
-  if (doc.kind === "daily") return "Your daily note, private to you.";
+  const exposure = doc.public ? ` ${PUBLIC_LINE}` : "";
+  if (doc.kind === "daily") return `Your daily note, private to you.${exposure}`;
   const place = doc.path.length ? doc.path.map((step) => step.name).join(" › ") : "No folder";
-  if (doc.visibility === "private") return `${place}, private to ${doc.ownedByMe ? "you" : doc.owner?.name ?? "its owner"}.`;
-  return `${place}, shared with the workspace. Teammates and agents will see this change.`;
+  if (doc.visibility === "private") return `${place}, private to ${doc.ownedByMe ? "you" : doc.owner?.name ?? "its owner"}.${exposure}`;
+  return `${place}, shared with the workspace. Teammates and agents will see this change.${exposure}`;
 }
 
 export async function docCardDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
@@ -547,7 +550,7 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
   }
   if (action === "archive") return { saved: true, doc: summaryOf(await archiveDoc(actor, requireDoc(args), provenance())) };
   const note = await appendToDailyNote(actor, { text: str(args.content), date: str(args.date) || undefined, meetings: args.meetings === true }, provenance());
-  return { saved: true, doc: summaryOf(note.page), date: note.date };
+  return { saved: true, doc: summaryOf(note.page), date: note.date, ...(note.meetingsError ? { warning: note.meetingsError } : {}) };
 }
 
 export async function searchDocsForAssistant(actor: UserActor, query: string, limit: number) {

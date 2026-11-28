@@ -183,7 +183,7 @@ export type DailyMeeting = {
 
 export type DailyNoteDay = { id: string; date: string; entryCount: number; excerpt: string; editedAt: string };
 
-export type DailyNote = { page: DocDetail; date: string; isToday: boolean; meetings: DailyMeeting[] | null };
+export type DailyNote = { page: DocDetail; date: string; isToday: boolean; meetings: DailyMeeting[] | null; meetingsError?: string };
 
 export type DocSaveInput = {
   title?: string;

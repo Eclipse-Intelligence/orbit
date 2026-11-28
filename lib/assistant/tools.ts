@@ -6896,7 +6896,7 @@ function collectIds(value: unknown, into: Set<string>) {
 
 async function toolDetails(actor: UserActor, args: Args[], tools: string[], names: Map<string, string>) {
   for (let index = 0; index < tools.length; index += 1) {
-    const resolved = resolveTool(tools[index], args[index] ?? {});
+    const resolved = resolveTool(tools[index], withoutMarkers(args[index] ?? {}));
     const details = resolved?.tool.details;
     if (!resolved || !details) continue;
     try {
@@ -6906,10 +6906,11 @@ async function toolDetails(actor: UserActor, args: Args[], tools: string[], name
 }
 
 export async function recordNames(actor: UserActor, args: Args[], tools: string[] = []) {
+  const clean = withoutMarkers(args);
   const ids = new Set<string>();
-  for (const entry of args) for (const value of Object.values(entry)) collectIds(value, ids);
+  for (const entry of clean) for (const value of Object.values(entry)) collectIds(value, ids);
   const names = new Map<string, string>();
-  await toolDetails(actor, args, tools, names);
+  await toolDetails(actor, clean, tools, names);
   if (ids.size === 0) return names;
   const list = [...ids];
   await withActor(actor, async (db) => {
