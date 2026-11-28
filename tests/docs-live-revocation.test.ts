@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, afterEach, before, describe, it } from "node:test";
+import { Text } from "@codemirror/state";
 import * as Y from "yjs";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
@@ -341,6 +342,82 @@ describe("a stale merge base after someone else types", () => {
     open.push(live);
     await live.sync();
     assert.equal(live.serverText, "Base");
+  });
+});
+
+function seededState(text: string) {
+  const seed = createLiveDoc(Y.encodeStateAsUpdate(new Y.Doc()));
+  liveText(seed).insert(0, text);
+  return Y.encodeStateAsUpdate(seed);
+}
+
+type DeleteScenario = { during: (client: Y.Doc, state: Uint8Array) => void };
+
+async function deleteDuringSync(scenario: DeleteScenario) {
+  const state = seededState("Keep this. Remove this.");
+  const server = createLiveDoc(state);
+  const client = createLiveDoc(state);
+  let calls = 0;
+  const fake: LiveServer = {
+    async sync(input) {
+      calls += 1;
+      if (calls === 1) {
+        scenario.during(client, state);
+        return { vector: Y.encodeStateVector(server), missing: Y.encodeStateAsUpdate(server, input.vector), revision: 1 };
+      }
+      return { vector: Y.encodeStateVector(server), missing: state, revision: 2, rebuilt: true };
+    },
+  };
+  const live = new LiveSession({ pageId: "00000000-0000-4000-8000-000000000003", user: { id: "u", name: "U", kind: "person" }, doc: client, serverVector: Y.encodeStateVector(client), serverText: "Keep this. Remove this.", revision: 1, title: "T", transport: null, server: fake, timing: FAST });
+  live.start();
+  open.push(live);
+  await live.sync();
+  return live;
+}
+
+describe("a delete the server hasn't seen", () => {
+  it("keeps the old base when this person deletes text while a sync is in flight, so a rebuild keeps the delete", async () => {
+    const live = await deleteDuringSync({ during: (client) => liveText(client).delete(10, 13) });
+    assert.equal(live.text.toString(), "Keep this.");
+    assert.equal(live.serverText, "Keep this. Remove this.");
+    await live.sync();
+    assert.equal(live.rebuilt, true);
+    const shared = liveText(createLiveDoc(live.replacement!.state!)).toString();
+    assert.equal(rebase(live.serverText, live.text.toString(), shared).toShared.apply(Text.of(shared.split("\n"))).toString(), "Keep this.", "the delete survives the rebuild");
+  });
+
+  it("keeps the old base when a teammate's delete arrives over the channel during the sync", async () => {
+    const live = await deleteDuringSync({
+      during: (client, state) => {
+        const remote = createLiveDoc(state);
+        const before = Y.encodeStateVector(remote);
+        liveText(remote).delete(10, 13);
+        Y.applyUpdate(client, Y.encodeStateAsUpdate(remote, before), REMOTE);
+      },
+    });
+    assert.equal(live.text.toString(), "Keep this.");
+    assert.equal(live.serverText, "Keep this. Remove this.");
+    await live.sync();
+    const shared = liveText(createLiveDoc(live.replacement!.state!)).toString();
+    assert.equal(rebase(live.serverText, live.text.toString(), shared).toShared.apply(Text.of(shared.split("\n"))).toString(), "Keep this.");
+  });
+
+  it("still moves the base forward when the delete came from the server's own reply", async () => {
+    const state = seededState("Keep this. Remove this.");
+    const server = createLiveDoc(state);
+    liveText(server).delete(10, 13);
+    const client = createLiveDoc(state);
+    const fake: LiveServer = {
+      async sync(input) {
+        return { vector: Y.encodeStateVector(server), missing: Y.encodeStateAsUpdate(server, input.vector), revision: 2 };
+      },
+    };
+    const live = new LiveSession({ pageId: "00000000-0000-4000-8000-000000000004", user: { id: "u", name: "U", kind: "person" }, doc: client, serverVector: Y.encodeStateVector(client), serverText: "Keep this. Remove this.", revision: 1, title: "T", transport: null, server: fake, timing: FAST });
+    live.start();
+    open.push(live);
+    await live.sync();
+    assert.equal(live.text.toString(), "Keep this.");
+    assert.equal(live.serverText, "Keep this.");
   });
 });
 

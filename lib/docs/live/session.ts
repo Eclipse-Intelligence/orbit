@@ -163,7 +163,7 @@ type Options<Summary> = {
 
 type Timer = ReturnType<typeof setTimeout>;
 
-type SyncContext = { seqAtStart: number; remoteAtStart: number; title: string | undefined; sent: boolean };
+type SyncContext = { seqAtStart: number; remoteAtStart: number; deleteAtStart: number; title: string | undefined; sent: boolean };
 
 export class LiveSession<Summary = unknown> {
   readonly pageId: string;
@@ -210,6 +210,7 @@ export class LiveSession<Summary = unknown> {
   private ownSeq = 0;
   private confirmedSeq = 0;
   private remoteSeq = 0;
+  private deleteSeq = 0;
   private keptAlive: number | null = null;
   private paused = false;
   private own = new Map<number, number>();
@@ -240,6 +241,7 @@ export class LiveSession<Summary = unknown> {
     this.awareness = new Awareness(this.doc);
     this.awareness.setLocalState(this.localState());
     this.doc.on("update", this.onUpdate);
+    this.doc.on("afterTransaction", this.onTransaction);
     this.awareness.on("update", this.onAwareness);
     this.awareness.on("change", this.onPresence);
   }
@@ -413,7 +415,7 @@ export class LiveSession<Summary = unknown> {
     const vector = Y.encodeStateVector(this.doc);
     const title = this.titleDirty ? this.title : undefined;
     if (encodeBytes(update).length + encodeBytes(vector).length + (title?.length ?? 0) > KEEPALIVE_MAX) return false;
-    const context: SyncContext = { seqAtStart: this.ownSeq, remoteAtStart: this.remoteSeq, title, sent: !isEmptyUpdate(update) };
+    const context: SyncContext = { seqAtStart: this.ownSeq, remoteAtStart: this.remoteSeq, deleteAtStart: this.deleteSeq, title, sent: !isEmptyUpdate(update) };
     const seq = this.ownSeq;
     this.keptAlive = seq;
     void this.server
@@ -464,6 +466,7 @@ export class LiveSession<Summary = unknown> {
     }
     this.leaveChannel();
     this.doc.off("update", this.onUpdate);
+    this.doc.off("afterTransaction", this.onTransaction);
     this.awareness.off("update", this.onAwareness);
     this.awareness.off("change", this.onPresence);
     this.awareness.destroy();
@@ -590,6 +593,10 @@ export class LiveSession<Summary = unknown> {
       this.emit();
     }
   }
+
+  private onTransaction = (transaction: Y.Transaction) => {
+    if (transaction.origin !== SERVER && transaction.deleteSet.clients.size > 0) this.deleteSeq += 1;
+  };
 
   private onUpdate = (update: Uint8Array, origin: unknown) => {
     if (this.closed) return;
@@ -884,7 +891,7 @@ export class LiveSession<Summary = unknown> {
     }
     if (!reply.held) this.confirmedSeq = Math.max(this.confirmedSeq, context.seqAtStart);
     if (context.title !== undefined && this.title === context.title) this.titleDirty = false;
-    if (!reply.held && reply.revision >= this.confirmedRevision && sameVector(Y.encodeStateVector(this.doc), reply.vector)) {
+    if (!reply.held && this.deleteSeq === context.deleteAtStart && reply.revision >= this.confirmedRevision && sameVector(Y.encodeStateVector(this.doc), reply.vector)) {
       this.confirmedText = this.text.toString();
       this.confirmedRevision = reply.revision;
     }
@@ -938,7 +945,7 @@ export class LiveSession<Summary = unknown> {
     const update = integratedUpdate(this.doc, this.serverVector);
     const vector = Y.encodeStateVector(this.doc);
     const title = this.titleDirty ? this.title : undefined;
-    const context: SyncContext = { seqAtStart: this.ownSeq, remoteAtStart: this.remoteSeq, title, sent: !isEmptyUpdate(update) };
+    const context: SyncContext = { seqAtStart: this.ownSeq, remoteAtStart: this.remoteSeq, deleteAtStart: this.deleteSeq, title, sent: !isEmptyUpdate(update) };
     this.titleDirty = false;
     const wasDirty = this.dirtySince;
     this.dirtySince = null;
