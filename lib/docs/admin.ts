@@ -11,28 +11,32 @@ const ARCHIVED_REACH = 10_000;
 export async function listArchivedDocs(actor: UserActor) {
   const notes = [];
   for (let offset = 0; offset <= ARCHIVED_REACH; offset += ARCHIVED_PAGE) {
-    const page = await listDocs(actor, { archived: true, kind: "any", limit: ARCHIVED_PAGE, offset });
+    const page = await listDocs(actor, { archived: true, kind: "any", limit: ARCHIVED_PAGE, offset }, { newestArchivedFirst: true });
     notes.push(...page.data);
     if (!page.hasMore) break;
   }
   return notes;
 }
 
-export type FormerOwner = { id: string; name: string; examples: string[] };
+export type FormerOwner = { id: string; name: string; docs: number; folders: number; examples: string[] };
 
-export async function listFormerOwners(actor: UserActor, memberIds: string[]): Promise<FormerOwner[]> {
-  return withActor(actor, async (db) => {
-    const result = await db.query<{ user_id: string; name: string | null; examples: string[] }>(
-      `select p.user_id, coalesce(nullif(o.full_name, ''), o.email) as name, (array_agg(p.title order by p.edited_at desc))[1:3] as examples
-       from crm.pages p left join crm.profiles o on o.id = p.user_id
-       where p.workspace_id = $1 and p.kind = 'note' and p.archived_at is null and p.user_id is not null and p.user_id <> all($2::uuid[])
-       group by p.user_id, o.full_name, o.email`,
-      [actor.workspaceId, memberIds],
+export async function listFormerOwners(actor: UserActor): Promise<FormerOwner[]> {
+  try {
+    const result = await query<{ user_id: string; name: string; docs: number; folders: number; examples: string[] }>(
+      "select user_id, name, docs, folders, examples from private.docs_former_owners($1, $2)",
+      [actor.workspaceId, actor.userId],
     );
-    return result.rows
-      .map((row) => ({ id: row.user_id, name: row.name ?? "Former member", examples: row.examples.map((title) => title || "Untitled") }))
-      .sort((left, right) => left.name.localeCompare(right.name));
-  });
+    return result.rows.map((row) => ({
+      id: row.user_id,
+      name: row.name,
+      docs: row.docs,
+      folders: row.folders,
+      examples: row.examples.map((title) => title || "Untitled"),
+    }));
+  } catch (error) {
+    if (isPgError(error) && error.code === "42501") throw new CrmError("forbidden", error.message, 403);
+    throw error;
+  }
 }
 
 export async function takeOverFormerMemberDocs(actor: UserActor, formerUserId: string) {

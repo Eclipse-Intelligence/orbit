@@ -17,6 +17,7 @@ import NoteEditor, { focusNoteText, noteTitle, scheduleNoteSave, setNoteTitle } 
 import NoteRail from "@/components/docs/note-rail";
 import { ParticipantAvatar, PresenceStack } from "@/components/docs/presence";
 import { OnlyYou, PageShare } from "@/components/docs/share-control";
+import { remoteTitleToAdopt } from "@/components/docs/remote-title";
 import { TITLE_FORBIDDEN, TITLE_RULE, useTitleRename } from "@/components/docs/title-rename";
 import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia, useToday } from "@/components/docs/use-docs";
 import type { Meeting, Page, PageFilter, PageSummary, Participant, Presence } from "@/lib/docs/client-types";
@@ -73,18 +74,24 @@ function contextFor(page: { kind: string; folderId: string | null; dailyDate: st
 }
 
 function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObject<HTMLTextAreaElement | null>; replaced: boolean }) {
-  const [value, setValue] = useState(() => (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
-  const fresh = useDocsStore((state) => state.fresh === page.id);
   const remote = useDocsStore((state) => state.remoteTitles[page.id]);
+  const editedAt = useDocsStore((state) => state.titleEdits[page.id] ?? 0);
+  const titleEdited = useDocsStore((state) => state.titleEdited);
+  const [value, setValue] = useState(() => {
+    const shown = replaced ? page.title : (noteTitle(page.id) ?? page.title);
+    return remoteTitleToAdopt(remote, editedAt, shown) ?? shown;
+  });
+  const fresh = useDocsStore((state) => state.fresh === page.id);
   const unavailable = useDocsStore((state) => Boolean(state.unavailable[page.id]));
   const [seenRemote, setSeenRemote] = useState(remote);
   const [editing, setEditing] = useState(false);
   const [waiting, setWaiting] = useState<string | null>(null);
   if (remote !== seenRemote) {
     setSeenRemote(remote);
-    if (remote && remote.title !== value) {
-      if (editing) setWaiting(remote.title);
-      else setValue(remote.title);
+    const next = remoteTitleToAdopt(remote, editedAt, value);
+    if (next) {
+      if (editing) setWaiting(next);
+      else setValue(next);
     }
   }
   const clearFresh = useDocsStore((state) => state.clearFresh);
@@ -92,11 +99,11 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
   const adopt = rename.adopt;
   const adoptedAt = useRef(0);
   useEffect(() => {
-    if (!remote || editing || adoptedAt.current >= remote.at) return;
+    if (!remote || editing || remote.at <= editedAt || adoptedAt.current >= remote.at) return;
     adoptedAt.current = remote.at;
     adopt(remote.title);
     if (noteTitle(page.id) !== remote.title) setNoteTitle(page.id, remote.title);
-  }, [remote, page.id, editing, adopt]);
+  }, [remote, editedAt, page.id, editing, adopt]);
   const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     if (!fresh) return;
@@ -132,7 +139,7 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
           setBlocked(next !== typed);
           setValue(next);
           setWaiting(null);
-          if (remote) adoptedAt.current = remote.at;
+          titleEdited(page.id);
           setNoteTitle(page.id, next);
           scheduleNoteSave(page.id, page);
           rename.typed(next);

@@ -62,7 +62,7 @@ Optional `Idempotency-Key` header (printable ASCII, up to 200 characters). Reuse
 | `DELETE` | `/opportunities/:id` | Archive | `opportunities:write` |
 | `GET` | `/pipeline` | The default pipeline and its stages | `crm:read` |
 | `PUT` | `/pipeline` | Replace the default pipeline's stages | `opportunities:write` |
-| `GET` | `/docs` | List shared docs (`folderId`, `folderId=none`, `tag` with nested tags, `sort` of `edited`, `created` or `title`, `archived=true`, `limit` up to 200, `offset`), or search them with `q` (title prefix, fuzzy title and full text, `limit` up to 50) | `docs:read` |
+| `GET` | `/docs` | List shared docs (`folderId`, `folderId=none`, `tag` with nested tags, `sort` of `edited`, `created` or `title`, `archived=true` (archived docs, in the same order: newest edit first unless `sort` says otherwise), `limit` up to 200, `offset`), or search them with `q` (title prefix, fuzzy title and full text, `limit` up to 50) | `docs:read` |
 | `POST` | `/docs` | Create a doc: `title`, `content` (Markdown), `folderId`, `shared`, `provenance`. Always shared with the workspace. 201 | `docs:write` |
 | `GET` | `/docs/folders` | Shared folders, with parent and position | `docs:read` |
 | `GET` | `/docs/:id` | One doc with its links, mentions and folder path, and its text from `offset` (100,000 characters, with `nextOffset`) | `docs:read` |

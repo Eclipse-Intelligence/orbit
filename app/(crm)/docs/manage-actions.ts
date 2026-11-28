@@ -2,7 +2,6 @@
 
 import { getUserActor } from "@/lib/auth/user";
 import type { Provenance, UserActor } from "@/lib/crm/types";
-import { getTeam } from "@/lib/crm/team";
 import { listArchivedDocs, listFormerOwners, takeOverFormerMemberDocs } from "@/lib/docs/admin";
 import { archiveFolder, folderSharing, listFolders, restoreFolder } from "@/lib/docs/folders";
 import { docsAction } from "@/lib/docs/http";
@@ -11,7 +10,7 @@ const PROVENANCE: Provenance = { operation: "docs.app" };
 
 export type ArchivedNote = { id: string; title: string; kind: "note" | "daily"; dailyDate: string | null; archivedAt: string };
 export type ArchivedFolder = { id: string; name: string; archivedAt: string };
-export type FormerMember = { id: string; name: string; examples: string[] };
+export type FormerMember = { id: string; name: string; examples: string[]; count: number };
 export type ArchivedDocs = { notes: ArchivedNote[]; folders: ArchivedFolder[]; formerMembers: FormerMember[] | null };
 
 function canAdminister(actor: UserActor) {
@@ -19,17 +18,8 @@ function canAdminister(actor: UserActor) {
 }
 
 async function formerMembers(actor: UserActor): Promise<FormerMember[]> {
-  const [team, folders] = await Promise.all([getTeam(actor), listFolders(actor)]);
-  const members = new Set(team.members.map((member) => member.id));
-  const found = new Map<string, FormerMember>();
-  for (const owner of await listFormerOwners(actor, [...members])) found.set(owner.id, owner);
-  for (const folder of folders) {
-    if (!folder.owner || members.has(folder.owner.id)) continue;
-    const member = found.get(folder.owner.id) ?? { id: folder.owner.id, name: folder.owner.name, examples: [] };
-    if (member.examples.length < 3) member.examples.push(folder.name);
-    found.set(folder.owner.id, member);
-  }
-  return [...found.values()].sort((left, right) => left.name.localeCompare(right.name));
+  const owners = await listFormerOwners(actor);
+  return owners.map((owner) => ({ id: owner.id, name: owner.name, examples: owner.examples, count: owner.docs + owner.folders }));
 }
 
 export async function archivedDocsAction() {

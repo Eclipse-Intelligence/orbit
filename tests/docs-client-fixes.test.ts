@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { EditorState } from "@codemirror/state";
 import { threadHolding, threadsOf } from "@/components/docs/comment-threads";
+import { remoteTitleToAdopt } from "@/components/docs/remote-title";
 import { queueRename, renameIfLatest } from "@/components/docs/rename-queue";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { UserActor } from "@/lib/crm/types";
@@ -114,6 +115,32 @@ describe("comment threads", () => {
     assert.equal(threadHolding(threads, "reply-a")?.root.id, "root-a");
     assert.equal(threadHolding(threads, "reply-b")?.root.resolved, true);
     assert.equal(threadHolding(threads, "missing"), null);
+  });
+});
+
+describe("remote titles", () => {
+  it("never applies a remote title older than the person's own rename, across remounts", async () => {
+    const { ids } = await open();
+    const id = ids[0];
+    const store = useDocsStore.getState();
+    store.remoteTitle(id, "R");
+    const remoteAt = useDocsStore.getState().remoteTitles[id].at;
+    assert.equal(remoteTitleToAdopt(useDocsStore.getState().remoteTitles[id], 0, "Note 0"), "R");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    store.titleEdited(id);
+    const edited = useDocsStore.getState().titleEdits[id];
+    assert.ok(edited > remoteAt);
+    assert.equal(useDocsStore.getState().remoteTitles[id], undefined);
+    for (let mount = 0; mount < 3; mount += 1) {
+      const state = useDocsStore.getState();
+      assert.equal(remoteTitleToAdopt(state.remoteTitles[id], state.titleEdits[id] ?? 0, "S"), null);
+    }
+    assert.equal(remoteTitleToAdopt({ title: "R", at: remoteAt }, edited, "S"), null);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    store.remoteTitle(id, "T");
+    const later = useDocsStore.getState();
+    assert.equal(remoteTitleToAdopt(later.remoteTitles[id], later.titleEdits[id] ?? 0, "S"), "T");
+    assert.equal(remoteTitleToAdopt(later.remoteTitles[id], later.titleEdits[id] ?? 0, "T"), null);
   });
 });
 
@@ -232,22 +259,66 @@ describe("former members and archived notes", () => {
     for (let index = 0; index < 205; index += 1) await createDoc(mark, { title: `Mark ${index}`, shared: true });
     for (const title of ["Leaver one", "Leaver two", "Leaver three", "Leaver four"]) await createDoc(leaver, { title, shared: true });
     await getAdminPool().query("delete from crm.workspace_members where workspace_id = $1 and user_id = $2", [mark.workspaceId, leaver.userId]);
-    const owners = await listFormerOwners(mark, [mark.userId]);
+    const owners = await listFormerOwners(mark);
     assert.equal(owners.length, 1);
     assert.equal(owners[0].id, leaver.userId);
-    assert.equal(owners[0].name, "Former member");
+    assert.equal(owners[0].docs, 4);
     assert.equal(owners[0].examples.length, 3);
-    assert.deepEqual(await listFormerOwners(mark, [mark.userId, leaver.userId]), []);
+  });
+
+  it("offers a former member who owned only private notes, or only archived ones, and tells no private titles", async () => {
+    const admin = getAdminPool();
+    const person = async (email: string, name: string, role = "member") => {
+      const id = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
+      await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, $3)", [mark.workspaceId, id, role]);
+      return { ...mark, userId: id, email, fullName: name, role: role as "member" | "admin", scopes: scopesForRole(role as "member" | "admin") };
+    };
+    const secretOnly = await person("secret@docs-client.test", "Sam Secret");
+    const archivedOnly = await person("archived@docs-client.test", "Ada Archived");
+    const plain = await person("plain@docs-client.test", "Pat Plain");
+    const admin2 = await person("admin@docs-client.test", "Alex Admin", "admin");
+    await createDoc(secretOnly, { title: "Private plans" });
+    await createDoc(secretOnly, { title: "More private plans" });
+    const old = await createDoc(archivedOnly, { title: "Old shared note", shared: true });
+    await archiveDoc(archivedOnly, old.id);
+    await admin.query("delete from crm.workspace_members where workspace_id = $1 and user_id = any($2::uuid[])", [mark.workspaceId, [secretOnly.userId, archivedOnly.userId]]);
+    const offered = await listFormerOwners(mark);
+    const byId = new Map(offered.map((owner) => [owner.id, owner]));
+    assert.equal(byId.get(secretOnly.userId)?.docs, 2);
+    assert.deepEqual(byId.get(secretOnly.userId)?.examples, []);
+    assert.equal(byId.get(archivedOnly.userId)?.docs, 1);
+    assert.equal(JSON.stringify(offered).includes("Private plans"), false);
+    assert.equal(byId.has(plain.userId), false);
+    assert.equal(byId.has(mark.userId), false);
+    assert.ok((await listFormerOwners(admin2)).some((owner) => owner.id === secretOnly.userId));
+    await assert.rejects(listFormerOwners(plain), /Only the owner or an admin/);
+    await assert.rejects(listFormerOwners({ ...mark, workspaceId: "00000000-0000-0000-0000-000000000000" }), /Only the owner or an admin/);
+  });
+
+  it("keeps explicit and default sorts on edit order for archived lists, and newest archived first only for the sheet", async () => {
+    const stale = await createDoc(mark, { title: "Edited long ago, archived last" });
+    const fresh = await createDoc(mark, { title: "Edited lately, archived first" });
+    const admin = getAdminPool();
+    await archiveDoc(mark, stale.id);
+    await archiveDoc(mark, fresh.id);
+    await admin.query("update crm.pages set edited_at = now() - interval '30 days', archived_at = now() where id = $1", [stale.id]);
+    await admin.query("update crm.pages set edited_at = now() - interval '1 day', archived_at = now() - interval '1 hour' where id = $1", [fresh.id]);
+    const order = async (query: Parameters<typeof listDocs>[1]) => (await listDocs(mark, { archived: true, kind: "any", limit: 200, ...query })).data.map((doc) => doc.id).filter((id) => id === stale.id || id === fresh.id);
+    assert.deepEqual(await order({ sort: "edited" }), [fresh.id, stale.id]);
+    assert.deepEqual(await order({}), [fresh.id, stale.id]);
+    const sheet = (await listArchivedDocs(mark)).map((doc) => doc.id).filter((id) => id === stale.id || id === fresh.id);
+    assert.deepEqual(sheet, [stale.id, fresh.id]);
   });
 
   it("lists every archived note, newest archived first", async () => {
+    const already = (await listArchivedDocs(mark)).length;
     const made = [];
     for (let index = 0; index < 205; index += 1) made.push(await createDoc(mark, { title: `Archive me ${index}` }));
     for (const doc of made) await archiveDoc(mark, doc.id);
     const first = await createDoc(mark, { title: "Touched later" });
     await archiveDoc(mark, first.id);
     const all = await listArchivedDocs(mark);
-    assert.equal(all.length, 206);
+    assert.equal(all.length, already + 206);
     assert.equal(all[0].id, first.id);
     const archivedTimes = all.map((doc) => doc.archivedAt ?? "");
     assert.deepEqual([...archivedTimes].sort().reverse(), archivedTimes);

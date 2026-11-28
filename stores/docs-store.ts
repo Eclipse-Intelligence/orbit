@@ -73,6 +73,7 @@ type DocsState = {
   liveKind: LiveTransportKind | null;
   live: Record<string, LiveStatus>;
   remoteTitles: Record<string, { title: string; at: number }>;
+  titleEdits: Record<string, number>;
   unavailable: Record<string, true>;
   init: (seed: DocsSeed, nav: DocsNav) => void;
   seed: (initial: { list: PageFilter; summaries: PageSummary[]; page: Page | null }) => void;
@@ -89,6 +90,7 @@ type DocsState = {
   setLive: (id: string, status: LiveStatus | null) => void;
   liveSaved: (id: string, summary: PageSummary, revision: number) => void;
   remoteTitle: (id: string, title: string) => void;
+  titleEdited: (id: string) => void;
   setUnavailable: (id: string, value: boolean) => void;
   replaceBody: (page: Page, options?: { untracked?: boolean }) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
@@ -264,6 +266,7 @@ function blank() {
     liveKind: null,
     live: {},
     remoteTitles: {},
+    titleEdits: {},
     unavailable: {},
   };
 }
@@ -497,6 +500,14 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         pages: page ? { ...state.pages, [id]: { ...page, revision: Math.max(page.revision, revision), updatedAt: summary.updatedAt, updatedBy: summary.updatedBy, tags: summary.tags } } : state.pages,
         summaries: { ...state.summaries, [id]: known ? { ...known, updatedAt: summary.updatedAt, updatedBy: summary.updatedBy, tags: summary.tags, title: summary.title } : summary },
       };
+    });
+  },
+
+  titleEdited(id) {
+    set((state) => {
+      const remoteTitles = { ...state.remoteTitles };
+      delete remoteTitles[id];
+      return { remoteTitles, titleEdits: { ...state.titleEdits, [id]: Date.now() } };
     });
   },
 
