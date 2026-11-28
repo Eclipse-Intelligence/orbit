@@ -8,7 +8,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { createFolder } from "@/lib/docs/folders";
 import { CHANGED_SINCE_APPROVAL, CHANGED_SINCE_APPROVAL_CARD, mergeRewrite } from "@/lib/assistant/docs";
 import { EXTERNAL_NOTICE } from "@/lib/assistant/tools";
-import { createDoc, getDoc, listVersions, saveDoc, setAssistantCanEdit } from "@/lib/docs/store";
+import { createDoc, getDoc, listVersions, saveDoc, setAssistantCanEdit, setDocPublic } from "@/lib/docs/store";
 import { createUser, resetDatabase } from "./helpers";
 
 type Reply = { content?: string; tool_calls?: { id: string; name: string; args: Record<string, unknown> }[] };
@@ -324,6 +324,48 @@ describe("approved doc edits", () => {
     const decided = await approve();
     assert.equal(decided.status, "done");
     assert.equal((await getDoc(mark, doc.id)).content, `${MINUTES.replace("ship in January", "ship in February")}\n- Priya books the room`);
+  });
+
+  const marked = (text: string) => `<<untrusted-0123456789ab>>${text}<</untrusted-0123456789ab>>`;
+
+  it("builds the card and the approval from the same arguments the run uses when they carry fence markers", async () => {
+    const doc = await createDoc(mark, { title: "Marked minutes", content: MINUTES, shared: true });
+    const args = { action: "edit", docId: doc.id, find: marked("ship in January"), replace: marked("ship in February") };
+    const card = describeAction("save_doc", args, await recordNames(mark, [args], ["save_doc"]));
+    assert.ok(card.lines.includes("1 line added, 1 line removed."));
+    assert.ok((card as { diff?: unknown[] }).diff?.length);
+    assert.equal((card as { approval?: { matches?: number } }).approval?.matches, 1);
+    const rewrite = { action: "replace", docId: marked(doc.id), content: marked("Fresh text") };
+    const rewriteCard = describeAction("save_doc", rewrite, await recordNames(mark, [rewrite], ["save_doc"]));
+    assert.ok((rewriteCard as { approval?: { base?: string } }).approval?.base);
+  });
+
+  it("refuses an approved edit whose arguments carried fence markers when the doc changed underneath it", async () => {
+    const doc = await createDoc(mark, { title: "Marked moved minutes", content: MINUTES, shared: true });
+    const approve = await propose({ action: "edit", docId: doc.id, find: marked("ship in January"), replace: marked("ship in February") }, "call_edit_marked");
+    const changed = MINUTES.replace("Decision: ship in January", "Decision: ship in January, unless legal objects");
+    await saveDoc(priya, doc.id, { content: changed });
+    const decided = await approve();
+    assert.equal(decided.status, "failed");
+    assert.equal(decided.result, CHANGED_SINCE_APPROVAL_CARD);
+    assert.equal((await getDoc(mark, doc.id)).content, changed);
+  });
+
+  it("says anyone with the public link sees the change when the link is on", async () => {
+    const own = await createDoc(mark, { title: "Public but private", content: "Old line" });
+    await setDocPublic(mark, own.id, { public: true });
+    const ownArgs = { action: "edit", docId: own.id, find: "Old line", replace: "New line" };
+    const ownCard = describeAction("save_doc", ownArgs, await recordNames(mark, [ownArgs], ["save_doc"]));
+    assert.ok(ownCard.lines.some((line) => line === "No folder, private to you. Anyone with the public link will see this change."));
+    const shared = await createDoc(mark, { title: "Public shared", content: "Old line", shared: true });
+    await setDocPublic(mark, shared.id, { public: true });
+    const sharedArgs = { action: "edit", docId: shared.id, find: "Old line", replace: "New line" };
+    const sharedCard = describeAction("save_doc", sharedArgs, await recordNames(mark, [sharedArgs], ["save_doc"]));
+    assert.ok(sharedCard.lines.some((line) => /shared with the workspace\. Teammates and agents will see this change\. Anyone with the public link will see this change\.$/.test(line)));
+    const quiet = await createDoc(mark, { title: "Not public", content: "Old line" });
+    const quietArgs = { action: "edit", docId: quiet.id, find: "Old line", replace: "New line" };
+    const quietCard = describeAction("save_doc", quietArgs, await recordNames(mark, [quietArgs], ["save_doc"]));
+    assert.ok(!quietCard.lines.some((line) => line.includes("public link")));
   });
 
   it("refuses an approved edit when the text it was changing changed", async () => {

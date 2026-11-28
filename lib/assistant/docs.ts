@@ -99,11 +99,14 @@ export function diffKey(args: Args) {
   return `doc-diff:${createHash("sha256").update(JSON.stringify(args)).digest("hex").slice(0, 16)}`;
 }
 
+const PUBLIC_LINE = "Anyone with the public link will see this change.";
+
 function whereLine(doc: DocDetail) {
-  if (doc.kind === "daily") return "Your daily note, private to you.";
+  const exposure = doc.public ? ` ${PUBLIC_LINE}` : "";
+  if (doc.kind === "daily") return `Your daily note, private to you.${exposure}`;
   const place = doc.path.length ? doc.path.map((step) => step.name).join(" › ") : "No folder";
-  if (doc.visibility === "private") return `${place}, private to ${doc.ownedByMe ? "you" : doc.owner?.name ?? "its owner"}.`;
-  return `${place}, shared with the workspace. Teammates and agents will see this change.`;
+  if (doc.visibility === "private") return `${place}, private to ${doc.ownedByMe ? "you" : doc.owner?.name ?? "its owner"}.${exposure}`;
+  return `${place}, shared with the workspace. Teammates and agents will see this change.${exposure}`;
 }
 
 export async function docCardDetails(actor: UserActor, args: Args): Promise<Record<string, string>> {
