@@ -22,7 +22,7 @@ begin
         raise exception 'This doc has no owner, so it can''t be made private.' using errcode = '42501';
       end if;
     elsif old.user_id is distinct from acting_user then
-      raise exception 'Only the owner can change who a doc can see.' using errcode = '42501';
+      raise exception 'Only the owner can change who can see this doc.' using errcode = '42501';
     end if;
   end if;
   if old.public_token_hash is not null and new.public_token_hash is distinct from old.public_token_hash then
@@ -84,7 +84,7 @@ begin
         raise exception 'This folder has no owner, so it can''t be made private.' using errcode = '42501';
       end if;
     elsif old.user_id is distinct from acting_user then
-      raise exception 'Only the owner can change who a folder can see.' using errcode = '42501';
+      raise exception 'Only the owner can change who can see this folder.' using errcode = '42501';
     end if;
   end if;
   return new;

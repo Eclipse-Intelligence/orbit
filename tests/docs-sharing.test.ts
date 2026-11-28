@@ -3,6 +3,7 @@ import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { PATCH as patchRoute } from "@/app/api/v1/docs/[id]/route";
+import { describeAction, recordNames } from "@/lib/assistant/tools";
 import { scopesForRole } from "@/lib/crm/scopes";
 import type { AgentActor, UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -118,10 +119,10 @@ describe("who can change sharing", () => {
       await mcp.close();
     }
 
-    await assert.rejects(queryAsUser(priya.userId, "update crm.pages set shared = true where id = $1", [note.id]), /Only the owner can change who a doc can see/);
-    await assert.rejects(queryAsUser(priya.userId, "update crm.page_folders set shared = true where id = $1", [sub.id]), /Only the owner can change who a folder can see/);
-    await assert.rejects(queryAsAgent("update crm.pages set shared = true where id = $1", [note.id]), /Only the owner can change who a doc can see/);
-    await assert.rejects(queryAsAgent("update crm.page_folders set shared = true where id = $1", [sub.id]), /Only the owner can change who a folder can see/);
+    await assert.rejects(queryAsUser(priya.userId, "update crm.pages set shared = true where id = $1", [note.id]), /Only the owner can change who can see this doc/);
+    await assert.rejects(queryAsUser(priya.userId, "update crm.page_folders set shared = true where id = $1", [sub.id]), /Only the owner can change who can see this folder/);
+    await assert.rejects(queryAsAgent("update crm.pages set shared = true where id = $1", [note.id]), /Only the owner can change who can see this doc/);
+    await assert.rejects(queryAsAgent("update crm.page_folders set shared = true where id = $1", [sub.id]), /Only the owner can change who can see this folder/);
 
     assert.equal((await flags("pages", note.id)).shared, false);
     assert.equal((await flags("page_folders", sub.id)).shared, false);
@@ -229,6 +230,25 @@ describe("renaming a private note", () => {
   });
 });
 
+describe("the assistant's rename card", () => {
+  useServerlessPool();
+
+  it("counts only the notes a rename will rewrite", async () => {
+    const secret = await createDoc(mark, { title: "Card secret", content: "Private" });
+    await createDoc(mark, { title: "Card shared linker", content: "See [[Card secret]]", shared: true });
+    await createDoc(mark, { title: "Card private linker one", content: "And [[Card secret]]" });
+    await createDoc(mark, { title: "Card private linker two", content: "Also [[Card secret]]" });
+    const args = { action: "rename", docId: secret.id, title: "Card renamed" };
+    const privateCard = describeAction("save_doc", args, await recordNames(mark, [args], ["save_doc"]));
+    assert.ok(privateCard.lines.includes("Updates links in 2 notes."), privateCard.lines.join(" | "));
+    await shareDoc(mark, secret.id, true);
+    const sharedCard = describeAction("save_doc", args, await recordNames(mark, [args], ["save_doc"]));
+    assert.ok(sharedCard.lines.includes("Updates links in 3 notes."), sharedCard.lines.join(" | "));
+    const result = await renameDoc(mark, secret.id, "Card renamed");
+    assert.equal(result.linksUpdated, 3);
+  });
+});
+
 describe("moving folders at the same time", () => {
   it("never lets two moves form a loop", async () => {
     const left = await createFolder(mark, { name: "Loop left", shared: true });
@@ -256,6 +276,32 @@ describe("moving folders at the same time", () => {
     const parent = new Map(rows.rows.map((row) => [row.id, row.parent_id]));
     assert.ok(parent.get(left.id) === null || parent.get(right.id) === null);
     assert.equal((await listFolders(mark)).length > 0, true);
+  });
+});
+
+describe("moving a folder and its parent at the same time", () => {
+  it("lets both moves finish, whichever one reaches the database first", async () => {
+    const root = await createFolder(mark, { name: "Order root", shared: true });
+    const parent = await createFolder(mark, { name: "Order parent", parentId: root.id });
+    const child = await createFolder(mark, { name: "Order child", parentId: parent.id });
+    const target = await createFolder(mark, { name: "Order target", shared: true });
+    const holder = await createFolder(mark, { name: "Order holder" });
+    const blocker = await getAdminPool().connect();
+    try {
+      await blocker.query("begin");
+      await blocker.query("select pg_advisory_xact_lock(hashtextextended('page_folders:' || $1::text, 0))", [mark.workspaceId]);
+      const outcome = (promise: Promise<unknown>) => promise.then(() => "moved", (error: Error) => error.message);
+      const parentMove = outcome(moveFolder(mark, parent.id, { parentId: holder.id, allowVisibilityChange: true }));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const childMove = outcome(moveFolder(mark, child.id, { parentId: target.id, allowVisibilityChange: true }));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await blocker.query("commit");
+      assert.deepEqual(await Promise.all([parentMove, childMove]), ["moved", "moved"]);
+    } finally {
+      blocker.release();
+    }
+    assert.equal((await flags("page_folders", child.id)).parent_id, target.id);
+    assert.equal((await flags("page_folders", parent.id)).parent_id, holder.id);
   });
 });
 

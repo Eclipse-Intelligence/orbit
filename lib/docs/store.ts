@@ -1076,6 +1076,14 @@ async function rewriteLinksTo(db: Db, actor: Actor, pageId: string, title: strin
   return updated;
 }
 
+export async function countLinksToRewrite(actor: Actor, id: string, title: string) {
+  assertDocsRead(actor);
+  return withActor(actor, async (db) => {
+    const page = await loadPage(db, actor, id);
+    return (await staleLinks(db, page.id, title)).length;
+  });
+}
+
 async function renameInside(db: Db, actor: Actor, page: FullPageRow, title: string, stamp: Stamp, provenance?: Provenance) {
   if (page.title !== title) await commitPage(db, actor, page, { title, content: page.content }, { stamp, provenance, reason: "renamed" });
   return rewriteLinksTo(db, actor, page.id, title, stamp, provenance);

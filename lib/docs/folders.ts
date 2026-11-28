@@ -62,6 +62,14 @@ function checkName(value: unknown) {
   return name;
 }
 
+async function lockFolderOrder(db: Db, actor: Actor) {
+  try {
+    await db.query("select pg_advisory_xact_lock(hashtextextended('page_folders:' || $1::text, 0))", [actor.workspaceId]);
+  } catch (error) {
+    throw busyError(error);
+  }
+}
+
 async function loadFolder(db: Db, actor: Actor, id: string, lock = false) {
   if (!isUuid(id)) throw new CrmError("not_found", NOT_FOUND, 404);
   const result = await db.query<FolderRow>(`${FOLDER_SELECT} where f.id = $1 and f.workspace_id = $2${lock ? " for update of f" : ""}`, [id, actor.workspaceId]);
@@ -155,6 +163,7 @@ export async function moveFolder(
 ): Promise<FolderMoveResult> {
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
+    await lockFolderOrder(db, actor);
     const folder = await loadFolder(db, actor, id, true);
     if (folder.archived_at) throw new CrmError("invalid_input", "This folder is archived. Restore it before moving it.", 400);
     if (input.parentId === folder.id) throw new CrmError("invalid_input", "A folder can't go inside itself.", 400, { field: "parentId" });
@@ -251,6 +260,7 @@ export async function folderSharing(actor: Actor, id: string) {
 export async function shareFolder(actor: Actor, id: string, shared: boolean, provenance?: Provenance) {
   assertDocsWrite(actor);
   return withActor(actor, async (db) => {
+    await lockFolderOrder(db, actor);
     const folder = await loadFolder(db, actor, id, true);
     if (folder.shared !== shared) {
       if (!(actor.type === "user" && folder.user_id === actor.userId) && !(folder.user_id === null && shared)) {
