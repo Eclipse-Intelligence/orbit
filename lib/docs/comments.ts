@@ -68,13 +68,16 @@ function threadsOf(comments: DocComment[], text: string | null = null): DocComme
     if (list) list.push(comment);
     else replies.set(comment.parentId, [comment]);
   }
-  return comments
-    .filter((comment) => comment.parentId === null)
-    .map((root) => ({
-      root,
-      replies: replies.get(root.id) ?? [],
-      orphaned: text !== null && root.anchor !== null ? resolveAnchor(text, root.anchor, { budget, fuzzy: !root.resolved }).status === "orphaned" : false,
-    }));
+  const roots = comments.filter((comment) => comment.parentId === null);
+  const orphaned = new Set<string>();
+  if (text !== null) {
+    const order = roots.map((_, index) => index).sort((left, right) => Number(roots[left].resolved) - Number(roots[right].resolved) || left - right);
+    for (const index of order) {
+      const root = roots[index];
+      if (root.anchor !== null && resolveAnchor(text, root.anchor, { budget, fuzzy: !root.resolved }).status === "orphaned") orphaned.add(root.id);
+    }
+  }
+  return roots.map((root) => ({ root, replies: replies.get(root.id) ?? [], orphaned: orphaned.has(root.id) }));
 }
 
 export function authorNameOf(actor: Actor) {

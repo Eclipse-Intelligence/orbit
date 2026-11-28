@@ -58,7 +58,7 @@ describe("Reading comments has a work budget for the whole doc", () => {
   });
 
   it("places 1000 threads for the browser quickly too", () => {
-    const threads = Array.from({ length: 1000 }, (_, index) => ({ id: `root-${index}`, anchor: missing(index) }));
+    const threads = Array.from({ length: 1000 }, (_, index) => ({ id: `root-${index}`, anchor: missing(index), resolved: false }));
     const { result, ms } = took(() => placeThreads(PROSE, threads));
     assert.ok(ms < 3 * SECOND, `took ${ms}ms`);
     assert.equal(result.placed.length + result.orphaned.length, 1000);
@@ -81,7 +81,7 @@ describe("Reading comments has a work budget for the whole doc", () => {
     assert.equal(open.orphaned, false);
     assert.equal(resolved.orphaned, true);
     const layout = placeThreads(text, [
-      { id: "open", anchor: edited },
+      { id: "open", anchor: edited, resolved: false },
       { id: "resolved", anchor: edited, resolved: true },
     ]);
     assert.deepEqual(layout.placed.map((item) => item.id), ["open"]);
@@ -93,10 +93,52 @@ describe("Reading comments has a work budget for the whole doc", () => {
     const threads = Array.from({ length: 200 }, (_, index) => {
       const quote = `parcel arrives on day ${index}`;
       const at = text.indexOf(quote);
-      return { id: `root-${index}`, anchor: { quote, prefix: text.slice(Math.max(0, at - 20), at), suffix: text.slice(at + quote.length, at + quote.length + 8), at } };
+      return { id: `root-${index}`, resolved: false, anchor: { quote, prefix: text.slice(Math.max(0, at - 20), at), suffix: text.slice(at + quote.length, at + quote.length + 8), at } };
     });
     const layout = placeThreads(text, threads);
     assert.equal(layout.placed.length, 200);
     assert.equal(layout.orphaned.length, 0);
+  });
+
+  describe("resolved threads never starve open ones", () => {
+    const text = Array.from({ length: 800 }, (_, index) => `Paragraph ${index} explains that the delivery of the parcel is expected on day ${index % 28}.`).join("\n\n");
+
+    function resolvedFirst(count: number) {
+      return Array.from({ length: count }, (_, index) => ({ id: `done-${index}`, anchor: { quote: "e", prefix: "", suffix: "", at: index }, resolved: true }));
+    }
+
+    function edited(count: number) {
+      return Array.from({ length: count }, (_, index) => {
+        const quote = `Paragraph ${index * 7} explains that the delivary of the parcel is expected`;
+        const at = text.indexOf(`Paragraph ${index * 7} explains`);
+        return { id: `open-${index}`, anchor: { quote, prefix: "", suffix: "", at }, resolved: false };
+      });
+    }
+
+    it("places lightly edited open threads however many resolved ones come before them", () => {
+      const threads = [...resolvedFirst(600), ...edited(8)];
+      const layout = placeThreads(text, threads);
+      assert.deepEqual(
+        layout.placed.filter((item) => item.id.startsWith("open-")).map((item) => item.id),
+        edited(8).map((thread) => thread.id),
+      );
+    });
+
+    it("keeps the result in the order the threads came in", () => {
+      const threads = [...resolvedFirst(3), ...edited(3)];
+      const layout = placeThreads(text, threads);
+      assert.deepEqual(layout.placed.map((item) => item.id), ["done-0", "done-1", "done-2", "open-0", "open-1", "open-2"].filter((id) => layout.placed.some((item) => item.id === id)));
+      assert.deepEqual(layout.placed.map((item) => item.id), threads.map((thread) => thread.id).filter((id) => !layout.orphaned.includes(id)));
+    });
+
+    it("reads comments for REST, MCP and the assistant the same way", () => {
+      const open = edited(8).map((thread, index) => comment(index, thread.anchor));
+      const done = resolvedFirst(600).map((thread, index) => comment(1000 + index, thread.anchor, true));
+      const views = commentViews([...done, ...open], text);
+      assert.deepEqual(
+        views.filter((view) => view.status === "open").map((view) => view.orphaned),
+        new Array(8).fill(false),
+      );
+    });
   });
 });

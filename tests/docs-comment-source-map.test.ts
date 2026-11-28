@@ -88,10 +88,10 @@ describe("placing comment threads in the editor text", () => {
 
   it("places a thread on the source text and orphans one whose text is gone", () => {
     const threads = [
-      { id: "a", anchor: anchorFor("most clicks") },
-      { id: "b", anchor: anchorFor("page audit") },
-      { id: "c", anchor: { quote: "something deleted long ago", prefix: "", suffix: "", at: 5 } },
-      { id: "d", anchor: null },
+      { id: "a", anchor: anchorFor("most clicks"), resolved: false },
+      { id: "b", anchor: anchorFor("page audit"), resolved: false },
+      { id: "c", anchor: { quote: "something deleted long ago", prefix: "", suffix: "", at: 5 }, resolved: false },
+      { id: "d", anchor: null, resolved: false },
     ];
     const layout = placeThreads(body, threads);
     assert.deepEqual(layout.orphaned.sort(), ["c", "d"]);
@@ -104,15 +104,15 @@ describe("placing comment threads in the editor text", () => {
   it("follows the text after an edit above it, and orphans it once the text changes", () => {
     const anchor = anchorFor("page audit");
     const moved = `Added a new first paragraph.\n\n${body}`;
-    const layout = placeThreads(moved, [{ id: "b", anchor }]);
+    const layout = placeThreads(moved, [{ id: "b", anchor, resolved: false }]);
     assert.equal(layout.placed.length, 1);
     assert.equal(moved.slice(layout.placed[0].from, layout.placed[0].to), "page audit");
-    const gone = placeThreads(body.replace("A page audit is", "Something wholly different is"), [{ id: "b", anchor }]);
+    const gone = placeThreads(body.replace("A page audit is", "Something wholly different is"), [{ id: "b", anchor, resolved: false }]);
     assert.deepEqual(gone.orphaned, ["b"]);
   });
 
   it("treats a doc with no anchored threads as all orphaned without reading it", () => {
-    assert.deepEqual(placeThreads(body, [{ id: "x", anchor: null }]), { placed: [], orphaned: ["x"] });
+    assert.deepEqual(placeThreads(body, [{ id: "x", anchor: null, resolved: false }]), { placed: [], orphaned: ["x"] });
     assert.deepEqual(placeThreads(body, []), { placed: [], orphaned: [] });
   });
 });

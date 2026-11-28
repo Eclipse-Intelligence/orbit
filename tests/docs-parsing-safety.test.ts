@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { docsParser } from "@/lib/docs/editor/syntax";
 import { findTags, headingsIn, normaliseTag, parseDoc, plainText, tagAt } from "@/lib/docs/markdown";
-import { PdfDeadlineError, renderDocPdf } from "@/lib/docs/pdf";
+import { breakLongLines, PdfDeadlineError, renderDocPdf } from "@/lib/docs/pdf";
 
 const MEGABYTE = 1_000_000;
 const LIMIT_MS = 1000;
@@ -171,4 +171,57 @@ describe("The Docs PDF writer stays within its deadline on hostile input", () =>
       assert.ok(took < 8000, `${label} took ${took}ms`);
     });
   }
+});
+
+describe("Breaking long PDF lines never creates block syntax", () => {
+  const words = (count: number) => Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
+  const MARKERS = ["- item", "* item", "+ item", "1. item", "12) item", "# heading", "###### heading", "> quote", "| cell", "```js", "~~~", "---", "***", "___", "<div>", "===", ": term"];
+
+  function startsOfPieces(text: string) {
+    return text.split("\n").slice(1);
+  }
+
+  for (const marker of MARKERS) {
+    it(`never starts a piece with "${marker}"`, () => {
+      for (const offset of [0, 1, 2, 3, 5, 8]) {
+        const head = words(1500).slice(0, 8000 - offset).replace(/\s+$/, "");
+        const line = `${head} ${marker} and then more words ${words(400)}`;
+        const result = breakLongLines(`${line}\n\nAfter`);
+        const pieces = startsOfPieces(result.slice(0, result.indexOf("\n\nAfter")));
+        assert.ok(pieces.length >= 1, "the line was broken");
+        for (const piece of pieces) assert.ok(!/^(?:[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|#{1,6}(?:\s|$)|[>|<=:]|`{3}|~{3}|(?:[-*_][ \t]*){3})/.test(piece), `${marker} at ${offset}: ${piece.slice(0, 20)}`);
+        assert.equal(result.replace(/\s+/g, " "), `${line}\n\nAfter`.replace(/\s+/g, " "));
+      }
+    });
+  }
+
+  it("keeps a fence that follows a long line closed, so later text is not turned into code", () => {
+    const line = `${words(1500).slice(0, 7990)} \`\`\` ${words(300)}`;
+    const result = breakLongLines(`${line}\n\nAfter the line`);
+    assert.ok(!result.split("\n").some((piece) => piece.startsWith("```")));
+  });
+
+  it("leaves long lines inside a fence and long table rows whole", () => {
+    const long = words(3000);
+    const fenced = `\`\`\`\n${long}\n\`\`\`\n\nAfter`;
+    assert.equal(breakLongLines(fenced), fenced);
+    const tilde = `~~~~\n${long}\n~~~~`;
+    assert.equal(breakLongLines(tilde), tilde);
+    const table = `| A | B |\n| - | - |\n| ${long} | x |\n| y | z |`;
+    assert.equal(breakLongLines(table), table);
+    const bare = `A | B\n- | -\n${long} | x`;
+    assert.equal(breakLongLines(bare), bare);
+    assert.notEqual(breakLongLines(long), long);
+  });
+
+  it("breaks hostile long lines in under a second", () => {
+    for (const text of [" ".repeat(MEGABYTE), "- ".repeat(MEGABYTE / 2), "a ".repeat(MEGABYTE / 2), `${"a ".repeat(4000)}${" ".repeat(MEGABYTE)}- x`, "[a](http://".repeat(MEGABYTE / 11)]) {
+      within("breakLongLines", () => breakLongLines(text));
+    }
+  });
+
+  it("still breaks a long line after a closed fence", () => {
+    const text = `\`\`\`\ncode\n\`\`\`\n\n${words(3000)}`;
+    assert.ok(breakLongLines(text).split("\n").length > text.split("\n").length);
+  });
 });

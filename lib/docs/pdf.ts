@@ -157,24 +157,79 @@ function runsOf(text: string, node: SyntaxNode, bold = false) {
   return out;
 }
 
-function breakLongLines(content: string) {
+const BLOCK_START = /^(?:[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|#{1,6}(?:\s|$)|[>|<=:]|`{3}|~{3}|(?:[-*_][ \t]*){3})/;
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})/;
+const RULE_ROW = /^[\s|:-]*-[\s|:-]*$/;
+
+function startOfPiece(line: string, cut: number) {
+  let next = cut;
+  while (next < line.length && /\s/.test(line[next])) next += 1;
+  return next;
+}
+
+function safeCut(line: string, from: number) {
+  const reach = from + LONG_LINE;
+  const fine = (cut: number) => {
+    if (!/\s/.test(line[cut]) || /\s/.test(line[cut - 1])) return false;
+    const next = startOfPiece(line, cut);
+    return !BLOCK_START.test(line.slice(next, next + 4));
+  };
+  for (let cut = reach; cut > from + LONG_LINE / 2; cut -= 1) if (fine(cut)) return { cut, next: startOfPiece(line, cut) };
+  for (let cut = reach + 1; cut < Math.min(line.length, reach + LONG_LINE); cut += 1) if (fine(cut)) return { cut, next: startOfPiece(line, cut) };
+  return null;
+}
+
+function escapedStart(piece: string) {
+  if (!BLOCK_START.test(piece.slice(0, 4))) return piece;
+  return /^\d/.test(piece) ? piece.replace(/^(\d{1,9})([.)])/, "$1\\$2") : `\\${piece}`;
+}
+
+function breakLine(line: string) {
+  const pieces: string[] = [];
+  let from = 0;
+  while (line.length - from > LONG_LINE) {
+    const found = safeCut(line, from);
+    let cut = found?.cut ?? from + LONG_LINE;
+    if (!found) while (cut > from + 1 && !/\s/.test(line[cut])) cut -= 1;
+    if (!/\s/.test(line[cut])) cut = from + LONG_LINE;
+    pieces.push(pieces.length === 0 ? line.slice(from, cut) : escapedStart(line.slice(from, cut)));
+    from = found?.next ?? startOfPiece(line, cut);
+  }
+  pieces.push(pieces.length === 0 ? line.slice(from) : escapedStart(line.slice(from)));
+  return pieces.join("\n");
+}
+
+export function breakLongLines(content: string) {
   if (content.length <= LONG_LINE) return content;
-  return content
-    .split("\n")
-    .map((line) => {
-      if (line.length <= LONG_LINE) return line;
-      const pieces: string[] = [];
-      let from = 0;
-      while (line.length - from > LONG_LINE) {
-        let cut = from + LONG_LINE;
-        while (cut > from + LONG_LINE / 2 && !/\s/.test(line[cut])) cut -= 1;
-        if (!/\s/.test(line[cut])) cut = from + LONG_LINE;
-        pieces.push(line.slice(from, cut));
-        from = cut;
-        while (from < line.length && /\s/.test(line[from])) from += 1;
+  const lines = content.split("\n");
+  const inTable = new Array<boolean>(lines.length).fill(false);
+  for (let index = 0; index < lines.length; ) {
+    if (lines[index].trim() === "") {
+      index += 1;
+      continue;
+    }
+    let end = index;
+    let table = false;
+    while (end < lines.length && lines[end].trim() !== "") {
+      if (lines[end].includes("|") && (lines[end].trimStart().startsWith("|") || RULE_ROW.test(lines[end]))) table = true;
+      end += 1;
+    }
+    if (table) inTable.fill(true, index, end);
+    index = end;
+  }
+  let fence: { char: string; size: number } | null = null;
+  return lines
+    .map((line, index) => {
+      const marker = FENCE_LINE.exec(line);
+      if (fence) {
+        if (marker && marker[1][0] === fence.char && marker[1].length >= fence.size && line.trim().replace(/[`~]/g, "") === "") fence = null;
+        return line;
       }
-      pieces.push(line.slice(from));
-      return pieces.join("\n");
+      if (marker && !(marker[1][0] === "`" && line.slice(marker[0].length).includes("`"))) {
+        fence = { char: marker[1][0], size: marker[1].length };
+        return line;
+      }
+      return line.length <= LONG_LINE || inTable[index] ? line : breakLine(line);
     })
     .join("\n");
 }

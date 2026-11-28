@@ -5,18 +5,25 @@ export type Placement = { id: string; from: number; to: number; fuzzy: boolean }
 
 export type Layout = { placed: Placement[]; orphaned: string[] };
 
-export function placeThreads(body: string, threads: { id: string; anchor: CommentAnchor | null; resolved?: boolean }[]): Layout {
+export function placeThreads(body: string, threads: { id: string; anchor: CommentAnchor | null; resolved: boolean }[]): Layout {
   const anchored = threads.filter((thread) => thread.anchor !== null);
   if (anchored.length === 0) return { placed: [], orphaned: threads.map((thread) => thread.id) };
   const map = sourceMap(body);
   const budget = anchorBudget();
-  const placed: Placement[] = [];
-  const orphaned: string[] = [];
-  for (const thread of threads) {
+  const found = new Map<number, Placement>();
+  const order = threads.map((_, index) => index).sort((left, right) => Number(threads[left].resolved) - Number(threads[right].resolved) || left - right);
+  for (const index of order) {
+    const thread = threads[index];
     const match = thread.anchor ? resolveAnchor(map.flat.text, thread.anchor, { budget, fuzzy: !thread.resolved }) : null;
     const span = match && match.status === "found" ? sourceRange(map, match.start, match.end) : null;
-    if (match && match.status === "found" && span) placed.push({ id: thread.id, from: span.from, to: span.to, fuzzy: match.fuzzy });
-    else orphaned.push(thread.id);
+    if (match && match.status === "found" && span) found.set(index, { id: thread.id, from: span.from, to: span.to, fuzzy: match.fuzzy });
   }
+  const placed: Placement[] = [];
+  const orphaned: string[] = [];
+  threads.forEach((thread, index) => {
+    const place = found.get(index);
+    if (place) placed.push(place);
+    else orphaned.push(thread.id);
+  });
   return { placed, orphaned };
 }

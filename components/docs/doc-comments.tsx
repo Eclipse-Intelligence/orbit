@@ -236,7 +236,7 @@ export function DocCommentsPanel({ pageId, fallbackBody, viewerName, phone, onCl
   const asked = useSearchParams().get(COMMENT_PARAM);
 
   const threads = useMemo(() => threadsOf(comments ?? []), [comments]);
-  const layout = useMemo(() => placeThreads(body, threads.map((thread) => ({ id: thread.root.id, anchor: thread.root.anchor }))), [body, threads]);
+  const layout = useMemo(() => placeThreads(body, threads.map((thread) => ({ id: thread.root.id, anchor: thread.root.anchor, resolved: thread.root.resolved }))), [body, threads]);
   const orphaned = useMemo(() => new Set(layout.orphaned), [layout]);
   const placement = useMemo(() => new Map(layout.placed.map((item) => [item.id, item])), [layout]);
 
