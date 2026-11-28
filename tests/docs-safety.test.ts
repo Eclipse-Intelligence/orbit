@@ -163,12 +163,13 @@ describe("folders after an unshare", () => {
     const team = await createFolder(mark, { name: "Team space", shared: true });
     const priyaSub = await createFolder(priya, { name: "Priya's corner", parentId: team.id });
     await createDoc(priya, { title: "Priya's corner note", folderId: priyaSub.id });
+    const priyaDirect = await createDoc(priya, { title: "Priya's note in the team folder", folderId: team.id });
     const agentSub = await createFolder(agent, { name: "Agent output", parentId: team.id });
     const agentDoc = await createDoc(agent, { title: "Agent report", folderId: team.id });
     assert.equal(agentSub.owner, null);
     assert.equal(agentDoc.owner, null);
     assert.equal(agentDoc.visibility, "shared");
-    assert.equal((await folderSharing(mark, team.id)).ownedByOthers, 4);
+    assert.equal((await folderSharing(mark, team.id)).ownedByOthers, 5);
 
     await shareFolder(mark, team.id, false);
     const priyaFolders = await listFolders(priya);
@@ -180,6 +181,10 @@ describe("folders after an unshare", () => {
     assert.equal((await listFolders(mark)).some((folder) => folder.id === priyaSub.id), false);
     assert.equal((await getDoc(priya, agentDoc.id)).visibility, "shared");
     assert.equal((await getDoc(agent, agentDoc.id)).owner, null);
+    assert.equal((await getDoc(priya, priyaDirect.id)).folderId, null);
+    await shareFolder(mark, team.id, true);
+    assert.equal((await getDoc(priya, priyaDirect.id)).visibility, "private");
+    await assert.rejects(getDoc(mark, priyaDirect.id), /doesn't exist|private/);
   });
 
   it("shows a folder shared from inside a private folder at the recipient's top level", async () => {

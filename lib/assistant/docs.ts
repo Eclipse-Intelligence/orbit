@@ -12,7 +12,7 @@ import { getFolder } from "@/lib/docs/folders";
 import { rebase } from "@/lib/docs/live/rebase";
 import { applyEdits, textEdits, type TextEdit } from "@/lib/docs/live/text-diff";
 import { searchDocs } from "@/lib/docs/search";
-import { archiveDoc, assistantMayEdit, checkPublicEnding, createDoc, editDoc, getDoc, listBacklinks, moveDoc, readDoc, renameDoc, setDocPublic, shareDoc } from "@/lib/docs/store";
+import { archiveDoc, assistantMayEdit, checkPublicEnding, countLinksToRewrite, createDoc, editDoc, getDoc, moveDoc, readDoc, renameDoc, setDocPublic, shareDoc } from "@/lib/docs/store";
 import { dailyHref, docHref, type DocDetail, type DocDiffLine, type DocEdit, type DocSummary } from "@/lib/docs/types";
 import { toolSource } from "@/lib/assistant/source";
 import { expiryDayLabel, expiryProblem } from "@/lib/docs/public-expiry";
@@ -161,7 +161,7 @@ export async function docCardDetails(actor: UserActor, args: Args): Promise<Reco
         }
       }
       if (action === "clear_public_ending" && !doc.public) out[`${key}:problem`] = "The public link is off. Turn it on first.";
-      if (action === "rename") out[`${key}:links`] = String((await listBacklinks(actor, docId).catch(() => [])).length);
+      if (action === "rename") out[`${key}:links`] = String(await countLinksToRewrite(actor, docId, str(args.title)).catch(() => 0));
     }
   }
   const folderId = str(args.folderId);

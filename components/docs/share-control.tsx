@@ -378,7 +378,7 @@ export function FolderSharePanel({ folder, open }: { folder: Folder; open: boole
       {owned && !confirming && (othersInside > 0 || sharedOnOwn > 0) && (
         <ShareNotice tone={othersInside > 0 ? "amber" : "plain"}>
           {othersInside > 0 && <p>{othersMoveText(othersInside)}</p>}
-          {sharedOnOwn > 0 && <p>{sharedOnOwn === 1 ? "1 note here is shared on its own and stays shared." : `${sharedOnOwn} notes here are shared on their own and stay shared.`}</p>}
+          {sharedOnOwn > 0 && <p>{sharedOnOwn === 1 ? "1 item here is shared on its own and stays shared." : `${sharedOnOwn} items here are shared on their own and stay shared.`}</p>}
         </ShareNotice>
       )}
       {owned && confirming && (
@@ -478,7 +478,7 @@ export function PageShare({ summary, compact = false }: { summary: PageSummary; 
           <ShareOption name={`share-${summary.id}`} checked={!summary.shared} disabled={fromFolder || lockedShared || pending} onSelect={() => void choose("private")} icon={<LockIcon aria-hidden className="text-soft size-3.5" />} title="Private">
             {owned ? "Only you." : `Only ${summary.owner.short}.`}
           </ShareOption>
-          <ShareOption name={`share-${summary.id}`} checked={summary.shared} disabled={fromFolder || pending} onSelect={() => void choose("shared")} icon={<UsersIcon aria-hidden className="size-3.5 text-(--tag-blue-text)" />} title="Shared with workspace">
+          <ShareOption name={`share-${summary.id}`} checked={summary.shared} disabled={fromFolder || pending || !(owned || summary.owner.kind !== "person")} onSelect={() => void choose("shared")} icon={<UsersIcon aria-hidden className="size-3.5 text-(--tag-blue-text)" />} title="Shared with workspace">
             Everyone in the workspace can read and edit it.
           </ShareOption>
         </div>

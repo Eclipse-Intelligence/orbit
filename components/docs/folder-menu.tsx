@@ -57,6 +57,7 @@ export default function FolderMenu({
   const placement = { ownerId: folder.owner.id, ownShared, viewerId, exclude: descendantsOf(folders, folder.id) };
   const targets = placeableFolders(folders, placement);
   const atTop = canPlaceAtTop(placement);
+  const atTopLevel = folder.parentId === null && !folder.parentHidden;
   const siblingsOf = (parentId: string | null) => folders.filter((item) => item.parentId === parentId && item.id !== folder.id).length;
 
   function later(action: () => void) {
@@ -110,10 +111,10 @@ export default function FolderMenu({
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {atTop && (
-                <DropdownMenuItem disabled={folder.parentId === null} onSelect={() => void moveFolder(folder.id, null, siblingsOf(null))}>
+                <DropdownMenuItem disabled={atTopLevel} onSelect={() => void moveFolder(folder.id, null, siblingsOf(null))}>
                   <FolderIcon aria-hidden className="text-subtle size-3.5 shrink-0" />
                   <span className="min-w-0 flex-1 truncate">Top level</span>
-                  {folder.parentId === null && <CheckIcon aria-label="Current place" role="img" className="size-3.5" />}
+                  {atTopLevel && <CheckIcon aria-label="Current place" role="img" className="size-3.5" />}
                 </DropdownMenuItem>
               )}
               {targets.map((target) => (
