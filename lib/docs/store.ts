@@ -258,7 +258,7 @@ type LinkRow = { key: string; pageId: string | null; label: string; heading: str
 
 type LinkPlan = { content: string; links: LinkRow[]; tags: string[]; mentions: DocMention[] };
 
-type LinkedPage = { id: string; workspace_id: string; user_id: string | null; kind: string };
+type LinkedPage = { id: string; workspace_id: string; user_id: string | null; kind: string; effective_shared: boolean };
 
 const MERGE_HOPS = 5;
 
@@ -411,14 +411,14 @@ async function planLinks(
   }
   const sticky = new Map<string, { id: string; title: string }>();
   const hidden = new Map<string, string>();
-  const previous = await db.query<{ key: string; target_id: string; id: string | null; title: string | null }>(
-    `select l.target_key as key, l.target_page_id as target_id, t.id, t.title from crm.page_links l
+  const previous = await db.query<{ key: string; target_id: string; id: string | null; title: string | null; target_shared: boolean | null }>(
+    `select l.target_key as key, l.target_page_id as target_id, t.id, t.title, t.effective_shared as target_shared from crm.page_links l
      left join crm.pages t on t.id = l.target_page_id
      where l.page_id = $1 and l.target_kind = 'page' and l.target_page_id is not null`,
     [page.id],
   );
   for (const row of previous.rows) {
-    if (row.id === null) hidden.set(row.key, row.target_id);
+    if (row.id === null || (page.effective_shared && !row.target_shared)) hidden.set(row.key, row.target_id);
     else if (row.title !== null) sticky.set(row.key, { id: row.id, title: row.title });
   }
   let rewritten = content;
@@ -648,7 +648,9 @@ async function storedLiveCopy(db: Db, page: FullPageRow): Promise<LiveCopy | nul
 async function staleLinks(db: Db, pageId: string, title: string) {
   const result = await db.query<{ id: string; keys: string[] }>(
     `select p.id, array_agg(distinct l.target_key) as keys from crm.page_links l join crm.pages p on p.id = l.page_id
+     join crm.pages t on t.id = l.target_page_id
      where l.target_page_id = $1 and p.id <> $1 and p.archived_at is null and l.target_kind = 'page' and l.target_key <> $2
+       and (t.effective_shared or not p.effective_shared)
      group by p.id`,
     [pageId, linkKey(title)],
   );
@@ -711,7 +713,7 @@ async function detail(db: Db, actor: Actor, row: FullPageRow): Promise<DocDetail
     path: path.rows,
     links: pageLinks,
     mentions,
-    canChangeSharing: row.kind === "note" && (row.shared ? owner : true),
+    canChangeSharing: row.kind === "note" && (owner || (row.user_id === null && !row.shared)),
     canChangeAssistantEdit: owner,
   };
 }
@@ -1005,11 +1007,11 @@ export async function untagPrivatePages(db: Db, actor: Actor, provenance?: Prove
 
 type OwnerRow = { user_id: string; workspace_id: string; workspace_name: string; role: "owner" | "admin" | "member"; email: string | null; full_name: string | null };
 
-export async function untagFolderPages(folderIds: string[]) {
-  if (folderIds.length === 0) return 0;
+export async function untagFolderPages(folderIds: string[], pageIds: string[] = []) {
+  if (folderIds.length === 0 && pageIds.length === 0) return 0;
   const pages = await query<{ page_id: string; user_id: string; workspace_id: string }>(
-    "select page_id::text, user_id::text, workspace_id::text from private.private_tagged_pages($1::uuid[])",
-    [folderIds],
+    "select page_id::text, user_id::text, workspace_id::text from private.private_tagged_pages($1::uuid[], $2::uuid[])",
+    [folderIds, pageIds],
   );
   const byOwner = new Map<string, { userId: string; workspaceId: string; ids: string[] }>();
   for (const row of pages.rows) {
@@ -1046,9 +1048,9 @@ export async function untagFolderPages(folderIds: string[]) {
   return cleaned;
 }
 
-export function untagFolderPagesAfterCommit(db: Db, folderIds: string[]) {
+export function untagFolderPagesAfterCommit(db: Db, folderIds: string[], pageIds: string[] = []) {
   afterCommit(db, async () => {
-    await untagFolderPages(folderIds);
+    await untagFolderPages(folderIds, pageIds);
   });
 }
 
@@ -1237,10 +1239,12 @@ async function shareIn(db: Db, actor: Actor, page: FullPageRow, shared: boolean,
   if (page.kind === "daily") throw new CrmError("forbidden", "Daily notes are always private, so they can't be shared.", 403);
   const before = visibilityOf(page.shared, page.effective_shared);
   if (page.shared === shared) return { after: page, visibility: visibilityChange(before, before) };
-  if (!shared && !ownedBy(actor, page.user_id)) {
+  if (!ownedBy(actor, page.user_id) && !(page.user_id === null && shared)) {
     throw new CrmError(
       "forbidden",
-      page.user_id ? `Only ${page.owner_name ?? "its owner"} can make this note private.` : "This note has no owner, so it can't be made private. A member can copy it into a private note instead.",
+      page.user_id
+        ? `Only ${page.owner_name ?? "its owner"} can ${shared ? "share this note" : "make this note private"}.`
+        : "This note has no owner, so it can't be made private. A member can copy it into a private note instead.",
       403,
     );
   }

@@ -71,6 +71,7 @@ export function toFolder(actor: UserActor, folder: DocFolder): Folder {
     id: folder.id,
     name: folder.name,
     parentId: folder.parentId,
+    parentHidden: folder.parentHidden,
     position: folder.position,
     visibility: folder.shared ? "shared" : "private",
     shared: folder.effectiveShared,

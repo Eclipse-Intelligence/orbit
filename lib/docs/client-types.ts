@@ -20,6 +20,7 @@ export type Folder = {
   id: string;
   name: string;
   parentId: string | null;
+  parentHidden?: boolean;
   position: number;
   visibility: Visibility;
   shared: boolean;

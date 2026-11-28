@@ -363,11 +363,11 @@ describe("folder cleanup edge cases", () => {
   it("leaves a folder that was shared again before the cleanup ran alone, and counts only cleaned pages", async () => {
     const folder = await createFolder(mark, { name: "Reshared", shared: true }, PROVENANCE);
     const sams = await createDoc(sam, { title: "Still shared", content: tag(priya, "Priya"), folderId: folder.id }, PROVENANCE);
-    assert.equal(await untagFolderPages([folder.id]), 0);
+    assert.equal(await untagFolderPages([folder.id], [sams.id]), 0);
     assert.equal((await getDoc(sam, sams.id)).content, tag(priya, "Priya"));
     await sql("update crm.page_folders set shared = false where id = $1", [folder.id]);
-    assert.equal(await untagFolderPages([folder.id]), 1);
-    assert.equal(await untagFolderPages([folder.id]), 0);
+    assert.equal(await untagFolderPages([folder.id], [sams.id]), 1);
+    assert.equal(await untagFolderPages([folder.id], [sams.id]), 0);
     assert.equal((await getDoc(sam, sams.id)).content, "@Priya");
   });
 

@@ -40,6 +40,7 @@ export type DocEditorRef = {
 export type DocFolder = {
   id: string;
   parentId: string | null;
+  parentHidden: boolean;
   name: string;
   position: number;
   owner: DocPerson | null;

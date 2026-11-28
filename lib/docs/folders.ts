@@ -39,6 +39,7 @@ function mapFolder(actor: Actor, row: FolderRow): DocFolder {
   return {
     id: row.id,
     parentId: row.parent_visible ? row.parent_id : null,
+    parentHidden: !row.parent_visible,
     name: row.name,
     position: row.position,
     owner: row.user_id ? { id: row.user_id, name: row.owner_name ?? "Former member" } : null,
@@ -168,6 +169,7 @@ export async function moveFolder(
     if (change.changed && !input.allowVisibilityChange) throw visibilityError(after, parent ? parent.name : "the top level");
     const moving = (folder.parent_id ?? null) !== (parent?.id ?? null);
     const subtree = moving && folder.effective_shared && !afterShared ? await folderTree(db, folder.id) : [];
+    const pageIds = await unsharedPagesIn(db, subtree);
     if (moving) {
       try {
         await db.query("update crm.page_folders set parent_id = $2 where id = $1", [folder.id, parent?.id ?? null]);
@@ -181,7 +183,7 @@ export async function moveFolder(
     if (moving) await auditFolder(db, actor, "page_folder.moved", moved, provenance, { parentId: moved.parent_id, previousParentId: folder.parent_id, visibility: after }, folder.effective_shared);
     if (folder.effective_shared && !moved.effective_shared) {
       await untagPrivatePages(db, actor, provenance);
-      untagFolderPagesAfterCommit(db, subtree);
+      untagFolderPagesAfterCommit(db, subtree, pageIds);
     }
     return { folder: mapFolder(actor, moved), visibility: change };
   });
@@ -194,11 +196,17 @@ function busyError(error: unknown) {
   return error;
 }
 
+async function unsharedPagesIn(db: Db, folderIds: string[]) {
+  if (folderIds.length === 0) return [];
+  const result = await db.query<{ id: string }>("select id::text from crm.pages where folder_id = any($1::uuid[]) and not shared", [folderIds]);
+  return result.rows.map((row) => row.id);
+}
+
 async function folderTree(db: Db, folderId: string) {
   const result = await db.query<{ id: string }>(
     `with recursive tree as (
        select f.id from crm.page_folders f where f.id = $1
-       union all
+       union
        select c.id from crm.page_folders c join tree t on c.parent_id = t.id
      )
      select id::text from tree`,
@@ -211,13 +219,14 @@ async function sharing(db: Db, folder: FolderRow): Promise<FolderSharing> {
   const result = await db.query<{ docs: number; folders: number; shared_on_their_own: number; owned_by_others: number }>(
     `with recursive tree as (
        select f.id from crm.page_folders f where f.id = $1
-       union all
+       union
        select c.id from crm.page_folders c join tree t on c.parent_id = t.id
      )
      select
        (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null) as docs,
        (select count(*)::int - 1 from tree) as folders,
-       (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null and p.shared) as shared_on_their_own,
+       (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null and p.shared)
+         + (select count(*)::int from crm.page_folders f where f.id in (select id from tree) and f.id <> $1 and f.archived_at is null and f.shared) as shared_on_their_own,
        (select count(*)::int from crm.pages p where p.folder_id in (select id from tree) and p.archived_at is null and p.user_id is distinct from $2)
          + (select count(*)::int from crm.page_folders f where f.id in (select id from tree) and f.id <> $1 and f.archived_at is null and f.user_id is distinct from $2) as owned_by_others`,
     [folder.id, folder.user_id],
@@ -244,15 +253,16 @@ export async function shareFolder(actor: Actor, id: string, shared: boolean, pro
   return withActor(actor, async (db) => {
     const folder = await loadFolder(db, actor, id, true);
     if (folder.shared !== shared) {
-      if (!shared && !(actor.type === "user" && folder.user_id === actor.userId)) {
+      if (!(actor.type === "user" && folder.user_id === actor.userId) && !(folder.user_id === null && shared)) {
         throw new CrmError(
           "forbidden",
-          folder.user_id ? `Only ${folder.owner_name ?? "its owner"} can make this folder private.` : "This folder has no owner, so it can't be made private.",
+          folder.user_id ? `Only ${folder.owner_name ?? "its owner"} can ${shared ? "share this folder" : "make this folder private"}.` : "This folder has no owner, so it can't be made private.",
           403,
         );
       }
       const before = await sharing(db, folder);
       const subtree = !shared && folder.effective_shared ? await folderTree(db, folder.id) : [];
+      const pageIds = await unsharedPagesIn(db, subtree);
       try {
         await db.query("update crm.page_folders set shared = $2 where id = $1", [folder.id, shared]);
       } catch (error) {
@@ -262,7 +272,7 @@ export async function shareFolder(actor: Actor, id: string, shared: boolean, pro
       await auditFolder(db, actor, "page_folder.shared", after, provenance, { shared, docs: before.docs, folders: before.folders }, folder.effective_shared);
       if (folder.effective_shared && !after.effective_shared) {
         await untagPrivatePages(db, actor, provenance);
-        untagFolderPagesAfterCommit(db, subtree);
+        untagFolderPagesAfterCommit(db, subtree, pageIds);
       }
       return { folder: mapFolder(actor, after), sharing: { ...before, shared: after.shared, effectiveShared: after.effective_shared } };
     }
@@ -280,7 +290,7 @@ export async function archiveFolder(actor: Actor, id: string, provenance?: Prove
     await db.query(
       `with recursive tree as (
          select f.id from crm.page_folders f where f.id = $1
-         union all
+         union
          select c.id from crm.page_folders c join tree t on c.parent_id = t.id where c.archived_at is null
        ),
        pages as (update crm.pages p set archived_at = $2 where p.folder_id in (select id from tree) and p.archived_at is null returning p.id)
@@ -304,7 +314,7 @@ export async function restoreFolder(actor: Actor, id: string, provenance?: Prove
     await db.query(
       `with recursive tree as (
          select f.id from crm.page_folders f where f.id = $1
-         union all
+         union
          select c.id from crm.page_folders c join tree t on c.parent_id = t.id where c.archived_at = $2
        ),
        pages as (update crm.pages p set archived_at = null where p.folder_id in (select id from tree) and p.archived_at = $2 returning p.id)
