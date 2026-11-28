@@ -550,7 +550,7 @@ export async function runDocAction(actor: UserActor, args: Args, context: { unat
   }
   if (action === "archive") return { saved: true, doc: summaryOf(await archiveDoc(actor, requireDoc(args), provenance())) };
   const note = await appendToDailyNote(actor, { text: str(args.content), date: str(args.date) || undefined, meetings: args.meetings === true }, provenance());
-  return { saved: true, doc: summaryOf(note.page), date: note.date };
+  return { saved: true, doc: summaryOf(note.page), date: note.date, ...(note.meetingsError ? { warning: note.meetingsError } : {}) };
 }
 
 export async function searchDocsForAssistant(actor: UserActor, query: string, limit: number) {

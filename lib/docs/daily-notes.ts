@@ -98,6 +98,8 @@ export async function getDailyNote(actor: Actor, date?: string, options: { meeti
   return { page, date: day, isToday: day === localDate(now), meetings: await withMeetings(owner, day, options.meetings === true) };
 }
 
+const MEETINGS_FAILED = "Couldn't read the calendar, so the meetings line was left out.";
+
 function meetingLine(meetings: DailyMeeting[]) {
   if (meetings.length === 0) return "No meetings in the calendar.";
   const time = (value: string) => localTime(new Date(value));
@@ -114,8 +116,18 @@ export async function appendToDailyNote(
   const now = input.now ?? new Date();
   const day = dayOf(input.date, now);
   const text = (input.text ?? "").trim();
-  const meetings = input.meetings ? await dailyMeetings(owner, day).catch(() => []) : null;
+  let meetings: DailyMeeting[] | null = null;
+  let meetingsError: string | undefined;
+  if (input.meetings) {
+    try {
+      meetings = await dailyMeetings(owner, day);
+    } catch (error) {
+      console.error("Daily note meetings failed", error);
+      meetingsError = MEETINGS_FAILED;
+    }
+  }
   const entry = [text, meetings ? meetingLine(meetings) : ""].filter(Boolean).join("\n");
+  if (!entry && meetingsError) throw new CrmError("upstream_error", `${MEETINGS_FAILED} Nothing was added.`, 502);
   if (!entry) throw new CrmError("invalid_input", "Say what to write in the daily note.", 400, { field: "text" });
   const page = await withActor(owner, async (db) => {
     const id = await ensureDaily(db, owner, day);
@@ -123,7 +135,7 @@ export async function appendToDailyNote(
     await changeDocContent(db, owner, fresh, appendDailyEntry(fresh.content, localTime(now), entry), { provenance, summary: "Added an entry" });
     return docDetail(db, owner, id);
   });
-  return { page, date: day, isToday: day === localDate(now), meetings };
+  return { page, date: day, isToday: day === localDate(now), meetings, ...(meetingsError ? { meetingsError } : {}) };
 }
 
 export async function listDailyNotes(actor: Actor, options: { from?: string; to?: string; limit?: number } = {}): Promise<DailyNoteDay[]> {

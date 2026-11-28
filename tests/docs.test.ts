@@ -417,3 +417,36 @@ describe("daily notes", () => {
     assert.equal(second.nextOffset, null);
   });
 });
+
+describe("daily notes when the calendar can't be read", () => {
+  async function withBrokenCalendar<T>(run: () => Promise<T>) {
+    const admin = getAdminPool();
+    await admin.query("alter table crm.calendar_events rename to calendar_events_hidden");
+    try {
+      return await run();
+    } finally {
+      await admin.query("alter table crm.calendar_events_hidden rename to calendar_events");
+    }
+  }
+
+  it("leaves the meetings line out, says so, and never writes that there were no meetings", async () => {
+    const now = new Date("2026-11-02T08:42:00Z");
+    const note = await withBrokenCalendar(() => appendToDailyNote(priya, { text: "Prep for Northwind", meetings: true, now }));
+    assert.equal(note.page.content, "08:42 Prep for Northwind");
+    assert.equal(note.meetings, null);
+    assert.match(note.meetingsError ?? "", /Couldn't read the calendar/);
+    assert.doesNotMatch(note.page.content, /No meetings/);
+  });
+
+  it("refuses an entry that was only the meetings line, and writes nothing", async () => {
+    const now = new Date("2026-11-03T08:42:00Z");
+    await assert.rejects(withBrokenCalendar(() => appendToDailyNote(priya, { meetings: true, now })), /Couldn't read the calendar/);
+    assert.equal(await getDailyNote(priya, "2026-11-03", { now }), null);
+  });
+
+  it("still writes the no meetings line when the calendar reads fine and is empty", async () => {
+    const note = await appendToDailyNote(priya, { meetings: true, date: "2026-11-04", now: new Date("2026-11-04T08:42:00Z") });
+    assert.equal(note.page.content, "08:42 No meetings in the calendar.");
+    assert.equal(note.meetingsError, undefined);
+  });
+});

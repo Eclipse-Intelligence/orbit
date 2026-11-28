@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { DELETE as restDelete, PATCH as restResolve } from "@/app/api/v1/docs/[id]/comments/[commentId]/route";
+import { POST as restReply } from "@/app/api/v1/docs/[id]/comments/[commentId]/replies/route";
 import { DELETE as archiveRoute, GET as readRoute, PATCH as patchRoute } from "@/app/api/v1/docs/[id]/route";
 import { GET as foldersRoute } from "@/app/api/v1/docs/folders/route";
 import { GET as listRoute, POST as createRoute } from "@/app/api/v1/docs/route";
@@ -95,5 +97,41 @@ describe("Docs REST API", () => {
     assert.equal(badOffset.status, 400);
     const badLimit = await listRoute(request("/docs?limit=ten"));
     assert.equal(badLimit.status, 400);
+  });
+});
+
+describe("Docs REST API provenance", () => {
+  const RESERVED = ["assistant", "web", " Email ", "clickup", "mcp"];
+
+  it("never lets an agent label a doc write with a source Orbit reserves for itself", async () => {
+    const folder = await createFolder(mark, { name: "Provenance", shared: true });
+    const doc = await createDoc(mark, { title: "Provenance doc", content: "Body", folderId: folder.id });
+    const comment = (
+      await getAdminPool().query<{ id: string }>(
+        "insert into crm.page_comments (workspace_id, page_id, author_name, body) values ($1, $2, 'Rae', 'Hello') returning id",
+        [mark.workspaceId, doc.id],
+      )
+    ).rows[0].id;
+    const created: string[] = [];
+    for (const source of RESERVED) {
+      const made = await createRoute(request("/docs", "POST", { title: `Made as ${source.trim()}`, folderId: folder.id, provenance: { source } }));
+      assert.equal(made.status, 201);
+      created.push(((await made.json()) as { doc: { id: string } }).doc.id);
+      assert.equal((await patchRoute(request(`/docs/${doc.id}`, "PATCH", { append: `as ${source}`, provenance: { source } }), params(doc.id))).status, 200);
+      assert.equal((await restReply(request(`/docs/${doc.id}/comments/${comment}/replies`, "POST", { body: "Reply", provenance: { source } }), { params: Promise.resolve({ id: doc.id, commentId: comment }) })).status, 201);
+      assert.equal((await restResolve(request(`/docs/${doc.id}/comments/${comment}`, "PATCH", { resolved: source === RESERVED[0], provenance: { source } }), { params: Promise.resolve({ id: doc.id, commentId: comment }) })).status, 200);
+    }
+    const kept = await createRoute(request("/docs", "POST", { title: "Own source", folderId: folder.id, provenance: { source: "research-agent" } }));
+    created.push(((await kept.json()) as { doc: { id: string } }).doc.id);
+    const events = await getAdminPool().query<{ source: string | null }>(
+      "select source from crm.audit_events where entity_id = any($1::uuid[]) and event_type like 'page%' and actor_agent_id is not null",
+      [[doc.id, ...created]],
+    );
+    const sources = events.rows.map((row) => (row.source ?? "").trim().toLowerCase());
+    for (const reserved of ["assistant", "web", "email", "clickup", "mcp"]) assert.ok(!sources.includes(reserved), `${reserved} reached the audit log`);
+    assert.ok(sources.includes("research-agent"));
+    await restDelete(request(`/docs/${doc.id}/comments/${comment}`, "DELETE", { provenance: { source: "assistant" } }), { params: Promise.resolve({ id: doc.id, commentId: comment }) });
+    const deleted = await getAdminPool().query<{ source: string | null }>("select source from crm.audit_events where entity_id = $1 and event_type = 'page.comment_deleted'", [doc.id]);
+    assert.ok(deleted.rows.every((row) => row.source !== "assistant"));
   });
 });

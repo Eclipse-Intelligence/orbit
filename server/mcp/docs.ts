@@ -395,7 +395,7 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
     async (args) =>
       run(async () => {
         const note = await appendToDailyNote(actor, { text: args.text, date: args.date, meetings: args.meetings }, provenance("append_daily_note"));
-        return { date: note.date, doc: summary(note.page), text: note.page.content };
+        return { date: note.date, doc: summary(note.page), text: note.page.content, ...(note.meetingsError ? { warning: note.meetingsError } : {}) };
       }),
   );
 }

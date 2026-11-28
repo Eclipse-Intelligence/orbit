@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { CrmError } from "@/lib/crm/errors";
 import type { Actor, Provenance } from "@/lib/crm/types";
-import { integerParam, parseInput } from "@/lib/crm/validation";
+import { agentSource, integerParam, parseInput } from "@/lib/crm/validation";
 import { deleteDocComment, readDocComments, replyToDocComment, setDocCommentResolved } from "@/lib/docs/comments";
 import { searchDocs } from "@/lib/docs/search";
 import { archiveDoc, createDoc, getDoc, listDocs, readDoc, updateDoc } from "@/lib/docs/store";
 import { DOC_SORTS, type DocEdit, type DocSort } from "@/lib/docs/types";
 
-const provenanceSchema = z.object({ source: z.string().max(200).nullable().optional(), sourceUrl: z.string().max(1000).nullable().optional() }).strict();
+const provenanceSchema = z.object({ source: z.string().max(200).nullable().optional().transform(agentSource), sourceUrl: z.string().max(1000).nullable().optional() }).strict();
 
 const createSchema = z
   .object({
