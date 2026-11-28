@@ -781,7 +781,7 @@ Docs (`/docs`) holds Markdown notes, written in a live preview editor where the 
 
 Routes: `/docs` (all notes), `/docs/<id>`, `/docs/folder/<id>`, `/docs/tag/<tag>`, `/docs/daily` and `/docs/daily/<YYYY-MM-DD>`, and `/docs?q=<search>`.
 
-Live editing runs over Supabase Realtime whenever `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set, and needs migration `20261216100000_docs_realtime.sql` (and `20270119100000_live_drafts.sql` for shared email drafts) and, in the Supabase dashboard, Realtime › Settings › "Allow public access" turned off. Agent and assistant edits reach open notes live only with `SUPABASE_SERVICE_ROLE_KEY` set; without it they arrive within 30 seconds. Locally, `DOCS_LIVE_RELAY=1` (without Supabase) runs a small relay inside `next start` or `next dev` so two browsers can edit a note or a shared draft together; leave it unset on Vercel.
+Live editing runs over Supabase Realtime whenever `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are set, and needs migrations `20261216100000_docs_realtime.sql` and `20270316100000_docs_live_keys.sql` (and `20270119100000_live_drafts.sql` for shared email drafts) and, in the Supabase dashboard, Realtime › Settings › "Allow public access" turned off. Agent and assistant edits reach open notes live only with `SUPABASE_SERVICE_ROLE_KEY` set; without it they arrive within 30 seconds. Locally, `DOCS_LIVE_RELAY=1` (without Supabase) runs a small relay inside `next start` or `next dev` so two browsers can edit a note or a shared draft together; leave it unset on Vercel.
 
 ## Keyboard shortcuts and the command palette
 

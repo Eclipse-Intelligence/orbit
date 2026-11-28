@@ -172,7 +172,7 @@ export const docsReads = {
   activity: ({ actor }: DocsCall) => docsActivity(actor),
   async live({ actor, params }: DocsCall) {
     const opened = await openLiveDoc(actor, params.id);
-    return { state: encodeBytes(opened.state), generation: opened.generation, revision: opened.doc.revision, title: opened.doc.title, transport: liveTransport() };
+    return { state: encodeBytes(opened.state), generation: opened.generation, revision: opened.doc.revision, title: opened.doc.title, key: opened.key, transport: liveTransport() };
   },
 };
 
@@ -223,6 +223,7 @@ export const docsWrites = {
       missing: encodeBytes(result.missing),
       generation: result.generation,
       rebuilt: result.rebuilt,
+      key: result.key,
       revision: result.doc.revision,
       summary: toSummary(actor, result.doc),
     };

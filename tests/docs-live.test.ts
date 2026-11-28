@@ -10,6 +10,7 @@ import { getAdminPool, getPool } from "@/lib/db/pool";
 import { openDailyNote } from "@/lib/docs/daily-notes";
 import { docsRespond, docsWrites } from "@/lib/docs/http";
 import { publishLiveChange, resetBroadcastFallback, setLiveTesting, supabaseSink, typingDuration, type LiveChange } from "@/lib/docs/live/broadcast";
+import { docTopic } from "@/lib/docs/live/protocol";
 import { LIVE_STATE_MAX, LIVE_UPDATE_MAX } from "@/lib/docs/live/persist";
 import { rebase } from "@/lib/docs/live/rebase";
 import { applyEdits, textEdits } from "@/lib/docs/live/text-diff";
@@ -41,6 +42,11 @@ async function member(email: string, name: string) {
   const id = (await admin.query<{ id: string }>("select private.create_local_user($1, 'password-123', $2) as id", [email, name])).rows[0].id;
   await admin.query("insert into crm.workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')", [mark.workspaceId, id]);
   return { ...mark, userId: id, email, fullName: name, role: "member" as const, scopes: scopesForRole("member") };
+}
+
+async function topicOf(pageId: string) {
+  const key = (await getAdminPool().query<{ live_key: string }>("select live_key from crm.pages where id = $1", [pageId])).rows[0].live_key;
+  return docTopic(pageId, key);
 }
 
 function clientFrom(state: Uint8Array) {
@@ -353,7 +359,8 @@ describe("agent edits arrive live", () => {
     events = [];
     await editDoc(agent, doc.id, { action: "edit", find: "Risks: legal.", replace: "Risks: legal review could slip into January 😬." });
     await settle();
-    const updates = events.filter((entry) => entry.topic === `doc:${doc.id}` && entry.event === "update");
+    const topic = await topicOf(doc.id);
+    const updates = events.filter((entry) => entry.topic === topic && entry.event === "update");
     assert.ok(updates.length >= 2, "the edit is streamed in several steps");
     assert.ok(updates.every((entry) => typeof entry.payload.a === "string" && entry.payload.server === true));
     const writing = events.filter((entry) => entry.topic === `docs-workspace:${mark.workspaceId}` && entry.event === "writing");
@@ -409,7 +416,8 @@ describe("agent edits arrive live", () => {
     events = [];
     await editDoc(agent, doc.id, { action: "append", content: "C" });
     await settle();
-    assert.ok(events.filter((entry) => entry.topic === `doc:${doc.id}`).length > 0);
+    const topic = await topicOf(doc.id);
+    assert.ok(events.filter((entry) => entry.topic === topic).length > 0);
     const watched = async () => (await getPool().query<{ watched: boolean }>("select private.page_watched($1, 90) as watched", [doc.id])).rows[0].watched;
     assert.equal(await watched(), true);
     await getAdminPool().query("update crm.page_watchers set seen_at = now() - interval '91 seconds' where page_id = $1", [doc.id]);
@@ -447,7 +455,8 @@ describe("fallback saves", () => {
     events = [];
     await restoreVersion(mark, doc.id, created.id);
     await settle();
-    const update = events.find((entry) => entry.event === "update" && entry.topic === `doc:${doc.id}`);
+    const topic = await topicOf(doc.id);
+    const update = events.find((entry) => entry.event === "update" && entry.topic === topic);
     assert.ok(update);
     Y.applyUpdate(local, Buffer.from(update.payload.u as string, "base64"));
     assert.equal(liveText(local).toString(), "First draft");
@@ -529,6 +538,7 @@ describe("realtime authorization", () => {
     const exists = await admin.query<{ found: string | null }>("select to_regclass('realtime.messages')::text as found");
     if (!exists.rows[0].found) await admin.query(readFileSync("supabase/bootstrap/local-realtime.sql", "utf8"));
     await admin.query(readFileSync("supabase/migrations/20261216100000_docs_realtime.sql", "utf8"));
+    await admin.query(readFileSync("supabase/migrations/20270316100000_docs_live_keys.sql", "utf8"));
   });
 
   async function access(userId: string, topic: string) {
@@ -559,18 +569,21 @@ describe("realtime authorization", () => {
 
   it("lets only people who can see a doc join, send and receive on its channel", async () => {
     const doc = await createDoc(mark, { title: "Channel test", content: "Hi" });
-    assert.deepEqual(await access(mark.userId, `doc:${doc.id}`), { read: true, write: true });
-    assert.deepEqual(await access(priya.userId, `doc:${doc.id}`), { read: false, write: false });
-    assert.deepEqual(await access(outsider.userId, `doc:${doc.id}`), { read: false, write: false });
+    const topic = await topicOf(doc.id);
+    assert.deepEqual(await access(mark.userId, topic), { read: true, write: true });
+    assert.deepEqual(await access(priya.userId, topic), { read: false, write: false });
+    assert.deepEqual(await access(outsider.userId, topic), { read: false, write: false });
     await shareDoc(mark, doc.id, true);
-    assert.deepEqual(await access(priya.userId, `doc:${doc.id}`), { read: true, write: true });
-    assert.deepEqual(await access(outsider.userId, `doc:${doc.id}`), { read: false, write: false });
+    const shared = await topicOf(doc.id);
+    assert.deepEqual(await access(priya.userId, shared), { read: true, write: true });
+    assert.deepEqual(await access(outsider.userId, shared), { read: false, write: false });
   });
 
   it("keeps daily note channels to their owner", async () => {
     const note = await openDailyNote(mark, "2026-10-30");
-    assert.deepEqual(await access(mark.userId, `doc:${note.page.id}`), { read: true, write: true });
-    assert.deepEqual(await access(priya.userId, `doc:${note.page.id}`), { read: false, write: false });
+    const topic = await topicOf(note.page.id);
+    assert.deepEqual(await access(mark.userId, topic), { read: true, write: true });
+    assert.deepEqual(await access(priya.userId, topic), { read: false, write: false });
   });
 
   it("lets people only listen on their own activity channels", async () => {
@@ -582,10 +595,15 @@ describe("realtime authorization", () => {
 
   it("refuses malformed topics and anonymous visitors", async () => {
     const doc = await createDoc(mark, { title: "Malformed", content: "" });
+    const topic = await topicOf(doc.id);
+    assert.deepEqual(await access(mark.userId, topic), { read: true, write: true });
+    assert.deepEqual(await access(mark.userId, `doc:${doc.id}`), { read: false, write: false }, "a topic without the page's key is refused");
+    assert.deepEqual(await access(mark.userId, `doc:${doc.id}:${"0".repeat(32)}`), { read: false, write: false }, "a guessed key is refused");
+    assert.deepEqual(await access(mark.userId, `${topic}x`), { read: false, write: false });
     assert.deepEqual(await access(mark.userId, `doc:${doc.id}x`), { read: false, write: false });
     assert.deepEqual(await access(mark.userId, `doc:not-a-uuid`), { read: false, write: false });
     assert.deepEqual(await access(mark.userId, "doc:"), { read: false, write: false });
-    assert.deepEqual(await access("", `doc:${doc.id}`), { read: false, write: false });
+    assert.deepEqual(await access("", topic), { read: false, write: false });
   });
 });
 
@@ -779,7 +797,7 @@ describe("live access", () => {
     events = [];
     await editDoc(mark, doc.id, { action: "append", content: "MCP note" }, { operation: "update_doc", source: "mcp" });
     await settle();
-    assert.equal(events.filter((entry) => entry.topic === `doc:${doc.id}`).length, 0, "nobody who can still see it is watching");
+    assert.equal(events.filter((entry) => entry.topic.startsWith(`doc:${doc.id}`)).length, 0, "nobody who can still see it is watching");
     await shareDoc(mark, doc.id, true);
     await openLiveDoc(priya, doc.id);
     await openLiveDoc(mark, doc.id);
@@ -810,7 +828,8 @@ describe("live links and renames", () => {
     const result = await renameDoc(agent, target.id, "Acme renewal");
     await settle();
     assert.equal(result.linksUpdated, 1);
-    const updates = events.filter((entry) => entry.topic === `doc:${linking.id}` && entry.event === "update");
+    const topic = await topicOf(linking.id);
+    const updates = events.filter((entry) => entry.topic === topic && entry.event === "update");
     assert.equal(updates.length, 1);
     assert.equal(updates[0].payload.a, undefined);
     assert.equal(events.filter((entry) => entry.event === "writing" && (entry.payload as { pageId?: string }).pageId === linking.id).length, 0);
@@ -840,7 +859,8 @@ describe("agent typing", () => {
     events = [];
     await editDoc(agent, doc.id, { action: "replace", content: lines.map((line) => line.replace("[ ]", "[x]")).join("\n") });
     await settle();
-    const updates = events.filter((entry) => entry.topic === `doc:${doc.id}` && entry.event === "update");
+    const topic = await topicOf(doc.id);
+    const updates = events.filter((entry) => entry.topic === topic && entry.event === "update");
     assert.ok(updates.length > 1 && updates.length <= 24, `${updates.length} steps`);
     for (const entry of updates) Y.applyUpdate(client.doc, Buffer.from(entry.payload.u as string, "base64"));
     assert.equal(liveText(client.doc).toString(), (await getDoc(mark, doc.id)).content);

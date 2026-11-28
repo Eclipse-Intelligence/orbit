@@ -38,6 +38,7 @@ import {
 } from "@/lib/docs/client-types";
 import type { DocsActionResult } from "@/lib/docs/http";
 import type { LiveTransportKind } from "@/lib/docs/live/protocol";
+import { fitsKeepalive } from "@/lib/mail/composer-state";
 import { watchLivePresence } from "@/lib/docs/live/registry";
 
 export type LiveOptions = { kind: LiveTransportKind; workspaceId: string; userId: string; publish?: boolean };
@@ -236,13 +237,14 @@ export function createLiveDocs(options: Options = {}): DocsData & { refreshActiv
     },
     async savePage(id, input, saveOptions = {}): Promise<SaveResult> {
       let response: Response;
+      const body = JSON.stringify(input);
       try {
         response = await fetch(`/api/docs/pages/${encodeURIComponent(id)}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(input),
+          body,
           credentials: "same-origin",
-          keepalive: saveOptions.keepalive === true && input.body.length < 60_000,
+          keepalive: saveOptions.keepalive === true && fitsKeepalive(body),
         });
       } catch {
         throw new DocsError(OFFLINE, "offline");

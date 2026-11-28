@@ -32,17 +32,25 @@ export async function GET(request: Request) {
         }
       };
       const unsubscribe = relaySubscribe(topic, client, (event, payload) => write(`data: ${JSON.stringify({ event, payload })}\n\n`));
-      const ping = setInterval(() => write(": ping\n\n"), 15_000);
-      stop = () => {
-        unsubscribe();
-        clearInterval(ping);
-      };
-      request.signal.addEventListener("abort", () => {
+      const close = () => {
         stop();
         try {
           controller.close();
         } catch {}
-      });
+      };
+      const ping = setInterval(() => {
+        write(": ping\n\n");
+        void relayAllows(actor, topic, false)
+          .then((allowed) => {
+            if (!allowed) close();
+          })
+          .catch(() => {});
+      }, 15_000);
+      stop = () => {
+        unsubscribe();
+        clearInterval(ping);
+      };
+      request.signal.addEventListener("abort", close);
       write(": joined\n\n");
     },
     cancel() {

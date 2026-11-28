@@ -10,7 +10,6 @@ import { chatTopic, personTopic, workspaceTopic, type AlertMessage, type LiveTra
 import { onTrustChange, publishPresence, trustedUser, trustWriter } from "@/lib/docs/live/registry";
 import { relayTransport } from "@/lib/docs/live/relay-transport";
 import {
-  KEEPALIVE_MAX,
   LiveSession,
   LiveSyncError,
   openSettled,
@@ -26,6 +25,7 @@ import { supabaseTransport } from "@/lib/docs/live/supabase-transport";
 import type { ChannelHandlers, ChannelStatus, LiveChannel, LiveTransport } from "@/lib/docs/live/transport";
 import { absoluteFrom, createLiveDoc, decodeBytes, encodeBytes, liveText } from "@/lib/docs/live/ydoc";
 import { liveParticipant } from "@/lib/docs/participants";
+import { fitsKeepalive } from "@/lib/mail/composer-state";
 import { adoptLiveBase, registerLiveNote, settleForLive, useDocsStore } from "@/stores/docs-store";
 
 export type CachedLive = {
@@ -35,6 +35,7 @@ export type CachedLive = {
   revision: number;
   generation: number | null;
   title: string;
+  key: string | null;
   base: string;
   own: [number, number][];
 };
@@ -60,6 +61,7 @@ type LivePayload = {
   rebuilt?: boolean;
   summary?: PageSummary;
   state?: string;
+  key?: string | null;
   title?: string;
   error?: string;
   code?: string;
@@ -120,7 +122,7 @@ function httpServer(pageId: string): LiveServer<PageSummary> {
         headers: { "content-type": "application/json" },
         body,
         credentials: "same-origin",
-        keepalive: input.keepalive === true && body.length < KEEPALIVE_MAX,
+        keepalive: input.keepalive === true && fitsKeepalive(body),
       });
       const payload = (await response.json().catch(() => null)) as LivePayload | null;
       if (!response.ok || !payload) throw liveError(response.status, payload);
@@ -133,6 +135,7 @@ function httpServer(pageId: string): LiveServer<PageSummary> {
         title: payload.summary?.title,
         generation: typeof payload.generation === "number" ? payload.generation : undefined,
         rebuilt: payload.rebuilt === true,
+        key: typeof payload.key === "string" ? payload.key : null,
         summary: payload.summary,
       };
     },
@@ -150,6 +153,7 @@ async function openState(pageId: string) {
     revision: payload.revision ?? 0,
     title: typeof payload.title === "string" ? payload.title : null,
     generation: typeof payload.generation === "number" ? payload.generation : 0,
+    key: typeof payload.key === "string" ? payload.key : null,
   };
 }
 
@@ -229,10 +233,11 @@ export async function attachLive(options: AttachOptions) {
   let revision: number;
   let generation: number | null;
   let title: string;
+  let key: string | null;
   let own: [number, number][] = [];
   let draft: Uint8Array | null = null;
   if (options.cached) {
-    ({ doc, serverVector, serverText, revision, generation, title, base, own } = options.cached);
+    ({ doc, serverVector, serverText, revision, generation, title, key, base, own } = options.cached);
   } else if (options.replacement?.state && options.base !== undefined) {
     base = options.base;
     doc = createLiveDoc(options.replacement.state);
@@ -241,6 +246,7 @@ export async function attachLive(options: AttachOptions) {
     revision = options.replacement.revision;
     generation = options.replacement.generation ?? 0;
     title = options.replacement.title ?? knownTitle(options.page);
+    key = options.replacement.key;
     clearLiveDraft(pageId);
   } else {
     const classicDraft = readDraft(pageId) !== null;
@@ -253,12 +259,13 @@ export async function attachLive(options: AttachOptions) {
     revision = opened.revision;
     generation = opened.generation;
     title = opened.title ?? knownTitle(options.page);
+    key = opened.key;
     if (classicDraft || options.base !== undefined) clearLiveDraft(pageId);
     else draft = parseDraft(readLiveDraft(pageId), generation);
   }
   const transport = await transportPromise.catch(() => null);
   if (!options.isCurrent() || current) return false;
-  const session = new LiveSession<PageSummary>({ pageId, user, doc, serverVector, serverText, revision, generation, title, own, transport, server: httpServer(pageId) });
+  const session = new LiveSession<PageSummary>({ pageId, user, doc, serverVector, serverText, revision, generation, title, own, transport, server: httpServer(pageId), key });
   if (draft) {
     try {
       Y.applyUpdate(doc, draft, RECONCILE);
@@ -451,6 +458,7 @@ export function detachLive(pageId: string, options: { save?: boolean } = {}): Ca
         revision: session.revision,
         generation: session.generation,
         title: session.title,
+        key: session.liveKey,
         base: session.text.toString(),
         own: session.ownClocks(),
       }

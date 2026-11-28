@@ -2,6 +2,7 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwareness
 import * as Y from "yjs";
 import {
   docTopic,
+  parseTopic,
   LIVE_MESSAGE_MAX,
   type AwarenessMessage,
   type HelloMessage,
@@ -38,12 +39,13 @@ export type SyncReply<Summary = unknown> = {
   generation?: number;
   rebuilt?: boolean;
   held?: boolean;
+  key?: string | null;
   summary?: Summary;
 };
 export type LiveServer<Summary = unknown> = { sync: (input: SyncInput) => Promise<SyncReply<Summary>> };
 
 export type LiveFailure = { status: number | null; code: string; message: string; final: boolean; fallback: boolean };
-export type Replacement = { state: Uint8Array | null; revision: number; generation: number | null; title: string | null; pendingTitle: string | null };
+export type Replacement = { state: Uint8Array | null; revision: number; generation: number | null; title: string | null; pendingTitle: string | null; key: string | null };
 
 export class LiveSyncError extends Error {
   readonly status: number | null;
@@ -64,6 +66,18 @@ export function failureOf(error: unknown): LiveFailure | null {
   if (code !== TOO_LONG && (status === null || !TERMINAL_STATUSES.has(status))) return null;
   const message = error instanceof Error && error.message ? error.message : "Couldn't save.";
   return { status, code, message, final: status === 403 || status === 404, fallback: code === LIVE_TOO_LARGE || code === LIVE_INVALID };
+}
+
+function sameVector(left: Uint8Array, right: Uint8Array) {
+  try {
+    const a = Y.decodeStateVector(left);
+    const b = Y.decodeStateVector(right);
+    if (a.size !== b.size) return false;
+    for (const [client, clock] of a) if (b.get(client) !== clock) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function integratedUpdate(doc: Y.Doc, vector: Uint8Array) {
@@ -144,6 +158,7 @@ type Options<Summary> = {
   server: LiveServer<Summary>;
   timing?: Partial<SessionTiming>;
   topic?: string;
+  key?: string | null;
 };
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -165,7 +180,7 @@ export class LiveSession<Summary = unknown> {
   private readonly timing: SessionTiming;
   private readonly transport: LiveTransport | null;
   private readonly server: LiveServer<Summary>;
-  private readonly topic: string;
+  private topic: string | null;
   private channel: LiveChannel | null = null;
   private channelToken: symbol | null = null;
   private joined = false;
@@ -219,7 +234,7 @@ export class LiveSession<Summary = unknown> {
     this.title = options.title;
     this.transport = options.transport;
     this.server = options.server;
-    this.topic = options.topic ?? docTopic(options.pageId);
+    this.topic = options.topic ?? (options.key === null ? null : docTopic(options.pageId, options.key));
     this.timing = { ...DEFAULT_TIMING, ...options.timing };
     for (const [client, clock] of options.own ?? []) this.own.set(client, clock);
     this.awareness = new Awareness(this.doc);
@@ -243,6 +258,11 @@ export class LiveSession<Summary = unknown> {
 
   get serverText() {
     return this.confirmedText;
+  }
+
+  get liveKey() {
+    const found = this.topic ? parseTopic(this.topic) : null;
+    return found?.key ?? null;
   }
 
   get serverRevision() {
@@ -487,7 +507,7 @@ export class LiveSession<Summary = unknown> {
   }
 
   private openChannel() {
-    if (!this.transport || this.channel) return;
+    if (!this.transport || this.channel || !this.topic) return;
     const token = Symbol("channel");
     this.channelToken = token;
     this.channel = this.transport.open(this.topic, {
@@ -505,6 +525,15 @@ export class LiveSession<Summary = unknown> {
         }
       },
     });
+  }
+
+  private follow(key: string | null | undefined) {
+    if (!key || this.closed || this.rebuilt || this.failure) return;
+    const topic = docTopic(this.pageId, key);
+    if (topic === this.topic) return;
+    this.topic = topic;
+    this.leaveChannel();
+    this.openChannel();
   }
 
   private announceLeave() {
@@ -830,6 +859,7 @@ export class LiveSession<Summary = unknown> {
       generation: typeof reply.generation === "number" ? reply.generation : null,
       title: reply.title ?? null,
       pendingTitle: context.title ?? (this.titleDirty ? this.title : null),
+      key: reply.key ?? null,
     };
     this.clearTimers();
     this.leaveChannel();
@@ -854,7 +884,7 @@ export class LiveSession<Summary = unknown> {
     }
     if (!reply.held) this.confirmedSeq = Math.max(this.confirmedSeq, context.seqAtStart);
     if (context.title !== undefined && this.title === context.title) this.titleDirty = false;
-    if (!reply.held && this.ownSeq === context.seqAtStart && this.remoteSeq === context.remoteAtStart && reply.revision >= this.confirmedRevision) {
+    if (!reply.held && reply.revision >= this.confirmedRevision && sameVector(Y.encodeStateVector(this.doc), reply.vector)) {
       this.confirmedText = this.text.toString();
       this.confirmedRevision = reply.revision;
     }
@@ -882,6 +912,7 @@ export class LiveSession<Summary = unknown> {
       if (!reply.held && (this.isSaver() || context.sent)) this.channel.send("saved", { sv: encodeBytes(reply.vector), r: reply.revision, ...this.generationTag() } satisfies SavedMessage);
       if (context.title !== undefined) this.channel.send("title", { t: context.title } satisfies TitleMessage);
     }
+    this.follow(reply.key);
     for (const listener of this.savedListeners) listener(reply);
     this.refreshStatus();
     if (!this.joined && !this.closed) this.armHeartbeat();
