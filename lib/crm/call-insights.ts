@@ -391,7 +391,15 @@ async function readTranscript(
   let queue: Promise<void> = Promise.resolve();
   const persist = () => {
     const snapshot = structuredClone(progress);
-    queue = queue.then(() => save(snapshot));
+    const run = queue.then(() => save(snapshot));
+    queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run.then(
+      () => true,
+      () => false,
+    );
   };
   let input = transcript;
   let size = transcript.length;
@@ -426,8 +434,8 @@ async function readTranscript(
             deadline: options.deadline,
           });
           slots[index] = result.data.notes;
-          report.progressed = true;
-          persist();
+          if (await persist()) report.progressed = true;
+          else stopped = true;
         } catch (error) {
           if (ranOutOfTime(error, options.deadline)) stopped = true;
           else {

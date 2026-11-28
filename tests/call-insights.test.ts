@@ -666,6 +666,51 @@ describe("call insights", () => {
         assert.equal(await attemptsOf(importId), 1);
       });
 
+      it("ends a run pending, without an unhandled rejection, when saving notes fails once, and a later run finishes", async () => {
+        const { owner, callId, contactId, companyId } = await setup("savefail@example.com");
+        const text = longTranscript(1500);
+        const importId = await importFor(owner, callId, contactId, companyId, text, "savefail-note");
+        const admin = getAdminPool();
+        await admin.query(
+          `create sequence public.fail_once;
+           create function public.fail_part_notes_once() returns trigger language plpgsql security definer as $f$
+           begin
+             if nextval('public.fail_once') = 1 then
+               raise exception 'brief database error';
+             end if;
+             return new;
+           end $f$;
+           create trigger fail_part_notes_once before update on crm.call_insights
+             for each row when (new.part_notes is distinct from old.part_notes)
+             execute function public.fail_part_notes_once()`,
+        );
+        const rejections: unknown[] = [];
+        const listener = (reason: unknown) => rejections.push(reason);
+        process.on("unhandledRejection", listener);
+        try {
+          const failing = routed(20);
+          const first = await summariseImport(owner, importId, { fetchImpl: failing.fetchImpl, deadline: Date.now() + 120_000 });
+          await new Promise((resolve) => setImmediate(resolve));
+          assert.equal(first?.status, "pending");
+          assert.equal(first?.error, null);
+          assert.deepEqual(rejections, []);
+          assert.ok(failing.calls.filter(isPart).length < splitTranscript(text, 40_000).length);
+          await makeStale(callId);
+          const later = routed(20);
+          const done = await summariseImport(owner, importId, { fetchImpl: later.fetchImpl, deadline: Date.now() + 120_000 });
+          assert.equal(done?.status, "ready");
+          assert.equal(await getInsightTranscript(owner, done!.id), text);
+          assert.deepEqual(rejections, []);
+        } finally {
+          process.off("unhandledRejection", listener);
+          await admin.query(
+            `drop trigger if exists fail_part_notes_once on crm.call_insights;
+             drop function if exists public.fail_part_notes_once();
+             drop sequence if exists public.fail_once`,
+          );
+        }
+      });
+
       it("discards saved notes when the transcript changes", async () => {
         const { owner, callId, contactId, companyId } = await setup("changed@example.com");
         const text = longTranscript(1500);
