@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import Button from "@/components/_ui/button";
 import { Sheet, SheetCloseButton, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/_ui/sheet";
 import { Composer, ThreadCard, type CommentActions } from "@/components/docs/comment-cards";
-import { createAnchor, resolveAnchor, stackCards, type AnchorMatch, type CommentAnchor } from "@/lib/docs/comment-anchor";
+import { anchorBudget, createAnchor, resolveAnchor, stackCards, type AnchorMatch, type CommentAnchor } from "@/lib/docs/comment-anchor";
 import {
   fetchComments,
   loadVisitor,
@@ -167,15 +167,13 @@ export default function PublicComments({ token, children }: { token: string; chi
   }, []);
 
   const threads = useMemo(() => threadsOf(comments ?? []), [comments]);
-  const placed = useMemo<Placed[]>(
-    () =>
-      map
-        ? threads
-            .filter((thread) => !thread.root.resolved)
-            .map((thread) => ({ thread, match: thread.root.anchor ? resolveAnchor(map.flat.text, thread.root.anchor) : ORPHANED }))
-        : [],
-    [threads, map],
-  );
+  const placed = useMemo<Placed[]>(() => {
+    if (!map) return [];
+    const budget = anchorBudget();
+    return threads
+      .filter((thread) => !thread.root.resolved)
+      .map((thread) => ({ thread, match: thread.root.anchor ? resolveAnchor(map.flat.text, thread.root.anchor, { budget }) : ORPHANED }));
+  }, [threads, map]);
   const anchored = useMemo(() => placed.filter((item) => item.match.status === "found").sort((a, b) => startOf(a) - startOf(b)), [placed]);
   const orphans = useMemo(() => placed.filter((item) => item.match.status !== "found"), [placed]);
   const resolved = useMemo(() => threads.filter((thread) => thread.root.resolved), [threads]);

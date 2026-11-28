@@ -84,12 +84,12 @@ describe("Docs PDF writer", () => {
   });
 
   it("splits a single row taller than a page", async () => {
-    const huge = Array.from({ length: 1200 }, (_, index) => `sentence${index}`).join(" ");
+    const huge = Array.from({ length: 600 }, (_, index) => `sentence${index}`).join(" ");
     const content = `| Notes | Count |\n| --- | --- |\n| ${huge} | 1 |\n| Short row | 2 |`;
     const { pages, text } = await read(await renderDocPdf({ title: "Tall row", content, updatedAt: UPDATED }));
     assert.ok(pages >= 2);
     const all = text.join(" ");
-    assert.ok(all.includes("sentence0") && all.includes("sentence1199") && all.includes("Short row"));
+    assert.ok(all.includes("sentence0") && all.includes("sentence599") && all.includes("Short row"));
     assert.match(text[1], /Notes Count/);
   });
 

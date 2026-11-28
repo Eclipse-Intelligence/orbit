@@ -2,7 +2,7 @@ import { withActor } from "@/lib/crm/context";
 import { CrmError, isPgError } from "@/lib/crm/errors";
 import { isUuid } from "@/lib/crm/mutate";
 import type { Actor, Provenance } from "@/lib/crm/types";
-import { resolveAnchor, type CommentAnchor } from "@/lib/docs/comment-anchor";
+import { anchorBudget, resolveAnchor, type CommentAnchor } from "@/lib/docs/comment-anchor";
 import { renderedText } from "@/lib/docs/editor/source-map";
 import { anchorSchema, COMMENT_BODY_LIMIT, COMMENT_NAME_LIMIT } from "@/lib/docs/public-comments";
 import { assertDocsRead, assertDocsWrite, auditDoc, loadPage } from "@/lib/docs/store";
@@ -60,13 +60,24 @@ function mapComment(row: CommentRow): DocComment {
 }
 
 function threadsOf(comments: DocComment[], text: string | null = null): DocCommentThread[] {
-  return comments
-    .filter((comment) => comment.parentId === null)
-    .map((root) => ({
-      root,
-      replies: comments.filter((comment) => comment.parentId === root.id),
-      orphaned: text !== null && root.anchor !== null ? resolveAnchor(text, root.anchor).status === "orphaned" : false,
-    }));
+  const budget = anchorBudget();
+  const replies = new Map<string, DocComment[]>();
+  for (const comment of comments) {
+    if (comment.parentId === null) continue;
+    const list = replies.get(comment.parentId);
+    if (list) list.push(comment);
+    else replies.set(comment.parentId, [comment]);
+  }
+  const roots = comments.filter((comment) => comment.parentId === null);
+  const orphaned = new Set<string>();
+  if (text !== null) {
+    const order = roots.map((_, index) => index).sort((left, right) => Number(roots[left].resolved) - Number(roots[right].resolved) || left - right);
+    for (const index of order) {
+      const root = roots[index];
+      if (root.anchor !== null && resolveAnchor(text, root.anchor, { budget, fuzzy: !root.resolved }).status === "orphaned") orphaned.add(root.id);
+    }
+  }
+  return roots.map((root) => ({ root, replies: replies.get(root.id) ?? [], orphaned: orphaned.has(root.id) }));
 }
 
 export function authorNameOf(actor: Actor) {

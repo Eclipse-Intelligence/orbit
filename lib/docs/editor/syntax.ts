@@ -1,13 +1,13 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import type { InlineContext, MarkdownConfig } from "@lezer/markdown";
-import { isTagBoundary, splitTarget, tagAt } from "@/lib/docs/markdown";
+import { isTagBoundary, MENTION_ID, splitTarget, tagAt } from "@/lib/docs/markdown";
 
 const OPEN_BRACKET = 91;
 const CLOSE_BRACKET = 93;
 const HASH = 35;
 const AT = 64;
 const WIKILINK_MAX = 400;
-const MENTION = /^@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):([0-9a-f-]{36})\)/;
+const MENTION = new RegExp(String.raw`^@\[([^[\]\n]{1,200})\]\((contact|company|task|opportunity|proposal|member):(${MENTION_ID})\)`);
 
 function wikiLink(cx: InlineContext, next: number, pos: number) {
   if (next !== OPEN_BRACKET || cx.char(pos + 1) !== OPEN_BRACKET) return -1;
