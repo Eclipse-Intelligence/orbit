@@ -30,28 +30,37 @@ export function descendantsOf(folders: Folder[], id: string) {
 }
 
 export async function refreshDocsAfterRestore() {
-  useDocsStore.setState({ lists: {} });
+  useDocsStore.setState({ lists: {}, listMore: {} });
   const store = useDocsStore.getState();
   await store.refreshNav();
   void store.refreshTitles();
 }
 
 export async function restoreFolder(id: string, name: string) {
-  const result = await restoreFolderAction(id);
-  if (result.error !== undefined) return result.error;
-  await refreshDocsAfterRestore();
+  try {
+    const result = await restoreFolderAction(id);
+    if (result.error !== undefined) return result.error;
+    await refreshDocsAfterRestore();
+  } catch {
+    return `Couldn't restore ${name}. Try again.`;
+  }
   useDocsStore.getState().notify(`Restored ${name}.`);
   return null;
 }
 
 export async function archiveFolder(folder: Folder) {
-  const result = await archiveFolderAction(folder.id);
   const store = useDocsStore.getState();
-  if (result.error !== undefined) {
-    store.notify(result.error, { tone: "alert" });
+  try {
+    const result = await archiveFolderAction(folder.id);
+    if (result.error !== undefined) {
+      store.notify(result.error, { tone: "alert" });
+      return false;
+    }
+    await refreshDocsAfterRestore();
+  } catch {
+    store.notify(`Couldn't archive ${folder.name}. Try again.`, { tone: "alert" });
     return false;
   }
-  await refreshDocsAfterRestore();
   store.notify(`Archived ${folder.name}.`, {
     undo: () => {
       void restoreFolder(folder.id, folder.name).then((problem) => {

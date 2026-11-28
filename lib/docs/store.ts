@@ -777,7 +777,8 @@ export async function listDocs(actor: Actor, query: DocListQuery = {}): Promise<
     values.push(tag, `${tag.replace(/[\\%_]/g, (match) => `\\${match}`)}/%`);
     where.push(`exists (select 1 from crm.page_tags t where t.page_id = p.id and (t.tag = $${values.length - 1} or t.tag like $${values.length} escape '\\'))`);
   }
-  const order = query.sort === "title" ? "lower(p.title) asc, p.edited_at desc" : query.sort === "created" ? "p.created_at desc" : "p.edited_at desc";
+  const fallback = query.archived ? "p.archived_at desc" : "p.edited_at desc";
+  const order = query.sort === "title" ? "lower(p.title) asc, p.edited_at desc" : query.sort === "created" ? "p.created_at desc" : fallback;
   values.push(limit + 1, offset);
   return withActor(actor, async (db) => {
     const result = await db.query<PageRow>(

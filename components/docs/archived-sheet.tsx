@@ -68,8 +68,14 @@ export default function ArchivedSheet() {
   async function run(id: string, action: () => Promise<string | null>) {
     setBusy(id);
     setProblem(null);
-    const failed = await action();
-    setBusy(null);
+    let failed: string | null;
+    try {
+      failed = await action();
+    } catch {
+      failed = "Couldn't do that. Try again.";
+    } finally {
+      setBusy(null);
+    }
     if (failed) setProblem(failed);
     else setReload((value) => value + 1);
   }

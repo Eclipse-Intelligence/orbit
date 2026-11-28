@@ -79,15 +79,24 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
   const unavailable = useDocsStore((state) => Boolean(state.unavailable[page.id]));
   const [seenRemote, setSeenRemote] = useState(remote);
   const [editing, setEditing] = useState(false);
+  const [waiting, setWaiting] = useState<string | null>(null);
   if (remote !== seenRemote) {
     setSeenRemote(remote);
-    if (remote && remote.title !== value && !editing) setValue(remote.title);
+    if (remote && remote.title !== value) {
+      if (editing) setWaiting(remote.title);
+      else setValue(remote.title);
+    }
   }
-  useEffect(() => {
-    if (remote && !editing && noteTitle(page.id) !== remote.title) setNoteTitle(page.id, remote.title);
-  }, [remote, page.id, editing]);
   const clearFresh = useDocsStore((state) => state.clearFresh);
   const rename = useTitleRename(page.id, page.title, page.kind === "note");
+  const adopt = rename.adopt;
+  const adoptedAt = useRef(0);
+  useEffect(() => {
+    if (!remote || editing || adoptedAt.current >= remote.at) return;
+    adoptedAt.current = remote.at;
+    adopt(remote.title);
+    if (noteTitle(page.id) !== remote.title) setNoteTitle(page.id, remote.title);
+  }, [remote, page.id, editing, adopt]);
   const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     if (!fresh) return;
@@ -122,6 +131,8 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
           const next = typed.replace(TITLE_FORBIDDEN, "");
           setBlocked(next !== typed);
           setValue(next);
+          setWaiting(null);
+          if (remote) adoptedAt.current = remote.at;
           setNoteTitle(page.id, next);
           scheduleNoteSave(page.id, page);
           rename.typed(next);
@@ -129,6 +140,13 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
         onFocus={() => setEditing(true)}
         onBlur={() => {
           setEditing(false);
+          if (waiting !== null && waiting !== value) {
+            setValue(waiting);
+            setNoteTitle(page.id, waiting);
+            adopt(waiting);
+            if (remote) adoptedAt.current = remote.at;
+          }
+          setWaiting(null);
           rename.settle();
         }}
         onKeyDown={(event) => {
@@ -680,7 +698,7 @@ export default function NoteView({
                   <>
                     <ConflictNotice id={page.id} />
                     <div>{editor(page)}</div>
-                    <JotLine page={page} />
+                    <JotLine key={page.id} page={page} />
                   </>
                 )
               }
@@ -700,7 +718,7 @@ export default function NoteView({
                   {!selected && <ConflictNotice id={page.id} />}
                   {selected && <VersionPreview page={page} selected={selected} showChanges={showChanges} />}
                   <div className={cn(selected && "hidden")}>{editor(page)}</div>
-                  {daily && !selected && <JotLine page={page} />}
+                  {daily && !selected && <JotLine key={page.id} page={page} />}
                 </>
               ) : missing ? (
                 <div role="alert" className="flex flex-col items-start gap-3 pt-1">

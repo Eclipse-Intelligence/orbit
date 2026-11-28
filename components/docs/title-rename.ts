@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { renameDocAction } from "@/app/(crm)/docs/actions";
+import { renameIfLatest } from "@/components/docs/rename-queue";
 import { commitNow, useDocsStore } from "@/stores/docs-store";
 
 export const RENAME_SETTLE_MS = 800;
@@ -23,13 +24,22 @@ async function whenSaved(id: string) {
   return saved(id);
 }
 
-async function renameNow(id: string, title: string) {
-  await commitNow(id);
-  if (!(await whenSaved(id))) return false;
+async function sendRename(id: string, title: string) {
   const result = await renameDocAction(id, title).catch(() => null);
   if (!result || result.error !== undefined) return false;
   if (result.data.linksUpdated > 0) void useDocsStore.getState().refreshTitles();
   return true;
+}
+
+function renameNow(id: string, title: string, latest: () => string) {
+  return renameIfLatest(id, title, {
+    latest,
+    settle: async () => {
+      await commitNow(id);
+      return whenSaved(id);
+    },
+    send: (value) => sendRename(id, value),
+  });
 }
 
 export function useTitleRename(id: string, initial: string, enabled: boolean) {
@@ -44,10 +54,17 @@ export function useTitleRename(id: string, initial: string, enabled: boolean) {
     if (!enabled || !next || next === renamed.current) return;
     const previous = renamed.current;
     renamed.current = next;
-    void renameNow(id, next).then((done) => {
+    void renameNow(id, next, () => latest.current.replace(/\s+/g, " ").trim()).then((done) => {
       if (!done && renamed.current === next) renamed.current = previous;
     });
   }, [id, enabled]);
+
+  const adopt = useCallback((title: string) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    latest.current = title;
+    renamed.current = title.replace(/\s+/g, " ").trim();
+  }, []);
 
   const typed = useCallback(
     (value: string) => {
@@ -65,5 +82,5 @@ export function useTitleRename(id: string, initial: string, enabled: boolean) {
     [settle],
   );
 
-  return { typed, settle };
+  return { typed, settle, adopt };
 }

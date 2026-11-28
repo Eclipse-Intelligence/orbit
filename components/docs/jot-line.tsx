@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { editorView, holdPendingEntry } from "@/components/docs/note-editor";
+import { editorViewFor, holdPendingEntry } from "@/components/docs/note-editor";
 import NotePicker, { type PickerHandle } from "@/components/docs/note-picker";
 import PhoneToolbar from "@/components/docs/phone-toolbar";
 import { useMedia } from "@/components/docs/use-docs";
@@ -50,7 +50,7 @@ export default function JotLine({ page }: { page: Page }) {
     if (!parent) return;
     const add = () => {
       const jot = viewRef.current;
-      const main = editorView();
+      const main = editorViewFor(pageId.current);
       if (!jot) return true;
       const block = entryBlock(jot.state.doc.toString(), startedRef.current ?? localTime(new Date()));
       if (!block) {

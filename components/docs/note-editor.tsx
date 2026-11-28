@@ -138,6 +138,10 @@ export function editorView() {
   return liveView;
 }
 
+export function editorViewFor(id: string) {
+  return liveView && liveId === id ? liveView : null;
+}
+
 export function paintComments(id: string, marks: CommentMark[], scrollTo: number | null) {
   const view = liveView;
   if (!view || liveId !== id) return false;

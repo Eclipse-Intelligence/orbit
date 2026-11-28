@@ -100,11 +100,19 @@ export function applyMention(view: EditorView, trigger: ActiveTrigger, record: {
   });
 }
 
+export function taskToggleChange(text: string) {
+  const next = toggleTaskMarker(text);
+  if (next === null) return null;
+  let at = 0;
+  while (at < text.length && text[at] === next[at]) at += 1;
+  return { at, insert: next[at] ?? "" };
+}
+
 function toggleTaskAt(view: EditorView, pos: number) {
   const line = view.state.doc.lineAt(pos);
-  const next = toggleTaskMarker(line.text);
-  if (next === null) return false;
-  view.dispatch({ changes: { from: line.from, to: line.to, insert: next }, userEvent: "input.toggle" });
+  const change = taskToggleChange(line.text);
+  if (!change) return false;
+  view.dispatch({ changes: { from: line.from + change.at, to: line.from + change.at + 1, insert: change.insert }, userEvent: "input.toggle" });
   return true;
 }
 
@@ -135,25 +143,31 @@ export function toggleHeading(view: EditorView) {
   view.focus();
 }
 
+export function wrapChanges(state: EditorState, marker: string) {
+  return state.changeByRange((range) => {
+    const text = state.sliceDoc(range.from, range.to);
+    if (text.startsWith(marker) && text.endsWith(marker) && text.length >= marker.length * 2) {
+      return {
+        changes: [
+          { from: range.from, to: range.from + marker.length },
+          { from: range.to - marker.length, to: range.to },
+        ],
+        range: EditorSelection.range(range.from, range.to - marker.length * 2),
+      };
+    }
+    return {
+      changes: [
+        { from: range.from, insert: marker },
+        { from: range.to, insert: marker },
+      ],
+      range: EditorSelection.range(range.from + marker.length, range.to + marker.length),
+    };
+  });
+}
+
 function wrapWith(marker: string) {
   return (view: EditorView) => {
-    view.dispatch(
-      view.state.changeByRange((range) => {
-        const text = view.state.sliceDoc(range.from, range.to);
-        if (text.startsWith(marker) && text.endsWith(marker) && text.length >= marker.length * 2) {
-          const inner = text.slice(marker.length, text.length - marker.length);
-          return { changes: { from: range.from, to: range.to, insert: inner }, range: EditorSelection.range(range.from, range.from + inner.length) };
-        }
-        return {
-          changes: [
-            { from: range.from, insert: marker },
-            { from: range.to, insert: marker },
-          ],
-          range: EditorSelection.range(range.from + marker.length, range.to + marker.length),
-        };
-      }),
-      { userEvent: "input.format" },
-    );
+    view.dispatch(wrapChanges(view.state, marker), { userEvent: "input.format" });
     return true;
   };
 }

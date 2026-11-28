@@ -265,6 +265,7 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   const activity = useDocsStore((state) => state.activity);
   const loadList = useDocsStore((state) => state.loadList);
   const loadPage = useDocsStore((state) => state.loadPage);
+  const refreshPage = useDocsStore((state) => state.refreshPage);
   const prefetch = useDocsStore((state) => state.prefetch);
   const openDaily = useDocsStore((state) => state.openDaily);
   const visit = useDocsStore((state) => state.visit);
@@ -336,10 +337,9 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   }, [ready, dailyDate, dailyId, openDaily]);
 
   const shownId = route.pageId ?? (dailyDate ? dailyId : (ids[0] ?? null));
-  const page: Page | null = shownId ? (pages[shownId] ?? (initial.page?.id === shownId ? initial.page : null)) : null;
-  const shownSummary = shownId ? (summaryOf(shownId) ?? (page ?? undefined)) : undefined;
-
   const [missing, setMissing] = useState<string | null>(null);
+  const page: Page | null = shownId ? (pages[shownId] ?? (initial.page?.id === shownId && missing !== shownId ? initial.page : null)) : null;
+  const shownSummary = shownId ? (summaryOf(shownId) ?? (page ?? undefined)) : undefined;
   const [pageError, setPageError] = useState<LoadError | null>(null);
   const [errorFor, setErrorFor] = useState(shownId);
   if (errorFor !== shownId) {
@@ -348,9 +348,21 @@ export default function DocsScreen({ viewer, initial }: { viewer: Viewer; initia
   }
   const pageFailed = Boolean(shownId) && pageError?.id === shownId;
   const shownLoaded = Boolean(shownId && pages[shownId]);
+  const confirmed = useRef<string | null>(initial.page?.id ?? null);
+  useEffect(() => {
+    if (!shownId) confirmed.current = null;
+    if (!ready || !shownId || !shownLoaded || confirmed.current === shownId) return;
+    confirmed.current = shownId;
+    void refreshPage(shownId)
+      .then((found) => {
+        if (!found) setMissing(shownId);
+      })
+      .catch(() => {});
+  }, [ready, shownId, shownLoaded, refreshPage]);
   useEffect(() => {
     if (!ready || !shownId || shownLoaded || pageFailed) return;
     let live = true;
+    confirmed.current = shownId;
     void loadPage(shownId)
       .then((found) => {
         if (live && !found) setMissing(shownId);

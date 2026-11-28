@@ -85,8 +85,14 @@ export function Composer({
     if (!ready || saving) return;
     setSaving(true);
     setError(null);
-    const problem = await onSubmit((askName ? who : name).trim(), text.trim());
-    setSaving(false);
+    let problem: string | null;
+    try {
+      problem = await onSubmit((askName ? who : name).trim(), text.trim());
+    } catch {
+      problem = `Couldn't ${submitLabel.toLowerCase()}. Try again.`;
+    } finally {
+      setSaving(false);
+    }
     if (problem) setError(problem);
     else setText("");
   }
