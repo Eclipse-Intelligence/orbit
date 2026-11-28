@@ -122,6 +122,20 @@ describe("MCP call transcripts", () => {
     assert.equal(joined, TRANSCRIPT);
   });
 
+  it("returns empty text with no next page for an offset past the end, however large", async () => {
+    for (const offset of [TRANSCRIPT.length, 2 ** 31, 2 ** 40, Number.MAX_SAFE_INTEGER]) {
+      const answer = await call(owner, "get_call_transcript", { id: insightId, offset });
+      assert.ok(!answer.isError, answer.content[0].text);
+      const page = JSON.parse(answer.content[0].text) as Page;
+      assert.equal(page.transcript, "");
+      assert.equal(page.nextOffset, null);
+      assert.equal(page.totalLength, TRANSCRIPT.length);
+    }
+    const first = await call(owner, "get_call_transcript", { id: insightId });
+    const text = first.content[0].text;
+    assert.ok(text.indexOf('"nextOffset"') < text.indexOf('"transcript"'));
+  });
+
   it("refuses another workspace and a token without crm:read", async () => {
     const other = await createUser("mcp-transcript-other@example.com", "Other Person");
     const refused = await call(other, "get_call_transcript", { id: insightId });

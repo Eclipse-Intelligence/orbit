@@ -7,6 +7,7 @@ import {
   getInsightsForActivities,
   getInsightTranscript,
   getInsightTranscriptPage,
+  TRANSCRIPT_PAGE_LENGTH,
   judgeCallSentiment,
   splitTranscript,
   withTranscriptHint,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/crm/call-insights";
 import { createCompany } from "@/lib/crm/companies";
 import { createContact } from "@/lib/crm/contacts";
+import { summarisePendingImports, summariseImport } from "@/lib/crm/conversations";
 import { listTasks } from "@/lib/crm/tasks";
 import type { UserActor } from "@/lib/crm/types";
 import { getAdminPool, getPool } from "@/lib/db/pool";
@@ -506,6 +508,69 @@ describe("call insights", () => {
       assert.equal(insight.summary, null);
     });
 
+    it("retries a long call that ran out of time on a later run instead of failing it for good", async () => {
+      const { owner, callId, contactId, companyId } = await setup("deadline@example.com");
+      const text = longTranscript(1500);
+      const admin = getAdminPool();
+      const imported = await admin.query<{ id: string }>(
+        `insert into crm.conversation_imports (workspace_id, user_id, source, external_id, kind, status, activity_id, contact_id, company_id, transcript)
+         values ($1, $2, 'granola', 'deadline-note', 'meeting', 'filed', $3, $4, $5, $6) returning id`,
+        [owner.workspaceId, owner.userId, callId, contactId, companyId, text],
+      );
+      const slow = routed(20);
+      const hurried = await summariseImport(owner, imported.rows[0].id, { fetchImpl: slow.fetchImpl, deadline: Date.now() + 3000 });
+      assert.equal(hurried?.status, "pending");
+      assert.equal(hurried?.error, null);
+      assert.equal(slow.calls.length, 0);
+      assert.equal(await summarisePendingImports(owner, { fetchImpl: slow.fetchImpl }), 0);
+      await admin.query(
+        `begin;
+         alter table crm.call_insights disable trigger call_insights_set_updated_at;
+         update crm.call_insights set updated_at = now() - interval '10 minutes' where activity_id = '${callId}';
+         alter table crm.call_insights enable trigger call_insights_set_updated_at;
+         commit`,
+      );
+      const later = routed(20);
+      assert.equal(await summarisePendingImports(owner, { fetchImpl: later.fetchImpl, deadline: Date.now() + 120_000 }), 1);
+      const [insight] = Object.values(await getInsightsForActivities(owner, [callId]));
+      assert.equal(insight.status, "ready");
+      assert.equal(await getInsightTranscript(owner, insight.id), text);
+    });
+
+    it("runs at most three part calls at a time", async () => {
+      const { owner, callId } = await setup("pool@example.com");
+      let running = 0;
+      let peak = 0;
+      const inner = routed(20).fetchImpl;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        try {
+          return await inner(input, init);
+        } finally {
+          running -= 1;
+        }
+      };
+      const insight = await summariseCall(owner, callId, longTranscript(5500), { fetchImpl, autoAccept: false });
+      assert.equal(insight.status, "ready");
+      assert.equal(peak, 3);
+    });
+
+    it("asks for enough output for a part's notes", async () => {
+      const { owner, callId } = await setup("tokens@example.com");
+      const seen: number[] = [];
+      const inner = routed(20).fetchImpl;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const body = JSON.parse(String(init?.body)) as { max_tokens: number; messages: { content: string }[] };
+        if (/one part of a long call transcript/.test(body.messages[0].content)) seen.push(body.max_tokens);
+        return inner(input, init);
+      };
+      await summariseCall(owner, callId, longTranscript(1500), { fetchImpl, autoAccept: false });
+      assert.ok(seen.length >= 3);
+      assert.ok(seen.every((tokens) => tokens >= 16_000));
+    });
+
     it("never saves a summary of only part of the call", async () => {
       const { owner, callId } = await setup("partial@example.com");
       const text = longTranscript(1500);
@@ -562,13 +627,13 @@ describe("call insights", () => {
         const page = await getInsightTranscriptPage(owner, insight.id, offset);
         assert.equal(page.offset, offset);
         assert.equal(page.totalLength, total);
-        assert.ok(Array.from(page.text).length <= 100_000);
+        assert.ok(Array.from(page.text).length <= TRANSCRIPT_PAGE_LENGTH);
         assert.ok(page.text.length > 0);
         joined += page.text;
         pages += 1;
         if (page.nextOffset === null) break;
         assert.equal(page.nextOffset, offset + Array.from(page.text).length);
-        assert.ok(page.text.endsWith("\n") || page.text.length >= 100_000 || !page.text.includes("\n"));
+        assert.ok(page.text.endsWith("\n") || page.text.length >= TRANSCRIPT_PAGE_LENGTH - 10_000 || !page.text.includes("\n"));
         offset = page.nextOffset;
       }
       assert.ok(pages >= 4);
@@ -577,6 +642,34 @@ describe("call insights", () => {
       assert.deepEqual([past.text, past.nextOffset], ["", null]);
       const first = await getInsightTranscriptPage(owner, insight.id);
       assert.equal(first.offset, 0);
+    });
+
+    it("returns empty text for an offset past the end, however large", async () => {
+      const { owner, callId } = await setup("hugeoffset@example.com");
+      const insight = await readyInsight(owner, callId);
+      for (const offset of [2 ** 31, 2 ** 40, Number.MAX_SAFE_INTEGER, 1e30]) {
+        const page = await getInsightTranscriptPage(owner, insight.id, offset);
+        assert.equal(page.text, "");
+        assert.equal(page.nextOffset, null);
+        assert.equal(page.totalLength, insight.transcriptLength);
+      }
+    });
+
+    it("keeps a page inside its limit after JSON escaping, however many quotes and line breaks it holds", async () => {
+      const { owner, callId } = await setup("escaping@example.com");
+      const text = Array.from({ length: 60_000 }, (_, index) => `A: "q${index}"`).join("\n");
+      const { fetchImpl } = routed(20);
+      const insight = await summariseCall(owner, callId, text, { fetchImpl, autoAccept: false });
+      let offset = 0;
+      let joined = "";
+      for (;;) {
+        const page = await getInsightTranscriptPage(owner, insight.id, offset);
+        assert.ok(JSON.stringify(page.text).length - 2 <= TRANSCRIPT_PAGE_LENGTH);
+        joined += page.text;
+        if (page.nextOffset === null) break;
+        offset = page.nextOffset;
+      }
+      assert.equal(joined, text);
     });
 
     it("hints that the transcript can be pulled", () => {

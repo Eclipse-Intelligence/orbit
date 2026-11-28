@@ -23,10 +23,14 @@ import {
   type Provenance,
   type Task,
 } from "@/lib/crm/types";
-import { completeJson, MODEL_WINDOW_CHARS } from "@/lib/llm";
+import { completeJson, LlmError, MODEL_WINDOW_CHARS, OUT_OF_TIME } from "@/lib/llm";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
-export const TRANSCRIPT_PAGE_LENGTH = 100_000;
+export const TRANSCRIPT_PAGE_LENGTH = 80_000;
+const TRANSCRIPT_OFFSET_MAX = 2_000_000_000;
+const PART_CONCURRENCY = 3;
+const PART_NOTES_TOKENS = 16_000;
+const DEADLINE_SLACK_MS = 8_000;
 export const TRANSCRIPT_TOOL = "get_call_transcript";
 const PROMPT_ROOM = 8_000;
 const PART_LENGTH = MODEL_WINDOW_CHARS - PROMPT_ROOM;
@@ -314,7 +318,7 @@ Reply with a single JSON object and nothing else: {"notes": string}
 Rules:
 - Write in British English. Use only what this part says; never invent names, figures, dates or commitments.
 - Keep everything a summary could need, in the order it was said: who spoke, the topics, decisions, needs, objections, figures and dates, every commitment (who will do what, with any timing in the speaker's words), and any sign of how the other party feels about the relationship.
-- Plain text in short lines, no Markdown.
+- Plain text in short lines, no Markdown, under 6,000 words.
 - Lines may be labelled "Name: text" or unlabelled. The part may start or end in the middle of a conversation.`;
 
 const notesSchema = z.object({ notes: z.string().trim().min(1) });
@@ -342,6 +346,26 @@ export function splitTranscript(text: string, size: number) {
   return parts;
 }
 
+async function inPool<T, R>(items: T[], size: number, run: (item: T, index: number) => Promise<R>) {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await run(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function ranOutOfTime(error: unknown, deadline: number | undefined) {
+  if (!(error instanceof LlmError)) return false;
+  if (error.message === OUT_OF_TIME) return true;
+  return error.retryable && deadline !== undefined && Date.now() >= deadline - DEADLINE_SLACK_MS;
+}
+
 async function readTranscript(
   call: CallRow,
   transcript: string,
@@ -352,19 +376,17 @@ async function readTranscript(
   let parts = splitTranscript(transcript, PART_LENGTH);
   let size = transcript.length;
   for (;;) {
-    const notes = await Promise.all(
-      parts.map(async (part, index) => {
-        const result = await completeJson({
-          system: PART_PROMPT,
-          user: buildPrompt(call, part, actorName(actor), `Part ${index + 1} of ${parts.length}:`),
-          schema: notesSchema,
-          maxTokens: 4000,
-          fetchImpl: options.fetchImpl,
-          deadline: options.deadline,
-        });
-        return result.data.notes;
-      }),
-    );
+    const notes = await inPool(parts, PART_CONCURRENCY, async (part, index) => {
+      const result = await completeJson({
+        system: PART_PROMPT,
+        user: buildPrompt(call, part, actorName(actor), `Part ${index + 1} of ${parts.length}:`),
+        schema: notesSchema,
+        maxTokens: PART_NOTES_TOKENS,
+        fetchImpl: options.fetchImpl,
+        deadline: options.deadline,
+      });
+      return result.data.notes;
+    });
     const joined = notes.map((note, index) => `Part ${index + 1} of ${notes.length}:\n${note}`).join("\n\n");
     if (joined.length <= PART_LENGTH) return { text: joined, notes: true };
     if (joined.length >= size) throw new CrmError("internal_error", "Couldn't summarise the call. Try again.", 500);
@@ -667,6 +689,7 @@ async function summaryOutcome(
       error: null,
     };
   } catch (error) {
+    if (ranOutOfTime(error, options.deadline)) return { status: "pending", error: null };
     return { status: "failed", error: failureMessage(error) };
   }
 }
@@ -917,6 +940,19 @@ export async function getInsightTranscript(actor: Actor, insightId: string) {
   });
 }
 
+function jsonLength(text: string) {
+  return JSON.stringify(text).length - 2;
+}
+
+function fitJson(text: string, limit: number) {
+  let fitted = text;
+  for (let size = jsonLength(fitted); size > limit; size = jsonLength(fitted)) {
+    const at = Math.max(1, Math.floor((fitted.length * limit * 0.98) / size));
+    fitted = fitted.slice(0, safeCut(fitted, at));
+  }
+  return fitted;
+}
+
 export type TranscriptPage = {
   insightId: string;
   text: string;
@@ -928,7 +964,7 @@ export type TranscriptPage = {
 export async function getInsightTranscriptPage(actor: Actor, insightId: string, offset = 0): Promise<TranscriptPage> {
   assertScope(actor.scopes, "crm:read");
   if (!isUuid(insightId)) throw new CrmError("not_found", "Call summary not found.", 404);
-  const start = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
+  const start = Number.isFinite(offset) && offset > 0 ? Math.min(Math.floor(offset), TRANSCRIPT_OFFSET_MAX) : 0;
   return withActor(actor, async (db) => {
     const result = await db.query<{ total: number; text: string }>(
       `select char_length(transcript)::int as total, substr(transcript, $3::int + 1, $4::int) as text
@@ -937,7 +973,7 @@ export async function getInsightTranscriptPage(actor: Actor, insightId: string, 
     );
     const row = result.rows[0];
     if (!row) throw new CrmError("not_found", "Call summary not found.", 404);
-    let text = row.text;
+    let text = fitJson(row.text, TRANSCRIPT_PAGE_LENGTH);
     let length = Array.from(text).length;
     if (start + length < row.total) {
       const line = text.lastIndexOf("\n");

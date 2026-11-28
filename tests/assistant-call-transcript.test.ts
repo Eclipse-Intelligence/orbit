@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { history } from "@/lib/assistant/chat";
 import { outsideRead } from "@/lib/assistant/web-gate";
 import { runTool, toolDefinitions } from "@/lib/assistant/tools";
 import { createActivity } from "@/lib/crm/activities";
@@ -56,7 +57,7 @@ describe("assistant call transcripts", () => {
       const page = (await runTool(owner, "get_call_transcript", offset === 0 ? { insightId } : { insightId, offset })) as Page;
       assert.equal(page.totalLength, TRANSCRIPT.length);
       assert.equal(page.offset, offset);
-      assert.ok(page.transcript.length <= 100_000);
+      assert.ok(page.transcript.length <= 80_000);
       joined += page.transcript;
       if (page.nextOffset === null) break;
       assert.equal(page.nextOffset, offset + page.transcript.length);
@@ -70,6 +71,38 @@ describe("assistant call transcripts", () => {
     assert.notEqual(fenced.transcript, TRANSCRIPT.slice(0, fenced.transcript.length));
     assert.ok(fenced.transcript.includes("marker-0-end"));
     assert.ok(outsideRead("get_call_transcript", JSON.stringify(fenced)));
+  });
+
+  it("keeps a full page whole, with its paging fields, when a later turn reads it back", async () => {
+    const dense = Array.from({ length: 30_000 }, (_, index) => `A: "q${index}"`).join("\n");
+    const { owner: heavy, callId } = await (async () => {
+      const company = await createCompany(owner, { name: "Dense Co", domain: "dense.test" });
+      const logged = await createActivity(owner, { type: "call", title: "Dense call", body: "Call", companyId: company.body.company.id, occurredAt: "2026-10-16T13:00:00.000Z" });
+      return { owner, callId: logged.body.activity.id };
+    })();
+    const inserted = await getAdminPool().query<{ id: string }>(
+      `insert into crm.call_insights (workspace_id, activity_id, source, transcript, summary, status)
+       values ($1, $2, 'manual', $3, 'Dense.', 'ready') returning id`,
+      [heavy.workspaceId, callId, dense],
+    );
+    const result = await runTool(heavy, "get_call_transcript", { insightId: inserted.rows[0].id }, { fence: "tok" });
+    const content = JSON.stringify(result);
+    assert.ok(content.length < 95_000);
+    const page = result as { nextOffset: number | null; transcript: string };
+    assert.ok(page.nextOffset !== null);
+    assert.ok(content.indexOf('"nextOffset"') < content.indexOf('"transcript"'));
+    const row = (role: "user" | "assistant" | "tool", text: string, extra: Record<string, unknown> = {}) =>
+      ({ id: crypto.randomUUID(), role, content: text, tool_calls: null, tool_call_id: null, tool_name: null, actions: null, sources: null, provider_state: null, created_at: new Date(), ...extra }) as Parameters<typeof history>[0][number];
+    const rows = [
+      row("user", "Read the call"),
+      row("assistant", "", { tool_calls: [{ id: "t1", type: "function", function: { name: "get_call_transcript", arguments: "{}" } }] }),
+      row("tool", content, { tool_call_id: "t1", tool_name: "get_call_transcript" }),
+      row("assistant", "Read it."),
+      row("user", "And now?"),
+    ];
+    const later = history(rows)[2] as { content: string };
+    assert.equal(later.content, content);
+    assert.ok(!later.content.includes("[Cut"));
   });
 
   it("marks each call summary with how to pull its transcript", async () => {
