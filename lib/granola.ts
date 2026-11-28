@@ -6,7 +6,7 @@ const DEFAULT_BASE_URL = "https://public-api.granola.ai";
 const MAX_ATTEMPTS = 5;
 const MAX_BACKOFF_MS = 8_000;
 const TIMEOUT_MS = 20_000;
-const MAX_TRANSCRIPT_PAGES = 200;
+const MAX_TRANSCRIPT_PAGES = 5000;
 export const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 
 export type GranolaUser = { name: string | null; email: string };
@@ -162,7 +162,7 @@ export function granolaClient(options: GranolaClientOptions) {
       if (!body.hasMore || !body.cursor) return items;
       cursor = body.cursor;
     }
-    return items;
+    throw new GranolaError("Couldn't read the whole Granola transcript. Try again.", 502);
   }
 
   async function getNote(noteId: string): Promise<GranolaNote | null> {

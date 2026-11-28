@@ -72,10 +72,12 @@ after(async () => {
   await getPool().end();
 });
 
-function llmResponse() {
+function llmResponse(body = "") {
+  const part = body.includes("one part of a long call transcript");
+  const reply = part ? { notes: "Notes on this part of the call." } : LLM_REPLY;
   return Response.json({
     model: "claude-haiku-5-5",
-    choices: [{ message: { role: "assistant", content: JSON.stringify(LLM_REPLY) }, finish_reason: "stop" }],
+    choices: [{ message: { role: "assistant", content: JSON.stringify(reply) }, finish_reason: "stop" }],
   });
 }
 
@@ -126,7 +128,7 @@ function granola(state: GranolaFake) {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
     requests.push({ method, url: url.toString(), body: String(init?.body ?? "") });
-    if (url.pathname.endsWith("/chat/completions")) return llmResponse();
+    if (url.pathname.endsWith("/chat/completions")) return llmResponse(String(init?.body ?? ""));
     assert.equal(url.origin, "https://public-api.granola.ai");
     assert.equal(new Headers(init?.headers).get("authorization"), "Bearer grn_test_key");
     if (url.pathname === "/v1/notes") {
@@ -647,6 +649,77 @@ describe("granola transcripts", () => {
     assert.equal(last.failed, 0);
     assert.equal(after.requests.filter((item) => item.url.includes(`/v1/notes/${noteId(11)}`)).length, 0);
   });
+
+  it("stores a Granola transcript longer than a million characters whole and summarises all of it", async () => {
+    const line = (index: number): GranolaTranscriptItem => ({
+      speaker: { source: "speaker", attribution: "them", name: "Jane Doe" },
+      text: `segment-${index}-end ${"w".repeat(100_000)}`,
+      start_time: hoursAgo(2),
+      end_time: hoursAgo(2),
+    });
+    const items = Array.from({ length: 13 }, (_, index) => line(index));
+    const big = new Map([
+      [
+        noteId(40),
+        makeNote(noteId(40), owner, {
+          title: "Very long Acme workshop",
+          attendees: [{ name: "Jane Doe", email: "jane@acme.com" }],
+          transcript: items,
+        }),
+      ],
+    ]);
+    const { fetchImpl, requests } = granola({ notes: big });
+    const result = await syncGranola({ fetchImpl, force: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.filed, 1);
+    const expected = granolaTranscriptText(items, owner.fullName);
+    assert.ok(expected.length > 1_300_000);
+    const row = (await importRows(owner.workspaceId)).get(noteId(40))!;
+    assert.equal(row.transcript, expected);
+    const insight = await getAdminPool().query<{ status: string; transcript: string }>(
+      "select status, transcript from crm.call_insights where activity_id = $1",
+      [row.activity_id],
+    );
+    assert.equal(insight.rows[0].status, "ready");
+    assert.equal(insight.rows[0].transcript, expected);
+    const sent = requests
+      .filter((request) => request.url.endsWith("/chat/completions") && request.body.includes("one part of a long call transcript"))
+      .map((request) => request.body)
+      .join("\n");
+    for (let index = 0; index < items.length; index += 1) assert.ok(sent.includes(`segment-${index}-end`));
+  });
+
+  it("does not store a Granola transcript it could not page to the end", async () => {
+    const items: GranolaTranscriptItem[] = Array.from({ length: 5001 }, (_, index) => ({
+      speaker: { source: "speaker", attribution: "them", name: "Jane Doe" },
+      text: `line ${index}`,
+      start_time: hoursAgo(2),
+      end_time: hoursAgo(2),
+    }));
+    const runaway = new Map([
+      [
+        noteId(41),
+        makeNote(noteId(41), owner, {
+          title: "Endless workshop",
+          attendees: [{ name: "Jane Doe", email: "jane@acme.com" }],
+          transcript: items,
+        }),
+      ],
+    ]);
+    const { fetchImpl } = granola({ notes: runaway, tooLarge: new Set([noteId(41)]) });
+    const result = await syncGranola({ fetchImpl, force: true });
+    assert.equal(result.failed, 1);
+    assert.match(result.error ?? "", /whole Granola transcript/);
+    const row = (await importRows(owner.workspaceId)).get(noteId(41));
+    assert.ok(!row || (row.transcript === null && row.activity_id === null));
+
+    const fixed = new Map([[noteId(41), runaway.get(noteId(41))!]]);
+    const retry = granola({ notes: fixed });
+    const again = await syncGranola({ fetchImpl: retry.fetchImpl, force: true });
+    assert.equal(again.failed, 0);
+    const stored = (await importRows(owner.workspaceId)).get(noteId(41))!;
+    assert.equal(stored.transcript, granolaTranscriptText(items, owner.fullName));
+  });
 });
 
 function fakeJwt(claims: Record<string, string>) {
@@ -670,6 +743,7 @@ type GraphState = {
   pstn: Record<string, unknown>[];
   subscription?: { patchStatus?: number };
   transcriptStatus?: number;
+  content?: Record<string, string>;
 };
 
 function graph(state: GraphState) {
@@ -681,7 +755,7 @@ function graph(state: GraphState) {
     if (url.includes("/oauth2/v2.0/token")) {
       return Response.json({ access_token: "app-token", expires_in: 3600 });
     }
-    if (url.endsWith("/chat/completions")) return llmResponse();
+    if (url.endsWith("/chat/completions")) return llmResponse(String(init?.body ?? ""));
     if (url.includes("getAllTranscripts")) {
       if (state.transcriptStatus) {
         return Response.json(
@@ -694,6 +768,7 @@ function graph(state: GraphState) {
     if (url.includes("getPstnCalls")) return Response.json({ value: state.pstn });
     if (url.includes("/content?")) {
       const id = /transcripts\/([^/]+)\/content/.exec(url)?.[1] ?? "";
+      if (state.content?.[id]) return new Response(state.content[id], { headers: { "content-type": "text/vtt" } });
       return new Response(VTT("Jane Doe", `Transcript ${id}.`), { headers: { "content-type": "text/vtt" } });
     }
     const single = /\/adhocCalls\/([^/]+)\/transcripts\/([^/?]+)$/.exec(url);
@@ -733,6 +808,26 @@ function transcript(id: string, callId: string, createdHoursAgo: number) {
 }
 
 describe("teams transcripts", () => {
+  it("stores a Teams transcript longer than a million characters whole", async () => {
+    const lines = Array.from({ length: 13 }, (_, index) => `segment-${index}-end ${"w".repeat(100_000)}`);
+    const body = lines.map((text, index) => `${index + 1}\n00:00:01.000 --> 00:00:03.000\n<v ${index % 2 ? "Tom Teams" : "Jane Doe"}>${text}</v>\n`).join("\n");
+    const vtt = `WEBVTT\n\n${body}`;
+    const long = await createUser("teams-long@orbit.test", "Tina Teams");
+    await saveMailbox(long, {
+      email: "teams-long@orbit.test",
+      refreshToken: "stored-refresh",
+      accessToken: fakeJwt({ tid: "tenant-1", oid: "user-oid-long" }),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    const { fetchImpl } = graph({ transcripts: [transcript("tr-long", "call-long", 1)], pstn: [], content: { "tr-long": vtt } });
+    const result = await syncTeamsTranscripts(long, { fetchImpl, force: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.imported, 1);
+    const row = (await importRows(long.workspaceId)).get("tr-long")!;
+    assert.equal(row.transcript, lines.map((text, index) => `${index % 2 ? "Tom Teams" : "Jane Doe"}: ${text}`).join("\n"));
+    assert.ok((row.transcript ?? "").length > 1_300_000);
+  });
+
   let owner: UserActor;
   let janeId: string;
   const state: GraphState = {

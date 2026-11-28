@@ -6,6 +6,10 @@ import {
   dismissActionItem,
   getInsightsForActivities,
   getInsightTranscript,
+  getInsightTranscriptPage,
+  judgeCallSentiment,
+  splitTranscript,
+  withTranscriptHint,
   resolveDueDate,
   summariseCall,
   transcriptToText,
@@ -409,5 +413,185 @@ describe("call insights", () => {
       note.body.activity.id,
     ]);
     assert.equal(rows.rows[0].total, 0);
+  });
+
+  describe("whole transcripts", () => {
+    function longTranscript(lines: number) {
+      return Array.from(
+        { length: lines },
+        (_, index) => `${index % 2 ? "Jane Doe" : "Mark Ridgeon"}: marker-${index}-end ${"word ".repeat(40).trim()}`,
+      ).join("\n");
+    }
+
+    function routed(noteLength: number, failOnPart?: number, shrink = false) {
+      const calls: { system: string; user: string }[] = [];
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { messages: { role: string; content: string }[] };
+        const system = body.messages[0].content;
+        const user = body.messages[1].content;
+        calls.push({ system, user });
+        let content: string;
+        if (/one part of a long call transcript/.test(system)) {
+          const part = /^Part (\d+) of/m.exec(user)?.[1];
+          if (failOnPart !== undefined && Number(part) === failOnPart) {
+            return Response.json({ error: { message: "bad" } }, { status: 400 });
+          }
+          const length = shrink ? Math.min(noteLength, Math.floor(user.length / 2)) : noteLength;
+          content = JSON.stringify({ notes: `Notes on part ${part}. ${"n".repeat(length)}` });
+        } else if (/judge how a client relationship stands/.test(system)) {
+          content = JSON.stringify({ health: "watch", healthReason: "Finance still has to approve." });
+        } else {
+          content = JSON.stringify(GOOD);
+        }
+        return Response.json({
+          model: "claude-haiku-5-5",
+          choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+        });
+      };
+      return { fetchImpl, calls };
+    }
+
+    const isPart = (call: { system: string }) => /one part of a long call transcript/.test(call.system);
+
+    it("stores a pasted transcript longer than the old limits and summarises every part of it", async () => {
+      const { owner, callId } = await setup("whole@example.com");
+      const text = longTranscript(5500);
+      assert.ok(text.length > 1_200_000);
+      const { fetchImpl, calls } = routed(20);
+      const insight = await summariseCall(owner, callId, text, { source: "manual", fetchImpl, autoAccept: false });
+      assert.equal(insight.status, "ready");
+      assert.equal(insight.transcriptLength, text.length);
+      assert.equal(await getInsightTranscript(owner, insight.id), text);
+      const parts = calls.filter(isPart);
+      assert.ok(parts.length >= 9);
+      const sent = parts.map((call) => call.user).join("\n");
+      for (let index = 0; index < 5500; index += 1) {
+        assert.ok(sent.includes(`marker-${index}-end`), `line ${index} reached the model`);
+      }
+      for (const call of parts) assert.ok(call.user.length < 150_000);
+      const final = calls[calls.length - 1];
+      assert.ok(!isPart(final));
+      assert.match(final.system, /notes, in order, from consecutive parts/);
+      assert.match(final.user, new RegExp(`Part ${parts.length} of ${parts.length}:`));
+      assert.ok(!final.user.includes("marker-"));
+    });
+
+    it("keeps one call for a transcript that fits the window", async () => {
+      const { owner, callId } = await setup("fits@example.com");
+      const text = longTranscript(400);
+      const { fetchImpl, calls } = routed(20);
+      const insight = await summariseCall(owner, callId, text, { fetchImpl, autoAccept: false });
+      assert.equal(insight.status, "ready");
+      assert.equal(calls.length, 1);
+      assert.ok(calls[0].user.includes(text));
+    });
+
+    it("condenses notes again when they are still too long for one pass", async () => {
+      const { owner, callId } = await setup("condense@example.com");
+      const text = longTranscript(1500);
+      const { fetchImpl, calls } = routed(60_000, undefined, true);
+      const insight = await summariseCall(owner, callId, text, { fetchImpl, autoAccept: false });
+      assert.equal(insight.status, "ready");
+      const final = calls[calls.length - 1];
+      assert.ok(!isPart(final));
+      assert.ok(final.user.length < 150_000);
+      assert.ok(calls.filter(isPart).length > 3);
+    });
+
+    it("fails rather than save a summary when the notes cannot be brought down to one pass", async () => {
+      const { owner, callId } = await setup("nocondense@example.com");
+      const { fetchImpl } = routed(150_000);
+      const insight = await summariseCall(owner, callId, longTranscript(1500), { fetchImpl, autoAccept: false });
+      assert.equal(insight.status, "failed");
+      assert.equal(insight.summary, null);
+    });
+
+    it("never saves a summary of only part of the call", async () => {
+      const { owner, callId } = await setup("partial@example.com");
+      const text = longTranscript(1500);
+      const { fetchImpl, calls } = routed(20, 2);
+      const insight = await summariseCall(owner, callId, text, { fetchImpl, autoAccept: false });
+      assert.equal(insight.status, "failed");
+      assert.equal(insight.summary, null);
+      assert.ok(calls.every(isPart));
+      const retry = routed(20);
+      const again = await summariseCall(owner, callId, "", { fetchImpl: retry.fetchImpl, autoAccept: false });
+      assert.equal(again.status, "ready");
+      assert.equal(await getInsightTranscript(owner, again.id), text);
+    });
+
+    it("judges the sentiment of a long call from every part", async () => {
+      const { owner, callId } = await setup("sentiment@example.com");
+      const text = longTranscript(1500);
+      const first = routed(20);
+      const insight = await summariseCall(owner, callId, text, { fetchImpl: first.fetchImpl, autoAccept: false });
+      const judging = routed(20);
+      const judged = await judgeCallSentiment(owner, callId, { fetchImpl: judging.fetchImpl });
+      assert.equal(judged.id, insight.id);
+      assert.equal(judged.sentiment, "watch");
+      const sent = judging.calls.filter(isPart).map((call) => call.user).join("\n");
+      for (let index = 0; index < 1500; index += 1) assert.ok(sent.includes(`marker-${index}-end`));
+      const final = judging.calls[judging.calls.length - 1];
+      assert.match(final.system, /notes, in order, from consecutive parts/);
+    });
+
+    it("splits on line boundaries and loses nothing", () => {
+      const text = longTranscript(3000);
+      const parts = splitTranscript(text, 50_000);
+      assert.ok(parts.every((part) => part.length <= 50_000));
+      assert.equal(parts.join("\n"), text);
+      const oneLine = "x".repeat(130_001);
+      assert.equal(splitTranscript(oneLine, 50_000).join(""), oneLine);
+      const emoji = "😀".repeat(30_000);
+      const cut = splitTranscript(emoji, 50_001);
+      assert.equal(cut.join(""), emoji);
+      assert.ok(cut.every((part) => !/[\ud800-\udbff]$/.test(part)));
+    });
+
+    it("pages the whole transcript with no gaps or overlaps", async () => {
+      const { owner, callId } = await setup("paging@example.com");
+      const text = `${longTranscript(1200)}\n😀 ${"y".repeat(150_000)}\nMark Ridgeon: last line`;
+      const { fetchImpl } = routed(20);
+      const insight = await summariseCall(owner, callId, text, { fetchImpl, autoAccept: false });
+      const total = Array.from(text).length;
+      assert.equal(insight.transcriptLength, total);
+      let offset = 0;
+      let joined = "";
+      let pages = 0;
+      for (;;) {
+        const page = await getInsightTranscriptPage(owner, insight.id, offset);
+        assert.equal(page.offset, offset);
+        assert.equal(page.totalLength, total);
+        assert.ok(Array.from(page.text).length <= 100_000);
+        assert.ok(page.text.length > 0);
+        joined += page.text;
+        pages += 1;
+        if (page.nextOffset === null) break;
+        assert.equal(page.nextOffset, offset + Array.from(page.text).length);
+        assert.ok(page.text.endsWith("\n") || page.text.length >= 100_000 || !page.text.includes("\n"));
+        offset = page.nextOffset;
+      }
+      assert.ok(pages >= 4);
+      assert.equal(joined, text);
+      const past = await getInsightTranscriptPage(owner, insight.id, total + 10);
+      assert.deepEqual([past.text, past.nextOffset], ["", null]);
+      const first = await getInsightTranscriptPage(owner, insight.id);
+      assert.equal(first.offset, 0);
+    });
+
+    it("hints that the transcript can be pulled", () => {
+      const hinted = withTranscriptHint({ id: "a", transcriptLength: 42 });
+      assert.deepEqual(hinted.transcript, { length: 42, tool: "get_call_transcript" });
+    });
+
+    it("refuses a transcript page from another workspace", async () => {
+      const { owner, callId } = await setup("pageowner@example.com");
+      const insight = await readyInsight(owner, callId);
+      const other = await createUser("pagenosy@example.com", "Nosy");
+      await assert.rejects(getInsightTranscriptPage(other, insight.id), /Call summary not found/);
+      await assert.rejects(getInsightTranscriptPage(owner, "not-a-uuid"), /Call summary not found/);
+      const noScope = await createAgent(owner.workspaceId, ["tasks:write"]);
+      await assert.rejects(getInsightTranscriptPage(noScope.actor, insight.id), /crm:read/);
+    });
   });
 });

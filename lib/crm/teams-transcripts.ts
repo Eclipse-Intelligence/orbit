@@ -296,7 +296,7 @@ async function importTeamsTranscript(
   const known = await withActor(actor, (db) => knownImportsFor(db, workspaceIds, "teams", [externalId], actor.userId));
   if (importSettled(known.get(externalId), workspaceIds)) return "skipped";
   const raw = await fetchTranscriptContent(token, identity.objectId, transcript, fetchImpl, deadline);
-  const text = transcriptToText(raw).slice(0, 1_000_000);
+  const text = transcriptToText(raw);
   const callId = transcript.callId?.trim().slice(0, 200) || null;
   return withActor(actor, async (db) => {
     await lockImportKey(db, actor.userId, "teams", externalId);

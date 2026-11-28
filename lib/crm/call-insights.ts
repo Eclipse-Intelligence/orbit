@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, tooLong, errorText } from "@/lib/crm/errors";
+import { CrmError, errorText } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { detectTaskRecordsInDb } from "@/lib/crm/task-detect";
@@ -23,11 +23,13 @@ import {
   type Provenance,
   type Task,
 } from "@/lib/crm/types";
-import { completeJson } from "@/lib/llm";
+import { completeJson, MODEL_WINDOW_CHARS } from "@/lib/llm";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
-export const TRANSCRIPT_MAX_LENGTH = 200_000;
-const RAW_TRANSCRIPT_MAX_LENGTH = 1_000_000;
+export const TRANSCRIPT_PAGE_LENGTH = 100_000;
+export const TRANSCRIPT_TOOL = "get_call_transcript";
+const PROMPT_ROOM = 8_000;
+const PART_LENGTH = MODEL_WINDOW_CHARS - PROMPT_ROOM;
 export const PENDING_STALE_MS = CALL_INSIGHT_STALE_MS;
 const DAY_MS = 86_400_000;
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -298,7 +300,80 @@ const llmSchema = z.object({
 
 type LlmSummary = z.infer<typeof llmSchema>;
 
-function buildPrompt(call: CallRow, transcript: string, actorName: string | null) {
+type Reading = { text: string; notes: boolean };
+
+const NOTES_LABEL = "Notes on the transcript, in order:";
+
+const NOTES_RULE = `
+- You are given notes, in order, from consecutive parts of the same call, because the whole transcript was too long for one pass. Read them as the whole call. Each note covers its own part, so combine them and keep every commitment, figure and date.`;
+
+const PART_PROMPT = `You read one part of a long call transcript, or of notes on one, for a personal CRM called Orbit, and write notes that a later summary will be built from.
+
+Reply with a single JSON object and nothing else: {"notes": string}
+
+Rules:
+- Write in British English. Use only what this part says; never invent names, figures, dates or commitments.
+- Keep everything a summary could need, in the order it was said: who spoke, the topics, decisions, needs, objections, figures and dates, every commitment (who will do what, with any timing in the speaker's words), and any sign of how the other party feels about the relationship.
+- Plain text in short lines, no Markdown.
+- Lines may be labelled "Name: text" or unlabelled. The part may start or end in the middle of a conversation.`;
+
+const notesSchema = z.object({ notes: z.string().trim().min(1) });
+
+function safeCut(text: string, at: number) {
+  const code = text.charCodeAt(at - 1);
+  return code >= 0xd800 && code <= 0xdbff ? at - 1 : at;
+}
+
+export function splitTranscript(text: string, size: number) {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > size) {
+    const line = rest.lastIndexOf("\n", size);
+    if (line > size / 2) {
+      parts.push(rest.slice(0, line));
+      rest = rest.slice(line + 1);
+    } else {
+      const at = safeCut(rest, size);
+      parts.push(rest.slice(0, at));
+      rest = rest.slice(at);
+    }
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+async function readTranscript(
+  call: CallRow,
+  transcript: string,
+  actor: Actor,
+  options: { fetchImpl?: typeof fetch; deadline?: number },
+): Promise<Reading> {
+  if (transcript.length <= PART_LENGTH) return { text: transcript, notes: false };
+  let parts = splitTranscript(transcript, PART_LENGTH);
+  let size = transcript.length;
+  for (;;) {
+    const notes = await Promise.all(
+      parts.map(async (part, index) => {
+        const result = await completeJson({
+          system: PART_PROMPT,
+          user: buildPrompt(call, part, actorName(actor), `Part ${index + 1} of ${parts.length}:`),
+          schema: notesSchema,
+          maxTokens: 4000,
+          fetchImpl: options.fetchImpl,
+          deadline: options.deadline,
+        });
+        return result.data.notes;
+      }),
+    );
+    const joined = notes.map((note, index) => `Part ${index + 1} of ${notes.length}:\n${note}`).join("\n\n");
+    if (joined.length <= PART_LENGTH) return { text: joined, notes: true };
+    if (joined.length >= size) throw new CrmError("internal_error", "Couldn't summarise the call. Try again.", 500);
+    size = joined.length;
+    parts = splitTranscript(joined, PART_LENGTH);
+  }
+}
+
+function buildPrompt(call: CallRow, transcript: string, actorName: string | null, label = "Transcript:") {
   const day = callDay(iso(call.occurred_at) ?? new Date().toISOString());
   const them = [
     call.contact_name,
@@ -315,7 +390,7 @@ function buildPrompt(call: CallRow, transcript: string, actorName: string | null
     `- The other party ("them"): ${them || "unknown"}`,
     call.title ? `- Logged as: ${call.title}` : null,
     "",
-    "Transcript:",
+    label,
     "<transcript>",
     transcript,
     "</transcript>",
@@ -505,14 +580,15 @@ export async function judgeCallSentiment(
     return { call, insight };
   });
   const { call, insight } = prepared;
+  const reading = await readTranscript(call, insight.transcript, actor, options);
   const user = [
-    buildPrompt(call, insight.transcript.slice(0, TRANSCRIPT_MAX_LENGTH), actorName(actor)),
+    buildPrompt(call, reading.text, actorName(actor), reading.notes ? NOTES_LABEL : undefined),
     "",
     "Summary already written:",
     insight.summary ?? "",
   ].join("\n");
   const result = await completeJson({
-    system: SENTIMENT_PROMPT,
+    system: reading.notes ? SENTIMENT_PROMPT + NOTES_RULE : SENTIMENT_PROMPT,
     user,
     schema: sentimentSchema,
     maxTokens: 400,
@@ -575,9 +651,10 @@ async function summaryOutcome(
   options: { fetchImpl?: typeof fetch; deadline?: number },
 ): Promise<Parameters<typeof finishInsight>[2]> {
   try {
+    const reading = await readTranscript(call, transcript, actor, options);
     const result = await completeJson({
-      system: SYSTEM_PROMPT,
-      user: buildPrompt(call, transcript, actorName(actor)),
+      system: reading.notes ? SYSTEM_PROMPT + NOTES_RULE : SYSTEM_PROMPT,
+      user: buildPrompt(call, reading.text, actorName(actor), reading.notes ? NOTES_LABEL : undefined),
       schema: llmSchema,
       maxTokens: 4000,
       fetchImpl: options.fetchImpl,
@@ -614,20 +691,7 @@ export async function summariseCall(
       field: "source",
     });
   }
-  if (transcript.length > RAW_TRANSCRIPT_MAX_LENGTH) {
-    throw new CrmError("invalid_input", tooLong("the transcript", 200_000), 400, {
-      field: "transcript",
-    });
-  }
   const text = transcriptToText(transcript);
-  if (text.length > TRANSCRIPT_MAX_LENGTH) {
-    throw new CrmError(
-      "invalid_input",
-      tooLong("the transcript", 200_000),
-      400,
-      { field: "transcript" },
-    );
-  }
   const prepared = await withActor(actor, async (db) => {
     const call = await readCall(db, actor, activityId);
     if (!call) throw new CrmError("not_found", "Call not found.", 404);
@@ -851,4 +915,46 @@ export async function getInsightTranscript(actor: Actor, insightId: string) {
     if (!row) throw new CrmError("not_found", "Call summary not found.", 404);
     return row.transcript;
   });
+}
+
+export type TranscriptPage = {
+  insightId: string;
+  text: string;
+  totalLength: number;
+  offset: number;
+  nextOffset: number | null;
+};
+
+export async function getInsightTranscriptPage(actor: Actor, insightId: string, offset = 0): Promise<TranscriptPage> {
+  assertScope(actor.scopes, "crm:read");
+  if (!isUuid(insightId)) throw new CrmError("not_found", "Call summary not found.", 404);
+  const start = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ total: number; text: string }>(
+      `select char_length(transcript)::int as total, substr(transcript, $3::int + 1, $4::int) as text
+       from crm.call_insights where id = $1 and workspace_id = $2`,
+      [insightId, actor.workspaceId, start, TRANSCRIPT_PAGE_LENGTH],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CrmError("not_found", "Call summary not found.", 404);
+    let text = row.text;
+    let length = Array.from(text).length;
+    if (start + length < row.total) {
+      const line = text.lastIndexOf("\n");
+      if (line > text.length / 2) {
+        text = text.slice(0, line + 1);
+        length = Array.from(text).length;
+      }
+    }
+    const end = start + length;
+    return { insightId, text, totalLength: row.total, offset: start, nextOffset: end < row.total ? end : null };
+  });
+}
+
+export function withTranscriptHint<T extends { transcriptLength: number }>(insight: T) {
+  return { ...insight, transcript: { length: insight.transcriptLength, tool: TRANSCRIPT_TOOL } };
+}
+
+export function withTranscriptHints<T extends { transcriptLength: number }>(insights: Record<string, T>) {
+  return Object.fromEntries(Object.entries(insights).map(([key, insight]) => [key, withTranscriptHint(insight)]));
 }
