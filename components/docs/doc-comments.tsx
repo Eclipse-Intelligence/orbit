@@ -7,6 +7,7 @@ import Button from "@/components/_ui/button";
 import HoldButton from "@/components/_ui/hold-button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/_ui/sheet";
 import { agoLabel, Avatar, Composer } from "@/components/docs/comment-cards";
+import { threadHolding, threadsOf, type Thread } from "@/components/docs/comment-threads";
 import { paintComments, shownBody } from "@/components/docs/note-editor";
 import { COMMENT_PARAM } from "@/lib/docs/comment-params";
 import { placeThreads } from "@/lib/docs/comment-layout";
@@ -19,12 +20,6 @@ import XIcon from "@/public/assets/images/companies/detail/x.svg";
 
 const REFRESH_MS = 30_000;
 const BODY_DEBOUNCE_MS = 300;
-
-type Thread = { root: DocComment; replies: DocComment[] };
-
-function threadsOf(comments: DocComment[]): Thread[] {
-  return comments.filter((comment) => comment.parentId === null).map((root) => ({ root, replies: comments.filter((comment) => comment.parentId === root.id) }));
-}
 
 export function CommentsButton({ open, total, pressed, compact, onClick }: { open: number; total: number; pressed: boolean; compact?: boolean; onClick: () => void }) {
   const label = open > 0 ? `Comments, ${open} open` : total > 0 ? "Comments, none open" : "Comments";
@@ -61,7 +56,13 @@ function useComments(pageId: string) {
 
   const reload = useCallback(async () => {
     const ticket = ++latest.current;
-    const result = await docCommentsAction(pageId);
+    let result: Awaited<ReturnType<typeof docCommentsAction>>;
+    try {
+      result = await docCommentsAction(pageId);
+    } catch {
+      if (ticket === latest.current) setFailed("Couldn't load the comments. Try again.");
+      return;
+    }
     if (ticket !== latest.current) return;
     if (result.error !== undefined) {
       setFailed(result.error);
@@ -208,8 +209,13 @@ function Card({
           onClick={async (event) => {
             event.stopPropagation();
             setBusy(true);
-            setProblem(await onToggle(root.id, !root.resolved));
-            setBusy(false);
+            try {
+              setProblem(await onToggle(root.id, !root.resolved));
+            } catch {
+              setProblem(`Couldn't ${root.resolved ? "reopen" : "resolve"} the comment. Try again.`);
+            } finally {
+              setBusy(false);
+            }
           }}
           className="hit"
         >
@@ -245,12 +251,12 @@ export function DocCommentsPanel({ pageId, fallbackBody, viewerName, phone, onCl
   const openPlaced = open.filter((thread) => !orphaned.has(thread.root.id)).sort((left, right) => (placement.get(left.root.id)?.from ?? 0) - (placement.get(right.root.id)?.from ?? 0));
   const openOrphaned = open.filter((thread) => orphaned.has(thread.root.id));
 
-  const arrival = asked && comments && arrived !== asked ? threads.find((thread) => thread.root.id === asked) : null;
+  const arrival = asked && comments && arrived !== asked ? threadHolding(threads, asked) : null;
   if (arrival && asked) {
     setArrived(asked);
     setTab(arrival.root.resolved ? "resolved" : "open");
-    setActive(asked);
-    setScrollRequest((current) => ({ id: asked, n: (current?.n ?? 0) + 1 }));
+    setActive(arrival.root.id);
+    setScrollRequest((current) => ({ id: arrival.root.id, n: (current?.n ?? 0) + 1 }));
   }
 
   useEffect(() => {
@@ -282,21 +288,33 @@ export function DocCommentsPanel({ pageId, fallbackBody, viewerName, phone, onCl
 
   const actions = {
     reply: async (rootId: string, text: string) => {
-      const result = await replyToCommentAction(pageId, rootId, text);
-      if (result.error !== undefined) return result.error;
+      try {
+        const result = await replyToCommentAction(pageId, rootId, text);
+        if (result.error !== undefined) return result.error;
+      } catch {
+        return "Couldn't reply. Try again.";
+      }
       await reload();
       return null;
     },
     toggle: async (rootId: string, next: boolean) => {
-      const result = await resolveCommentAction(pageId, rootId, next);
-      if (result.error !== undefined) return result.error;
+      try {
+        const result = await resolveCommentAction(pageId, rootId, next);
+        if (result.error !== undefined) return result.error;
+      } catch {
+        return `Couldn't ${next ? "resolve" : "reopen"} the comment. Try again.`;
+      }
       if (next) setActive((current) => (current === rootId ? null : current));
       await reload();
       return null;
     },
     remove: async (id: string) => {
-      const result = await deleteCommentAction(pageId, id);
-      if (result.error !== undefined) return result.error;
+      try {
+        const result = await deleteCommentAction(pageId, id);
+        if (result.error !== undefined) return result.error;
+      } catch {
+        return "Couldn't delete the comment. Try again.";
+      }
       await reload();
       return null;
     },

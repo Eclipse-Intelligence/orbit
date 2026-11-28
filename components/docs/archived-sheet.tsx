@@ -68,8 +68,14 @@ export default function ArchivedSheet() {
   async function run(id: string, action: () => Promise<string | null>) {
     setBusy(id);
     setProblem(null);
-    const failed = await action();
-    setBusy(null);
+    let failed: string | null;
+    try {
+      failed = await action();
+    } catch {
+      failed = "Couldn't do that. Try again.";
+    } finally {
+      setBusy(null);
+    }
     if (failed) setProblem(failed);
     else setReload((value) => value + 1);
   }
@@ -176,7 +182,7 @@ export default function ArchivedSheet() {
                   <li key={member.id} className="flex min-h-11 items-center gap-3 py-1.5">
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="text-foreground truncate text-[14px] leading-5">{member.name}</span>
-                      <span className="caption-style text-subtle truncate">{member.examples.join(", ")}</span>
+                      <span className="caption-style text-subtle truncate">{member.examples.length > 0 ? member.examples.join(", ") : `${member.count} ${member.count === 1 ? "item" : "items"}`}</span>
                     </span>
                     <Button variant="secondary" size="sm" disabled={busy !== null} onClick={() => setTakeOver(member)}>
                       Take over

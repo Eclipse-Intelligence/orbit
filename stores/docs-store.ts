@@ -55,6 +55,7 @@ type DocsState = {
   summaries: Record<string, PageSummary>;
   pages: Record<string, Page>;
   lists: Record<string, string[]>;
+  listMore: Record<string, boolean>;
   sort: PageSort;
   recent: string[];
   activity: Record<string, Participant[]>;
@@ -71,13 +72,15 @@ type DocsState = {
   visibilityPrompt: VisibilityPrompt | null;
   liveKind: LiveTransportKind | null;
   live: Record<string, LiveStatus>;
-  remoteTitles: Record<string, { title: string; at: number }>;
+  remoteTitles: Record<string, string>;
   unavailable: Record<string, true>;
   init: (seed: DocsSeed, nav: DocsNav) => void;
   seed: (initial: { list: PageFilter; summaries: PageSummary[]; page: Page | null }) => void;
   loadList: (list: PageFilter, force?: boolean) => Promise<string[]>;
   loadPage: (id: string, force?: boolean) => Promise<Page | null>;
-  refreshPage: (id: string) => Promise<void>;
+  refreshPage: (id: string) => Promise<boolean>;
+  forget: (id: string) => void;
+  setListMore: (key: string, more: boolean) => void;
   prefetch: (ids: string[]) => void;
   refreshNav: () => Promise<void>;
   refreshAfterAgent: () => void;
@@ -86,6 +89,7 @@ type DocsState = {
   setLive: (id: string, status: LiveStatus | null) => void;
   liveSaved: (id: string, summary: PageSummary, revision: number) => void;
   remoteTitle: (id: string, title: string) => void;
+  clearRemoteTitle: (id: string) => void;
   setUnavailable: (id: string, value: boolean) => void;
   replaceBody: (page: Page, options?: { untracked?: boolean }) => void;
   setSave: (id: string, status: SaveStatus, message?: string) => void;
@@ -120,6 +124,7 @@ type Acknowledged = NoteText & { revision: number; daily: boolean };
 type Queued = NoteText & { renamedFrom: string | null };
 type Reader = () => NoteText;
 
+export const LIST_PAGE_SIZE = 200;
 const RECENT_KEY = "orbit-docs-recent";
 const SAVE_DELAY_MS = 500;
 const UNSAVED = "Your latest changes haven't saved yet. Try again once they have.";
@@ -202,6 +207,30 @@ function summaryFrom(page: Page): PageSummary {
   };
 }
 
+function withoutKey<T>(record: Record<string, T>, key: string) {
+  if (!(key in record)) return record;
+  const rest = { ...record };
+  delete rest[key];
+  return rest;
+}
+
+function gone(error: unknown) {
+  return error instanceof DocsError && (error.code === "not_found" || error.code === "forbidden");
+}
+
+function lookup(id: string) {
+  return docsData()
+    .getPage(id)
+    .catch((error: unknown) => {
+      if (gone(error)) return null;
+      throw error;
+    });
+}
+
+function replaceIfNewer(fresh: Page, held: Page | undefined) {
+  if (held && fresh.revision > held.revision) useDocsStore.getState().replaceBody(fresh);
+}
+
 function message(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -225,6 +254,7 @@ function blank() {
     summaries: {},
     pages: {},
     lists: {},
+    listMore: {},
     sort: "edited" as PageSort,
     recent: [],
     activity: {},
@@ -264,10 +294,11 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         for (const [id, revision] of Object.entries(revisions)) {
           const page = state.pages[id];
           if (!page || page.revision >= revision || !idle(id)) continue;
-          void docsData()
-            .getPage(id)
+          void lookup(id)
             .then((fresh) => {
-              if (current === session && fresh && idle(id)) get().replaceBody(fresh);
+              if (current !== session) return;
+              if (!fresh) get().forget(id);
+              else if (idle(id)) replaceIfNewer(fresh, get().pages[id]);
             })
             .catch(() => {});
         }
@@ -291,6 +322,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       summaries: nextSummaries,
       pages,
       lists: state.lists[key] ? state.lists : { ...state.lists, [key]: summaries.map((summary) => summary.id) },
+      listMore: state.lists[key] ? state.listMore : { ...state.listMore, [key]: summaries.length >= LIST_PAGE_SIZE },
     });
   },
 
@@ -309,7 +341,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
         set((state) => {
           const summaries = { ...state.summaries };
           for (const row of rows) summaries[row.id] = row;
-          return { summaries, lists: { ...state.lists, [key]: ids } };
+          return { summaries, lists: { ...state.lists, [key]: ids }, listMore: { ...state.listMore, [key]: ids.length >= LIST_PAGE_SIZE } };
         });
         return ids;
       })
@@ -326,14 +358,13 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     const running = pageRequests.get(id);
     if (running && !force) return running;
     const current = session;
-    const request = docsData()
-      .getPage(id)
+    const request = lookup(id)
       .then((page) => {
         if (current !== session) return page;
         if (page) {
           if (idle(id)) acked.delete(id);
-          set((state) => ((state.pages[id]?.revision ?? 0) > page.revision ? state : { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) } }));
-        }
+          set((state) => ((state.pages[id]?.revision ?? 0) > page.revision ? state : { pages: { ...state.pages, [id]: page }, summaries: { ...state.summaries, [id]: summaryFrom(page) }, remoteTitles: withoutKey(state.remoteTitles, id) }));
+        } else get().forget(id);
         return page;
       })
       .finally(() => {
@@ -345,10 +376,37 @@ export const useDocsStore = create<DocsState>((set, get) => ({
 
   async refreshPage(id) {
     const current = session;
-    const fresh = await docsData().getPage(id);
-    if (current !== session || !fresh || !idle(id)) return;
+    const fresh = await lookup(id);
+    if (current !== session) return true;
+    if (!fresh) {
+      get().forget(id);
+      return false;
+    }
+    if (!idle(id)) return true;
     const held = get().pages[id];
     if (!held || fresh.revision > held.revision) get().replaceBody(fresh);
+    return true;
+  },
+
+  forget(id) {
+    set((state) => {
+      const lists: Record<string, string[]> = {};
+      for (const [key, ids] of Object.entries(state.lists)) lists[key] = ids.filter((item) => item !== id);
+      const pages = { ...state.pages };
+      delete pages[id];
+      const summaries = { ...state.summaries };
+      delete summaries[id];
+      return { pages, summaries, lists, recent: state.recent.filter((item) => item !== id) };
+    });
+    const key = recentKey();
+    if (!key) return;
+    try {
+      localStorage.setItem(key, JSON.stringify(get().recent));
+    } catch {}
+  },
+
+  setListMore(key, more) {
+    set((state) => (state.listMore[key] === more ? state : { listMore: { ...state.listMore, [key]: more } }));
   },
 
   prefetch(ids) {
@@ -424,6 +482,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       pages: { ...state.pages, [page.id]: page },
       summaries: { ...state.summaries, [page.id]: summaryFrom(page) },
       epochs: { ...state.epochs, [page.id]: (state.epochs[page.id] ?? 0) + 1 },
+      remoteTitles: withoutKey(state.remoteTitles, page.id),
     }));
   },
 
@@ -450,12 +509,16 @@ export const useDocsStore = create<DocsState>((set, get) => ({
     });
   },
 
+  clearRemoteTitle(id) {
+    set((state) => (id in state.remoteTitles ? { remoteTitles: withoutKey(state.remoteTitles, id) } : {}));
+  },
+
   remoteTitle(id, title) {
     set((state) => {
       const page = state.pages[id];
       const summary = state.summaries[id];
       return {
-        remoteTitles: { ...state.remoteTitles, [id]: { title, at: Date.now() } },
+        remoteTitles: { ...state.remoteTitles, [id]: title },
         pages: page && page.kind !== "daily" ? { ...state.pages, [id]: { ...page, title } } : state.pages,
         summaries: summary && summary.kind !== "daily" ? { ...state.summaries, [id]: { ...summary, title } } : state.summaries,
       };
@@ -469,7 +532,12 @@ export const useDocsStore = create<DocsState>((set, get) => ({
       const unavailable = { ...state.unavailable };
       if (value) unavailable[id] = true;
       else delete unavailable[id];
-      return { unavailable };
+      if (!value) return { unavailable };
+      const lists: Record<string, string[]> = {};
+      for (const [key, ids] of Object.entries(state.lists)) lists[key] = ids.filter((item) => item !== id);
+      const summaries = { ...state.summaries };
+      delete summaries[id];
+      return { unavailable, lists, summaries, recent: state.recent.filter((item) => item !== id) };
     });
   },
 
@@ -597,7 +665,7 @@ export const useDocsStore = create<DocsState>((set, get) => ({
             .restorePage(id)
             .then((page) => {
               if (idle(id)) acked.delete(id);
-              set((state) => ({ summaries: { ...state.summaries, [id]: summaryFrom(page) }, pages: { ...state.pages, [id]: page }, listsVersion: state.listsVersion + 1 }));
+              set((state) => ({ summaries: { ...state.summaries, [id]: summaryFrom(page) }, pages: { ...state.pages, [id]: page }, remoteTitles: withoutKey(state.remoteTitles, id), listsVersion: state.listsVersion + 1 }));
               void get().refreshNav();
               void get().refreshTitles();
               get().notify(`Restored ${title}.`);
@@ -1101,6 +1169,11 @@ async function send(id: string, next: Queued, base: Acknowledged, keepalive: boo
   if (!newer) queued.set(id, next);
   useDocsStore.getState().setSave(id, "error", result.error);
   if (newer) return flush(id);
+  void lookup(id)
+    .then((found) => {
+      if (current === session && !found) useDocsStore.getState().forget(id);
+    })
+    .catch(() => {});
 }
 
 function acknowledge(id: string, sent: Queued, previous: Acknowledged, saved: Page): Promise<void> {
@@ -1134,10 +1207,11 @@ function refreshLinked(renamedId: string, from: string, to: string) {
   const current = session;
   for (const page of Object.values(useDocsStore.getState().pages)) {
     if (page.id === renamedId || !idle(page.id) || rewriteLinkTitle(page.body, from, to).count === 0) continue;
-    void docsData()
-      .getPage(page.id)
+    void lookup(page.id)
       .then((fresh) => {
-        if (current === session && fresh && idle(page.id)) useDocsStore.getState().replaceBody(fresh);
+        if (current !== session) return;
+        if (!fresh) useDocsStore.getState().forget(page.id);
+        else if (idle(page.id)) replaceIfNewer(fresh, useDocsStore.getState().pages[page.id]);
       })
       .catch(() => {});
   }

@@ -185,7 +185,7 @@ Docs are Markdown notes in nested folders (see `docs/architecture.md`, Docs). Re
 | --- | --- | --- | --- | --- | --- |
 | `list_doc_folders` | Folders with parent, position, owner and visibility (`private`, `shared`, `shared_by_folder`). | `archived` | `docs:read` | No | Both |
 | `create_doc_folder` | Creates a folder, at the top level or in another. Agent tokens can only create shared ones. | `name`, `parent_id`, `shared`, `provenanceUrl` | `docs:write` | Yes | Both |
-| `list_docs` | Docs with excerpts and tags, newest edit first. Filter by folder, by no folder, or by a tag (nested tags included). | `folder_id`, `no_folder`, `tag`, `sort` (`edited`, `created`, `title`), `archived`, `limit` (up to 200), `offset` | `docs:read` | No | Both |
+| `list_docs` | Docs with excerpts and tags, newest edit first (archived ones too, unless `sort` says otherwise). Filter by folder, by no folder, or by a tag (nested tags included). | `folder_id`, `no_folder`, `tag`, `sort` (`edited`, `created`, `title`), `archived`, `limit` (up to 200), `offset` | `docs:read` | No | Both |
 | `search_docs` | Title prefix, fuzzy title and full-text search. An empty query lists recent docs. Personal tokens also search their daily notes. | `query`, `limit` (up to 50) | `docs:read` | No | Both |
 | `read_doc` | A doc as Markdown, 100,000 characters from `offset` with `nextOffset`. The first window adds its folder path, links, mentions and backlinks. | `id`, `offset` | `docs:read` | No | Both |
 | `create_doc` | Creates a doc. A personal token's doc is private unless shared or put in a shared folder; an agent token's is always shared. | `title`, `content`, `folder_id`, `shared`, `provenanceUrl` | `docs:write` | Yes | Both |

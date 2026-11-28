@@ -750,7 +750,7 @@ export async function readDoc(actor: Actor, id: string, offset: unknown = 0) {
   });
 }
 
-export async function listDocs(actor: Actor, query: DocListQuery = {}): Promise<{ data: DocSummary[]; hasMore: boolean }> {
+export async function listDocs(actor: Actor, query: DocListQuery = {}, options: { newestArchivedFirst?: boolean } = {}): Promise<{ data: DocSummary[]; hasMore: boolean }> {
   assertDocsRead(actor);
   const limit = pagingNumber(query.limit, 50, 1, 200);
   const offset = pagingNumber(query.offset, 0, 0, 10_000);
@@ -777,7 +777,8 @@ export async function listDocs(actor: Actor, query: DocListQuery = {}): Promise<
     values.push(tag, `${tag.replace(/[\\%_]/g, (match) => `\\${match}`)}/%`);
     where.push(`exists (select 1 from crm.page_tags t where t.page_id = p.id and (t.tag = $${values.length - 1} or t.tag like $${values.length} escape '\\'))`);
   }
-  const order = query.sort === "title" ? "lower(p.title) asc, p.edited_at desc" : query.sort === "created" ? "p.created_at desc" : "p.edited_at desc";
+  const fallback = options.newestArchivedFirst ? "p.archived_at desc" : "p.edited_at desc";
+  const order = query.sort === "title" ? "lower(p.title) asc, p.edited_at desc" : query.sort === "created" ? "p.created_at desc" : fallback;
   values.push(limit + 1, offset);
   return withActor(actor, async (db) => {
     const result = await db.query<PageRow>(

@@ -17,6 +17,7 @@ import NoteEditor, { focusNoteText, noteTitle, scheduleNoteSave, setNoteTitle } 
 import NoteRail from "@/components/docs/note-rail";
 import { ParticipantAvatar, PresenceStack } from "@/components/docs/presence";
 import { OnlyYou, PageShare } from "@/components/docs/share-control";
+import { liveRemoteTitle } from "@/components/docs/remote-title";
 import { TITLE_FORBIDDEN, TITLE_RULE, useTitleRename } from "@/components/docs/title-rename";
 import { navigateWithinDocs, useDocsNav, useDocsNavigate, useDocsNow, useMedia, useToday } from "@/components/docs/use-docs";
 import type { Meeting, Page, PageFilter, PageSummary, Participant, Presence } from "@/lib/docs/client-types";
@@ -73,21 +74,25 @@ function contextFor(page: { kind: string; folderId: string | null; dailyDate: st
 }
 
 function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObject<HTMLTextAreaElement | null>; replaced: boolean }) {
-  const [value, setValue] = useState(() => (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
+  const remote = useDocsStore((state) => liveRemoteTitle(state, page.id));
+  const clearRemoteTitle = useDocsStore((state) => state.clearRemoteTitle);
+  const [value, setValue] = useState(() => remote ?? (replaced ? page.title : (noteTitle(page.id) ?? page.title)));
   const fresh = useDocsStore((state) => state.fresh === page.id);
-  const remote = useDocsStore((state) => state.remoteTitles[page.id]);
   const unavailable = useDocsStore((state) => Boolean(state.unavailable[page.id]));
   const [seenRemote, setSeenRemote] = useState(remote);
   const [editing, setEditing] = useState(false);
   if (remote !== seenRemote) {
     setSeenRemote(remote);
-    if (remote && remote.title !== value && !editing) setValue(remote.title);
+    if (remote !== undefined && remote !== value && !editing) setValue(remote);
   }
-  useEffect(() => {
-    if (remote && !editing && noteTitle(page.id) !== remote.title) setNoteTitle(page.id, remote.title);
-  }, [remote, page.id, editing]);
   const clearFresh = useDocsStore((state) => state.clearFresh);
   const rename = useTitleRename(page.id, page.title, page.kind === "note");
+  const adopt = rename.adopt;
+  useEffect(() => {
+    if (remote === undefined || editing) return;
+    adopt(remote);
+    if (noteTitle(page.id) !== remote) setNoteTitle(page.id, remote);
+  }, [remote, page.id, editing, adopt]);
   const [blocked, setBlocked] = useState(false);
   useEffect(() => {
     if (!fresh) return;
@@ -122,6 +127,7 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
           const next = typed.replace(TITLE_FORBIDDEN, "");
           setBlocked(next !== typed);
           setValue(next);
+          clearRemoteTitle(page.id);
           setNoteTitle(page.id, next);
           scheduleNoteSave(page.id, page);
           rename.typed(next);
@@ -129,6 +135,11 @@ function TitleField({ page, inputRef, replaced }: { page: Page; inputRef: RefObj
         onFocus={() => setEditing(true)}
         onBlur={() => {
           setEditing(false);
+          if (remote !== undefined && remote !== value) {
+            setValue(remote);
+            setNoteTitle(page.id, remote);
+            adopt(remote);
+          }
           rename.settle();
         }}
         onKeyDown={(event) => {
@@ -680,7 +691,7 @@ export default function NoteView({
                   <>
                     <ConflictNotice id={page.id} />
                     <div>{editor(page)}</div>
-                    <JotLine page={page} />
+                    <JotLine key={page.id} page={page} />
                   </>
                 )
               }
@@ -700,7 +711,7 @@ export default function NoteView({
                   {!selected && <ConflictNotice id={page.id} />}
                   {selected && <VersionPreview page={page} selected={selected} showChanges={showChanges} />}
                   <div className={cn(selected && "hidden")}>{editor(page)}</div>
-                  {daily && !selected && <JotLine page={page} />}
+                  {daily && !selected && <JotLine key={page.id} page={page} />}
                 </>
               ) : missing ? (
                 <div role="alert" className="flex flex-col items-start gap-3 pt-1">

@@ -225,8 +225,6 @@ export function RowList({ children, label, onMove }: { children: ReactNode; labe
   );
 }
 
-export const LIST_PAGE_SIZE = 200;
-
 function listParams(list: PageFilter): Record<string, string> {
   if (list.kind === "folder") return { list: "folder", folder: list.folderId };
   if (list.kind === "tag") return { list: "tag", tag: list.path };
@@ -234,27 +232,31 @@ function listParams(list: PageFilter): Record<string, string> {
 }
 
 export function LoadMore({ list, sort, loaded }: { list: PageFilter; sort: PageSort; loaded: number }) {
-  const [state, setState] = useState<{ key: string; status: "idle" | "loading" | "done" | "failed" }>({ key: "", status: "idle" });
-  const key = `${listKey(list)}|${sort}|${Math.floor(loaded / LIST_PAGE_SIZE)}`;
+  const [state, setState] = useState<{ key: string; status: "idle" | "loading" | "failed" }>({ key: "", status: "idle" });
+  const storeKey = `${listKey(list)}|${sort}`;
+  const more = useDocsStore((current) => current.listMore[storeKey] === true);
+  const key = `${storeKey}|${loaded}`;
   const status = state.key === key ? state.status : "idle";
-  if (list.kind === "search" || loaded < LIST_PAGE_SIZE || status === "done") return null;
+  if (list.kind === "search" || !more) return null;
 
-  async function more() {
+  async function loadMore() {
     setState({ key, status: "loading" });
     try {
       const params = new URLSearchParams({ ...listParams(list), sort, paged: "1", offset: String(loaded) });
       const response = await fetch(`/api/docs/pages?${params}`, { cache: "no-store", credentials: "same-origin" });
       if (!response.ok) throw new Error();
       const result = (await response.json()) as { pages: PageSummary[]; hasMore: boolean };
-      const storeKey = `${listKey(list)}|${sort}`;
       useDocsStore.setState((current) => {
         const ids = current.lists[storeKey] ?? [];
         const seen = new Set(ids);
         const summaries = { ...current.summaries };
         for (const page of result.pages) summaries[page.id] = summaries[page.id] ?? page;
-        return { summaries, lists: { ...current.lists, [storeKey]: [...ids, ...result.pages.map((page) => page.id).filter((id) => !seen.has(id))] } };
+        return {
+          summaries,
+          lists: { ...current.lists, [storeKey]: [...ids, ...result.pages.map((page) => page.id).filter((id) => !seen.has(id))] },
+          listMore: { ...current.listMore, [storeKey]: result.hasMore && result.pages.length > 0 },
+        };
       });
-      setState({ key: `${listKey(list)}|${sort}|${Math.floor((loaded + result.pages.length) / LIST_PAGE_SIZE)}`, status: result.hasMore && result.pages.length > 0 ? "idle" : "done" });
     } catch {
       setState({ key, status: "failed" });
     }
@@ -262,7 +264,7 @@ export function LoadMore({ list, sort, loaded }: { list: PageFilter; sort: PageS
 
   return (
     <div className="flex flex-col items-start gap-2 px-3 py-3">
-      <Button variant="secondary" size="sm" disabled={status === "loading"} onClick={() => void more()}>
+      <Button variant="secondary" size="sm" disabled={status === "loading"} onClick={() => void loadMore()}>
         {status === "loading" ? "Loading…" : "Load more"}
       </Button>
       {status === "failed" && (

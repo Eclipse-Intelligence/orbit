@@ -118,7 +118,7 @@ export function registerDocsTools(server: McpServer, actor: Actor) {
   server.registerTool(
     "list_docs",
     {
-      description: `Docs, newest edit first unless sorted otherwise, with excerpts and tags. Filter by folder (folder_id, or no_folder true for docs not in a folder you can see) or by a tag, which includes its nested tags. ${who}`,
+      description: `Docs, newest edit first unless sorted otherwise (archived ones too), with excerpts and tags. Filter by folder (folder_id, or no_folder true for docs not in a folder you can see) or by a tag, which includes its nested tags. ${who}`,
       inputSchema: {
         folder_id: z.uuid().optional(),
         no_folder: z.boolean().optional(),
