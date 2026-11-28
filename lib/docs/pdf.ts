@@ -157,81 +157,16 @@ function runsOf(text: string, node: SyntaxNode, bold = false) {
   return out;
 }
 
-const BLOCK_START = /^(?:[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|#{1,6}(?:\s|$)|[>|<=:]|`{3}|~{3}|(?:[-*_][ \t]*){3})/;
-const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})/;
-const RULE_ROW = /^[\s|:-]*-[\s|:-]*$/;
-
-function startOfPiece(line: string, cut: number) {
-  let next = cut;
-  while (next < line.length && /\s/.test(line[next])) next += 1;
-  return next;
-}
-
-function safeCut(line: string, from: number) {
-  const reach = from + LONG_LINE;
-  const fine = (cut: number) => {
-    if (!/\s/.test(line[cut]) || /\s/.test(line[cut - 1])) return false;
-    const next = startOfPiece(line, cut);
-    return !BLOCK_START.test(line.slice(next, next + 4));
-  };
-  for (let cut = reach; cut > from + LONG_LINE / 2; cut -= 1) if (fine(cut)) return { cut, next: startOfPiece(line, cut) };
-  for (let cut = reach + 1; cut < Math.min(line.length, reach + LONG_LINE); cut += 1) if (fine(cut)) return { cut, next: startOfPiece(line, cut) };
-  return null;
-}
-
-function escapedStart(piece: string) {
-  if (!BLOCK_START.test(piece.slice(0, 4))) return piece;
-  return /^\d/.test(piece) ? piece.replace(/^(\d{1,9})([.)])/, "$1\\$2") : `\\${piece}`;
-}
-
-function breakLine(line: string) {
-  const pieces: string[] = [];
+function hasLongLine(content: string) {
+  if (content.length <= LONG_LINE) return false;
   let from = 0;
-  while (line.length - from > LONG_LINE) {
-    const found = safeCut(line, from);
-    let cut = found?.cut ?? from + LONG_LINE;
-    if (!found) while (cut > from + 1 && !/\s/.test(line[cut])) cut -= 1;
-    if (!/\s/.test(line[cut])) cut = from + LONG_LINE;
-    pieces.push(pieces.length === 0 ? line.slice(from, cut) : escapedStart(line.slice(from, cut)));
-    from = found?.next ?? startOfPiece(line, cut);
+  while (from < content.length) {
+    const end = content.indexOf("\n", from);
+    const stop = end < 0 ? content.length : end;
+    if (stop - from > LONG_LINE) return true;
+    from = stop + 1;
   }
-  pieces.push(pieces.length === 0 ? line.slice(from) : escapedStart(line.slice(from)));
-  return pieces.join("\n");
-}
-
-export function breakLongLines(content: string) {
-  if (content.length <= LONG_LINE) return content;
-  const lines = content.split("\n");
-  const inTable = new Array<boolean>(lines.length).fill(false);
-  for (let index = 0; index < lines.length; ) {
-    if (lines[index].trim() === "") {
-      index += 1;
-      continue;
-    }
-    let end = index;
-    let table = false;
-    while (end < lines.length && lines[end].trim() !== "") {
-      if (lines[end].includes("|") && (lines[end].trimStart().startsWith("|") || RULE_ROW.test(lines[end]))) table = true;
-      end += 1;
-    }
-    if (table) inTable.fill(true, index, end);
-    index = end;
-  }
-  let fence: { char: string; size: number } | null = null;
-  return lines
-    .map((line, index) => {
-      const marker = FENCE_LINE.exec(line);
-      if (fence) {
-        if (marker && marker[1][0] === fence.char && marker[1].length >= fence.size && line.trim().replace(/[`~]/g, "") === "") fence = null;
-        return line;
-      }
-      if (marker && !(marker[1][0] === "`" && line.slice(marker[0].length).includes("`"))) {
-        fence = { char: marker[1][0], size: marker[1].length };
-        return line;
-      }
-      return line.length <= LONG_LINE || inTable[index] ? line : breakLine(line);
-    })
-    .join("\n");
+  return false;
 }
 
 export class DocPdfWriter {
@@ -718,14 +653,26 @@ export class DocPdfWriter {
     }
   }
 
+  private plainBody(context: Context) {
+    for (const line of this.text.split("\n")) {
+      this.tick();
+      if (line.trim() === "") this.gap(BODY * 0.75);
+      else this.paragraph([plain(displayText(line))], context, {});
+    }
+  }
+
   render(input: DocPdfInput) {
     const title = input.title.trim() || "Untitled";
     const context: Context = { indent: 0, bars: [] };
     this.paragraph([plain(updatedLabel(input.updatedAt))], context, { size: 8.5, after: 4 });
     this.paragraph([plain(title, { bold: true })], context, { size: 21, after: 10 });
-    definitions = new Set([...this.text.matchAll(DEFINITION)].map((match) => referenceKey(match[1])));
-    const tree = docsParser.parse(this.text);
-    for (let child = tree.topNode.firstChild; child; child = child.nextSibling) this.block(child, context);
+    if (hasLongLine(this.text)) {
+      this.plainBody(context);
+    } else {
+      definitions = new Set([...this.text.matchAll(DEFINITION)].map((match) => referenceKey(match[1])));
+      const tree = docsParser.parse(this.text);
+      for (let child = tree.topNode.firstChild; child; child = child.nextSibling) this.block(child, context);
+    }
     const pages = this.pdf.getPages();
     const regular = this.fonts.regular;
     const flat = this.clean(title).replace(/\s+/g, " ");
@@ -748,7 +695,7 @@ export async function renderDocPdf(input: DocPdfInput, options: { deadline?: num
     bold: await pdf.embedFont(files.bold, { subset: true }),
     italic: await pdf.embedFont(files.italic, { subset: true }),
   };
-  const writer = new DocPdfWriter(pdf, fonts, breakLongLines(input.content), deadline);
+  const writer = new DocPdfWriter(pdf, fonts, input.content, deadline);
   const title = input.title.trim() || "Untitled";
   pdf.setTitle(writer.clean(title));
   pdf.setCreator("Orbit");

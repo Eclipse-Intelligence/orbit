@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { docsParser } from "@/lib/docs/editor/syntax";
 import { findTags, headingsIn, normaliseTag, parseDoc, plainText, tagAt } from "@/lib/docs/markdown";
-import { breakLongLines, PdfDeadlineError, renderDocPdf } from "@/lib/docs/pdf";
+import { createHash } from "node:crypto";
+import { extractText, getDocumentProxy } from "unpdf";
+import { PdfDeadlineError, renderDocPdf } from "@/lib/docs/pdf";
 
 const MEGABYTE = 1_000_000;
 const LIMIT_MS = 1000;
@@ -153,6 +155,13 @@ describe("The Docs PDF writer stays within its deadline on hostile input", () =>
     "code with a long run of spaces": `\`\`\`\nx${" ".repeat(MEGABYTE / 2)}y\n\`\`\``,
     "unclosed image openers": `${"![a](".repeat(MEGABYTE / 12)} end`,
     "nested list markers on one line": `${"- ".repeat(MEGABYTE / 4)}x`,
+    "a long table row of links": `| ${"[a](http://".repeat(45_000)} | x |\n| - | - |\n| a | b |`,
+    "a long table row of images": `| a | b |\n| - | - |\n| ${"![a](".repeat(90_000)} | x |`,
+    "a long code line in a list fence": `- \`\`\`\n  ${"x ".repeat(20_000)}\n- after`,
+    "a long code line in a quote fence": `> \`\`\`\n> ${"x ".repeat(20_000)}\n> \`\`\`\n\nafter`,
+    "rule markers after a long line": `${"word ".repeat(1700)}_ _ _ _ _ _ ${"word ".repeat(300)}\n\n_ _ _\n\n- - - -`,
+    "lines just under the limit": `${`${"[a](http://".repeat(700)}\n`.repeat(100)}`,
+    "unclosed mentions": `${"@[a](company:".repeat(MEGABYTE / 13)} end`,
     "one very long word": "w".repeat(MEGABYTE / 2),
     "a wide table": `${"|a".repeat(2000)}|\n${"|-".repeat(2000)}|\n${"|b".repeat(2000)}|`,
     "many table rows": `| a | b |\n| - | - |\n${"| x | y |\n".repeat(MEGABYTE / 20)}`,
@@ -173,55 +182,84 @@ describe("The Docs PDF writer stays within its deadline on hostile input", () =>
   }
 });
 
-describe("Breaking long PDF lines never creates block syntax", () => {
-  const words = (count: number) => Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
-  const MARKERS = ["- item", "* item", "+ item", "1. item", "12) item", "# heading", "###### heading", "> quote", "| cell", "```js", "~~~", "---", "***", "___", "<div>", "===", ": term"];
+describe("The Docs PDF writer prints a doc with a very long line as plain text", () => {
+  const NORMAL = [
+    "# Heading one",
+    "",
+    "Some **bold**, *italic* and `code` with [a link](https://example.com/secret) and [[Wiki target|alias text]] and #tag.",
+    "",
+    "- First bullet",
+    "  - Nested bullet",
+    "- [ ] Open task",
+    "- [x] Done task",
+    "",
+    "1. One",
+    "2. Two",
+    "",
+    "> Quoted words",
+    "",
+    "```",
+    "code line one",
+    "code line two",
+    "```",
+    "",
+    "---",
+    "",
+    "| A | B |",
+    "| :-- | --: |",
+    "| one | two |",
+    "",
+    `A long paragraph. ${"It keeps going with ordinary words. ".repeat(120)}`,
+  ].join("\n");
+  const MAIN_OUTPUT_SHA256 = "2aa74d9d25a37ffca4c7edd06a421903d025713d40bfb350e240f6caa2d63f3d";
 
-  function startsOfPieces(text: string) {
-    return text.split("\n").slice(1);
+  async function textOf(buffer: Buffer, title: string) {
+    const pdf = await getDocumentProxy(new Uint8Array(buffer));
+    const { text } = await extractText(pdf, { mergePages: false });
+    return text.map((page) => page.replace(new RegExp(`${title} · Page \\d+ of \\d+`), "")).join(" ").replace(/\s+/g, " ").trim();
   }
 
-  for (const marker of MARKERS) {
-    it(`never starts a piece with "${marker}"`, () => {
-      for (const offset of [0, 1, 2, 3, 5, 8]) {
-        const head = words(1500).slice(0, 8000 - offset).replace(/\s+$/, "");
-        const line = `${head} ${marker} and then more words ${words(400)}`;
-        const result = breakLongLines(`${line}\n\nAfter`);
-        const pieces = startsOfPieces(result.slice(0, result.indexOf("\n\nAfter")));
-        assert.ok(pieces.length >= 1, "the line was broken");
-        for (const piece of pieces) assert.ok(!/^(?:[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|#{1,6}(?:\s|$)|[>|<=:]|`{3}|~{3}|(?:[-*_][ \t]*){3})/.test(piece), `${marker} at ${offset}: ${piece.slice(0, 20)}`);
-        assert.equal(result.replace(/\s+/g, " "), `${line}\n\nAfter`.replace(/\s+/g, " "));
-      }
-    });
-  }
-
-  it("keeps a fence that follows a long line closed, so later text is not turned into code", () => {
-    const line = `${words(1500).slice(0, 7990)} \`\`\` ${words(300)}`;
-    const result = breakLongLines(`${line}\n\nAfter the line`);
-    assert.ok(!result.split("\n").some((piece) => piece.startsWith("```")));
+  it("renders a doc whose lines are all under the limit exactly as it did before", async () => {
+    const buffer = await renderDocPdf({ title: "Normal doc", content: NORMAL, updatedAt: UPDATED });
+    assert.equal(createHash("sha256").update(buffer).digest("hex"), MAIN_OUTPUT_SHA256);
+    const edge = await renderDocPdf({ title: "Normal doc", content: `${NORMAL}\n\n${"w ".repeat(3999)}w`, updatedAt: UPDATED });
+    assert.ok((await textOf(edge, "Normal doc")).includes("Heading one"));
   });
 
-  it("leaves long lines inside a fence and long table rows whole", () => {
-    const long = words(3000);
-    const fenced = `\`\`\`\n${long}\n\`\`\`\n\nAfter`;
-    assert.equal(breakLongLines(fenced), fenced);
-    const tilde = `~~~~\n${long}\n~~~~`;
-    assert.equal(breakLongLines(tilde), tilde);
-    const table = `| A | B |\n| - | - |\n| ${long} | x |\n| y | z |`;
-    assert.equal(breakLongLines(table), table);
-    const bare = `A | B\n- | -\n${long} | x`;
-    assert.equal(breakLongLines(bare), bare);
-    assert.notEqual(breakLongLines(long), long);
+  it("keeps every character and shows structure as written once a line is over 8000", async () => {
+    const long = Array.from({ length: 1800 }, (_, index) => `word${index}`).join(" ");
+    assert.ok(long.length > 8000);
+    const content = `# Not a heading\n\n- not a bullet\n\n> not a quote\n\n| a | b |\n\n\`\`\`\nnot code\n\`\`\`\n\n_ _ _\n\n${long}\n\n**not bold** after`;
+    const buffer = await renderDocPdf({ title: "Plain", content, updatedAt: UPDATED });
+    assert.equal(buffer.subarray(0, 5).toString(), "%PDF-");
+    const text = await textOf(buffer, "Plain");
+    assert.ok(text.includes(content.replace(/\s+/g, " ").trim()), text.slice(0, 300));
   });
 
-  it("breaks hostile long lines in under a second", () => {
-    for (const text of [" ".repeat(MEGABYTE), "- ".repeat(MEGABYTE / 2), "a ".repeat(MEGABYTE / 2), `${"a ".repeat(4000)}${" ".repeat(MEGABYTE)}- x`, "[a](http://".repeat(MEGABYTE / 11)]) {
-      within("breakLongLines", () => breakLongLines(text));
+  it("still shows a mention or a wiki link by its visible name, never its id or link target", async () => {
+    const id = "11111111-2222-4333-8444-555555555555";
+    const content = `Hello @[Ada Lovelace](contact:${id}) and [[Secret target|Shown]] and [[Other]] and [a label](https://example.com/x) ${"filler ".repeat(1500)}`;
+    const text = await textOf(await renderDocPdf({ title: "Plain", content, updatedAt: UPDATED }), "Plain");
+    assert.ok(text.includes("Hello Ada Lovelace and Shown and Other and a label filler"));
+    assert.ok(!text.includes(id) && !text.includes("Secret target") && !text.includes("[[") && !text.includes("example.com"));
+  });
+
+  it("keeps every character of a long line inside a table, a list fence and a quote fence", async () => {
+    for (const content of [`| a | b |\n| - | - |\n| ${"cell ".repeat(2000)}| x |`, `- \`\`\`\n  ${"code ".repeat(2000)}\n- after`, `> \`\`\`\n> ${"quoted ".repeat(2000)}\n> \`\`\`\n\nafter`]) {
+      const text = await textOf(await renderDocPdf({ title: "Plain", content, updatedAt: UPDATED }), "Plain");
+      assert.ok(text.includes(content.replace(/\s+/g, " ").trim()));
     }
   });
 
-  it("still breaks a long line after a closed fence", () => {
-    const text = `\`\`\`\ncode\n\`\`\`\n\n${words(3000)}`;
-    assert.ok(breakLongLines(text).split("\n").length > text.split("\n").length);
+  it("stays on the deadline for a long table row of links or images", { timeout: 60_000 }, async () => {
+    for (const content of [`| ${"[a](http://".repeat(45_000)} | x |`, `| ${"![a](".repeat(90_000)} | x |`]) {
+      const started = Date.now();
+      try {
+        await renderDocPdf({ title: "Hostile", content, updatedAt: UPDATED }, { deadline: Date.now() + 3000 });
+      } catch (error) {
+        assert.ok(error instanceof PdfDeadlineError, String(error));
+      }
+      assert.ok(Date.now() - started < 8000, `took ${Date.now() - started}ms`);
+    }
   });
 });
