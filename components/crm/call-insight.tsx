@@ -78,6 +78,8 @@ export default function CallInsightPanel({
         setDraft("");
       }
       router.refresh();
+    } catch {
+      setError("Couldn't summarise the call. Try again.");
     } finally {
       busy.current = false;
       setPending(null);
