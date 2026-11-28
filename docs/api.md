@@ -275,7 +275,7 @@ A person can have 500 open reminders and 200 repeating ones. Another person's re
 
 ## Context
 
-`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, status, and `sentiment` (`healthy`, `watch`, `at_risk` or null) with `sentimentReason` (the transcript is not included). The company carries `health`, `healthReason`, `healthAt` and `healthActivityId`.
+`GET /api/v1/companies/:id/context` returns the company, its contacts, opportunities, recent activities, open tasks, `lastInteraction`, `openTaskCount`, `relationshipStatus` (`new`, `active`, `quiet`, or `needs_action`), and `timeline`: the company's activities plus those of its current contacts, newest first. `insights` maps the id of each call in the timeline that has a summary to its summary, key points, suggested actions, status, and `sentiment` (`healthy`, `watch`, `at_risk` or null) with `sentimentReason`, and `transcriptLength` (the transcript itself is not included; there is no REST endpoint for it, and the full text is read through the MCP tool `get_call_transcript` or the assistant's tool of the same name). The company carries `health`, `healthReason`, `healthAt` and `healthActivityId`.
 
 `GET /api/v1/relationships/stale` lists companies with no interaction in the last 21 days. `days` and `limit` are optional whole numbers; anything else is a 400 `invalid_input`.
 

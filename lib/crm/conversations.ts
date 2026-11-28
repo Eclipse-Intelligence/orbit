@@ -8,7 +8,6 @@ import {
   summariseCall,
   type ReusedSummary,
   transcriptToText,
-  TRANSCRIPT_MAX_LENGTH,
 } from "@/lib/crm/call-insights";
 import { upsertCompanyInDb } from "@/lib/crm/companies";
 import { upsertContactInDb } from "@/lib/crm/contacts";
@@ -1092,14 +1091,6 @@ async function countDismissed(db: Db, actor: UserActor) {
   return result.rows[0]?.total ?? 0;
 }
 
-function summaryTranscript(raw: string) {
-  const text = transcriptToText(raw);
-  if (text.length <= TRANSCRIPT_MAX_LENGTH) return text;
-  const cut = text.slice(0, TRANSCRIPT_MAX_LENGTH);
-  const line = cut.lastIndexOf("\n");
-  return line > TRANSCRIPT_MAX_LENGTH / 2 ? cut.slice(0, line) : cut;
-}
-
 const BLOCKING_INSIGHT = `
   select 1 from crm.call_insights ci
   where ci.activity_id = $1
@@ -1142,18 +1133,25 @@ export async function summariseImport(
   });
   if (!claimed) return null;
   let error: string | null = null;
+  const report = { progressed: false };
   try {
     const insight = await summariseCall(
       actor,
       claimed.activityId,
-      claimed.hasInsight ? "" : summaryTranscript(claimed.transcript),
+      claimed.hasInsight ? "" : transcriptToText(claimed.transcript),
       {
         source: claimed.source === "granola" ? "granola" : "teams",
         fetchImpl: options.fetchImpl,
         deadline: options.deadline,
         reuse: claimed.sibling,
+        report,
       },
     );
+    if (report.progressed && insight.status === "pending") {
+      await withActor(actor, async (db) => {
+        await db.query("update crm.conversation_imports set attempts = greatest(attempts - 1, 0) where id = $1", [importId]);
+      });
+    }
     if (insight.status === "failed") error = insight.error ?? "Couldn't summarise the conversation.";
     await withActor(actor, async (db) => {
       await db.query("update crm.conversation_imports set error = $2 where id = $1", [

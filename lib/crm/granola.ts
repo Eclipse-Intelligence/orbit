@@ -377,7 +377,7 @@ export async function fileGranolaNote(owner: UserActor, note: GranolaNote, every
           endedAt,
           JSON.stringify(participants),
           externalUrl,
-          transcript ? transcript.slice(0, 1_000_000) : null,
+          transcript || null,
           summary,
           activityId ? "filed" : "unfiled",
           activityId,

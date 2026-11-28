@@ -1,10 +1,10 @@
 import { scheduleIndexing } from "@/lib/knowledge/background";
 import { addCallToKnowledge } from "@/lib/knowledge/calls";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Db } from "@/lib/db/pool";
 import { withActor } from "@/lib/crm/context";
-import { CrmError, tooLong, errorText } from "@/lib/crm/errors";
+import { CrmError, errorText } from "@/lib/crm/errors";
 import { iso, isUuid, recordAudit } from "@/lib/crm/mutate";
 import { assertScope } from "@/lib/crm/scopes";
 import { detectTaskRecordsInDb } from "@/lib/crm/task-detect";
@@ -23,11 +23,19 @@ import {
   type Provenance,
   type Task,
 } from "@/lib/crm/types";
-import { completeJson } from "@/lib/llm";
+import { completeJson, LlmError, MODEL_WINDOW_CHARS, OUT_OF_TIME } from "@/lib/llm";
 import { appTimeZone, zonedParts } from "@/lib/time";
 
-export const TRANSCRIPT_MAX_LENGTH = 200_000;
-const RAW_TRANSCRIPT_MAX_LENGTH = 1_000_000;
+export const TRANSCRIPT_PAGE_LENGTH = 80_000;
+const TRANSCRIPT_OFFSET_MAX = 2_000_000_000;
+const PART_CONCURRENCY = 3;
+const PART_SIZE = 40_000;
+const PART_NOTES_TOKENS = 4_000;
+const PART_START_MARGIN_MS = 10_000;
+const DEADLINE_SLACK_MS = 8_000;
+export const TRANSCRIPT_TOOL = "get_call_transcript";
+const PROMPT_ROOM = 8_000;
+const PART_LENGTH = MODEL_WINDOW_CHARS - PROMPT_ROOM;
 export const PENDING_STALE_MS = CALL_INSIGHT_STALE_MS;
 const DAY_MS = 86_400_000;
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -298,7 +306,158 @@ const llmSchema = z.object({
 
 type LlmSummary = z.infer<typeof llmSchema>;
 
-function buildPrompt(call: CallRow, transcript: string, actorName: string | null) {
+type Reading = { text: string; notes: boolean };
+
+const LONG_CALL_LABEL = "The transcript:";
+
+const LONG_CALL_NOTE = "(This transcript is too long to read again. The summary, key points and actions below were written from every part of it, so judge from them.)";
+
+const NOTES_LABEL = "Notes on the transcript, in order:";
+
+const NOTES_RULE = `
+- You are given notes, in order, from consecutive parts of the same call, because the whole transcript was too long for one pass. Read them as the whole call. Each note covers its own part, so combine them and keep every commitment, figure and date.`;
+
+const PART_PROMPT = `You read one part of a long call transcript, or of notes on one, for a personal CRM called Orbit, and write notes that a later summary will be built from.
+
+Reply with a single JSON object and nothing else: {"notes": string}
+
+Rules:
+- Write in British English. Use only what this part says; never invent names, figures, dates or commitments.
+- Keep everything a summary could need, in the order it was said: who spoke, the topics, decisions, needs, objections, figures and dates, every commitment (who will do what, with any timing in the speaker's words), and any sign of how the other party feels about the relationship.
+- Plain text in short lines, no Markdown, under 1,500 words.
+- Lines may be labelled "Name: text" or unlabelled. The part may start or end in the middle of a conversation.`;
+
+const notesSchema = z.object({ notes: z.string().trim().min(1) });
+
+function safeCut(text: string, at: number) {
+  const code = text.charCodeAt(at - 1);
+  return code >= 0xd800 && code <= 0xdbff ? at - 1 : at;
+}
+
+export function splitTranscript(text: string, size: number) {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > size) {
+    const line = rest.lastIndexOf("\n", size);
+    if (line > size / 2) {
+      parts.push(rest.slice(0, line));
+      rest = rest.slice(line + 1);
+    } else {
+      const at = safeCut(rest, size);
+      parts.push(rest.slice(0, at));
+      rest = rest.slice(at);
+    }
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+function ranOutOfTime(error: unknown, deadline: number | undefined) {
+  if (!(error instanceof LlmError)) return false;
+  if (error.message === OUT_OF_TIME) return true;
+  return error.retryable && deadline !== undefined && Date.now() >= deadline - DEADLINE_SLACK_MS;
+}
+
+type Progress = { hash: string; size: number; levels: (string | null)[][] };
+
+type Report = { progressed: boolean };
+
+function timeShort(deadline: number | undefined) {
+  return deadline !== undefined && deadline - Date.now() < PART_START_MARGIN_MS;
+}
+
+function savedProgress(value: unknown, hash: string): Progress | null {
+  if (!value || typeof value !== "object") return null;
+  const saved = value as Partial<Progress>;
+  if (saved.hash !== hash || saved.size !== PART_SIZE || !Array.isArray(saved.levels)) return null;
+  const levels = saved.levels.map((level) =>
+    Array.isArray(level) ? level.map((note) => (typeof note === "string" && note ? note : null)) : [],
+  );
+  return { hash, size: PART_SIZE, levels };
+}
+
+async function readTranscript(
+  call: CallRow,
+  transcript: string,
+  actor: Actor,
+  options: { fetchImpl?: typeof fetch; deadline?: number },
+  saved: unknown,
+  save: (progress: Progress) => Promise<void>,
+  report: Report,
+): Promise<Reading | null> {
+  if (transcript.length <= PART_LENGTH) return { text: transcript, notes: false };
+  const hash = createHash("sha256").update(transcript).digest("hex");
+  const progress = savedProgress(saved, hash) ?? { hash, size: PART_SIZE, levels: [] };
+  let queue: Promise<void> = Promise.resolve();
+  const persist = () => {
+    const snapshot = structuredClone(progress);
+    const run = queue.then(() => save(snapshot));
+    queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run.then(
+      () => true,
+      () => false,
+    );
+  };
+  let input = transcript;
+  let size = transcript.length;
+  for (let level = 0; ; level += 1) {
+    const parts = splitTranscript(input, PART_SIZE);
+    let slots = progress.levels[level];
+    if (!slots || slots.length !== parts.length) {
+      slots = parts.map(() => null);
+      progress.levels[level] = slots;
+      progress.levels.length = level + 1;
+    }
+    const todo = slots.flatMap((note, index) => (note === null ? [index] : []));
+    let next = 0;
+    let stopped = false;
+    let failed = false;
+    let failure: unknown;
+    const workers = Array.from({ length: Math.min(PART_CONCURRENCY, todo.length) }, async () => {
+      while (next < todo.length && !stopped && !failed) {
+        if (timeShort(options.deadline)) {
+          stopped = true;
+          return;
+        }
+        const index = todo[next];
+        next += 1;
+        try {
+          const result = await completeJson({
+            system: PART_PROMPT,
+            user: buildPrompt(call, parts[index], actorName(actor), `Part ${index + 1} of ${parts.length}:`),
+            schema: notesSchema,
+            maxTokens: PART_NOTES_TOKENS,
+            fetchImpl: options.fetchImpl,
+            deadline: options.deadline,
+          });
+          slots[index] = result.data.notes;
+          if (await persist()) report.progressed = true;
+          else stopped = true;
+        } catch (error) {
+          if (ranOutOfTime(error, options.deadline)) stopped = true;
+          else {
+            failed = true;
+            failure = error;
+          }
+        }
+      }
+    });
+    await Promise.all(workers);
+    await queue;
+    if (failed) throw failure;
+    if (stopped || slots.some((note) => note === null)) return null;
+    const joined = slots.map((note, index) => `Part ${index + 1} of ${slots.length}:\n${note}`).join("\n\n");
+    if (joined.length <= PART_LENGTH) return { text: joined, notes: true };
+    if (joined.length >= size) throw new CrmError("internal_error", "Couldn't summarise the call. Try again.", 500);
+    size = joined.length;
+    input = joined;
+  }
+}
+
+function buildPrompt(call: CallRow, transcript: string, actorName: string | null, label = "Transcript:") {
   const day = callDay(iso(call.occurred_at) ?? new Date().toISOString());
   const them = [
     call.contact_name,
@@ -315,7 +474,7 @@ function buildPrompt(call: CallRow, transcript: string, actorName: string | null
     `- The other party ("them"): ${them || "unknown"}`,
     call.title ? `- Logged as: ${call.title}` : null,
     "",
-    "Transcript:",
+    label,
     "<transcript>",
     transcript,
     "</transcript>",
@@ -390,8 +549,8 @@ async function lockInsight(db: Db, where: string, values: unknown[]) {
 }
 
 async function lockInsightWithTranscript(db: Db, activityId: string, workspaceId: string) {
-  const result = await db.query<InsightRow & { transcript: string }>(
-    `select ${INSIGHT_COLUMNS}, i.transcript
+  const result = await db.query<InsightRow & { transcript: string; part_notes: unknown }>(
+    `select ${INSIGHT_COLUMNS}, i.transcript, i.part_notes
      from crm.call_insights i
      where i.activity_id = $1 and i.workspace_id = $2
      for update`,
@@ -424,7 +583,8 @@ async function finishInsight(
          error = $7,
          sentiment = case when $2 = 'ready' then $8 else i.sentiment end,
          sentiment_reason = case when $2 = 'ready' then $9 else i.sentiment_reason end,
-         sentiment_checked_at = case when $2 = 'ready' then now() else i.sentiment_checked_at end
+         sentiment_checked_at = case when $2 = 'ready' then now() else i.sentiment_checked_at end,
+         part_notes = case when $2 = 'ready' then null else i.part_notes end
      where i.id = $1
      returning ${INSIGHT_COLUMNS}`,
     [
@@ -505,11 +665,23 @@ export async function judgeCallSentiment(
     return { call, insight };
   });
   const { call, insight } = prepared;
+  const long = insight.transcript.length > PART_LENGTH;
+  const written = mapInsight(insight);
   const user = [
-    buildPrompt(call, insight.transcript.slice(0, TRANSCRIPT_MAX_LENGTH), actorName(actor)),
+    buildPrompt(call, long ? LONG_CALL_NOTE : insight.transcript, actorName(actor), long ? LONG_CALL_LABEL : undefined),
     "",
     "Summary already written:",
     insight.summary ?? "",
+    ...(long
+      ? [
+          "",
+          "Key points:",
+          ...written.keyPoints.map((point) => `- ${point}`),
+          "",
+          "Actions:",
+          ...written.actionItems.map((item) => `- ${item.title}`),
+        ]
+      : []),
   ].join("\n");
   const result = await completeJson({
     system: SENTIMENT_PROMPT,
@@ -567,17 +739,34 @@ function reusedOutcome(reuse: ReusedSummary) {
   };
 }
 
+async function saveProgress(actor: Actor, insightId: string, progress: Progress) {
+  await withActor(actor, async (db) => {
+    await db.query("update crm.call_insights set part_notes = $2::jsonb where id = $1", [insightId, JSON.stringify(progress)]);
+  });
+}
+
 async function summaryOutcome(
   actor: Actor,
   call: Parameters<typeof buildPrompt>[0],
   transcript: string,
   occurredAt: string,
   options: { fetchImpl?: typeof fetch; deadline?: number },
+  progress: { insightId: string; saved: unknown; report: Report },
 ): Promise<Parameters<typeof finishInsight>[2]> {
   try {
+    const reading = await readTranscript(
+      call,
+      transcript,
+      actor,
+      options,
+      progress.saved,
+      (snapshot) => saveProgress(actor, progress.insightId, snapshot),
+      progress.report,
+    );
+    if (!reading || timeShort(options.deadline)) return { status: "pending", error: null };
     const result = await completeJson({
-      system: SYSTEM_PROMPT,
-      user: buildPrompt(call, transcript, actorName(actor)),
+      system: reading.notes ? SYSTEM_PROMPT + NOTES_RULE : SYSTEM_PROMPT,
+      user: buildPrompt(call, reading.text, actorName(actor), reading.notes ? NOTES_LABEL : undefined),
       schema: llmSchema,
       maxTokens: 4000,
       fetchImpl: options.fetchImpl,
@@ -590,6 +779,7 @@ async function summaryOutcome(
       error: null,
     };
   } catch (error) {
+    if (ranOutOfTime(error, options.deadline)) return { status: "pending", error: null };
     return { status: "failed", error: failureMessage(error) };
   }
 }
@@ -604,6 +794,7 @@ export async function summariseCall(
     deadline?: number;
     autoAccept?: boolean;
     reuse?: ReusedSummary | null;
+    report?: Report;
   } = {},
 ): Promise<CallInsight> {
   assertScope(actor.scopes, "activities:write");
@@ -614,20 +805,7 @@ export async function summariseCall(
       field: "source",
     });
   }
-  if (transcript.length > RAW_TRANSCRIPT_MAX_LENGTH) {
-    throw new CrmError("invalid_input", tooLong("the transcript", 200_000), 400, {
-      field: "transcript",
-    });
-  }
   const text = transcriptToText(transcript);
-  if (text.length > TRANSCRIPT_MAX_LENGTH) {
-    throw new CrmError(
-      "invalid_input",
-      tooLong("the transcript", 200_000),
-      400,
-      { field: "transcript" },
-    );
-  }
   const prepared = await withActor(actor, async (db) => {
     const call = await readCall(db, actor, activityId);
     if (!call) throw new CrmError("not_found", "Call not found.", 404);
@@ -651,7 +829,7 @@ export async function summariseCall(
       );
       current = await lockInsightWithTranscript(db, activityId, actor.workspaceId);
       if (!current) throw new CrmError("internal_error", "Couldn't save. Try again.", 500);
-      if (inserted.rows[0]) return { call, insight: mapInsight(current), transcript: text, run: true };
+      if (inserted.rows[0]) return { call, insight: mapInsight(current), transcript: text, saved: null as unknown, run: true };
     }
     if (text && text !== current.transcript) {
       throw new CrmError("conflict", "This call already has a transcript.", 409, {
@@ -659,18 +837,22 @@ export async function summariseCall(
       });
     }
     const stored = current.transcript;
-    if (current.status === "ready") return { call, insight: mapInsight(current), transcript: stored, run: false };
+    if (current.status === "ready") return { call, insight: mapInsight(current), transcript: stored, saved: null as unknown, run: false };
     const updatedAt = new Date(iso(current.updated_at) ?? 0).getTime();
     if (current.status === "pending" && Date.now() - updatedAt < PENDING_STALE_MS) {
-      return { call, insight: mapInsight(current), transcript: stored, run: false };
+      return { call, insight: mapInsight(current), transcript: stored, saved: null as unknown, run: false };
     }
     const insight = await finishInsight(db, current.id, { status: "pending" });
-    return { call, insight, transcript: stored, run: true };
+    return { call, insight, transcript: stored, saved: current.part_notes as unknown, run: true };
   });
   if (!prepared.run) return prepared.insight;
 
   const occurredAt = iso(prepared.call.occurred_at) ?? new Date().toISOString();
-  const outcome = options.reuse ? reusedOutcome(options.reuse) : await summaryOutcome(actor, prepared.call, prepared.transcript, occurredAt, options);
+  const outcome = options.reuse ? reusedOutcome(options.reuse) : await summaryOutcome(actor, prepared.call, prepared.transcript, occurredAt, options, {
+        insightId: prepared.insight.id,
+        saved: prepared.saved,
+        report: options.report ?? { progressed: false },
+      });
   const finished = await withActor(actor, async (db) => {
     const saved = await finishInsight(db, prepared.insight.id, outcome);
     if (saved.status === "ready") {
@@ -851,4 +1033,59 @@ export async function getInsightTranscript(actor: Actor, insightId: string) {
     if (!row) throw new CrmError("not_found", "Call summary not found.", 404);
     return row.transcript;
   });
+}
+
+function jsonLength(text: string) {
+  return JSON.stringify(text).length - 2;
+}
+
+function fitJson(text: string, limit: number) {
+  let fitted = text;
+  for (let size = jsonLength(fitted); size > limit; size = jsonLength(fitted)) {
+    const at = Math.max(1, Math.floor((fitted.length * limit * 0.98) / size));
+    fitted = fitted.slice(0, safeCut(fitted, at));
+  }
+  return fitted;
+}
+
+export type TranscriptPage = {
+  insightId: string;
+  text: string;
+  totalLength: number;
+  offset: number;
+  nextOffset: number | null;
+};
+
+export async function getInsightTranscriptPage(actor: Actor, insightId: string, offset = 0): Promise<TranscriptPage> {
+  assertScope(actor.scopes, "crm:read");
+  if (!isUuid(insightId)) throw new CrmError("not_found", "Call summary not found.", 404);
+  const start = Number.isFinite(offset) && offset > 0 ? Math.min(Math.floor(offset), TRANSCRIPT_OFFSET_MAX) : 0;
+  return withActor(actor, async (db) => {
+    const result = await db.query<{ total: number; text: string }>(
+      `select char_length(transcript)::int as total, substr(transcript, $3::int + 1, $4::int) as text
+       from crm.call_insights where id = $1 and workspace_id = $2`,
+      [insightId, actor.workspaceId, start, TRANSCRIPT_PAGE_LENGTH],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CrmError("not_found", "Call summary not found.", 404);
+    let text = fitJson(row.text, TRANSCRIPT_PAGE_LENGTH);
+    let length = Array.from(text).length;
+    if (start + length < row.total) {
+      const line = text.lastIndexOf("\n");
+      if (line > text.length / 2) {
+        text = text.slice(0, line + 1);
+        length = Array.from(text).length;
+      }
+    }
+    const end = start + length;
+    return { insightId, text, totalLength: row.total, offset: start, nextOffset: end < row.total ? end : null };
+  });
+}
+
+export function withTranscriptHint<T extends { transcriptLength: number }>(insight: T) {
+  return { ...insight, transcript: { length: insight.transcriptLength, tool: TRANSCRIPT_TOOL } };
+}
+
+export function withTranscriptHints<T extends { transcriptLength: number }>(insights: Record<string, T>) {
+  return Object.fromEntries(Object.entries(insights).map(([key, insight]) => [key, withTranscriptHint(insight)]));
 }

@@ -420,7 +420,7 @@ These are list prices; the gateway's own prices and caching decide the real figu
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
 | `list_companies` | Lists companies with search, lifecycle, health, tag, owner and AI field filters (`ai`: yes or no, number ranges, text contains, any of the options, optionally with Unknown) and sorting (including `aiSort` by an AI field), with relationship, ICP fit (0 to 4), the workspace's AI fields and each company's answers by column name. Takes `workspace`. | No | Yes | `limit` up to 100 (default 50), `offset` up to 10,000. |
-| `get_company` | Everything about one company: details, people, deals, open and done tasks, the activity timeline, call summaries, meetings, relationship, its Knowledge items and its AI field answers (likelihood, reason, sources, checked date, whether set by hand). Takes `workspace`. | No | Yes | Up to 500 Knowledge items listed. |
+| `get_company` | Everything about one company: details, people, deals, open and done tasks, the activity timeline, call summaries (with a pointer to `get_call_transcript` for the full transcript), meetings, relationship, its Knowledge items and its AI field answers (likelihood, reason, sources, checked date, whether set by hand). Takes `workspace`. | No | Yes | Up to 500 Knowledge items listed. |
 | `list_quiet_relationships` | Every company with no interaction in the last N days. | No | No | Default 21 days; up to 100 companies. |
 | `create_company` | Adds a company. | Yes | No | |
 | `update_company` | Changes one company's details by `companyId`; only the fields passed change. Health is set by hand only when the user asks, with a reason. With `companyIds` it makes the same change (owner, lifecycle, industry, size, source) to many companies. | Yes | No | `companyIds` up to 100 a call. |
@@ -432,7 +432,7 @@ These are list prices; the gateway's own prices and caching decide the real figu
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
 | `list_contacts` | Lists people with search, company, tag and owner filters. Takes `workspace`. | No | Yes | `limit` up to 100 (default 50). |
-| `get_contact` | Everything about one person: details, company, open and recently completed tasks, timeline with call summaries, meetings and the last email check. Takes `workspace`. | No | Yes | The 100 most recent activities; completed tasks from the last 14 days, up to 50. |
+| `get_contact` | Everything about one person: details, company, open and recently completed tasks, timeline with call summaries (with a pointer to `get_call_transcript` for the full transcript), meetings and the last email check. Takes `workspace`. | No | Yes | The 100 most recent activities; completed tasks from the last 14 days, up to 50. |
 | `create_contact` | Adds a person, optionally at a company. | Yes | No | Needs an email or a name. |
 | `update_contact` | Changes one person's details by `contactId` (including `location` and `salesNavigatorUrl`); only the fields passed change. With `contactIds` it makes the same change (owner, company, job title, source) to many people. | Yes | No | `contactIds` up to 100 a call. |
 | `merge_contacts` | Merges a duplicate person into the one to keep. The kept email stays; a different one goes into the notes. | Yes | No | Can't be undone. |
@@ -469,11 +469,11 @@ These are list prices; the gateway's own prices and caching decide the real figu
 
 | Tool | What it does | Approval | Outside | Notable limits |
 | --- | --- | --- | --- | --- |
-| `list_activities` | Logged activity, newest first, with search and filters, plus call summaries for calls and meetings. Takes `workspace`. | No | Yes | `limit` up to 100 (default 50). |
+| `list_activities` | Logged activity, newest first, with search and filters, plus call summaries for calls and meetings (with a pointer to `get_call_transcript` for the full transcript). Takes `workspace`. | No | Yes | `limit` up to 100 (default 50). |
 | `log_activity` | Logs a note, call or email (only one that happened outside Orbit) on a company or person. The tasks guide has the model propose it with `update_task` (`completed: true`) and `create_task` in one turn for a call outcome, using a task the message tags first, then the task in the page context only when the call is about its person or company (or names nobody), and `list_tasks` for anyone else. | Yes | No | Refuses an email already filed from the mailbox in the last six hours. |
 | `archive_activity` | Removes a wrong or duplicate activity from timelines, counts and relationship labels. It is archived and can be undone. | Yes | No | Only the person who logged it, or an owner or admin. |
 | `update_activity` | Edits a logged activity: type, title, text, when it happened, and its company, person and opportunity. The card shows the activity and each change from and to. It can be undone. | Yes | No | Only the person who logged it, or an owner or admin. Emails filed from Mail take only a new company or opportunity; calls and meetings from Teams, Granola or a transcript take only a new title, company, person or opportunity. Refuses a deleted activity. |
-| `get_call_transcript` | The full transcript behind a call summary. | No | Yes | |
+| `get_call_transcript` | The transcript behind a call summary, read in pages. `callSummaries` (and `insights` on `get_company`) hold only Orbit's summary of each call, with `transcript: { length, tool }` saying how long the full transcript is and that this tool reads it. Takes `insightId` and an optional `offset`; returns up to 80,000 characters from `offset` (measured after JSON escaping, so a page always fits whole in a later turn's 100,000 character result limit), ending on a line break where there is one, with `totalLength`, `offset` and `nextOffset` (null at the end) ahead of the text. Takes `workspace`. The model keeps calling with `nextOffset` to read the whole call, so nothing is cut. | No | Yes | Pages of 80,000 characters; no limit on the transcript. |
 
 ### Pipeline and deals
 

@@ -10,6 +10,7 @@ const MAX_ATTEMPTS = 2;
 const MIN_REPLY_TOKENS = 4000;
 const DEADLINE_MARGIN_MS = 2_000;
 const MIN_ATTEMPT_MS = 5_000;
+export const OUT_OF_TIME = "Ran out of time. Try again.";
 const UNUSABLE = "The AI gave an unusable answer. Try again.";
 const UNREACHABLE = "Couldn't reach the AI. Try again.";
 const AI_ERROR = "The AI returned an error. Try again.";
@@ -224,7 +225,7 @@ export async function completeJson<T>(request: LlmJsonRequest<T>): Promise<LlmJs
       : limit;
     if (remaining < (request.deadline ? MIN_ATTEMPT_MS : 1_000)) {
       if (last) throw last;
-      throw new LlmError("Ran out of time. Try again.", true);
+      throw new LlmError(OUT_OF_TIME, true);
     }
     try {
       return await attempt(request, apiKey, model, Math.min(limit, remaining));

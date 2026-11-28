@@ -4,6 +4,7 @@ import { PROPOSED, type CompanionResult } from "@/companion/src/protocol";
 import { applyCompanionResult, sendMessage, type AssistantEvent } from "@/lib/assistant/chat";
 import { systemPrompt } from "@/lib/assistant/prompt";
 import { ASSISTANT_TOOLS, ORBIT_TOOL_LIMIT, WORKSPACE_READ_TOOLS, crossWorkspaceRefusal, runTool, toolDefinitions } from "@/lib/assistant/tools";
+import { createActivity } from "@/lib/crm/activities";
 import { createBoard } from "@/lib/crm/boards";
 import { runCaptureAction } from "@/lib/crm/capture-actions";
 import { createCompany, getCompany } from "@/lib/crm/companies";
@@ -105,6 +106,29 @@ describe("assistant across workspaces", () => {
     const byId = (await runTool(eclipse, "list_contacts", { workspace: ridgeon.workspaceId })) as Found;
     assert.equal(byId.workspace.name, "Mark Ridgeon");
     assert.equal(byId.data?.length, 1);
+  });
+
+  it("reads a call transcript from the person's other workspace, and refuses one they aren't in", async () => {
+    const contact = await createContact(ridgeon, { firstName: "Tess", lastName: "Call", email: "tess@acme-consulting.test", companyId: consulting });
+    const logged = await createActivity(ridgeon, { type: "call", title: "Call with Tess", body: "Call", contactId: contact.body.contact.id, companyId: consulting, occurredAt: "2026-10-15T13:00:00.000Z" });
+    const text = "Tess Call: the figure is 4,200.\nMark Ridgeon: agreed.";
+    const inserted = await getAdminPool().query<{ id: string }>(
+      `insert into crm.call_insights (workspace_id, activity_id, contact_id, company_id, source, transcript, summary, status)
+       values ($1, $2, $3, $4, 'manual', $5, 'A call.', 'ready') returning id`,
+      [ridgeon.workspaceId, logged.body.activity.id, contact.body.contact.id, consulting, text],
+    );
+    const insightId = inserted.rows[0].id;
+    const here = (await runTool(eclipse, "get_call_transcript", { insightId })) as { error?: string };
+    assert.ok(here.error);
+    const there = (await runTool(eclipse, "get_call_transcript", { insightId, workspace: "Mark Ridgeon" })) as Labelled & { transcript?: string; nextOffset?: number | null };
+    assert.equal(there.workspace.name, "Mark Ridgeon");
+    assert.equal(there.nextOffset, null);
+    assert.ok(there.transcript?.includes("the figure is 4,200."));
+    const all = (await runTool(eclipse, "get_call_transcript", { insightId, workspace: "all" })) as { workspaces: Labelled[] };
+    assert.deepEqual(all.workspaces.map((item) => item.workspace.name), ["Mark Ridgeon"]);
+    const refused = (await runTool(priya, "get_call_transcript", { insightId, workspace: "Mark Ridgeon" })) as { error?: string; transcript?: string };
+    assert.match(refused.error ?? "", /not in a workspace called Mark Ridgeon/);
+    assert.equal(refused.transcript, undefined);
   });
 
   it("reads every workspace with all, one labelled result each", async () => {
