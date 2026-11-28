@@ -61,6 +61,14 @@ export async function storeLiveDoc(db: Db, pageId: string, copy: LiveCopy) {
   await db.query("update crm.pages set ydoc = $2, ydoc_generation = $3 where id = $1", [pageId, encodeState(copy.doc), copy.generation]);
 }
 
+export async function liveKeyFor(db: Db, pageId: string): Promise<string | null> {
+  const read = async () => (await db.query<{ live_key: string | null }>("select live_key from crm.pages where id = $1", [pageId])).rows[0]?.live_key ?? null;
+  const found = await read();
+  if (found) return found;
+  await db.query("update crm.pages set live_key = replace(gen_random_uuid()::text, '-', '') where id = $1 and live_key is null", [pageId]);
+  return read();
+}
+
 export function liveUserFor(actor: Actor, editor: DocEditor): LiveUser | null {
   if (editor === "assistant") return { id: "orbit-assistant", name: "Orbit assistant", kind: "assistant" };
   if (editor !== "agent") return null;

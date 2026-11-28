@@ -18,6 +18,7 @@ import {
   fitLiveDoc,
   freshLiveDoc,
   liveChange,
+  liveKeyFor,
   liveUserFor,
   loadLiveDoc,
   markWatching,
@@ -861,7 +862,7 @@ export async function saveDoc(actor: Actor, id: string, input: DocSaveInput, pro
 
 export type LiveSync = { update?: Uint8Array | null; vector?: Uint8Array | null; title?: string; generation?: number };
 
-export type LiveSyncResult = { doc: DocSummary; vector: Uint8Array; missing: Uint8Array; saved: boolean; generation: number; rebuilt: boolean };
+export type LiveSyncResult = { doc: DocSummary; vector: Uint8Array; missing: Uint8Array; saved: boolean; generation: number; rebuilt: boolean; key: string | null };
 
 async function liveDocFor(db: Db, page: FullPageRow): Promise<LiveCopy & { stored: boolean }> {
   const stored = await loadLiveDoc(db, page.id);
@@ -921,13 +922,15 @@ function sameBytes(left: Uint8Array, right: Uint8Array) {
 
 export async function openLiveDoc(actor: Actor, id: string) {
   assertDocsRead(actor);
+  const watched = await pageWatched(id).catch(() => true);
   return withActor(actor, async (db) => {
     const first = await loadPage(db, actor, id);
     const current = await loadLiveDoc(db, first.id);
-    const compact = current.doc !== null && compactable(current.bytes, first.content) && !(await pageWatched(first.id).catch(() => true));
+    const compact = current.doc !== null && compactable(current.bytes, first.content) && !watched;
     if (!compact && usableLiveDoc(current) && liveText(current.doc).toString() === first.content) {
       await markWatching(db, actor, first);
-      return { state: Y.encodeStateAsUpdate(current.doc), generation: current.generation, doc: mapPage(actor, first) };
+      const key = await liveKeyFor(db, first.id);
+      return { state: Y.encodeStateAsUpdate(current.doc), generation: current.generation, doc: mapPage(actor, first), key };
     }
     current.doc?.destroy();
     const page = await loadPage(db, actor, id, { lock: true });
@@ -943,7 +946,8 @@ export async function openLiveDoc(actor: Actor, id: string) {
       afterCommit(db, () => publishLiveChange(change));
     }
     await markWatching(db, actor, page);
-    return { state: Y.encodeStateAsUpdate(copy.doc), generation: copy.generation, doc: mapPage(actor, page) };
+    const key = await liveKeyFor(db, page.id);
+    return { state: Y.encodeStateAsUpdate(copy.doc), generation: copy.generation, doc: mapPage(actor, page), key };
   });
 }
 
@@ -955,6 +959,7 @@ export async function syncLiveDoc(actor: Actor, id: string, input: LiveSync, pro
     const page = await loadPage(db, actor, id, { lock: true });
     const { copy, saved, stale } = await mergeLive(db, actor, page, input, provenance);
     await markWatching(db, actor, page, { refresh: !sending });
+    const key = await liveKeyFor(db, page.id);
     const row = saved ? await loadPage(db, actor, id) : page;
     return {
       doc: mapPage(actor, row),
@@ -963,6 +968,7 @@ export async function syncLiveDoc(actor: Actor, id: string, input: LiveSync, pro
       saved,
       generation: copy.generation,
       rebuilt: stale,
+      key,
     };
   });
 }

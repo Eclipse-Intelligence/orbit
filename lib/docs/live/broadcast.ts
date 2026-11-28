@@ -158,6 +158,13 @@ export async function pageWatched(pageId: string) {
   return result.rows[0]?.watched === true;
 }
 
+async function pageLive(pageId: string) {
+  const result = await query<{ live_key: string | null; watched: boolean }>("select live_key, watched from private.page_live_state($1, $2)", [pageId, WATCH_WINDOW_SECONDS]);
+  const row = result.rows[0];
+  const watched = testing?.watched ? await testing.watched(pageId) : row?.watched === true;
+  return { key: row?.live_key ?? null, watched };
+}
+
 export function typingDuration(characters: number) {
   return Math.min(TYPING_MAX_MS, Math.max(TYPING_MIN_MS, characters * TYPING_MS_PER_CHARACTER));
 }
@@ -206,16 +213,17 @@ export async function publishLiveChange(change: LiveChange) {
   const sink = currentSink();
   if (!sink) return;
   if (change.rebuilt) {
-    await sink(docTopic(change.pageId), "pull", { r: change.revision, g: change.generation });
+    const { key } = await pageLive(change.pageId);
+    await sink(docTopic(change.pageId, key), "pull", { r: change.revision, g: change.generation });
     return;
   }
   if (change.steps.length === 0) return;
   const activity = change.agent ? activityTopic(change) : null;
   if (activity && change.agent) await sink(activity, "writing", { pageId: change.pageId, user: change.agent, writing: true }).catch(() => {});
   try {
-    const watched = await pageWatched(change.pageId).catch(() => true);
+    const { key, watched } = await pageLive(change.pageId);
     if (!watched) return;
-    const topic = docTopic(change.pageId);
+    const topic = docTopic(change.pageId, key);
     const tooLarge = change.steps.some((step) => step.u.length > LIVE_MESSAGE_MAX);
     if (tooLarge) {
       await sink(topic, "pull", { r: change.revision, g: change.generation });

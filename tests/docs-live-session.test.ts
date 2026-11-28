@@ -65,10 +65,16 @@ async function session(actor: UserActor, pageId: string, transport: ReturnType<H
     transport,
     server: server(actor, pageId, calls),
     timing: FAST,
+    key: opened.key,
   });
   live.start();
   open.push(live);
   return live;
+}
+
+async function keyedTopic(pageId: string) {
+  const key = (await getAdminPool().query<{ live_key: string }>("select live_key from crm.pages where id = $1", [pageId])).rows[0].live_key;
+  return docTopic(pageId, key);
 }
 
 async function until(check: () => boolean | Promise<boolean>, label: string, ms = 4_000) {
@@ -326,7 +332,7 @@ describe("live session safety", () => {
     const hub = memoryHub();
     const calls: Calls = { count: 0, fail: true };
     const markLive = await session(mark, doc.id, hub.transport(), calls);
-    const forger = await rawMember(hub, docTopic(doc.id));
+    const forger = await rawMember(hub, await keyedTopic(doc.id));
     await until(() => markLive.status !== "connecting", "joined");
     type(markLive, "end", " mine");
     await wait(30);
@@ -448,7 +454,7 @@ describe("live session safety", () => {
     const first = await session(mark, doc.id, hub.transport());
     const second = await session(priya, doc.id, hub.transport());
     await until(() => first.remoteStates().length === 1 && second.remoteStates().length === 1, "presence");
-    const watcher = await rawMember(hub, docTopic(doc.id));
+    const watcher = await rawMember(hub, await keyedTopic(doc.id));
     await wait(40);
     const saver = first.isSaver() ? first : second;
     type(saver, "end", " last words");
@@ -538,7 +544,7 @@ describe("live session safety", () => {
     const calls: Calls = { count: 0, fail: false };
     const markLive = await session(mark, doc.id, hub.transport(), calls);
     Object.assign(markLive, { generation: 3 });
-    const peer = await rawMember(hub, docTopic(doc.id));
+    const peer = await rawMember(hub, await keyedTopic(doc.id));
     await until(() => markLive.status === "live", "live");
     await wait(60);
     const copy = createLiveDoc(Y.encodeStateAsUpdate(markLive.doc));
@@ -554,7 +560,7 @@ describe("live session safety", () => {
     const doc = await sharedDoc("Malformed", "Base");
     const hub = memoryHub();
     const markLive = await session(mark, doc.id, hub.transport());
-    const peer = await rawMember(hub, docTopic(doc.id));
+    const peer = await rawMember(hub, await keyedTopic(doc.id));
     await until(() => markLive.status === "live", "live");
     peer.channel.send("hello", { c: 1, sv: "////" });
     peer.channel.send("awareness", { a: "AAAAAAAA" });

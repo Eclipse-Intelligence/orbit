@@ -21,10 +21,11 @@ export async function relayAllows(actor: UserActor, topic: string, send: boolean
       return (result.rowCount ?? 0) > 0;
     });
   }
+  if (!target.key) return false;
   return withActor(actor, async (db) => {
     const result = await db.query<{ archived: boolean }>(
-      `select archived_at is not null as archived from crm.pages p where id = $1 and ${pageInScope("p", 2, 3)}`,
-      [target.id, actor.workspaceId, actor.userId],
+      `select archived_at is not null as archived from crm.pages p where id = $1 and ${pageInScope("p", 2, 3)} and p.live_key = $4`,
+      [target.id, actor.workspaceId, actor.userId, target.key],
     );
     const row = result.rows[0];
     return Boolean(row) && !(send && row.archived);
